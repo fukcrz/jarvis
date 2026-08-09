@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Clipboard, Clock3, LoaderCircle, RotateCcw, XCircle } from "lucide-react";
+import { ArrowDown, Check, ChevronDown, Clipboard, Clock3, LoaderCircle, RotateCcw, XCircle } from "lucide-react";
 import type { SessionStatus, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { MarkdownMessage } from "./markdown-message";
@@ -51,7 +51,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
           {feedback === undefined ? null : <WorkingIndicator feedback={feedback} />}
         </div>
       </div>
-      {!following ? <Button size="sm" className="jump-latest" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}>Jump to latest</Button> : null}
+      {!following ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="Jump to latest" title="Jump to latest" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
     </section>
   );
 }

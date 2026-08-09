@@ -52,7 +52,6 @@ export function Sidebar(props: SidebarProps) {
         })}
         {props.workspaces.length === 0 ? <div className="session-list-empty"><Settings2 size={17} /><span>No projects yet</span></div> : null}
       </nav>
-      <div className="sidebar-footer"><span>Local</span></div>
     </aside>
   );
 }

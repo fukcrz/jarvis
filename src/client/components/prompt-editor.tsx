@@ -61,7 +61,7 @@ export function PromptEditor({ sessionId, initialValue, busy, onDraftChange, onS
         <div className="composer-footer">
           <div className="composer-options">{controls}</div>
           {busy ? (
-            <Tooltip label="Stop current run"><Button variant="danger" size="icon" aria-label="Stop current run" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
+            <Tooltip label="Stop current run"><Button className="composer-stop" size="icon" aria-label="Stop current run" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
           ) : (
             <Tooltip label="Send message"><Button className="composer-send" size="icon" aria-label="Send message" onClick={() => { void submit(); }} disabled={value.trim() === ""}><ArrowUp size={17} /></Button></Tooltip>
           )}
