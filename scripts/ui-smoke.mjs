@@ -16,6 +16,16 @@ async function capture(name, viewport, path, openNavigation = false) {
         localStorage.setItem("jarvis.workspace", id);
         localStorage.setItem("jarvis.session", selectedSessionId);
       }, { workspaceId, sessionId: isolatedSessionId });
+      await context.addInitScript(() => {
+        const NativeWebSocket = window.WebSocket;
+        window.__jarvisSockets = [];
+        window.WebSocket = class extends NativeWebSocket {
+          constructor(...args) {
+            super(...args);
+            window.__jarvisSockets.push(this);
+          }
+        };
+      });
     }
   }
   const page = await context.newPage();
@@ -58,9 +68,35 @@ async function capture(name, viewport, path, openNavigation = false) {
 
   const viewportOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
   if (viewportOverflow) failures.push(`${name}: unexpected horizontal viewport overflow`);
+  if (!openNavigation && isolatedSessionId !== undefined) await verifyStreamingMarkdown(page, name, isolatedSessionId);
   await page.screenshot({ path, fullPage: true });
   if (!openNavigation) await verifyComposerShortcuts(page, name);
   await context.close();
+}
+
+async function verifyStreamingMarkdown(page, name, sessionId) {
+  await page.waitForFunction((selected) => window.__jarvisSockets?.some((socket) => socket.url.includes(`/sessions/${selected}/events`) && socket.readyState === WebSocket.OPEN), sessionId, { timeout: 15_000 });
+  const emittedAt = new Date().toISOString();
+  await page.evaluate(({ selected, emittedAt }) => {
+    const socket = window.__jarvisSockets.find((candidate) => candidate.url.includes(`/sessions/${selected}/events`) && candidate.readyState === WebSocket.OPEN);
+    socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+      version: 1,
+      sessionId: selected,
+      runId: "markdown-smoke",
+      seq: 900000001,
+      emittedAt,
+      type: "assistant.delta",
+      payload: { messageId: "markdown-smoke", delta: "# Streaming heading\n\n**Bold text** with `inline code`.\n\n- First item\n- Second item" },
+    }) }));
+  }, { selected: sessionId, emittedAt });
+
+  const message = page.locator('.message-row.streaming').filter({ hasText: "Streaming heading" });
+  await message.getByRole("heading", { name: "Streaming heading", level: 1 }).waitFor({ state: "visible", timeout: 5_000 });
+  if (await message.locator("strong").textContent() !== "Bold text") failures.push(`${name}: streaming Markdown did not render bold text`);
+  if (await message.locator("code").textContent() !== "inline code") failures.push(`${name}: streaming Markdown did not render inline code`);
+  if (JSON.stringify(await message.locator("li").allTextContents()) !== JSON.stringify(["First item", "Second item"])) failures.push(`${name}: streaming Markdown did not render a list`);
+  if (await message.locator(".streaming-text").count() !== 0) failures.push(`${name}: streaming message still uses the plain-text renderer`);
+  if (await message.locator(".streaming-cursor").count() !== 1) failures.push(`${name}: streaming cursor is missing`);
 }
 
 async function verifyComposerShortcuts(page, name) {

@@ -1,10 +1,8 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeSanitize from "rehype-sanitize";
 import { Check, ChevronDown, Clipboard, Clock3, LoaderCircle, RotateCcw, XCircle } from "lucide-react";
 import type { SessionStatus, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
+import { MarkdownMessage } from "./markdown-message";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
@@ -88,8 +86,8 @@ const MessageItem = memo(function MessageItem({ item, streaming }: { item: Extra
   };
   return (
     <article className={`message-row ${item.role} ${streaming ? "streaming" : ""}`}>
-      <div className="message-content">
-        {streaming ? <p className="streaming-text">{item.text}<span className="streaming-cursor" aria-hidden="true" /></p> : <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{item.text}</ReactMarkdown>}
+      <div className={`message-content ${streaming ? "streaming" : ""}`}>
+        <MarkdownMessage text={item.text} streaming={streaming} />
       </div>
       <Tooltip label={copied ? "Copied" : "Copy message"}>
         <button type="button" className="message-copy" aria-label="Copy message" onClick={() => { void copy(); }}><Clipboard size={14} /></button>
