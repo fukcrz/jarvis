@@ -171,6 +171,34 @@ describe("Jarvis HTTP and WebSocket API", () => {
     socket.close();
   });
 
+  it("deletes a newly-created session before Pi persists its JSONL file", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "new-session-delete-workspace");
+    await mkdir(workspacePath);
+    const createdWorkspace = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath, label: "New session delete" } });
+    const workspace = createdWorkspace.json() as { workspace: { id: string } };
+    const createdSession = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.workspace.id}/sessions`, payload: {} });
+    expect(createdSession.statusCode).toBe(200);
+    const session = createdSession.json() as { session: { id: string } };
+
+    const address = await server.listen({ host: "127.0.0.1", port: 0 });
+    const endpoint = new URL(`/api/workspaces/${workspace.workspace.id}/events`, address);
+    endpoint.protocol = "ws:";
+    const socket = createSocket(endpoint.toString());
+    await waitForOpen(socket);
+
+    const received = nextJsonMessage(socket);
+    const removed = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.workspace.id}/sessions/${session.session.id}` });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toEqual({ removed: true });
+    await expect(received).resolves.toEqual({ version: 1, type: "session.deleted", workspaceId: workspace.workspace.id, sessionId: session.session.id });
+
+    const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/sessions` });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual({ sessions: [] });
+    socket.close();
+  });
+
   it("delivers a workspace event through the standard WebSocket endpoint", async () => {
     const server = activeApp();
     const listed = await server.inject({ method: "GET", url: "/api/workspaces" });

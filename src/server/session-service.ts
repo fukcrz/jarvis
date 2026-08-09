@@ -128,7 +128,7 @@ export class SessionService {
         ? await SessionManager.list(workspace.cwd)
         : await SessionManager.list(workspace.cwd, sessionDir);
       const match = listed.find((entry) => entry.id === ref.sessionId);
-      if (match === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+      if (match === undefined && active === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
 
       if (active !== undefined) {
         active.unsubscribe();
@@ -136,11 +136,13 @@ export class SessionService {
         this.active.delete(key);
       }
 
-      try {
-        await rm(match.path);
-      } catch (error) {
-        if (isMissingFile(error)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
-        throw new AppError("SESSION_DELETE_FAILED", "Unable to delete session history", 500);
+      if (match !== undefined) {
+        try {
+          await rm(match.path);
+        } catch (error) {
+          if (isMissingFile(error)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+          throw new AppError("SESSION_DELETE_FAILED", "Unable to delete session history", 500);
+        }
       }
 
       this.events.publishWorkspace(ref.workspaceId, { version: 1, type: "session.deleted", workspaceId: ref.workspaceId, sessionId: ref.sessionId });
