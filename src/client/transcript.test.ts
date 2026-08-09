@@ -69,5 +69,31 @@ describe("transcript reducer", () => {
     }]);
 
     expect(result.items).toEqual([expect.objectContaining({ id: "partial", role: "assistant", text: "Streaming" })]);
+    expect(result.streamingMessageId).toBe("partial");
+  });
+
+  it("marks only the active assistant message as streaming and clears it after completion", () => {
+    const streaming = applySessionEvents(emptyTranscript, [{
+      version: 1,
+      sessionId: "session",
+      runId: "run",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "assistant.delta",
+      payload: { messageId: "partial", delta: "# Incomplete" },
+    }]);
+    const completed = applySessionEvents(streaming, [{
+      version: 1,
+      sessionId: "session",
+      runId: "run",
+      seq: 2,
+      emittedAt: "2026-08-09T00:00:01.000Z",
+      type: "assistant.completed",
+      payload: { message: { kind: "message", id: "partial", role: "assistant", createdAt: "2026-08-09T00:00:00.000Z", text: "# Complete" } },
+    }]);
+
+    expect(streaming.streamingMessageId).toBe("partial");
+    expect(completed.streamingMessageId).toBeUndefined();
+    expect(completed.items).toEqual([expect.objectContaining({ id: "partial", text: "# Complete" })]);
   });
 });

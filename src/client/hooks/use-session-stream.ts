@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, sessionPath, socketUrl } from "../api";
-import { type ModelDescriptor, type SessionEvent, type SessionRef, sessionEventSchema } from "../../shared/protocol";
+import { isRecord, type ModelDescriptor, type SessionEvent, type SessionRef, sessionEventSchema } from "../../shared/protocol";
 import { applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, type TranscriptState } from "../transcript";
 
 interface StreamState {
@@ -42,7 +42,7 @@ export function useSessionStream(ref: SessionRef | undefined) {
 
   const flushEvents = useCallback(() => {
     requestFrame.current = undefined;
-    const events = queuedEvents.current.splice(0);
+    const events = coalesceStreamEvents(queuedEvents.current.splice(0));
     if (events.length > 0) dispatch({ type: "events", events });
   }, []);
 
@@ -146,4 +146,20 @@ export function useSessionStream(ref: SessionRef | undefined) {
   }, [refKey, loadingEarlier]);
 
   return { ...state, loadEarlier, loadingEarlier, selectModel };
+}
+
+function coalesceStreamEvents(events: SessionEvent[]): SessionEvent[] {
+  const result: SessionEvent[] = [];
+  for (const event of events) {
+    const previous = result.at(-1);
+    const previousPayload = previous?.type === "assistant.delta" && isRecord(previous.payload) ? previous.payload : undefined;
+    const payload = event.type === "assistant.delta" && isRecord(event.payload) ? event.payload : undefined;
+    const sameMessage = previousPayload?.["messageId"] === payload?.["messageId"];
+    if (previous !== undefined && previous.type === "assistant.delta" && event.type === "assistant.delta" && sameMessage && typeof previousPayload?.["delta"] === "string" && typeof payload?.["delta"] === "string") {
+      result[result.length - 1] = { ...event, payload: { messageId: payload["messageId"], delta: previousPayload["delta"] + payload["delta"] } };
+    } else {
+      result.push(event);
+    }
+  }
+  return result;
 }

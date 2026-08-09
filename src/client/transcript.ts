@@ -9,6 +9,7 @@ export interface TranscriptState {
   seq: number;
   status: SessionStatus;
   model: SessionModelSnapshot;
+  streamingMessageId?: string;
 }
 
 export const emptyTranscript: TranscriptState = {
@@ -33,6 +34,7 @@ export function hydrateTranscript(previous: TranscriptState, page: TimelinePage,
     seq: Math.max(previous.seq, snapshot.seq),
     status: snapshot.status,
     model: snapshot.model,
+    ...(snapshot.partial === undefined ? {} : { streamingMessageId: snapshot.partial.id }),
   };
 }
 
@@ -67,12 +69,14 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const message: MessageTimelineItem = existing === undefined
       ? { kind: "message", id: messageId, role: "assistant", createdAt: event.emittedAt, text: delta }
       : { ...existing, text: existing.text + delta };
-    return { ...next, items: mergeTimeline(next.items, [message]) };
+    return { ...next, items: mergeTimeline(next.items, [message]), streamingMessageId: messageId };
   }
   if (event.type === "assistant.completed") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const message = recordMessage(payload?.["message"]);
-    return message === undefined ? next : { ...next, items: mergeTimeline(next.items, [message]) };
+    if (message === undefined) return next;
+    const updated = { ...next, items: mergeTimeline(next.items, [message]) };
+    return updated.streamingMessageId === message.id ? withoutStreamingMessage(updated) : updated;
   }
   if (event.type === "tool.upsert") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -87,9 +91,15 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
   if (event.type === "run.started" || event.type === "run.stopping" || event.type === "run.settled" || event.type === "run.failed" || event.type === "session.updated") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const status = recordStatus(payload?.["status"]);
-    return status === undefined ? next : { ...next, status };
+    if (status === undefined) return next;
+    const updated = { ...next, status };
+    return event.type === "run.settled" || event.type === "run.failed" ? withoutStreamingMessage(updated) : updated;
   }
   return next;
+}
+
+function withoutStreamingMessage(state: TranscriptState): TranscriptState {
+  return { ...state, streamingMessageId: undefined };
 }
 
 function mergeTimeline(...groups: TimelineItem[][]): TimelineItem[] {

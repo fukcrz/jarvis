@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
@@ -9,13 +9,14 @@ import { Tooltip } from "./ui/tooltip";
 
 interface TimelineProps {
   items: TimelineItem[];
+  streamingMessageId?: string;
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => Promise<void>;
   error?: string;
 }
 
-export function Timeline({ items, hasMore, loadingMore, onLoadMore, error }: TimelineProps) {
+export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
 
@@ -23,7 +24,7 @@ export function Timeline({ items, hasMore, loadingMore, onLoadMore, error }: Tim
     const element = scrollRef.current;
     if (element === null || !following) return;
     element.scrollTop = element.scrollHeight;
-  }, [items, following]);
+  }, [items, streamingMessageId, following]);
 
   const loadEarlier = async () => {
     const element = scrollRef.current;
@@ -42,7 +43,9 @@ export function Timeline({ items, hasMore, loadingMore, onLoadMore, error }: Tim
       }}>
         <div className="timeline-inner">
           {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "Loading history" : "Load earlier"}</Button> : null}
-          {items.map((item) => item.kind === "message" ? <MessageItem key={item.id} item={item} /> : <ToolItem key={item.id} item={item} />)}
+          {items.map((item) => item.kind === "message"
+            ? <MessageItem key={item.id} item={item} streaming={item.id === streamingMessageId} />
+            : <ToolItem key={item.id} item={item} />)}
           {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
         </div>
       </div>
@@ -51,9 +54,8 @@ export function Timeline({ items, hasMore, loadingMore, onLoadMore, error }: Tim
   );
 }
 
-function MessageItem({ item }: { item: Extract<TimelineItem, { kind: "message" }> }) {
+const MessageItem = memo(function MessageItem({ item, streaming }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean }) {
   const [copied, setCopied] = useState(false);
-  const timestamp = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(item.createdAt));
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(item.text);
@@ -64,17 +66,16 @@ function MessageItem({ item }: { item: Extract<TimelineItem, { kind: "message" }
     }
   };
   return (
-    <article className={`message-row ${item.role}`}>
-      <div className="message-meta">{item.role === "user" ? <span>You</span> : null}<time>{timestamp}</time></div>
+    <article className={`message-row ${item.role} ${streaming ? "streaming" : ""}`}>
       <div className="message-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{item.text}</ReactMarkdown>
+        {streaming ? <p className="streaming-text">{item.text}<span className="streaming-cursor" aria-hidden="true" /></p> : <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{item.text}</ReactMarkdown>}
       </div>
       <Tooltip label={copied ? "Copied" : "Copy message"}>
         <button type="button" className="message-copy" aria-label="Copy message" onClick={() => { void copy(); }}><Clipboard size={14} /></button>
       </Tooltip>
     </article>
   );
-}
+});
 
 function ToolItem({ item }: { item: ToolTimelineItem }) {
   const [open, setOpen] = useState(item.state === "running" || item.state === "failed");
