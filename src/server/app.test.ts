@@ -87,6 +87,10 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(emptyJson.statusCode).toBe(400);
     expect(emptyJson.json()).toMatchObject({ error: { code: "INVALID_REQUEST", message: "Invalid request" } });
 
+    const invalidModel = await server.inject({ method: "PUT", url: "/api/workspaces/00000000-0000-4000-8000-000000000000/sessions/00000000-0000-4000-8000-000000000000/model", payload: { provider: "", modelId: "" } });
+    expect(invalidModel.statusCode).toBe(400);
+    expect(invalidModel.json()).toMatchObject({ error: { code: "INVALID_REQUEST", message: "Invalid request" } });
+
     const workspacePath = join(jarvisHome, "workspace");
     await mkdir(workspacePath);
     const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath, label: "Scratch" } });

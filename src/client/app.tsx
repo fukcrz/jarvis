@@ -1,10 +1,11 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FolderPlus, Menu, Pencil, Plus, Trash2, Wifi, WifiOff } from "lucide-react";
-import type { SessionRef, SessionSummary, Workspace } from "../shared/protocol";
+import type { ModelDescriptor, SessionRef, SessionSummary, Workspace } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
+import { ModelSelector } from "./components/model-selector";
 import { Sidebar } from "./components/sidebar";
 import { Timeline } from "./components/timeline";
 import { Button } from "./components/ui/button";
@@ -28,6 +29,7 @@ export function App() {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(() => readDrafts());
 
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId);
@@ -37,7 +39,10 @@ export function App() {
   const selectedRef = useMemo<SessionRef | undefined>(() => selectedWorkspace === undefined || selectedSession === undefined
     ? undefined
     : { workspaceId: selectedWorkspace.id, sessionId: selectedSession.id }, [selectedWorkspace?.id, selectedSession?.id]);
+  // The stream owns the authoritative runtime model snapshot and realtime changes.
   const stream = useSessionStream(selectedRef);
+
+  useEffect(() => { setModelSwitchPending(false); }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
 
   const loadWorkspaces = useCallback(async () => {
     const values = await api.listWorkspaces();
@@ -266,6 +271,19 @@ export function App() {
     }
   };
 
+  const selectModel = async (model: ModelDescriptor) => {
+    if (selectedRef === undefined || modelSwitchPending) return;
+    setModelSwitchPending(true);
+    try {
+      await stream.selectModel(model);
+      setPageError(undefined);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Unable to change model");
+    } finally {
+      setModelSwitchPending(false);
+    }
+  };
+
   const chooseSession = (nextWorkspaceId: string, nextSessionId: string) => {
     setWorkspaceId(nextWorkspaceId);
     setSessionId(nextSessionId);
@@ -307,7 +325,10 @@ export function App() {
               <div><h1>{selectedSession === undefined ? "New session" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined ? null : <Tooltip label="Rename session"><Button variant="ghost" size="icon" aria-label="Rename session" onClick={() => { setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); setRenameOpen(true); }}><Pencil size={15} /></Button></Tooltip>}</div>
             </div>
           </div>
-          {selectedSession === undefined ? null : <div className={`connection-status ${stream.connection}`}><span>{stream.connection === "live" ? <Wifi size={14} /> : <WifiOff size={14} />}</span>{stream.transcript.status.runState === "running" ? "Running" : stream.transcript.status.runState === "stopping" ? "Stopping" : stream.connection === "live" ? "Ready" : "Reconnecting"}</div>}
+          <div className="header-controls">
+            {selectedSession === undefined ? null : <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle"} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />}
+            {selectedSession === undefined ? null : <div className={`connection-status ${stream.connection}`}><span>{stream.connection === "live" ? <Wifi size={14} /> : <WifiOff size={14} />}</span><span className="connection-label">{stream.transcript.status.runState === "running" ? "Running" : stream.transcript.status.runState === "stopping" ? "Stopping" : stream.connection === "live" ? "Ready" : "Reconnecting"}</span></div>}
+          </div>
         </header>
         {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="Dismiss error" onClick={() => setPageError(undefined)}>Dismiss</button></div>}
         {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>No session selected</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> New session</Button></section> : <>

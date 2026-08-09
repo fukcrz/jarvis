@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type {
   MessageTimelineItem,
+  ModelDescriptor,
   PromptAccepted,
   SessionRef,
   SessionStatus,
@@ -27,6 +28,7 @@ import type {
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, unsupportedExtensionUi } from "./extension-ui.js";
+import { projectModelSnapshot } from "./model-projection.js";
 import { assistantTextFromContent, messageFromPi, projectHistory, textFromContent, toolFromCall, toolWithPartial, toolWithResult } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
 
@@ -39,6 +41,8 @@ interface ActiveSession {
   ref: SessionRef;
   cwd: string;
   session: AgentSession;
+  modelRuntime: ModelRuntime;
+  modelSwitching: boolean;
   unsubscribe: () => void;
   state: SessionStatus;
   requestRuns: Map<string, PromptAccepted>;
@@ -119,10 +123,41 @@ export class SessionService {
       // one join-time snapshot for the client-side watermark algorithm.
       seq: this.events.currentSeq(active.ref),
       status: active.state,
+      model: this.modelSnapshot(active),
       liveMessages: [...active.liveMessages.values()],
       ...(active.partial === undefined ? {} : { partial: active.partial }),
       activeTools: [...active.activeTools.values()],
     };
+  }
+
+  async setModel(ref: SessionRef, provider: string, modelId: string): Promise<ModelDescriptor> {
+    const active = await this.getActive(ref);
+    if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) {
+      throw new AppError("SESSION_BUSY", "Stop the current run before changing models", 409);
+    }
+
+    active.modelSwitching = true;
+    try {
+      const available = await this.availableModels(active.modelRuntime);
+      const model = available.find((candidate) => candidate.provider === provider && candidate.id === modelId);
+      if (model === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "This model is not available for the current Pi profile", 404);
+
+      const snapshot = projectModelSnapshot(active.session.model, available);
+      if (active.session.model?.provider === provider && active.session.model?.id === modelId) {
+        if (snapshot.current === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "Pi did not select the requested model", 409);
+        return snapshot.current;
+      }
+
+      await active.session.setModel(model);
+      active.updatedAt = new Date().toISOString();
+      const updated = projectModelSnapshot(active.session.model, available);
+      if (updated.current === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "Pi did not select the requested model", 409);
+      this.events.publishSession(active.ref, { type: "model.changed", payload: { model: updated } });
+      this.publishSummary(active);
+      return updated.current;
+    } finally {
+      active.modelSwitching = false;
+    }
   }
 
   async prompt(ref: SessionRef, text: string, clientRequestId: string): Promise<PromptAccepted> {
@@ -132,7 +167,7 @@ export class SessionService {
     const active = await this.getActive(ref);
     const previous = active.requestRuns.get(clientRequestId);
     if (previous !== undefined) return previous;
-    if (active.state.runState !== "idle" || active.session.isStreaming) throw new AppError("SESSION_BUSY", "This session is already running", 409);
+    if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) throw new AppError("SESSION_BUSY", "This session is already running", 409);
 
     const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString() };
     active.state = { sessionId: ref.sessionId, runState: "running", activeRun: run };
@@ -230,10 +265,11 @@ export class SessionService {
 
   private async createActive(ref: SessionRef, workspace: Workspace, manager: SessionManager): Promise<ActiveSession> {
     const agentDir = getAgentDir();
+    const modelRuntime = await this.getModelRuntime(agentDir);
     const { session } = await createAgentSession({
       cwd: workspace.cwd,
       agentDir,
-      modelRuntime: await this.getModelRuntime(agentDir),
+      modelRuntime,
       sessionManager: manager,
     });
     const extensionState: { active?: ActiveSession; startupFailure?: { code: string; message: string } } = {};
@@ -262,6 +298,8 @@ export class SessionService {
       ref: actualRef,
       cwd: workspace.cwd,
       session,
+      modelRuntime,
+      modelSwitching: false,
       unsubscribe: () => undefined,
       state: extensionState.startupFailure === undefined
         ? { sessionId: session.sessionId, runState: "idle" }
@@ -276,6 +314,15 @@ export class SessionService {
     active.unsubscribe = session.subscribe((event) => this.handlePiEvent(active, event));
     this.active.set(activeKey(actualRef), active);
     return active;
+  }
+
+  private modelSnapshot(active: ActiveSession) {
+    return projectModelSnapshot(active.session.model, active.modelRuntime.getAvailableSnapshot());
+  }
+
+  private async availableModels(runtime: ModelRuntime) {
+    const cached = runtime.getAvailableSnapshot();
+    return cached.length > 0 ? cached : await runtime.getAvailable();
   }
 
   private async getModelRuntime(agentDir: string): Promise<ModelRuntime> {

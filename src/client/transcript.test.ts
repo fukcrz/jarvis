@@ -12,6 +12,7 @@ describe("transcript reducer", () => {
     }, {
       seq: 4,
       status: { sessionId: "session", runState: "running", activeRun: { id: "run", startedAt: "2026-08-09T00:00:00.000Z" } },
+      model: { current: { provider: "provider", id: "model-a", name: "Model A", reasoning: true }, available: [{ provider: "provider", id: "model-a", name: "Model A", reasoning: true }, { provider: "provider", id: "model-b", name: "Model B", reasoning: false }] },
       liveMessages: [],
       activeTools: [],
     });
@@ -40,6 +41,20 @@ describe("transcript reducer", () => {
     }]);
 
     expect(result.items).toEqual([expect.objectContaining({ id: "user", role: "user", text: "Hello" })]);
+  });
+
+  it("updates the selected model from a server event", () => {
+    const result = applySessionEvents({ ...emptyTranscript, model: { available: [{ provider: "provider", id: "first", name: "First", reasoning: false }, { provider: "provider", id: "second", name: "Second", reasoning: true }] } }, [{
+      version: 1,
+      sessionId: "session",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "model.changed",
+      payload: { model: { current: { provider: "provider", id: "second", name: "Second", reasoning: true }, available: [{ provider: "provider", id: "first", name: "First", reasoning: false }, { provider: "provider", id: "second", name: "Second", reasoning: true }] } },
+    }]);
+
+    expect(result.model.current).toMatchObject({ id: "second", name: "Second" });
+    expect(result.model.available).toHaveLength(2);
   });
 
   it("creates an assistant partial from a text delta", () => {

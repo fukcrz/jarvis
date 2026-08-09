@@ -44,6 +44,9 @@ async function capture(name, viewport, path, openNavigation = false) {
     await page.locator(".project-toggle[aria-expanded='false']").first().waitFor({ state: "visible" });
     await projectToggle.click();
     await page.locator(".project-sessions").first().waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "Choose model" }).click();
+    await page.locator(".model-menu").waitFor({ state: "visible" });
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Add project" }).click();
     await page.getByRole("dialog", { name: "Projects" }).waitFor({ state: "visible" });
     await page.getByRole("button", { name: "Close dialog" }).click();

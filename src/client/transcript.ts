@@ -1,4 +1,4 @@
-import type { MessageTimelineItem, SessionEvent, SessionStatus, SessionStreamSnapshot, TimelineItem, TimelinePage, ToolTimelineItem } from "../shared/protocol";
+import type { MessageTimelineItem, ModelDescriptor, SessionEvent, SessionModelSnapshot, SessionStatus, SessionStreamSnapshot, TimelineItem, TimelinePage, ToolTimelineItem } from "../shared/protocol";
 import { isRecord } from "../shared/protocol";
 
 export interface TranscriptState {
@@ -8,6 +8,7 @@ export interface TranscriptState {
   hasMore: boolean;
   seq: number;
   status: SessionStatus;
+  model: SessionModelSnapshot;
 }
 
 export const emptyTranscript: TranscriptState = {
@@ -17,6 +18,7 @@ export const emptyTranscript: TranscriptState = {
   hasMore: false,
   seq: 0,
   status: { sessionId: "", runState: "idle" },
+  model: { available: [] },
 };
 
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
@@ -30,6 +32,7 @@ export function hydrateTranscript(previous: TranscriptState, page: TimelinePage,
     hasMore: page.hasMore,
     seq: Math.max(previous.seq, snapshot.seq),
     status: snapshot.status,
+    model: snapshot.model,
   };
 }
 
@@ -75,6 +78,11 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const tool = recordTool(payload?.["tool"]);
     return tool === undefined ? next : { ...next, items: mergeTimeline(next.items, [tool]) };
+  }
+  if (event.type === "model.changed") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const model = recordModelSnapshot(payload?.["model"]);
+    return model === undefined ? next : { ...next, model };
   }
   if (event.type === "run.started" || event.type === "run.stopping" || event.type === "run.settled" || event.type === "run.failed" || event.type === "session.updated") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -124,6 +132,21 @@ function recordTool(value: unknown): ToolTimelineItem | undefined {
     ...(typeof value["output"] === "string" ? { output: value["output"] } : {}),
     ...(typeof value["error"] === "string" ? { error: value["error"] } : {}),
   };
+}
+
+function recordModelSnapshot(value: unknown): SessionModelSnapshot | undefined {
+  if (!isRecord(value) || !Array.isArray(value["available"])) return undefined;
+  const available = value["available"].flatMap((item) => {
+    const model = recordModel(item);
+    return model === undefined ? [] : [model];
+  });
+  const current = recordModel(value["current"]);
+  return { ...(current === undefined ? {} : { current }), available };
+}
+
+function recordModel(value: unknown): ModelDescriptor | undefined {
+  if (!isRecord(value) || typeof value["provider"] !== "string" || typeof value["id"] !== "string" || typeof value["name"] !== "string" || typeof value["reasoning"] !== "boolean") return undefined;
+  return { provider: value["provider"], id: value["id"], name: value["name"], reasoning: value["reasoning"] };
 }
 
 function recordStatus(value: unknown): SessionStatus | undefined {

@@ -14,6 +14,7 @@ import { WorkspaceStore } from "./workspace-store.js";
 const workspaceInput = z.object({ cwd: z.string().min(1), label: z.string().max(96).optional() }).strict();
 const workspaceUpdateInput = z.object({ label: z.string().min(1).max(96) }).strict();
 const sessionNameInput = z.object({ name: z.string().min(1).max(120) }).strict();
+const modelInput = z.object({ provider: z.string().min(1).max(160), modelId: z.string().min(1).max(320) }).strict();
 const promptInput = z.object({ text: z.string(), clientRequestId: z.string().uuid() }).strict();
 const abortInput = z.object({ runId: z.string().uuid().optional() }).strict();
 const listQuery = z.object({ query: z.string().optional() });
@@ -81,6 +82,11 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     return sessions.timeline(ref, query.before, query.limit);
   });
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/runtime", async (request) => sessions.runtime(sessionRef(request.params)));
+  app.put("/api/workspaces/:workspaceId/sessions/:sessionId/model", async (request) => {
+    const ref = sessionRef(request.params);
+    const body = modelInput.parse(request.body);
+    return { model: await sessions.setModel(ref, body.provider, body.modelId) };
+  });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/prompt", async (request) => {
     const ref = sessionRef(request.params);
     const body = promptInput.parse(request.body);

@@ -18,6 +18,18 @@ export interface SessionRef {
   sessionId: string;
 }
 
+export interface ModelDescriptor {
+  provider: string;
+  id: string;
+  name: string;
+  reasoning: boolean;
+}
+
+export interface SessionModelSnapshot {
+  current?: ModelDescriptor;
+  available: ModelDescriptor[];
+}
+
 export interface SessionStatus {
   sessionId: string;
   runState: RunState;
@@ -75,6 +87,7 @@ export interface TimelinePage {
 export interface SessionStreamSnapshot {
   seq: number;
   status: SessionStatus;
+  model: SessionModelSnapshot;
   /** Messages from the current run that may not yet have reached JSONL. */
   liveMessages: MessageTimelineItem[];
   partial?: MessageTimelineItem;
@@ -95,6 +108,7 @@ export type SessionEventType =
   | "assistant.delta"
   | "assistant.completed"
   | "tool.upsert"
+  | "model.changed"
   | "session.updated";
 
 export interface SessionEvent {
@@ -134,6 +148,7 @@ export const sessionEventSchema = z.object({
     "assistant.delta",
     "assistant.completed",
     "tool.upsert",
+    "model.changed",
     "session.updated",
   ]),
   payload: z.unknown(),

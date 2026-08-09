@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, sessionPath, socketUrl } from "../api";
-import { type SessionEvent, type SessionRef, sessionEventSchema } from "../../shared/protocol";
+import { type ModelDescriptor, type SessionEvent, type SessionRef, sessionEventSchema } from "../../shared/protocol";
 import { applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, type TranscriptState } from "../transcript";
 
 interface StreamState {
@@ -13,6 +13,7 @@ type Action =
   | { type: "reset" }
   | { type: "hydrate"; page: Awaited<ReturnType<typeof api.timeline>>; snapshot: Awaited<ReturnType<typeof api.runtime>> }
   | { type: "events"; events: SessionEvent[] }
+  | { type: "model"; model: ModelDescriptor }
   | { type: "prepend"; page: Awaited<ReturnType<typeof api.timeline>> }
   | { type: "connection"; value: StreamState["connection"]; error?: string };
 
@@ -22,6 +23,7 @@ function reducer(state: StreamState, action: Action): StreamState {
   if (action.type === "reset") return initialState;
   if (action.type === "hydrate") return { ...state, transcript: hydrateTranscript(state.transcript, action.page, action.snapshot), error: undefined };
   if (action.type === "events") return { ...state, transcript: applySessionEvents(state.transcript, action.events) };
+  if (action.type === "model") return { ...state, transcript: { ...state.transcript, model: { ...state.transcript.model, current: action.model } } };
   if (action.type === "prepend") return { ...state, transcript: prependTranscript(state.transcript, action.page) };
   return { ...state, connection: action.value, ...(action.error === undefined ? {} : { error: action.error }) };
 }
@@ -31,10 +33,12 @@ export function useSessionStream(ref: SessionRef | undefined) {
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const stateRef = useRef(state);
   const refKey = ref === undefined ? undefined : `${ref.workspaceId}:${ref.sessionId}`;
+  const refKeyRef = useRef(refKey);
   const requestFrame = useRef<number | undefined>(undefined);
   const queuedEvents = useRef<SessionEvent[]>([]);
 
   useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => { refKeyRef.current = refKey; }, [refKey]);
 
   const flushEvents = useCallback(() => {
     requestFrame.current = undefined;
@@ -122,6 +126,14 @@ export function useSessionStream(ref: SessionRef | undefined) {
     if (requestFrame.current !== undefined) cancelAnimationFrame(requestFrame.current);
   }, []);
 
+  // Keep the displayed model responsive before the matching socket frame arrives.
+  const selectModel = useCallback(async (model: ModelDescriptor): Promise<void> => {
+    if (ref === undefined) return;
+    const selectedKey = refKey;
+    const selected = await api.setModel(ref, model);
+    if (refKeyRef.current === selectedKey) dispatch({ type: "model", model: selected });
+  }, [refKey]);
+
   const loadEarlier = useCallback(async () => {
     if (ref === undefined || !stateRef.current.transcript.hasMore || loadingEarlier) return;
     setLoadingEarlier(true);
@@ -133,5 +145,5 @@ export function useSessionStream(ref: SessionRef | undefined) {
     }
   }, [refKey, loadingEarlier]);
 
-  return { ...state, loadEarlier, loadingEarlier };
+  return { ...state, loadEarlier, loadingEarlier, selectModel };
 }
