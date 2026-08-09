@@ -38,6 +38,14 @@ export function App() {
   const selectedRef = useMemo<SessionRef | undefined>(() => selectedWorkspace === undefined || selectedSession === undefined
     ? undefined
     : { workspaceId: selectedWorkspace.id, sessionId: selectedSession.id }, [selectedWorkspace?.id, selectedSession?.id]);
+  const selectedSessionId = selectedRef?.sessionId;
+  const selectedDraft = selectedSessionId === undefined ? "" : drafts[selectedSessionId] ?? "";
+  const updateDraft = useCallback((id: string, value: string) => {
+    setDrafts((current) => current[id] === value ? current : { ...current, [id]: value });
+  }, []);
+  const updateSelectedDraft = useCallback((value: string) => {
+    if (selectedSessionId !== undefined) updateDraft(selectedSessionId, value);
+  }, [selectedSessionId, updateDraft]);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
   const stream = useSessionStream(selectedRef);
 
@@ -326,10 +334,9 @@ export function App() {
           <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? stream.transcript.status.lastError?.message} status={stream.transcript.status} />
           <PromptEditor
             key={selectedRef.sessionId}
-            sessionId={selectedRef.sessionId}
-            initialValue={drafts[selectedRef.sessionId] ?? ""}
+            initialValue={selectedDraft}
             busy={stream.transcript.status.runState !== "idle"}
-            onDraftChange={(value) => setDrafts((current) => ({ ...current, [selectedRef.sessionId]: value }))}
+            onDraftChange={updateSelectedDraft}
             onSubmit={submitPrompt}
             onStop={() => { void abort(); }}
             controls={selectedSession === undefined ? undefined : <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle"} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />}

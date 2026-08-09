@@ -70,7 +70,7 @@ async function capture(name, viewport, path, openNavigation = false) {
   if (viewportOverflow) failures.push(`${name}: unexpected horizontal viewport overflow`);
   if (!openNavigation && isolatedSessionId !== undefined) await verifyStreamingMarkdown(page, name, isolatedSessionId);
   await page.screenshot({ path, fullPage: true });
-  if (!openNavigation) await verifyComposerShortcuts(page, name);
+  if (!openNavigation) await verifyComposerShortcuts(page, name, isolatedSessionId);
   await context.close();
 }
 
@@ -99,7 +99,7 @@ async function verifyStreamingMarkdown(page, name, sessionId) {
   if (await message.locator(".streaming-cursor").count() !== 1) failures.push(`${name}: streaming cursor is missing`);
 }
 
-async function verifyComposerShortcuts(page, name) {
+async function verifyComposerShortcuts(page, name, sessionId) {
   const editor = page.locator(".composer-editor .cm-content");
   if (await editor.count() === 0) return;
   const editorSurface = page.locator(".composer-editor .cm-editor");
@@ -118,6 +118,7 @@ async function verifyComposerShortcuts(page, name) {
     await page.keyboard.press("Control+A");
     await page.keyboard.press("Backspace");
   }
+  if (sessionId !== undefined) await verifyDraftStability(page, name, sessionId, editor);
   const prompts = [];
   await page.route("**/api/workspaces/*/sessions/*/prompt", async (route) => {
     prompts.push(JSON.parse(route.request().postData() ?? "{}"));
@@ -127,11 +128,37 @@ async function verifyComposerShortcuts(page, name) {
   await page.keyboard.type("First line");
   await page.keyboard.press("Shift+Enter");
   await page.keyboard.type("Second line");
+  await page.waitForTimeout(260);
   const lines = await page.locator(".composer-editor .cm-line").allTextContents();
   if (JSON.stringify(lines) !== JSON.stringify(["First line", "Second line"])) failures.push(`${name}: Shift+Enter did not add a newline`);
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => document.querySelector(".composer-editor .cm-placeholder") !== null, undefined, { timeout: 5_000 });
   if (prompts.length !== 1 || prompts[0]?.text !== "First line\nSecond line") failures.push(`${name}: Enter did not send the editor value`);
+}
+
+async function verifyDraftStability(page, name, sessionId, editor) {
+  const expected = "Draft remains stable while the session updates.";
+  await editor.click();
+  for (const [index, character] of [...expected].entries()) {
+    await page.keyboard.insertText(character);
+    await page.evaluate(({ selected, index }) => {
+      const socket = window.__jarvisSockets.find((candidate) => candidate.url.includes(`/sessions/${selected}/events`) && candidate.readyState === WebSocket.OPEN);
+      socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+        version: 1,
+        sessionId: selected,
+        seq: 900001000 + index,
+        emittedAt: new Date().toISOString(),
+        type: "session.updated",
+        payload: { status: { sessionId: selected, runState: "idle" } },
+      }) }));
+    }, { selected: sessionId, index });
+  }
+  await page.waitForTimeout(260);
+  if (await editor.textContent() !== expected) failures.push(`${name}: draft changed after session updates`);
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Backspace");
+  await page.waitForTimeout(260);
+  if (!await editor.locator(".cm-placeholder").isVisible()) failures.push(`${name}: cleared draft returned after session updates`);
 }
 
 try {
