@@ -14,9 +14,9 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`.
+Open `http://<machine-ip>:5173` from any reachable device. In development, Vite and Fastify listen on all network interfaces.
 
-The Fastify API listens on `http://127.0.0.1:4310`. Production builds can be run with:
+Development has no authentication and can operate Pi sessions, so do not expose it to an untrusted network. Production builds keep Fastify on `127.0.0.1` and can be run with:
 
 ```bash
 npm run build

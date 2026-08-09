@@ -28,13 +28,14 @@ export interface JarvisServices {
 
 export async function buildApp(options: { serveStatic?: boolean; staticRoot?: string } = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: { level: process.env["LOG_LEVEL"] ?? "info" } });
+  const production = process.env["NODE_ENV"] === "production";
   const workspaces = new WorkspaceStore();
   await workspaces.initialize(process.cwd());
   const events = new EventHub();
   const sessions = new SessionService(workspaces, events);
   const services: JarvisServices = { workspaces, sessions, events };
 
-  await app.register(cors, { origin: [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] });
+  await app.register(cors, { origin: production ? [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] : true });
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
 

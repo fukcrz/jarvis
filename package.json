@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "tsx watch src/server/index.ts",
-    "dev:web": "vite --host 127.0.0.1",
+    "dev:web": "vite",
     "build": "npm run build:server && npm run build:web",
     "build:server": "tsc -p tsconfig.server.json",
     "build:web": "vite build",
