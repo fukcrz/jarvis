@@ -323,7 +323,7 @@ export function App() {
         </header>
         {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="Dismiss error" onClick={() => setPageError(undefined)}>Dismiss</button></div>}
         {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>No session selected</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> New session</Button></section> : <>
-          <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? stream.transcript.status.lastError?.message} />
+          <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? stream.transcript.status.lastError?.message} status={stream.transcript.status} />
           <PromptEditor
             key={selectedRef.sessionId}
             sessionId={selectedRef.sessionId}

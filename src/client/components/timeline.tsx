@@ -1,9 +1,10 @@
-import { memo, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import { Check, ChevronDown, Clipboard, Clock3, LoaderCircle, RotateCcw, XCircle } from "lucide-react";
-import type { TimelineItem, ToolTimelineItem } from "../../shared/protocol";
+import type { SessionStatus, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
+import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
@@ -14,17 +15,19 @@ interface TimelineProps {
   loadingMore: boolean;
   onLoadMore: () => Promise<void>;
   error?: string;
+  status: SessionStatus;
 }
 
-export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error }: TimelineProps) {
+export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, status }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
+  const feedback = getRunFeedback(status, items, streamingMessageId);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
     if (element === null || !following) return;
     element.scrollTop = element.scrollHeight;
-  }, [items, streamingMessageId, following]);
+  }, [items, streamingMessageId, feedback?.label, following]);
 
   const loadEarlier = async () => {
     const element = scrollRef.current;
@@ -47,11 +50,29 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
             ? <MessageItem key={item.id} item={item} streaming={item.id === streamingMessageId} />
             : <ToolItem key={item.id} item={item} />)}
           {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
+          {feedback === undefined ? null : <WorkingIndicator feedback={feedback} />}
         </div>
       </div>
       {!following ? <Button size="sm" className="jump-latest" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}>Jump to latest</Button> : null}
     </section>
   );
+}
+
+function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [feedback.startedAt, feedback.label, feedback.tone]);
+
+  const elapsed = formatRunElapsed(feedback.startedAt, now);
+  return <div className={`working-indicator ${feedback.tone}`} role="status" aria-live="polite">
+    <LoaderCircle className="spin" size={15} />
+    <span>{feedback.label}</span>
+    {elapsed === undefined ? null : <time>{elapsed}</time>}
+  </div>;
 }
 
 const MessageItem = memo(function MessageItem({ item, streaming }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean }) {
