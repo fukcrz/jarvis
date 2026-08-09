@@ -72,8 +72,15 @@ async function verifyComposerShortcuts(page, name) {
     failures.push(`${name}: composer input area is not multi-line height`);
   } else {
     await editorSurface.click({ position: { x: 20, y: bounds.height - 8 } });
-    const focused = await editor.evaluate((element) => document.activeElement === element);
-    if (!focused) failures.push(`${name}: clicking the lower input area did not focus the editor`);
+    await page.keyboard.type("lower-area-focus");
+    const focus = await editor.evaluate((element) => ({
+      active: document.activeElement === element,
+      text: element.textContent,
+      contentHeight: element.getBoundingClientRect().height,
+    }));
+    if (!focus.active || focus.text !== "lower-area-focus" || focus.contentHeight < bounds.height - 1) failures.push(`${name}: clicking the lower input area did not focus the editor`);
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Backspace");
   }
   const prompts = [];
   await page.route("**/api/workspaces/*/sessions/*/prompt", async (route) => {

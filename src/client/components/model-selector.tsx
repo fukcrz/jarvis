@@ -1,6 +1,7 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, LoaderCircle } from "lucide-react";
 import type { ModelDescriptor, SessionModelSnapshot } from "../../shared/protocol";
+import { displayModelName } from "../model-display";
 import { Button } from "./ui/button";
 
 interface ModelSelectorProps {
@@ -18,9 +19,9 @@ export function ModelSelector({ model, disabled, pending, onSelect }: ModelSelec
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <Button variant="secondary" size="sm" className="model-selector-trigger" aria-label="Choose model" title={current?.name ?? "Choose model"} disabled={disabled || pending || model.available.length === 0}>
+        <Button variant="secondary" size="sm" className="model-selector-trigger" aria-label="Choose model" title={current === undefined ? "Choose model" : displayModelName(current.name)} disabled={disabled || pending || model.available.length === 0}>
           {pending ? <LoaderCircle className="spin" size={14} /> : null}
-          <span>{current?.name ?? "Choose model"}</span>
+          <span>{current === undefined ? "Choose model" : displayModelName(current.name)}</span>
           <ChevronDown size={14} />
         </Button>
       </DropdownMenu.Trigger>
@@ -33,7 +34,7 @@ export function ModelSelector({ model, disabled, pending, onSelect }: ModelSelec
               const selected = modelKey(candidate) === currentKey;
               return <DropdownMenu.Item key={modelKey(candidate)} className={`model-menu-item ${selected ? "selected" : ""}`} data-model-provider={candidate.provider} data-model-id={candidate.id} disabled={selected} onSelect={() => onSelect(candidate)}>
                 <span className="model-menu-check">{selected ? <Check size={14} /> : null}</span>
-                <span className="model-menu-label">{candidate.name}</span>
+                <span className="model-menu-label">{displayModelName(candidate.name)}</span>
               </DropdownMenu.Item>;
             })}
           </div>)}
