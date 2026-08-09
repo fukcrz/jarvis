@@ -33,8 +33,7 @@ export function ModelSelector({ model, disabled, pending, onSelect }: ModelSelec
               const selected = modelKey(candidate) === currentKey;
               return <DropdownMenu.Item key={modelKey(candidate)} className={`model-menu-item ${selected ? "selected" : ""}`} data-model-provider={candidate.provider} data-model-id={candidate.id} disabled={selected} onSelect={() => onSelect(candidate)}>
                 <span className="model-menu-check">{selected ? <Check size={14} /> : null}</span>
-                <span className="model-menu-label"><strong>{candidate.name}</strong><small>{candidate.id}</small></span>
-                {candidate.reasoning ? <span className="model-capability">Reasoning</span> : null}
+                <span className="model-menu-label">{candidate.name}</span>
               </DropdownMenu.Item>;
             })}
           </div>)}

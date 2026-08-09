@@ -46,6 +46,7 @@ async function capture(name, viewport, path, openNavigation = false) {
     await page.locator(".project-sessions").first().waitFor({ state: "visible" });
     await page.getByRole("button", { name: "Choose model" }).click();
     await page.locator(".model-menu").waitFor({ state: "visible" });
+    if (await page.locator(".model-menu-item small, .model-capability").count() !== 0) failures.push(`${name}: model menu still shows redundant metadata`);
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Add project" }).click();
     await page.getByRole("dialog", { name: "Projects" }).waitFor({ state: "visible" });
@@ -65,6 +66,15 @@ async function capture(name, viewport, path, openNavigation = false) {
 async function verifyComposerShortcuts(page, name) {
   const editor = page.locator(".composer-editor .cm-content");
   if (await editor.count() === 0) return;
+  const editorSurface = page.locator(".composer-editor .cm-editor");
+  const bounds = await editorSurface.boundingBox();
+  if (bounds === null || bounds.height < 100) {
+    failures.push(`${name}: composer input area is not multi-line height`);
+  } else {
+    await editorSurface.click({ position: { x: 20, y: bounds.height - 8 } });
+    const focused = await editor.evaluate((element) => document.activeElement === element);
+    if (!focused) failures.push(`${name}: clicking the lower input area did not focus the editor`);
+  }
   const prompts = [];
   await page.route("**/api/workspaces/*/sessions/*/prompt", async (route) => {
     prompts.push(JSON.parse(route.request().postData() ?? "{}"));

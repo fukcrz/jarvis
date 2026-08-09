@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import CodeMirror from "@uiw/react-codemirror";
+import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { ArrowUp, Square } from "lucide-react";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
@@ -19,6 +19,7 @@ export function PromptEditor({ sessionId, initialValue, busy, onDraftChange, onS
   const valueRef = useRef(initialValue);
   const busyRef = useRef(busy);
   const submittingRef = useRef(false);
+  const editorRef = useRef<ReactCodeMirrorRef>(null);
 
   useEffect(() => { setValue(initialValue); valueRef.current = initialValue; }, [sessionId, initialValue]);
   useEffect(() => { busyRef.current = busy; }, [busy]);
@@ -43,21 +44,26 @@ export function PromptEditor({ sessionId, initialValue, busy, onDraftChange, onS
   return (
     <section className="composer" aria-label="Message composer">
       <div className="composer-editor">
-        <CodeMirror
-          value={value}
-          onChange={change}
-          minHeight="102px"
-          maxHeight="220px"
-          theme="dark"
-          basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}
-          placeholder="Ask for follow-up changes"
-          onKeyDownCapture={(event) => {
-            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || busyRef.current || submittingRef.current || valueRef.current.trim() === "") return;
-            event.preventDefault();
-            event.stopPropagation();
-            void submit();
-          }}
-        />
+        <div className="composer-input-area" onMouseDown={(event) => {
+          if (event.button === 0) editorRef.current?.view?.focus();
+        }}>
+          <CodeMirror
+            ref={editorRef}
+            value={value}
+            onChange={change}
+            minHeight="102px"
+            maxHeight="220px"
+            theme="dark"
+            basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}
+            placeholder="Ask for follow-up changes"
+            onKeyDownCapture={(event) => {
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || busyRef.current || submittingRef.current || valueRef.current.trim() === "") return;
+              event.preventDefault();
+              event.stopPropagation();
+              void submit();
+            }}
+          />
+        </div>
         <div className="composer-footer">
           <div className="composer-options">{controls}</div>
           {busy ? (
