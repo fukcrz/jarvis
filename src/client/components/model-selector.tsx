@@ -1,5 +1,5 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Bot, Check, ChevronDown, LoaderCircle } from "lucide-react";
+import { Check, ChevronDown, LoaderCircle } from "lucide-react";
 import type { ModelDescriptor, SessionModelSnapshot } from "../../shared/protocol";
 import { Button } from "./ui/button";
 
@@ -19,7 +19,7 @@ export function ModelSelector({ model, disabled, pending, onSelect }: ModelSelec
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <Button variant="secondary" size="sm" className="model-selector-trigger" aria-label="Choose model" title={current?.name ?? "Choose model"} disabled={disabled || pending || model.available.length === 0}>
-          {pending ? <LoaderCircle className="spin" size={14} /> : <Bot size={14} />}
+          {pending ? <LoaderCircle className="spin" size={14} /> : null}
           <span>{current?.name ?? "Choose model"}</span>
           <ChevronDown size={14} />
         </Button>

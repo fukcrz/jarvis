@@ -1,6 +1,6 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FolderPlus, Menu, Pencil, Plus, Trash2, Wifi, WifiOff } from "lucide-react";
+import { FolderPlus, Menu, Pencil, Plus, Trash2 } from "lucide-react";
 import type { ModelDescriptor, SessionRef, SessionSummary, Workspace } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, socketUrl } from "./api";
@@ -20,7 +20,6 @@ export function App() {
   const [sessionsByWorkspace, setSessionsByWorkspace] = useState<Record<string, SessionSummary[]>>({});
   const [sessionId, setSessionId] = useState<string | undefined>(() => window.localStorage.getItem("jarvis.session") ?? undefined);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Record<string, boolean>>(() => readExpandedWorkspaces());
-  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState<string | undefined>();
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
@@ -183,7 +182,6 @@ export function App() {
       setWorkspaceId(targetWorkspaceId);
       setSessionId(session.id);
       setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
-      setSearch("");
       setPageError(undefined);
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Unable to create session");
@@ -297,15 +295,13 @@ export function App() {
     workspaceId={workspaceId}
     selectedSessionId={sessionId}
     expandedWorkspaceIds={expandedWorkspaceIds}
-    search={search}
     onToggleWorkspace={(id) => setExpandedWorkspaceIds((current) => ({ ...current, [id]: !current[id] }))}
     onOpenWorkspaceDialog={() => { setWorkspaceDialogOpen(true); setMobileOpen(false); }}
     onCreateSession={(id) => { void createSession(id); setMobileOpen(false); }}
     onSelectSession={chooseSession}
-    onSearch={setSearch}
   />;
 
-  if (loading) return <main className="app-loading">Opening Jarvis...</main>;
+  if (loading) return <main className="app-loading">Opening workspace...</main>;
 
   return (
     <main className="app-shell">
@@ -321,13 +317,8 @@ export function App() {
           <div className="chat-title-wrap">
             <Tooltip label="Open navigation"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={19} /></Button></Tooltip>
             <div className="chat-title">
-              <span className="chat-workspace">{selectedWorkspace?.label ?? "Project"}</span>
               <div><h1>{selectedSession === undefined ? "New session" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined ? null : <Tooltip label="Rename session"><Button variant="ghost" size="icon" aria-label="Rename session" onClick={() => { setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); setRenameOpen(true); }}><Pencil size={15} /></Button></Tooltip>}</div>
             </div>
-          </div>
-          <div className="header-controls">
-            {selectedSession === undefined ? null : <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle"} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />}
-            {selectedSession === undefined ? null : <div className={`connection-status ${stream.connection}`}><span>{stream.connection === "live" ? <Wifi size={14} /> : <WifiOff size={14} />}</span><span className="connection-label">{stream.transcript.status.runState === "running" ? "Running" : stream.transcript.status.runState === "stopping" ? "Stopping" : stream.connection === "live" ? "Ready" : "Reconnecting"}</span></div>}
           </div>
         </header>
         {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="Dismiss error" onClick={() => setPageError(undefined)}>Dismiss</button></div>}
@@ -341,6 +332,7 @@ export function App() {
             onDraftChange={(value) => setDrafts((current) => ({ ...current, [selectedRef.sessionId]: value }))}
             onSubmit={submitPrompt}
             onStop={() => { void abort(); }}
+            controls={selectedSession === undefined ? undefined : <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle"} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />}
           />
         </>}
       </section>

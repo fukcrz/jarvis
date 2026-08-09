@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
-import { Check, ChevronDown, Clipboard, Clock3, LoaderCircle, RotateCcw, TerminalSquare, XCircle } from "lucide-react";
+import { Check, ChevronDown, Clipboard, Clock3, LoaderCircle, RotateCcw, XCircle } from "lucide-react";
 import type { TimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
@@ -42,7 +42,6 @@ export function Timeline({ items, hasMore, loadingMore, onLoadMore, error }: Tim
       }}>
         <div className="timeline-inner">
           {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "Loading history" : "Load earlier"}</Button> : null}
-          {items.length === 0 ? <div className="conversation-empty"><TerminalSquare size={22} /><p>Start a focused coding task in this session.</p></div> : null}
           {items.map((item) => item.kind === "message" ? <MessageItem key={item.id} item={item} /> : <ToolItem key={item.id} item={item} />)}
           {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
         </div>
@@ -66,7 +65,7 @@ function MessageItem({ item }: { item: Extract<TimelineItem, { kind: "message" }
   };
   return (
     <article className={`message-row ${item.role}`}>
-      <div className="message-meta"><span>{item.role === "user" ? "You" : "Jarvis"}</span><time>{timestamp}</time></div>
+      <div className="message-meta">{item.role === "user" ? <span>You</span> : null}<time>{timestamp}</time></div>
       <div className="message-content">
         <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{item.text}</ReactMarkdown>
       </div>
