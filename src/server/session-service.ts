@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import {
@@ -60,6 +60,7 @@ const MAX_PROMPT_LENGTH = 40_000;
 export class SessionService {
   private readonly active = new Map<string, ActiveSession>();
   private readonly pendingOpens = new Map<string, Promise<ActiveSession>>();
+  private readonly deleting = new Set<string>();
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
 
   constructor(
@@ -105,6 +106,47 @@ export class SessionService {
     const summary = this.summaryFromActive(active);
     this.publishSummary(active, summary);
     return summary;
+  }
+
+  async remove(ref: SessionRef): Promise<void> {
+    const key = activeKey(ref);
+    if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is already being deleted", 409);
+    this.deleting.add(key);
+
+    try {
+      const workspace = this.workspaces.get(ref.workspaceId);
+      const pending = this.pendingOpens.get(key);
+      if (pending !== undefined) await pending.catch(() => undefined);
+
+      const active = this.active.get(key);
+      if (active !== undefined && (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming)) {
+        throw new AppError("SESSION_BUSY", "Stop the current run before deleting this session", 409);
+      }
+
+      const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
+      const listed = sessionDir === undefined
+        ? await SessionManager.list(workspace.cwd)
+        : await SessionManager.list(workspace.cwd, sessionDir);
+      const match = listed.find((entry) => entry.id === ref.sessionId);
+      if (match === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+
+      if (active !== undefined) {
+        active.unsubscribe();
+        active.session.dispose();
+        this.active.delete(key);
+      }
+
+      try {
+        await rm(match.path);
+      } catch (error) {
+        if (isMissingFile(error)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+        throw new AppError("SESSION_DELETE_FAILED", "Unable to delete session history", 500);
+      }
+
+      this.events.publishWorkspace(ref.workspaceId, { version: 1, type: "session.deleted", workspaceId: ref.workspaceId, sessionId: ref.sessionId });
+    } finally {
+      this.deleting.delete(key);
+    }
   }
 
   async timeline(ref: SessionRef, before?: number, limit = PAGE_LIMIT): Promise<TimelinePage> {
@@ -225,6 +267,7 @@ export class SessionService {
     }
     this.active.clear();
     this.pendingOpens.clear();
+    this.deleting.clear();
   }
 
   private async executePrompt(active: ActiveSession, prompt: string, runId: string): Promise<void> {
@@ -238,6 +281,7 @@ export class SessionService {
 
   private async getActive(ref: SessionRef): Promise<ActiveSession> {
     const key = activeKey(ref);
+    if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is being deleted", 409);
     const existing = this.active.get(key);
     if (existing !== undefined) return existing;
     const pending = this.pendingOpens.get(key);
@@ -546,6 +590,10 @@ function expandToUserBoundary(items: TimelineItem[], start: number): number {
 function firstUserMessage(entries: readonly unknown[]): string | null {
   const history = projectHistory(entries);
   return history.find((item): item is MessageTimelineItem => item.kind === "message" && item.role === "user")?.text ?? null;
+}
+
+function isMissingFile(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as Record<string, unknown>)["code"] === "ENOENT";
 }
 
 function stringValue(value: unknown): string {

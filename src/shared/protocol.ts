@@ -123,7 +123,8 @@ export interface SessionEvent {
 
 export type WorkspaceEvent =
   | { version: typeof PROTOCOL_VERSION; type: "session.created"; workspaceId: string; session: SessionSummary }
-  | { version: typeof PROTOCOL_VERSION; type: "session.updated"; workspaceId: string; session: SessionSummary };
+  | { version: typeof PROTOCOL_VERSION; type: "session.updated"; workspaceId: string; session: SessionSummary }
+  | { version: typeof PROTOCOL_VERSION; type: "session.deleted"; workspaceId: string; sessionId: string };
 
 export interface ApiErrorBody {
   error: {
@@ -154,20 +155,36 @@ export const sessionEventSchema = z.object({
   payload: z.unknown(),
 });
 
-export const workspaceEventSchema = z.object({
-  version: z.literal(PROTOCOL_VERSION),
-  type: z.enum(["session.created", "session.updated"]),
-  workspaceId: z.string().min(1),
-  session: z.object({
-    id: z.string(),
-    workspaceId: z.string(),
-    name: z.string().nullable(),
-    preview: z.string().nullable(),
-    createdAt: z.string(),
-    updatedAt: z.string(),
-    runState: z.enum(["idle", "running", "stopping"]),
-  }),
+const sessionSummarySchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  name: z.string().nullable(),
+  preview: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  runState: z.enum(["idle", "running", "stopping"]),
 });
+
+export const workspaceEventSchema = z.discriminatedUnion("type", [
+  z.object({
+    version: z.literal(PROTOCOL_VERSION),
+    type: z.literal("session.created"),
+    workspaceId: z.string().min(1),
+    session: sessionSummarySchema,
+  }),
+  z.object({
+    version: z.literal(PROTOCOL_VERSION),
+    type: z.literal("session.updated"),
+    workspaceId: z.string().min(1),
+    session: sessionSummarySchema,
+  }),
+  z.object({
+    version: z.literal(PROTOCOL_VERSION),
+    type: z.literal("session.deleted"),
+    workspaceId: z.string().min(1),
+    sessionId: z.string().min(1),
+  }),
+]);
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

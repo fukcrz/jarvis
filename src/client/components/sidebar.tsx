@@ -14,6 +14,7 @@ interface SidebarProps {
   onOpenWorkspaceDialog: () => void;
   onCreateSession: (workspaceId: string) => void;
   onSelectSession: (workspaceId: string, sessionId: string) => void;
+  onOpenSessionMenu: (workspaceId: string, session: SessionSummary, position: { x: number; y: number }) => void;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -41,7 +42,14 @@ export function Sidebar(props: SidebarProps) {
                 <Tooltip label={`New session in ${workspace.label}`}><Button variant="ghost" size="icon" className="project-new-session" aria-label={`New session in ${workspace.label}`} onClick={() => props.onCreateSession(workspace.id)}><MessageSquarePlus size={15} /></Button></Tooltip>
               </div>
               {expanded ? <div className="project-sessions" role="group">
-                {sessions.map((session) => <button key={session.id} type="button" data-session-id={session.id} className={`session-row ${workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "selected" : ""}`} aria-current={workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "page" : undefined} onClick={() => props.onSelectSession(workspace.id, session.id)}>
+                {sessions.map((session) => <button key={session.id} type="button" data-session-id={session.id} className={`session-row ${workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "selected" : ""}`} aria-current={workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "page" : undefined} onClick={() => props.onSelectSession(workspace.id, session.id)} onContextMenu={(event) => {
+                  event.preventDefault();
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  props.onOpenSessionMenu(workspace.id, session, {
+                    x: event.clientX === 0 ? bounds.right : event.clientX,
+                    y: event.clientY === 0 ? bounds.bottom : event.clientY,
+                  });
+                }}>
                   <span className={`session-dot ${session.runState}`}></span>
                   <span className="session-text"><strong>{sessionLabel(session.name, session.preview)}</strong><small>{formatRelativeTime(session.updatedAt)}</small></span>
                 </button>)}

@@ -18,6 +18,19 @@ describe("API client", () => {
     expect(new Headers(init?.headers).has("content-type")).toBe(false);
   });
 
+  it("does not send a JSON content type when deleting a session", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ removed: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ref = { workspaceId: "da69b38d-f132-4c84-8c4f-6174015e9c5e", sessionId: "c2f73ddd-cfc6-464f-acb3-c8f425cea7f0" };
+
+    await api.removeSession(ref);
+
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe(`/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}`);
+    expect(init?.method).toBe("DELETE");
+    expect(new Headers(init?.headers).has("content-type")).toBe(false);
+  });
+
   it("sends a provider and model id to the session model endpoint", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ model: { provider: "provider", id: "model", name: "Model", reasoning: true } }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

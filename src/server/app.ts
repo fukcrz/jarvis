@@ -75,6 +75,10 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const body = sessionNameInput.parse(request.body);
     return { session: await sessions.rename(ref, body.name) };
   });
+  app.delete("/api/workspaces/:workspaceId/sessions/:sessionId", async (request) => {
+    await sessions.remove(sessionRef(request.params));
+    return { removed: true };
+  });
 
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/timeline", async (request) => {
     const ref = sessionRef(request.params);

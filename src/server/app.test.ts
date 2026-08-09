@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,12 +18,17 @@ interface TestSocketConstructor {
 
 let app: FastifyInstance | undefined;
 let jarvisHome: string;
+let sessionDir: string;
 let previousJarvisHome: string | undefined;
+let previousSessionDir: string | undefined;
 
 beforeEach(async () => {
   previousJarvisHome = process.env["JARVIS_HOME"];
+  previousSessionDir = process.env["PI_CODING_AGENT_SESSION_DIR"];
   jarvisHome = await mkdtemp(join(tmpdir(), "jarvis-app-test-"));
+  sessionDir = join(jarvisHome, "sessions");
   process.env["JARVIS_HOME"] = jarvisHome;
+  process.env["PI_CODING_AGENT_SESSION_DIR"] = sessionDir;
   app = await buildApp();
 });
 
@@ -29,6 +36,8 @@ afterEach(async () => {
   await app?.close();
   if (previousJarvisHome === undefined) delete process.env["JARVIS_HOME"];
   else process.env["JARVIS_HOME"] = previousJarvisHome;
+  if (previousSessionDir === undefined) delete process.env["PI_CODING_AGENT_SESSION_DIR"];
+  else process.env["PI_CODING_AGENT_SESSION_DIR"] = previousSessionDir;
   await rm(jarvisHome, { force: true, recursive: true });
   app = undefined;
 });
@@ -128,6 +137,38 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const missingApi = await server.inject({ method: "GET", url: "/api/not-a-route" });
     expect(missingApi.statusCode).toBe(404);
     expect(missingApi.json()).toMatchObject({ error: { code: "NOT_FOUND", message: "Route not found" } });
+  });
+
+  it("deletes a session JSONL file and broadcasts a workspace event", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "delete-session-workspace");
+    await mkdir(workspacePath);
+    const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath, label: "Delete session" } });
+    const workspace = created.json() as { workspace: { id: string } };
+    const sessionId = randomUUID();
+    const timestamp = new Date().toISOString();
+    const sessionFile = join(sessionDir, `${timestamp.replace(/[:.]/g, "-")}_${sessionId}.jsonl`);
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(sessionFile, `${JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp, cwd: workspacePath })}\n`);
+    expect(existsSync(sessionFile)).toBe(true);
+
+    const address = await server.listen({ host: "127.0.0.1", port: 0 });
+    const endpoint = new URL(`/api/workspaces/${workspace.workspace.id}/events`, address);
+    endpoint.protocol = "ws:";
+    const socket = createSocket(endpoint.toString());
+    await waitForOpen(socket);
+
+    const received = nextJsonMessage(socket);
+    const removed = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.workspace.id}/sessions/${sessionId}` });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toEqual({ removed: true });
+    await expect(received).resolves.toEqual({ version: 1, type: "session.deleted", workspaceId: workspace.workspace.id, sessionId });
+    expect(existsSync(sessionFile)).toBe(false);
+
+    const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/sessions` });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual({ sessions: [] });
+    socket.close();
   });
 
   it("delivers a workspace event through the standard WebSocket endpoint", async () => {

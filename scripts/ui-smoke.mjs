@@ -70,7 +70,10 @@ async function capture(name, viewport, path, openNavigation = false) {
   if (viewportOverflow) failures.push(`${name}: unexpected horizontal viewport overflow`);
   if (!openNavigation && isolatedSessionId !== undefined) await verifyStreamingMarkdown(page, name, isolatedSessionId);
   await page.screenshot({ path, fullPage: true });
-  if (!openNavigation) await verifyComposerShortcuts(page, name, isolatedSessionId);
+  if (!openNavigation) {
+    await verifyComposerShortcuts(page, name, isolatedSessionId);
+    await verifySessionDeleteMenu(page, name);
+  }
   await context.close();
 }
 
@@ -134,6 +137,44 @@ async function verifyComposerShortcuts(page, name, sessionId) {
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => document.querySelector(".composer-editor .cm-placeholder") !== null, undefined, { timeout: 5_000 });
   if (prompts.length !== 1 || prompts[0]?.text !== "First line\nSecond line") failures.push(`${name}: Enter did not send the editor value`);
+}
+
+async function verifySessionDeleteMenu(page, name) {
+  const row = page.locator(".desktop-sidebar .session-row").first();
+  if (await row.count() === 0) return;
+  const sessionId = await row.getAttribute("data-session-id");
+  if (sessionId === null) {
+    failures.push(`${name}: session row is missing its id`);
+    return;
+  }
+
+  await row.click({ button: "right" });
+  const menu = page.getByRole("menu", { name: "Session actions" });
+  await menu.waitFor({ state: "visible", timeout: 5_000 });
+  const menuDelete = menu.getByRole("menuitem", { name: "Delete session" });
+  if (await menuDelete.isDisabled()) {
+    failures.push(`${name}: delete menu is disabled for an idle smoke session`);
+    return;
+  }
+  await menuDelete.click();
+  const dialog = page.getByRole("dialog", { name: "Delete session" });
+  await dialog.waitFor({ state: "visible", timeout: 5_000 });
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await dialog.waitFor({ state: "hidden", timeout: 5_000 });
+
+  const deletes = [];
+  await page.route("**/api/workspaces/*/sessions/*", async (route) => {
+    if (route.request().method() !== "DELETE") return route.continue();
+    deletes.push(route.request().url());
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ removed: true }) });
+  });
+  await row.click({ button: "right" });
+  await menu.waitFor({ state: "visible", timeout: 5_000 });
+  await menu.getByRole("menuitem", { name: "Delete session" }).click();
+  await dialog.waitFor({ state: "visible", timeout: 5_000 });
+  await dialog.getByRole("button", { name: "Delete session" }).click();
+  await page.waitForFunction((id) => document.querySelector(`.desktop-sidebar .session-row[data-session-id="${id}"]`) === null, sessionId, { timeout: 5_000 });
+  if (deletes.length !== 1) failures.push(`${name}: deleting a session did not issue one DELETE request`);
 }
 
 async function verifyDraftStability(page, name, sessionId, editor) {

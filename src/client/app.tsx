@@ -7,6 +7,7 @@ import { api, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
 import { Sidebar } from "./components/sidebar";
+import { SessionContextMenu, type SessionContextMenuTarget } from "./components/session-context-menu";
 import { Timeline } from "./components/timeline";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
@@ -30,6 +31,9 @@ export function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(() => readDrafts());
+  const [sessionMenu, setSessionMenu] = useState<SessionContextMenuTarget | undefined>();
+  const [deleteTarget, setDeleteTarget] = useState<Pick<SessionContextMenuTarget, "workspaceId" | "session"> | undefined>();
+  const [deletePending, setDeletePending] = useState(false);
 
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId);
   const selectedSession = selectedWorkspace === undefined
@@ -46,6 +50,7 @@ export function App() {
   const updateSelectedDraft = useCallback((value: string) => {
     if (selectedSessionId !== undefined) updateDraft(selectedSessionId, value);
   }, [selectedSessionId, updateDraft]);
+  const closeSessionMenu = useCallback(() => { setSessionMenu(undefined); }, []);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
   const stream = useSessionStream(selectedRef);
 
@@ -143,10 +148,19 @@ export function App() {
           try {
             const parsed = workspaceEventSchema.safeParse(JSON.parse(String(event.data)));
             if (!parsed.success) return;
-            setSessionsByWorkspace((current) => ({
-              ...current,
-              [workspace.id]: mergeSession(current[workspace.id] ?? [], parsed.data.session),
-            }));
+            const workspaceEvent = parsed.data;
+            if (workspaceEvent.type === "session.deleted") {
+              setSessionsByWorkspace((current) => {
+                const sessions = current[workspace.id] ?? [];
+                const next = withoutSession(sessions, workspaceEvent.sessionId);
+                return next === sessions ? current : { ...current, [workspace.id]: next };
+              });
+              setDrafts((current) => withoutDraft(current, workspaceEvent.sessionId));
+              setSessionMenu((current) => current?.workspaceId === workspace.id && current.session.id === workspaceEvent.sessionId ? undefined : current);
+              setDeleteTarget((current) => current?.workspaceId === workspace.id && current.session.id === workspaceEvent.sessionId ? undefined : current);
+              return;
+            }
+            setSessionsByWorkspace((current) => ({ ...current, [workspace.id]: mergeSession(current[workspace.id] ?? [], workspaceEvent.session) }));
           } catch {
             // A malformed workspace event does not invalidate the active view.
           }
@@ -250,6 +264,28 @@ export function App() {
     }
   };
 
+  const deleteSession = async () => {
+    const target = deleteTarget;
+    if (target === undefined || deletePending) return;
+    setDeletePending(true);
+    try {
+      await api.removeSession({ workspaceId: target.workspaceId, sessionId: target.session.id });
+      const remaining = withoutSession(sessionsByWorkspace[target.workspaceId] ?? [], target.session.id);
+      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: withoutSession(current[target.workspaceId] ?? [], target.session.id) }));
+      setDrafts((current) => withoutDraft(current, target.session.id));
+      if (workspaceId === target.workspaceId && sessionId === target.session.id) {
+        setSessionId(remaining[0]?.id);
+        setMobileOpen(false);
+      }
+      setDeleteTarget(undefined);
+      setPageError(undefined);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Unable to delete session");
+    } finally {
+      setDeletePending(false);
+    }
+  };
+
   const submitPrompt = async (text: string): Promise<boolean> => {
     if (selectedRef === undefined) return false;
     try {
@@ -307,6 +343,7 @@ export function App() {
     onOpenWorkspaceDialog={() => { setWorkspaceDialogOpen(true); setMobileOpen(false); }}
     onCreateSession={(id) => { void createSession(id); setMobileOpen(false); }}
     onSelectSession={chooseSession}
+    onOpenSessionMenu={(targetWorkspaceId, session, position) => setSessionMenu({ workspaceId: targetWorkspaceId, session, ...position })}
   />;
 
   if (loading) return <main className="app-loading">Opening workspace...</main>;
@@ -344,6 +381,11 @@ export function App() {
         </>}
       </section>
 
+      {sessionMenu === undefined ? null : <SessionContextMenu target={sessionMenu} onClose={closeSessionMenu} onDelete={(target) => {
+        setSessionMenu(undefined);
+        setDeleteTarget({ workspaceId: target.workspaceId, session: target.session });
+      }} />}
+
       <Dialog open={workspaceDialogOpen} onOpenChange={setWorkspaceDialogOpen}>
         <DialogContent title="Projects" description="Add a local directory or remove a registered project.">
           <div className="workspace-form">
@@ -362,8 +404,30 @@ export function App() {
           <form className="rename-form" onSubmit={(event) => { event.preventDefault(); void renameSession(); }}><input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} autoFocus /><Button type="submit" disabled={renameValue.trim() === ""}>Save</Button></form>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={deleteTarget !== undefined} onOpenChange={(open) => { if (!open && !deletePending) setDeleteTarget(undefined); }}>
+        <DialogContent title="Delete session" description="This permanently deletes the Pi session history.">
+          <p className="delete-session-message"><strong>{deleteTarget === undefined ? "" : sessionLabel(deleteTarget.session.name, deleteTarget.session.preview)}</strong> will be permanently deleted.</p>
+          <div className="dialog-actions">
+            <Button variant="secondary" onClick={() => setDeleteTarget(undefined)} disabled={deletePending}>Cancel</Button>
+            <Button variant="danger" onClick={() => { void deleteSession(); }} disabled={deletePending}>{deletePending ? "Deleting..." : "Delete session"}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </main>
   );
+}
+
+function withoutSession(current: SessionSummary[], sessionId: string): SessionSummary[] {
+  const next = current.filter((session) => session.id !== sessionId);
+  return next.length === current.length ? current : next;
+}
+
+function withoutDraft(current: Record<string, string>, sessionId: string): Record<string, string> {
+  if (!(sessionId in current)) return current;
+  const next = { ...current };
+  delete next[sessionId];
+  return next;
 }
 
 function mergeSession(current: SessionSummary[], next: SessionSummary): SessionSummary[] {
