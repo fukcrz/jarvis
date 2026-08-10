@@ -86,6 +86,23 @@ export function App() {
     return () => media.removeEventListener("change", update);
   }, []);
 
+  // Track the visual viewport so mobile layouts can shrink below the on-screen
+  // keyboard (dvh does not include it on iOS/Android). Sets --vvh on the root;
+  // CSS falls back to 100dvh when this runs in a browser without visualViewport.
+  useEffect(() => {
+    const visualViewport = window.visualViewport;
+    if (visualViewport === null) return;
+    const root = document.documentElement;
+    const update = () => { root.style.setProperty("--vvh", `${String(visualViewport.height)}px`); };
+    update();
+    visualViewport.addEventListener("resize", update);
+    visualViewport.addEventListener("scroll", update);
+    return () => {
+      visualViewport.removeEventListener("resize", update);
+      visualViewport.removeEventListener("scroll", update);
+    };
+  }, []);
+
   useEffect(() => {
     setModelSwitchPending(false);
     setThinkingLevelPending(false);
