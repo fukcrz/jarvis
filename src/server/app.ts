@@ -1,11 +1,13 @@
-import { resolve } from "node:path";
+import { readdir, realpath, stat } from "node:fs/promises";
+import { platform } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
 import { z } from "zod";
-import type { ApiErrorBody, SessionRef } from "../shared/protocol.js";
+import type { ApiErrorBody, DirectoryListing, SessionRef } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { SessionService } from "./session-service.js";
@@ -13,6 +15,7 @@ import { WorkspaceStore } from "./workspace-store.js";
 
 const workspaceInput = z.object({ cwd: z.string().min(1), label: z.string().max(96).optional() }).strict();
 const workspaceUpdateInput = z.object({ label: z.string().min(1).max(96) }).strict();
+const directoryQuery = z.object({ path: z.string().min(1).optional(), roots: z.enum(["true"]).optional() }).strict();
 const sessionNameInput = z.object({ name: z.string().min(1).max(120) }).strict();
 const modelInput = z.object({ provider: z.string().min(1).max(160), modelId: z.string().min(1).max(320) }).strict();
 const promptInput = z.object({ text: z.string(), clientRequestId: z.string().uuid() }).strict();
@@ -44,6 +47,11 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
 
   app.get("/api/health", async () => ({ ok: true, version: 1 }));
 
+  app.get("/api/directories", async (request) => {
+    const query = directoryQuery.parse(request.query);
+    return { directory: query.roots === "true" ? await listRoots() : await listDirectory(query.path ?? process.cwd()) };
+  });
+
   app.get("/api/workspaces", async () => ({ workspaces: workspaces.list() }));
   app.post("/api/workspaces", async (request) => {
     const body = workspaceInput.parse(request.body);
@@ -53,6 +61,10 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
     const body = workspaceUpdateInput.parse(request.body);
     return { workspace: await workspaces.updateLabel(params.workspaceId, body.label) };
+  });
+  app.post("/api/workspaces/:workspaceId/open", async (request) => {
+    const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
+    return { workspace: await workspaces.touch(params.workspaceId) };
   });
   app.delete("/api/workspaces/:workspaceId", async (request) => {
     const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
@@ -149,6 +161,54 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
 declare module "fastify" {
   interface FastifyInstance {
     jarvis: JarvisServices;
+  }
+}
+
+async function listRoots(): Promise<DirectoryListing> {
+  if (platform() !== "win32") return listDirectory("/");
+  const candidates = Array.from({ length: 26 }, (_, index) => `${String.fromCharCode(65 + index)}:\\`);
+  const entries = (await Promise.all(candidates.map(async (path) => {
+    try {
+      const metadata = await stat(path);
+      return metadata.isDirectory() ? { name: path, path } : undefined;
+    } catch {
+      return undefined;
+    }
+  }))).filter((entry): entry is { name: string; path: string } => entry !== undefined);
+  return { path: "", name: "Drives", entries, isGitRepository: false, isRootPicker: true };
+}
+
+async function listDirectory(value: string): Promise<DirectoryListing> {
+  try {
+    const path = await realpath(value);
+    const metadata = await stat(path);
+    if (!metadata.isDirectory()) throw new AppError("DIRECTORY_INVALID", "Path must be a directory", 400);
+    const entries = await readdir(path, { withFileTypes: true });
+    const directoryEntries = entries
+      .filter((entry) => entry.isDirectory() && entry.name !== "." && entry.name !== "..")
+      .map((entry) => ({ name: entry.name, path: join(path, entry.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const parentPath = dirname(path);
+    return {
+      path,
+      name: basename(path) || path,
+      parent: parentPath === path ? undefined : parentPath,
+      entries: directoryEntries,
+      isGitRepository: await pathExists(join(path, ".git")),
+      isRootPicker: false,
+    };
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError("DIRECTORY_UNAVAILABLE", `Directory is unavailable: ${value}`, 400);
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
   }
 }
 

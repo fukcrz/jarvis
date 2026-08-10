@@ -12,11 +12,12 @@ export default defineConfig({
   },
   server: {
     host: true,
-    port: 5173,
+    port: 28471,
+    strictPort: true,
     allowedHosts: true,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:4310",
+        target: "http://127.0.0.1:39126",
         changeOrigin: true,
         ws: true,
       },

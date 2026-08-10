@@ -11,6 +11,21 @@ export interface Workspace {
   label: string;
   createdAt: string;
   updatedAt: string;
+  lastOpenedAt: string;
+}
+
+export interface DirectoryEntry {
+  name: string;
+  path: string;
+}
+
+export interface DirectoryListing {
+  path: string;
+  name: string;
+  parent?: string;
+  entries: DirectoryEntry[];
+  isGitRepository: boolean;
+  isRootPicker: boolean;
 }
 
 export interface SessionRef {

@@ -1,5 +1,6 @@
 import type {
   ApiErrorBody,
+  DirectoryListing,
   ModelDescriptor,
   PromptAccepted,
   SessionRef,
@@ -28,8 +29,17 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  directory: async (path?: string, roots = false): Promise<DirectoryListing> => {
+    const params = new URLSearchParams();
+    if (path !== undefined) params.set("path", path);
+    if (roots) params.set("roots", "true");
+    const query = params.size === 0 ? "" : `?${params.toString()}`;
+    return (await request<{ directory: DirectoryListing }>(`/api/directories${query}`)).directory;
+  },
   listWorkspaces: async (): Promise<Workspace[]> => (await request<{ workspaces: Workspace[] }>("/api/workspaces")).workspaces,
   addWorkspace: async (cwd: string, label?: string): Promise<Workspace> => (await request<{ workspace: Workspace }>("/api/workspaces", { method: "POST", body: JSON.stringify({ cwd, ...(label === undefined ? {} : { label }) }) })).workspace,
+  renameWorkspace: async (workspaceId: string, label: string): Promise<Workspace> => (await request<{ workspace: Workspace }>(`/api/workspaces/${workspaceId}`, { method: "PATCH", body: JSON.stringify({ label }) })).workspace,
+  openWorkspace: async (workspaceId: string): Promise<Workspace> => (await request<{ workspace: Workspace }>(`/api/workspaces/${workspaceId}/open`, { method: "POST", body: "{}" })).workspace,
   removeWorkspace: async (workspaceId: string): Promise<void> => { await request(`/api/workspaces/${workspaceId}`, { method: "DELETE" }); },
   listSessions: async (workspaceId: string, query?: string): Promise<SessionSummary[]> => {
     const params = new URLSearchParams();

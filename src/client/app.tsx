@@ -1,6 +1,6 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FolderPlus, Menu, Pencil, Plus, Trash2 } from "lucide-react";
+import { FolderPlus, Menu, Pencil, Plus } from "lucide-react";
 import type { ModelDescriptor, SessionRef, SessionSummary, Workspace } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, socketUrl } from "./api";
@@ -8,9 +8,12 @@ import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
 import { Sidebar } from "./components/sidebar";
 import { SessionContextMenu, type SessionContextMenuTarget } from "./components/session-context-menu";
+import { ProjectContextMenu, type ProjectContextMenuTarget } from "./components/project-context-menu";
+import { MobileActionSheet, type MobileActionTarget } from "./components/mobile-action-sheet";
 import { Timeline } from "./components/timeline";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
+import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
 import { sessionLabel } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
@@ -24,14 +27,18 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState<string | undefined>();
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
-  const [workspacePath, setWorkspacePath] = useState("");
-  const [workspaceLabel, setWorkspaceLabel] = useState("");
-  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<{ workspaceId: string; session: SessionSummary } | undefined>();
   const [renameValue, setRenameValue] = useState("");
+  const [projectRenameTarget, setProjectRenameTarget] = useState<Workspace | undefined>();
+  const [projectRenameValue, setProjectRenameValue] = useState("");
+  const [projectRemoveTarget, setProjectRemoveTarget] = useState<Workspace | undefined>();
+  const [projectRemovePending, setProjectRemovePending] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(() => readDrafts());
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuTarget | undefined>();
+  const [projectMenu, setProjectMenu] = useState<ProjectContextMenuTarget | undefined>();
+  const [mobileActionTarget, setMobileActionTarget] = useState<MobileActionTarget | undefined>();
   const [deleteTarget, setDeleteTarget] = useState<Pick<SessionContextMenuTarget, "workspaceId" | "session"> | undefined>();
   const [deletePending, setDeletePending] = useState(false);
 
@@ -51,6 +58,7 @@ export function App() {
     if (selectedSessionId !== undefined) updateDraft(selectedSessionId, value);
   }, [selectedSessionId, updateDraft]);
   const closeSessionMenu = useCallback(() => { setSessionMenu(undefined); }, []);
+  const closeProjectMenu = useCallback(() => { setProjectMenu(undefined); }, []);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
   const stream = useSessionStream(selectedRef);
 
@@ -210,57 +218,70 @@ export function App() {
     }
   };
 
-  const addWorkspace = async () => {
+  const addWorkspace = async (path: string, label?: string) => {
+    const workspace = await api.addWorkspace(path, label);
+    setWorkspaces((current) => mergeWorkspace(current, workspace));
+    setSessionsByWorkspace((current) => current[workspace.id] === undefined ? { ...current, [workspace.id]: [] } : current);
+    setExpandedWorkspaceIds((current) => ({ ...current, [workspace.id]: true }));
+    setWorkspaceId(workspace.id);
+    setSessionId(undefined);
+    setPageError(undefined);
+  };
+
+  const renameSession = async () => {
+    const target = renameTarget;
+    if (target === undefined) return;
     try {
-      const workspace = await api.addWorkspace(workspacePath, workspaceLabel.trim() || undefined);
-      setWorkspaces((current) => mergeWorkspace(current, workspace));
-      setSessionsByWorkspace((current) => current[workspace.id] === undefined ? { ...current, [workspace.id]: [] } : current);
-      setExpandedWorkspaceIds((current) => ({ ...current, [workspace.id]: true }));
-      setWorkspaceId(workspace.id);
-      setSessionId(undefined);
-      setWorkspacePath("");
-      setWorkspaceLabel("");
-      setWorkspaceDialogOpen(false);
+      const session = await api.renameSession({ workspaceId: target.workspaceId, sessionId: target.session.id }, renameValue);
+      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session) }));
+      setRenameTarget(undefined);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Unable to add project");
+      setPageError(error instanceof Error ? error.message : "Unable to rename session");
     }
   };
 
-  const removeWorkspace = async (id: string) => {
+  const renameProject = async () => {
+    const target = projectRenameTarget;
+    if (target === undefined) return;
     try {
-      await api.removeWorkspace(id);
-      const remaining = workspaces.filter((workspace) => workspace.id !== id);
+      const workspace = await api.renameWorkspace(target.id, projectRenameValue);
+      setWorkspaces((current) => mergeWorkspace(current, workspace));
+      setProjectRenameTarget(undefined);
+      setPageError(undefined);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Unable to rename project");
+    }
+  };
+
+  const removeProject = async () => {
+    const target = projectRemoveTarget;
+    if (target === undefined || projectRemovePending) return;
+    setProjectRemovePending(true);
+    try {
+      await api.removeWorkspace(target.id);
+      const remaining = workspaces.filter((workspace) => workspace.id !== target.id);
       setWorkspaces(remaining);
       setSessionsByWorkspace((current) => {
         const next = { ...current };
-        delete next[id];
+        delete next[target.id];
         return next;
       });
       setExpandedWorkspaceIds((current) => {
         const next = { ...current };
-        delete next[id];
+        delete next[target.id];
         return next;
       });
-      if (workspaceId === id) {
+      if (workspaceId === target.id) {
         setWorkspaceId(remaining[0]?.id);
         setSessionId(undefined);
       }
+      setProjectRemoveTarget(undefined);
       setPageError(undefined);
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Unable to remove project");
-    }
-  };
-
-  const renameSession = async () => {
-    if (selectedRef === undefined) return;
-    try {
-      const session = await api.renameSession(selectedRef, renameValue);
-      setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session) }));
-      setRenameOpen(false);
-      setPageError(undefined);
-    } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Unable to rename session");
+    } finally {
+      setProjectRemovePending(false);
     }
   };
 
@@ -343,7 +364,10 @@ export function App() {
     onOpenWorkspaceDialog={() => { setWorkspaceDialogOpen(true); setMobileOpen(false); }}
     onCreateSession={(id) => { void createSession(id); setMobileOpen(false); }}
     onSelectSession={chooseSession}
+    onOpenProjectMenu={(workspace, position) => setProjectMenu({ workspace, ...position })}
     onOpenSessionMenu={(targetWorkspaceId, session, position) => setSessionMenu({ workspaceId: targetWorkspaceId, session, ...position })}
+    onLongPressProject={(workspace) => setMobileActionTarget({ kind: "project", workspace })}
+    onLongPressSession={(targetWorkspaceId, session) => setMobileActionTarget({ kind: "session", workspaceId: targetWorkspaceId, session })}
   />;
 
   if (loading) return <main className="app-loading">Opening workspace...</main>;
@@ -362,7 +386,7 @@ export function App() {
           <div className="chat-title-wrap">
             <Tooltip label="Open navigation"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={19} /></Button></Tooltip>
             <div className="chat-title">
-              <div><h1>{selectedSession === undefined ? "New session" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined ? null : <Tooltip label="Rename session"><Button variant="ghost" size="icon" aria-label="Rename session" onClick={() => { setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); setRenameOpen(true); }}><Pencil size={15} /></Button></Tooltip>}</div>
+              <div><h1>{selectedSession === undefined ? "New session" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined || selectedWorkspace === undefined ? null : <Tooltip label="Rename session"><Button variant="ghost" size="icon" aria-label="Rename session" onClick={() => { setRenameTarget({ workspaceId: selectedWorkspace.id, session: selectedSession }); setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); }}><Pencil size={15} /></Button></Tooltip>}</div>
             </div>
           </div>
         </header>
@@ -381,27 +405,61 @@ export function App() {
         </>}
       </section>
 
-      {sessionMenu === undefined ? null : <SessionContextMenu target={sessionMenu} onClose={closeSessionMenu} onDelete={(target) => {
+      {sessionMenu === undefined ? null : <SessionContextMenu target={sessionMenu} onClose={closeSessionMenu} onRename={(target) => {
+        setSessionMenu(undefined);
+        setRenameTarget({ workspaceId: target.workspaceId, session: target.session });
+        setRenameValue(target.session.name ?? sessionLabel(target.session.name, target.session.preview));
+      }} onDelete={(target) => {
         setSessionMenu(undefined);
         setDeleteTarget({ workspaceId: target.workspaceId, session: target.session });
       }} />}
+      {projectMenu === undefined ? null : <ProjectContextMenu target={projectMenu} onClose={closeProjectMenu} onCreateSession={(workspace) => {
+        setProjectMenu(undefined);
+        void createSession(workspace.id);
+      }} onRename={(workspace) => {
+        setProjectMenu(undefined);
+        setProjectRenameTarget(workspace);
+        setProjectRenameValue(workspace.label);
+      }} onRemove={(workspace) => {
+        setProjectMenu(undefined);
+        setProjectRemoveTarget(workspace);
+      }} />}
+      <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onCreateSession={(workspace) => {
+        setMobileActionTarget(undefined);
+        void createSession(workspace.id);
+        setMobileOpen(false);
+      }} onRenameProject={(workspace) => {
+        setMobileActionTarget(undefined);
+        setProjectRenameTarget(workspace);
+        setProjectRenameValue(workspace.label);
+      }} onRemoveProject={(workspace) => {
+        setMobileActionTarget(undefined);
+        setProjectRemoveTarget(workspace);
+      }} onRenameSession={(targetWorkspaceId, session) => {
+        setMobileActionTarget(undefined);
+        setRenameTarget({ workspaceId: targetWorkspaceId, session });
+        setRenameValue(session.name ?? sessionLabel(session.name, session.preview));
+      }} onDeleteSession={(targetWorkspaceId, session) => {
+        setMobileActionTarget(undefined);
+        setDeleteTarget({ workspaceId: targetWorkspaceId, session });
+      }} />
 
-      <Dialog open={workspaceDialogOpen} onOpenChange={setWorkspaceDialogOpen}>
-        <DialogContent title="Projects" description="Add a local directory or remove a registered project.">
-          <div className="workspace-form">
-            <label>Path<input value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder="/path/to/project" autoFocus /></label>
-            <label>Name <span>optional</span><input value={workspaceLabel} onChange={(event) => setWorkspaceLabel(event.target.value)} placeholder="Project name" /></label>
-            <Button onClick={() => { void addWorkspace(); }} disabled={workspacePath.trim() === ""}><FolderPlus size={16} /> Add project</Button>
-          </div>
-          <div className="registered-workspaces">
-            {workspaces.map((workspace) => <div key={workspace.id} className="registered-workspace"><div><strong>{workspace.label}</strong><span>{workspace.cwd}</span></div><Tooltip label="Remove project"><Button variant="ghost" size="icon" aria-label={`Remove ${workspace.label}`} onClick={() => { void removeWorkspace(workspace.id); }}><Trash2 size={15} /></Button></Tooltip></div>)}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <WorkspaceDialog open={workspaceDialogOpen} onOpenChange={setWorkspaceDialogOpen} onAdd={addWorkspace} />
 
-      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+      <Dialog open={renameTarget !== undefined} onOpenChange={(open) => { if (!open) setRenameTarget(undefined); }}>
         <DialogContent title="Rename session">
           <form className="rename-form" onSubmit={(event) => { event.preventDefault(); void renameSession(); }}><input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} autoFocus /><Button type="submit" disabled={renameValue.trim() === ""}>Save</Button></form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={projectRenameTarget !== undefined} onOpenChange={(open) => { if (!open) setProjectRenameTarget(undefined); }}>
+        <DialogContent title="Rename project">
+          <form className="rename-form" onSubmit={(event) => { event.preventDefault(); void renameProject(); }}><input value={projectRenameValue} onChange={(event) => setProjectRenameValue(event.target.value)} autoFocus /><Button type="submit" disabled={projectRenameValue.trim() === ""}>Save</Button></form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={projectRemoveTarget !== undefined} onOpenChange={(open) => { if (!open && !projectRemovePending) setProjectRemoveTarget(undefined); }}>
+        <DialogContent title="Remove project" description="This only removes the project from Jarvis.">
+          <p className="delete-session-message"><strong>{projectRemoveTarget?.label ?? ""}</strong> and its session history will remain on disk.</p>
+          <div className="dialog-actions"><Button variant="secondary" onClick={() => setProjectRemoveTarget(undefined)} disabled={projectRemovePending}>Cancel</Button><Button variant="danger" onClick={() => { void removeProject(); }} disabled={projectRemovePending}>{projectRemovePending ? "Removing..." : "Remove project"}</Button></div>
         </DialogContent>
       </Dialog>
 

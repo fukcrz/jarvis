@@ -1,4 +1,5 @@
 import { ChevronRight, Folder, FolderPlus, MessageSquarePlus, Settings2 } from "lucide-react";
+import type { PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { formatRelativeTime, sessionLabel } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -14,7 +15,10 @@ interface SidebarProps {
   onOpenWorkspaceDialog: () => void;
   onCreateSession: (workspaceId: string) => void;
   onSelectSession: (workspaceId: string, sessionId: string) => void;
+  onOpenProjectMenu: (workspace: Workspace, position: { x: number; y: number }) => void;
   onOpenSessionMenu: (workspaceId: string, session: SessionSummary, position: { x: number; y: number }) => void;
+  onLongPressProject: (workspace: Workspace) => void;
+  onLongPressSession: (workspaceId: string, session: SessionSummary) => void;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -34,7 +38,11 @@ export function Sidebar(props: SidebarProps) {
           return (
             <section className={`project-node ${active ? "active" : ""}`} key={workspace.id}>
               <div className="project-row">
-                <button className="project-toggle" type="button" aria-label={toggleLabel} aria-expanded={expanded} onClick={() => props.onToggleWorkspace(workspace.id)}>
+                <button className="project-toggle" type="button" aria-label={toggleLabel} aria-expanded={expanded} onClick={() => { if (!consumeLongPress()) props.onToggleWorkspace(workspace.id); }} onContextMenu={(event) => {
+                  event.preventDefault();
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  props.onOpenProjectMenu(workspace, { x: event.clientX === 0 ? bounds.right : event.clientX, y: event.clientY === 0 ? bounds.bottom : event.clientY });
+                }} onPointerDown={(event) => startLongPress(event, () => props.onLongPressProject(workspace))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress}>
                   <ChevronRight className={expanded ? "project-chevron-expanded" : ""} size={14} />
                   <Folder size={15} />
                   <span>{workspace.label}</span>
@@ -42,7 +50,7 @@ export function Sidebar(props: SidebarProps) {
                 <Tooltip label={`New session in ${workspace.label}`}><Button variant="ghost" size="icon" className="project-new-session" aria-label={`New session in ${workspace.label}`} onClick={() => props.onCreateSession(workspace.id)}><MessageSquarePlus size={15} /></Button></Tooltip>
               </div>
               {expanded ? <div className="project-sessions" role="group">
-                {sessions.map((session) => <button key={session.id} type="button" data-session-id={session.id} className={`session-row ${workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "selected" : ""}`} aria-current={workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "page" : undefined} onClick={() => props.onSelectSession(workspace.id, session.id)} onContextMenu={(event) => {
+                {sessions.map((session) => <button key={session.id} type="button" data-session-id={session.id} className={`session-row ${workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "selected" : ""}`} aria-current={workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "page" : undefined} onClick={() => { if (!consumeLongPress()) props.onSelectSession(workspace.id, session.id); }} onPointerDown={(event) => startLongPress(event, () => props.onLongPressSession(workspace.id, session))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress} onContextMenu={(event) => {
                   event.preventDefault();
                   const bounds = event.currentTarget.getBoundingClientRect();
                   props.onOpenSessionMenu(workspace.id, session, {
@@ -62,4 +70,29 @@ export function Sidebar(props: SidebarProps) {
       </nav>
     </aside>
   );
+}
+
+let longPressTimer: number | undefined;
+let suppressNextClick = false;
+
+function startLongPress(event: PointerEvent<HTMLButtonElement>, action: () => void): void {
+  if (event.pointerType !== "touch") return;
+  cancelLongPress();
+  longPressTimer = window.setTimeout(() => {
+    longPressTimer = undefined;
+    suppressNextClick = true;
+    action();
+  }, 500);
+}
+
+function consumeLongPress(): boolean {
+  if (!suppressNextClick) return false;
+  suppressNextClick = false;
+  return true;
+}
+
+function cancelLongPress(): void {
+  if (longPressTimer === undefined) return;
+  window.clearTimeout(longPressTimer);
+  longPressTimer = undefined;
 }

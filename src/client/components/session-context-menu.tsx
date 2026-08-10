@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import type { SessionSummary } from "../../shared/protocol";
 
 export interface SessionContextMenuTarget {
@@ -12,14 +12,15 @@ export interface SessionContextMenuTarget {
 interface SessionContextMenuProps {
   target: SessionContextMenuTarget;
   onClose: () => void;
+  onRename: (target: SessionContextMenuTarget) => void;
   onDelete: (target: SessionContextMenuTarget) => void;
 }
 
 const MENU_WIDTH = 196;
-const MENU_HEIGHT = 42;
+const MENU_HEIGHT = 78;
 const VIEWPORT_GUTTER = 8;
 
-export function SessionContextMenu({ target, onClose, onDelete }: SessionContextMenuProps) {
+export function SessionContextMenu({ target, onClose, onRename, onDelete }: SessionContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const left = Math.max(VIEWPORT_GUTTER, Math.min(target.x, window.innerWidth - MENU_WIDTH - VIEWPORT_GUTTER));
   const top = Math.max(VIEWPORT_GUTTER, Math.min(target.y, window.innerHeight - MENU_HEIGHT - VIEWPORT_GUTTER));
@@ -49,8 +50,9 @@ export function SessionContextMenu({ target, onClose, onDelete }: SessionContext
   }, [onClose]);
 
   return (
-    <div ref={menuRef} className="session-context-menu" role="menu" aria-label="Session actions" tabIndex={-1} style={{ left, top }} onContextMenu={(event) => event.preventDefault()}>
-      <button className="session-context-menu-item danger" type="button" role="menuitem" disabled={busy} title={busy ? "Stop this session before deleting" : undefined} onClick={() => onDelete(target)}>
+    <div ref={menuRef} className="context-menu" role="menu" aria-label="Session actions" tabIndex={-1} style={{ left, top }} onContextMenu={(event) => event.preventDefault()}>
+      <button className="context-menu-item" type="button" role="menuitem" onClick={() => onRename(target)}><Pencil size={14} /><span>Rename session</span></button>
+      <button className="context-menu-item danger" type="button" role="menuitem" disabled={busy} title={busy ? "Stop this session before deleting" : undefined} onClick={() => onDelete(target)}>
         <Trash2 size={14} />
         <span>Delete session</span>
       </button>

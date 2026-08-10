@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 
-const baseUrl = process.env["JARVIS_URL"] ?? "http://127.0.0.1:5173";
+const baseUrl = process.env["JARVIS_URL"] ?? "http://127.0.0.1:28471";
 const isolatedSessionId = process.env["JARVIS_SESSION"];
 const browser = await chromium.launch({ headless: true });
 const failures = [];

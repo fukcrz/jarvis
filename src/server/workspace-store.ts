@@ -25,18 +25,18 @@ export class WorkspaceStore {
     try {
       const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as PersistedWorkspaces;
       if (parsed.version !== 1 || !Array.isArray(parsed.workspaces)) throw new Error("Unsupported workspace registry format");
-      this.workspaces = parsed.workspaces;
+      this.workspaces = parsed.workspaces.map((workspace) => ({ ...workspace, lastOpenedAt: workspace.lastOpenedAt ?? workspace.updatedAt ?? workspace.createdAt }));
     } catch (error) {
       if (!isMissingFile(error)) throw error;
       const cwd = await resolveDirectory(defaultCwd);
       const now = new Date().toISOString();
-      this.workspaces = [{ id: randomUUID(), cwd, label: defaultLabel(cwd), createdAt: now, updatedAt: now }];
+      this.workspaces = [{ id: randomUUID(), cwd, label: defaultLabel(cwd), createdAt: now, updatedAt: now, lastOpenedAt: now }];
       await this.persist();
     }
   }
 
   list(): Workspace[] {
-    return [...this.workspaces].sort((a, b) => a.label.localeCompare(b.label));
+    return [...this.workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt) || a.label.localeCompare(b.label));
   }
 
   get(id: string): Workspace {
@@ -57,6 +57,7 @@ export class WorkspaceStore {
       label: normalizeLabel(label, resolved),
       createdAt: now,
       updatedAt: now,
+      lastOpenedAt: now,
     };
     this.workspaces.push(workspace);
     await this.persist();
@@ -67,6 +68,13 @@ export class WorkspaceStore {
     const workspace = this.get(id);
     workspace.label = normalizeLabel(label, workspace.cwd);
     workspace.updatedAt = new Date().toISOString();
+    await this.persist();
+    return workspace;
+  }
+
+  async touch(id: string): Promise<Workspace> {
+    const workspace = this.get(id);
+    workspace.lastOpenedAt = new Date().toISOString();
     await this.persist();
     return workspace;
   }

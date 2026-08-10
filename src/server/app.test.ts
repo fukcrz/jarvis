@@ -82,6 +82,35 @@ function nextJsonMessage(socket: TestSocket): Promise<unknown> {
 }
 
 describe("Jarvis HTTP and WebSocket API", () => {
+  it("lists available Windows drives from the directory root picker", async () => {
+    const roots = await activeApp().inject({ method: "GET", url: "/api/directories?roots=true" });
+    expect(roots.statusCode).toBe(200);
+    expect(roots.json()).toMatchObject({ directory: { name: "Drives", path: "", isRootPicker: true } });
+    expect((roots.json() as { directory: { entries: Array<{ path: string }> } }).directory.entries).toContainEqual(expect.objectContaining({ path: "C:\\" }));
+  });
+
+  it("lists selectable child directories and records a project's last opened time", async () => {
+    const server = activeApp();
+    const browserRoot = join(jarvisHome, "browser-root");
+    const project = join(browserRoot, "project");
+    await mkdir(project, { recursive: true });
+    await mkdir(join(browserRoot, ".git"));
+    await writeFile(join(browserRoot, "notes.txt"), "not a directory");
+
+    const listing = await server.inject({ method: "GET", url: `/api/directories?path=${encodeURIComponent(browserRoot)}` });
+    expect(listing.statusCode).toBe(200);
+    expect(listing.json()).toMatchObject({ directory: { path: browserRoot, isGitRepository: true, entries: [{ name: ".git", path: join(browserRoot, ".git") }, { name: "project", path: project }] } });
+
+    const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: project } });
+    expect(created.statusCode).toBe(200);
+    const workspace = created.json() as { workspace: { id: string; lastOpenedAt: string } };
+    expect(workspace.workspace.lastOpenedAt).toEqual(expect.any(String));
+
+    const opened = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.workspace.id}/open`, payload: {} });
+    expect(opened.statusCode).toBe(200);
+    expect(opened.json()).toMatchObject({ workspace: { id: workspace.workspace.id, lastOpenedAt: expect.any(String) } });
+  });
+
   it("returns API validation errors and persists workspace changes", async () => {
     const server = activeApp();
     const health = await server.inject({ method: "GET", url: "/api/health" });
