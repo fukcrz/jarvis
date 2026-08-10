@@ -139,6 +139,10 @@ function recordTool(value: unknown): ToolTimelineItem | undefined {
     state,
     ...(typeof value["target"] === "string" ? { target: value["target"] } : {}),
     ...(typeof value["inputPreview"] === "string" ? { inputPreview: value["inputPreview"] } : {}),
+    ...(typeof value["cwd"] === "string" ? { cwd: value["cwd"] } : {}),
+    ...(typeof value["exitCode"] === "number" && Number.isFinite(value["exitCode"]) ? { exitCode: value["exitCode"] } : {}),
+    ...(typeof value["durationMs"] === "number" && Number.isFinite(value["durationMs"]) ? { durationMs: value["durationMs"] } : {}),
+    ...(value["truncated"] === true ? { truncated: true } : {}),
     ...(typeof value["output"] === "string" ? { output: value["output"] } : {}),
     ...(typeof value["error"] === "string" ? { error: value["error"] } : {}),
   };

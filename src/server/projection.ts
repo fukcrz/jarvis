@@ -66,18 +66,26 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
 
     if (role === "bashExecution") {
       const command = stringValue(message["command"]);
-      const output = [stringValue(message["output"]), message["exitCode"] === undefined ? "" : `exit ${String(message["exitCode"])}`]
-        .filter((part) => part !== "")
-        .join("\n");
+      const output = stringValue(message["output"]);
+      const exitCode = numberValue(message["exitCode"]);
+      const state = message["cancelled"] === true
+        ? "cancelled" as const
+        : exitCode !== undefined && exitCode !== 0
+          ? "failed" as const
+          : "completed" as const;
       items.push({
         kind: "tool",
         id: `bash:${entryId}`,
         createdAt,
         name: "bash",
         title: "Run command",
-        state: message["cancelled"] === true ? "cancelled" : "completed",
+        state,
         ...(command === "" ? {} : { target: command, inputPreview: command }),
-        ...(output === "" ? {} : { output: truncate(output) }),
+        ...(exitCode === undefined ? {} : { exitCode }),
+        ...(message["truncated"] === true ? { truncated: true } : {}),
+        ...(state === "failed"
+          ? (output === "" ? {} : { error: truncate(output) })
+          : (output === "" ? {} : { output: truncate(output) })),
       });
     }
   }
@@ -95,7 +103,14 @@ export function messageFromPi(message: unknown, role: "user" | "assistant", text
   return { kind: "message", id: stableId, role, createdAt, text };
 }
 
-export function toolFromCall(id: string, name: string, args: unknown, createdAt = new Date().toISOString(), state: ToolState = "running"): ToolTimelineItem {
+export function toolFromCall(
+  id: string,
+  name: string,
+  args: unknown,
+  createdAt = new Date().toISOString(),
+  state: ToolState = "running",
+  metadata?: { cwd?: string },
+): ToolTimelineItem {
   const target = toolTarget(args);
   const title = toolTitle(name);
   const inputPreview = summarizeArgs(args);
@@ -108,19 +123,41 @@ export function toolFromCall(id: string, name: string, args: unknown, createdAt 
     state,
     ...(target === undefined ? {} : { target }),
     ...(inputPreview === "" ? {} : { inputPreview }),
+    ...(metadata?.cwd === undefined ? {} : { cwd: metadata.cwd }),
   };
 }
 
-export function toolWithResult(tool: ToolTimelineItem, result: unknown, isError: boolean): ToolTimelineItem {
+export function toolWithResult(tool: ToolTimelineItem, result: unknown, isError: boolean, durationMs?: number): ToolTimelineItem {
   const text = truncate(textFromToolResult(result));
-  return isError
-    ? { ...tool, state: "failed", ...(text === "" ? {} : { error: text }) }
-    : { ...tool, state: "completed", ...(text === "" ? {} : { output: text }) };
+  const metadata = toolResultMetadata(result);
+  const exitCode = metadata.exitCode ?? (tool.name === "bash" && isError ? bashExitCodeFromError(text) : undefined);
+  const failed = isError || exitCode !== undefined && exitCode !== 0;
+  const next = {
+    ...tool,
+    state: failed ? "failed" as const : "completed" as const,
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(exitCode === undefined ? {} : { exitCode }),
+    ...(metadata.truncated ? { truncated: true } : {}),
+  };
+  if (failed) {
+    delete next.output;
+    if (text !== "") next.error = text;
+    return next;
+  }
+  delete next.error;
+  if (text !== "") next.output = text;
+  return next;
 }
 
 export function toolWithPartial(tool: ToolTimelineItem, result: unknown): ToolTimelineItem {
   const output = truncate(textFromToolResult(result));
-  return { ...tool, state: "running", ...(output === "" ? {} : { output }) };
+  const metadata = toolResultMetadata(result);
+  return {
+    ...tool,
+    state: "running",
+    ...(output === "" ? {} : { output }),
+    ...(metadata.truncated ? { truncated: true } : {}),
+  };
 }
 
 export function textFromContent(content: unknown): string {
@@ -175,6 +212,24 @@ export function textFromToolResult(value: unknown): string {
   }
 }
 
+function bashExitCodeFromError(value: string): number | undefined {
+  const match = value.match(/Command exited with code (-?\\d+)/);
+  if (match === null) return undefined;
+  const code = Number(match[1]);
+  return Number.isFinite(code) ? code : undefined;
+}
+
+function toolResultMetadata(value: unknown): { exitCode?: number; truncated?: boolean } {
+  if (!isRecord(value)) return {};
+  const details = isRecord(value["details"]) ? value["details"] : undefined;
+  const exitCode = numberValue(value["exitCode"]) ?? numberValue(details?.["exitCode"]);
+  const truncated = value["truncated"] === true || details?.["truncated"] === true || isRecord(details?.["truncation"]) && details["truncation"]["truncated"] === true;
+  return {
+    ...(exitCode === undefined ? {} : { exitCode }),
+    ...(truncated ? { truncated: true } : {}),
+  };
+}
+
 export function summarizeArgs(args: unknown): string {
   if (!isRecord(args)) return args == null ? "" : String(args);
   const command = stringValue(args["command"]);
@@ -226,6 +281,10 @@ function truncate(value: string): string {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

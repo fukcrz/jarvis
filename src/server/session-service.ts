@@ -450,7 +450,14 @@ export class SessionService {
         return;
       }
       case "tool_execution_start": {
-        const tool = toolFromCall(event.toolCallId, event.toolName, event.args, new Date().toISOString(), "running");
+        const tool = toolFromCall(
+          event.toolCallId,
+          event.toolName,
+          event.args,
+          new Date().toISOString(),
+          "running",
+          event.toolName === "bash" ? { cwd: active.cwd } : undefined,
+        );
         active.activeTools.set(tool.id, tool);
         this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool } });
         return;
@@ -463,8 +470,10 @@ export class SessionService {
         return;
       }
       case "tool_execution_end": {
-        const previous = active.activeTools.get(event.toolCallId) ?? toolFromCall(event.toolCallId, event.toolName, undefined);
-        const tool = toolWithResult(previous, event.result, event.isError);
+        const previous = active.activeTools.get(event.toolCallId) ?? toolFromCall(event.toolCallId, event.toolName, undefined, new Date().toISOString(), "running", event.toolName === "bash" ? { cwd: active.cwd } : undefined);
+        const startedAt = Date.parse(previous.createdAt);
+        const durationMs = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : undefined;
+        const tool = toolWithResult(previous, event.result, event.isError, durationMs);
         active.activeTools.set(tool.id, tool);
         this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool } });
         return;

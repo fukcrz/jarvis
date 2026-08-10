@@ -96,6 +96,10 @@ export interface ToolTimelineItem {
   state: ToolState;
   target?: string;
   inputPreview?: string;
+  cwd?: string;
+  exitCode?: number;
+  durationMs?: number;
+  truncated?: boolean;
   output?: string;
   error?: string;
 }
