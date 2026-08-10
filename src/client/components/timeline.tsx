@@ -1,11 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ArrowDown, Check, ChevronDown, Clipboard, Clock3, LoaderCircle, RotateCcw, Terminal, XCircle } from "lucide-react";
+import { ArrowDown, Check, ChevronDown, Clock3, LoaderCircle, RotateCcw, Terminal, XCircle } from "lucide-react";
 import type { MessageTimelineItem, SessionStatus, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { MarkdownMessage } from "./markdown-message";
 import { Button } from "./ui/button";
-import { Tooltip } from "./ui/tooltip";
 
 interface TimelineProps {
   items: TimelineItem[];
@@ -73,25 +72,12 @@ function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
 }
 
 const MessageItem = memo(function MessageItem({ item, streaming }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(item.text);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1100);
-    } catch {
-      setCopied(false);
-    }
-  };
   return (
     <article className={`message-row ${item.role} ${streaming ? "streaming" : ""}`}>
       <div className={`message-body ${item.role}`}>
         <div className={`message-content ${streaming ? "streaming" : ""}`}>
           <MarkdownMessage text={item.text} streaming={streaming} />
         </div>
-        <Tooltip label={copied ? "已复制" : "复制消息"}>
-          <button type="button" className="message-copy" aria-label="复制消息" onClick={() => { void copy(); }}><Clipboard size={14} /></button>
-        </Tooltip>
       </div>
     </article>
   );
