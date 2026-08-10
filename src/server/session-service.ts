@@ -211,8 +211,10 @@ export class SessionService {
 
   async setModel(ref: SessionRef, provider: string, modelId: string): Promise<ModelDescriptor> {
     const active = await this.getActive(ref);
-    if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) {
-      throw new AppError("SESSION_BUSY", "Stop the current run before changing models", 409);
+    // Pi itself allows model switches while streaming (the official TUI does
+    // this freely); the switch applies to the next LLM call of the current run.
+    if (active.modelSwitching) {
+      throw new AppError("SESSION_BUSY", "A model switch is already in progress", 409);
     }
 
     active.modelSwitching = true;
@@ -248,8 +250,9 @@ export class SessionService {
 
   async setThinkingLevel(ref: SessionRef, level: ThinkingLevel): Promise<SessionThinkingSnapshot> {
     const active = await this.getActive(ref);
-    if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) {
-      throw new AppError("SESSION_BUSY", "Stop the current run before changing thinking level", 409);
+    // Pi applies the new level to the next LLM call, so switching mid-run is safe.
+    if (active.modelSwitching) {
+      throw new AppError("SESSION_BUSY", "A model switch is already in progress", 409);
     }
 
     const previous = active.session.thinkingLevel;
