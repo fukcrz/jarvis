@@ -49,6 +49,15 @@ export function App() {
   const [deletePending, setDeletePending] = useState(false);
   const [composerCommands, setComposerCommands] = useState<ComposerCommand[]>([]);
 
+  const activeRunStateByWorkspace = useMemo(() => {
+    const result: Record<string, "running" | "stopping"> = {};
+    for (const [id, sessions] of Object.entries(sessionsByWorkspace)) {
+      const active = sessions.find((session): session is SessionSummary & { runState: "running" | "stopping" } => session.runState !== "idle");
+      if (active !== undefined) result[id] = active.runState;
+    }
+    return result;
+  }, [sessionsByWorkspace]);
+
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId);
   const selectedSession = selectedWorkspace === undefined
     ? undefined
@@ -521,7 +530,7 @@ export function App() {
         {renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "projects" ? <MobileProjectsPage workspaces={workspaces} onAddProject={() => setWorkspaceDialogOpen(true)} onOpenProject={openMobileProject} onOpenProjectMenu={openMobileProjectMenu} /> : mobilePage === "sessions" ? <MobileSessionsPage workspace={selectedWorkspace} sessions={sessionsByWorkspace[workspaceId ?? ""] ?? []} onBack={() => setMobilePage("projects")} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(id) => { if (workspaceId !== undefined) chooseSession(workspaceId, id); }} onOpenProjectMenu={openMobileProjectMenu} onOpenSessionMenu={(session) => { if (workspaceId !== undefined) openMobileSessionMenu(workspaceId, session); }} /> : <section className="mobile-chat-page">
+        {mobilePage === "projects" ? <MobileProjectsPage workspaces={workspaces} activeRunStateByWorkspace={activeRunStateByWorkspace} onAddProject={() => setWorkspaceDialogOpen(true)} onOpenProject={openMobileProject} onOpenProjectMenu={openMobileProjectMenu} /> : mobilePage === "sessions" ? <MobileSessionsPage workspace={selectedWorkspace} sessions={sessionsByWorkspace[workspaceId ?? ""] ?? []} onBack={() => setMobilePage("projects")} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(id) => { if (workspaceId !== undefined) chooseSession(workspaceId, id); }} onOpenProjectMenu={openMobileProjectMenu} onOpenSessionMenu={(session) => { if (workspaceId !== undefined) openMobileSessionMenu(workspaceId, session); }} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
             <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => setMobilePage("sessions")}><ArrowLeft size={19} /></Button>
             <button type="button" className="mobile-chat-session" onClick={() => setMobileSwitcherOpen(true)}>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}<ChevronDown size={15} /></button>

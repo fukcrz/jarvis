@@ -6,6 +6,8 @@ import { Button } from "./ui/button";
 
 interface MobileProjectsPageProps {
   workspaces: Workspace[];
+  /** First active run state per workspace, so project rows can show the spinner. */
+  activeRunStateByWorkspace: Record<string, "running" | "stopping">;
   onAddProject: () => void;
   onOpenProject: (workspace: Workspace) => void;
   onOpenProjectMenu: (workspace: Workspace) => void;
@@ -18,14 +20,18 @@ export function MobileProjectsPage(props: MobileProjectsPageProps) {
       <Button variant="ghost" size="icon" aria-label="添加项目" onClick={props.onAddProject}><Plus size={19} /></Button>
     </header>
     <div className="mobile-page-list">
-      {props.workspaces.map((workspace) => <div className="mobile-project-row" key={workspace.id}>
-        <button type="button" className="mobile-project-select" onClick={() => props.onOpenProject(workspace)}>
-          <Folder size={18} />
-          <span>{workspace.label}</span>
-          <ChevronRight size={17} className="mobile-row-chevron" />
-        </button>
-        <Button variant="ghost" size="icon" aria-label={`管理项目 ${workspace.label}`} onClick={() => props.onOpenProjectMenu(workspace)}><MoreVertical size={18} /></Button>
-      </div>)}
+      {props.workspaces.map((workspace) => {
+        const runState = props.activeRunStateByWorkspace[workspace.id];
+        return <div className="mobile-project-row" key={workspace.id}>
+          <button type="button" className="mobile-project-select" onClick={() => props.onOpenProject(workspace)}>
+            <Folder size={18} />
+            <span>{workspace.label}</span>
+            {runState === undefined ? null : <span className={`sidebar-activity ${runState}`} role="status" aria-label={`${workspace.label} 有正在执行的会话`} />}
+            <ChevronRight size={17} className="mobile-row-chevron" />
+          </button>
+          <Button variant="ghost" size="icon" aria-label={`管理项目 ${workspace.label}`} onClick={() => props.onOpenProjectMenu(workspace)}><MoreVertical size={18} /></Button>
+        </div>;
+      })}
       {props.workspaces.length === 0 ? <div className="mobile-page-empty">暂无项目</div> : null}
     </div>
   </section>;

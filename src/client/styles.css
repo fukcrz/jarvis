@@ -246,6 +246,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-project-select:hover, .mobile-session-select:hover { color: var(--accent-strong); }
 .mobile-project-select span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
 .mobile-row-chevron { margin-left: auto; color: var(--subtle); }
+.mobile-project-select .sidebar-activity { margin-right: 0; }
 .mobile-session-copy { display: flex; min-width: 0; flex: 1; align-items: baseline; justify-content: space-between; gap: 10px; }
 .mobile-session-copy strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 550; }
 .mobile-session-copy small { flex: 0 0 auto; color: var(--subtle); font-size: 11px; }
