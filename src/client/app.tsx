@@ -1,6 +1,5 @@
-import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FolderPlus, Menu, Pencil, Plus } from "lucide-react";
+import { ArrowLeft, ChevronDown, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
 import type { ComposerCommand, ModelDescriptor, SessionRef, SessionSummary, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, socketUrl } from "./api";
@@ -10,6 +9,7 @@ import { Sidebar } from "./components/sidebar";
 import { SessionContextMenu, type SessionContextMenuTarget } from "./components/session-context-menu";
 import { ProjectContextMenu, type ProjectContextMenuTarget } from "./components/project-context-menu";
 import { MobileActionSheet, type MobileActionTarget } from "./components/mobile-action-sheet";
+import { MobileProjectsPage, MobileSessionsPage, MobileSessionSwitcher } from "./components/mobile-navigation";
 import { Timeline } from "./components/timeline";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
@@ -33,7 +33,9 @@ export function App() {
   const [projectRenameValue, setProjectRenameValue] = useState("");
   const [projectRemoveTarget, setProjectRemoveTarget] = useState<Workspace | undefined>();
   const [projectRemovePending, setProjectRemovePending] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobilePage, setMobilePage] = useState<"projects" | "sessions" | "chat">(() => window.localStorage.getItem("jarvis.session") === null ? "projects" : "chat");
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
+  const [mobileSwitcherOpen, setMobileSwitcherOpen] = useState(false);
   const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(() => readDrafts());
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuTarget | undefined>();
@@ -62,6 +64,14 @@ export function App() {
   const closeProjectMenu = useCallback(() => { setProjectMenu(undefined); }, []);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
   const stream = useSessionStream(selectedRef);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 760px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   useEffect(() => { setModelSwitchPending(false); }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
 
@@ -97,6 +107,7 @@ export function App() {
   useEffect(() => {
     if (workspaces.length === 0) {
       setSessionsByWorkspace({});
+      if (window.innerWidth <= 760) setMobilePage("projects");
       return;
     }
     let disposed = false;
@@ -124,8 +135,13 @@ export function App() {
     const sessions = sessionsByWorkspace[workspace.id];
     if (sessions === undefined) return;
     if (sessionId !== undefined && sessions.some((session) => session.id === sessionId)) return;
+    if (window.innerWidth <= 760) {
+      setSessionId(undefined);
+      if (mobilePage === "chat") setMobilePage("sessions");
+      return;
+    }
     setSessionId(sessions[0]?.id);
-  }, [workspaces, sessionsByWorkspace, workspaceId, sessionId, loading]);
+  }, [workspaces, sessionsByWorkspace, workspaceId, sessionId, loading, mobilePage]);
 
   useEffect(() => {
     setExpandedWorkspaceIds((current) => {
@@ -290,6 +306,7 @@ export function App() {
       if (workspaceId === target.id) {
         setWorkspaceId(remaining[0]?.id);
         setSessionId(undefined);
+        setMobilePage("projects");
       }
       setProjectRemoveTarget(undefined);
       setPageError(undefined);
@@ -306,12 +323,12 @@ export function App() {
     setDeletePending(true);
     try {
       await api.removeSession({ workspaceId: target.workspaceId, sessionId: target.session.id });
-      const remaining = withoutSession(sessionsByWorkspace[target.workspaceId] ?? [], target.session.id);
       setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: withoutSession(current[target.workspaceId] ?? [], target.session.id) }));
       setDrafts((current) => withoutDraft(current, target.session.id));
       if (workspaceId === target.workspaceId && sessionId === target.session.id) {
-        setSessionId(remaining[0]?.id);
-        setMobileOpen(false);
+        setSessionId(undefined);
+        setMobilePage("sessions");
+        setMobileSwitcherOpen(false);
       }
       setDeleteTarget(undefined);
       setPageError(undefined);
@@ -371,7 +388,23 @@ export function App() {
     setWorkspaceId(nextWorkspaceId);
     setSessionId(nextSessionId);
     setExpandedWorkspaceIds((current) => ({ ...current, [nextWorkspaceId]: true }));
-    setMobileOpen(false);
+    setMobilePage("chat");
+    setMobileSwitcherOpen(false);
+  };
+
+  const openMobileProject = (workspace: Workspace) => {
+    setWorkspaceId(workspace.id);
+    setSessionId(undefined);
+    setMobilePage("sessions");
+    setMobileSwitcherOpen(false);
+  };
+
+  const openMobileProjectMenu = (workspace: Workspace) => {
+    setMobileActionTarget({ kind: "project", workspace });
+  };
+
+  const openMobileSessionMenu = (workspaceId: string, session: SessionSummary) => {
+    setMobileActionTarget({ kind: "session", workspaceId, session });
   };
 
   const sidebar = <Sidebar
@@ -381,13 +414,10 @@ export function App() {
     selectedSessionId={sessionId}
     expandedWorkspaceIds={expandedWorkspaceIds}
     onToggleWorkspace={(id) => setExpandedWorkspaceIds((current) => ({ ...current, [id]: !current[id] }))}
-    onOpenWorkspaceDialog={() => { setWorkspaceDialogOpen(true); setMobileOpen(false); }}
-    onCreateSession={(id) => { void createSession(id); setMobileOpen(false); }}
+    onOpenWorkspaceDialog={() => { setWorkspaceDialogOpen(true); }}
+    onCreateSession={(id) => { void createSession(id); }}
     onSelectSession={chooseSession}
-    onOpenProjectMenu={(workspace, position) => {
-      if (window.innerWidth <= 760) setMobileActionTarget({ kind: "project", workspace });
-      else setProjectMenu({ workspace, ...position });
-    }}
+    onOpenProjectMenu={(workspace, position) => setProjectMenu({ workspace, ...position })}
     onOpenSessionMenu={(targetWorkspaceId, session, position) => setSessionMenu({ workspaceId: targetWorkspaceId, session, ...position })}
     onLongPressProject={(workspace) => setMobileActionTarget({ kind: "project", workspace })}
     onLongPressSession={(targetWorkspaceId, session) => setMobileActionTarget({ kind: "session", workspaceId: targetWorkspaceId, session })}
@@ -395,40 +425,39 @@ export function App() {
 
   if (loading) return <main className="app-loading">正在打开工作区…</main>;
 
+  const renderChatContent = () => <>
+    {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
+    {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
+      <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? stream.transcript.status.lastError?.message} status={stream.transcript.status} />
+      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle"} commands={composerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} controls={selectedSession === undefined ? undefined : <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle"} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />} />
+    </>}
+  </>;
+
   return (
     <main className="app-shell">
       <div className="desktop-sidebar">{sidebar}</div>
-      <DialogPrimitive.Root open={mobileOpen} onOpenChange={setMobileOpen}>
-        <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="dialog-overlay mobile-overlay" />
-          <DialogPrimitive.Content className="mobile-sidebar" aria-label="项目和会话导航">{sidebar}</DialogPrimitive.Content>
-        </DialogPrimitive.Portal>
-      </DialogPrimitive.Root>
-      <section className="main-pane">
+      {!isMobile ? <section className="main-pane">
         <header className="chat-header">
           <div className="chat-title-wrap">
-            <Tooltip label="打开导航"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="打开导航" onClick={() => setMobileOpen(true)}><Menu size={19} /></Button></Tooltip>
             <div className="chat-title">
               <div><h1>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined || selectedWorkspace === undefined ? null : <Tooltip label="重命名会话"><Button variant="ghost" size="icon" aria-label="重命名会话" onClick={() => { setRenameTarget({ workspaceId: selectedWorkspace.id, session: selectedSession }); setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); }}><Pencil size={15} /></Button></Tooltip>}</div>
             </div>
           </div>
         </header>
-        {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
-        {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
-          <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? stream.transcript.status.lastError?.message} status={stream.transcript.status} />
-          <PromptEditor
-            key={selectedRef.sessionId}
-            initialValue={selectedDraft}
-            busy={stream.transcript.status.runState !== "idle"}
-            commands={composerCommands}
-            searchFiles={searchWorkspaceFiles}
-            onDraftChange={updateSelectedDraft}
-            onSubmit={submitPrompt}
-            onStop={() => { void abort(); }}
-            controls={selectedSession === undefined ? undefined : <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle"} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />}
-          />
-        </>}
-      </section>
+        {renderChatContent()}
+      </section> : null}
+      {isMobile ? <div className="mobile-app">
+        {mobilePage === "projects" ? <MobileProjectsPage workspaces={workspaces} onAddProject={() => setWorkspaceDialogOpen(true)} onOpenProject={openMobileProject} onOpenProjectMenu={openMobileProjectMenu} /> : mobilePage === "sessions" ? <MobileSessionsPage workspace={selectedWorkspace} sessions={sessionsByWorkspace[workspaceId ?? ""] ?? []} onBack={() => setMobilePage("projects")} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(id) => { if (workspaceId !== undefined) chooseSession(workspaceId, id); }} onOpenProjectMenu={openMobileProjectMenu} onOpenSessionMenu={(session) => { if (workspaceId !== undefined) openMobileSessionMenu(workspaceId, session); }} /> : <section className="mobile-chat-page">
+          <header className="mobile-chat-header">
+            <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => setMobilePage("sessions")}><ArrowLeft size={19} /></Button>
+            <button type="button" className="mobile-chat-project" onClick={() => setMobilePage("projects")}>{selectedWorkspace?.label ?? "项目"}</button>
+            <button type="button" className="mobile-chat-session" onClick={() => setMobileSwitcherOpen(true)}>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}<ChevronDown size={15} /></button>
+            {selectedSession === undefined || selectedWorkspace === undefined ? null : <Button variant="ghost" size="icon" aria-label="当前会话操作" onClick={() => openMobileSessionMenu(selectedWorkspace.id, selectedSession)}><MoreVertical size={18} /></Button>}
+          </header>
+          <div className="mobile-chat-content">{renderChatContent()}</div>
+          {mobileSwitcherOpen ? <MobileSessionSwitcher workspace={selectedWorkspace} sessions={sessionsByWorkspace[workspaceId ?? ""] ?? []} selectedSessionId={sessionId} onClose={() => setMobileSwitcherOpen(false)} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(id) => { if (workspaceId !== undefined) chooseSession(workspaceId, id); }} /> : null}
+        </section>}
+      </div> : null}
 
       {sessionMenu === undefined ? null : <SessionContextMenu target={sessionMenu} onClose={closeSessionMenu} onRename={(target) => {
         setSessionMenu(undefined);
@@ -449,11 +478,7 @@ export function App() {
         setProjectMenu(undefined);
         setProjectRemoveTarget(workspace);
       }} />}
-      <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onCreateSession={(workspace) => {
-        setMobileActionTarget(undefined);
-        void createSession(workspace.id);
-        setMobileOpen(false);
-      }} onRenameProject={(workspace) => {
+      <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onRenameProject={(workspace) => {
         setMobileActionTarget(undefined);
         setProjectRenameTarget(workspace);
         setProjectRenameValue(workspace.label);

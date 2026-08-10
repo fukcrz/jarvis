@@ -1,7 +1,7 @@
-import { Folder, FolderPlus, MessageSquarePlus, Settings2 } from "lucide-react";
-import type { PointerEvent } from "react";
+import { Folder, FolderPlus, MessageSquarePlus, Search, Settings2 } from "lucide-react";
+import { useState, type PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { formatRelativeTime, sessionLabel } from "../lib/utils";
+import { formatRelativeTime, matchesSessionQuery, sessionLabel } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
@@ -22,22 +22,30 @@ interface SidebarProps {
 }
 
 export function Sidebar(props: SidebarProps) {
+  const [query, setQuery] = useState("");
+  const searching = query.trim() !== "";
   return (
     <aside className="sidebar">
       <div className="sidebar-toolbar">
         <span>项目</span>
         <Tooltip label="添加项目"><Button variant="ghost" size="icon" aria-label="添加项目" onClick={props.onOpenWorkspaceDialog}><FolderPlus size={16} /></Button></Tooltip>
       </div>
+      <label className="sidebar-search">
+        <Search size={14} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索会话" aria-label="搜索会话" />
+        {query === "" ? null : <button type="button" aria-label="清除会话搜索" onClick={() => setQuery("")}>×</button>}
+      </label>
       <nav className="project-tree" aria-label="项目列表">
         {props.workspaces.map((workspace) => {
-          const sessions = props.sessionsByWorkspace[workspace.id] ?? [];
-          const expanded = props.expandedWorkspaceIds[workspace.id] === true;
-          const active = workspace.id === props.workspaceId;
+          const allSessions = props.sessionsByWorkspace[workspace.id] ?? [];
+          const sessions = searching ? allSessions.filter((session) => matchesSessionQuery(session, query)) : allSessions;
+          if (searching && sessions.length === 0) return null;
+          const expanded = searching || props.expandedWorkspaceIds[workspace.id] === true;
           const activeSession = sessions.find((session) => session.runState === "running" || session.runState === "stopping");
           const toggleLabel = `${expanded ? "收起" : "展开"}${workspace.label}的会话`;
 
           return (
-            <section className={`project-node ${active ? "active" : ""}`} key={workspace.id}>
+            <section className="project-node" key={workspace.id}>
               <div className="project-row">
                 <button className="project-toggle" type="button" aria-label={toggleLabel} aria-expanded={expanded} onClick={() => { if (!consumeLongPress()) props.onToggleWorkspace(workspace.id); }} onContextMenu={(event) => {
                   event.preventDefault();
@@ -68,6 +76,7 @@ export function Sidebar(props: SidebarProps) {
           );
         })}
         {props.workspaces.length === 0 ? <div className="session-list-empty"><Settings2 size={17} /><span>暂无项目</span></div> : null}
+      {props.workspaces.length > 0 && searching && !props.workspaces.some((workspace) => (props.sessionsByWorkspace[workspace.id] ?? []).some((session) => matchesSessionQuery(session, query))) ? <div className="session-list-empty"><Search size={17} /><span>没有匹配的会话</span></div> : null}
       </nav>
     </aside>
   );
