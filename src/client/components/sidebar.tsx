@@ -33,6 +33,7 @@ export function Sidebar(props: SidebarProps) {
           const sessions = props.sessionsByWorkspace[workspace.id] ?? [];
           const expanded = props.expandedWorkspaceIds[workspace.id] === true;
           const active = workspace.id === props.workspaceId;
+          const activeSession = sessions.find((session) => session.runState === "running" || session.runState === "stopping");
           const toggleLabel = `${expanded ? "Collapse" : "Expand"} ${workspace.label} sessions`;
 
           return (
@@ -47,6 +48,7 @@ export function Sidebar(props: SidebarProps) {
                   <span>{workspace.label}</span>
                 </button>
                 <Tooltip label={`New session in ${workspace.label}`}><Button variant="ghost" size="icon" className="project-new-session" aria-label={`New session in ${workspace.label}`} onClick={(event) => { event.stopPropagation(); props.onCreateSession(workspace.id); }}><MessageSquarePlus size={15} /></Button></Tooltip>
+                {expanded || activeSession === undefined ? null : <span className={`sidebar-activity ${activeSession.runState}`} role="status" aria-label={`${workspace.label} has an active session`} />}
               </div>
               {expanded ? <div className="project-sessions" role="group">
                 {sessions.map((session) => <button key={session.id} type="button" data-session-id={session.id} className={`session-row ${workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "selected" : ""}`} aria-current={workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "page" : undefined} onClick={() => { if (!consumeLongPress()) props.onSelectSession(workspace.id, session.id); }} onPointerDown={(event) => startLongPress(event, () => props.onLongPressSession(workspace.id, session))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress} onContextMenu={(event) => {
@@ -57,8 +59,8 @@ export function Sidebar(props: SidebarProps) {
                     y: event.clientY === 0 ? bounds.bottom : event.clientY,
                   });
                 }}>
-                  <span className={`session-dot ${session.runState}`}></span>
                   <span className="session-text"><strong>{sessionLabel(session.name, session.preview)}</strong><small>{formatRelativeTime(session.updatedAt)}</small></span>
+                  {session.runState === "idle" ? null : <span className={`sidebar-activity ${session.runState}`} role="status" aria-label={`${session.runState === "stopping" ? "Stopping" : "Running"} session`} />}
                 </button>)}
                 {sessions.length === 0 ? <div className="project-empty">No sessions</div> : null}
               </div> : null}

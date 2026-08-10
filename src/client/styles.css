@@ -58,8 +58,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .project-toggle span { overflow: hidden; color: inherit; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .button.project-new-session { width: 26px; height: 26px; flex: 0 0 auto; margin-right: 4px; border-radius: 50%; color: #b4b0bd; opacity: 0; }
 .project-row:hover .project-new-session, .project-new-session:focus-visible { opacity: 1; }
+.sidebar-activity { width: 12px; height: 12px; flex: 0 0 auto; margin-right: 10px; border: 2px solid rgb(182 168 255 / .32); border-top-color: var(--accent-strong); border-radius: 50%; animation: spin .85s linear infinite; }
+.sidebar-activity.stopping { border-color: rgb(244 190 112 / .28); border-top-color: var(--warm); animation-duration: 1.2s; }
 .project-sessions { display: grid; gap: 4px; margin: 4px 0 0; border: 0; padding: 0; }
-.session-row { display: block; width: 100%; min-width: 0; margin-left: 0; border: 0; border-radius: 999px; background: transparent; padding: 4px 12px 4px 36px; color: #c8c5ce; text-align: left; }
+.session-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; width: 100%; min-width: 0; margin-left: 0; border: 0; border-radius: 999px; background: transparent; padding: 4px 12px 4px 36px; color: #c8c5ce; text-align: left; }
 .session-row:hover { background: #302d37; color: #f0edf4; }
 .session-row.selected { border: 0; background: #37333f; color: #f0edf4; }
 .session-dot, .session-text small { display: none; }
