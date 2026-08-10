@@ -6,6 +6,21 @@ export function cn(...values: ClassValue[]): string {
   return twMerge(clsx(values));
 }
 
+/**
+ * RFC 4122 v4 UUID。crypto.randomUUID 仅在安全上下文（HTTPS/localhost）可用，
+ * 局域网 HTTP 访问时不存在，这里提供兼容兜底。
+ */
+export function randomUUID(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+}
+
 export function sessionLabel(name: string | null, preview: string | null): string {
   return name?.trim() || preview?.trim().replace(/\s+/g, " ").slice(0, 72) || "新会话";
 }

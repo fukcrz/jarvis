@@ -7,6 +7,7 @@ import helmet from "@fastify/helmet";
 import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
 import { z } from "zod";
+import { THINKING_LEVELS } from "../shared/protocol.js";
 import type { ApiErrorBody, DirectoryListing, SessionRef, WorkspaceFile } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
@@ -19,6 +20,7 @@ const directoryQuery = z.object({ path: z.string().min(1).optional(), roots: z.e
 const fileSearchQuery = z.object({ query: z.string().max(160).optional() }).strict();
 const sessionNameInput = z.object({ name: z.string().min(1).max(120) }).strict();
 const modelInput = z.object({ provider: z.string().min(1).max(160), modelId: z.string().min(1).max(320) }).strict();
+const thinkingInput = z.object({ level: z.enum(THINKING_LEVELS) }).strict();
 const promptInput = z.object({ text: z.string(), clientRequestId: z.string().uuid() }).strict();
 const abortInput = z.object({ runId: z.string().uuid().optional() }).strict();
 const listQuery = z.object({ query: z.string().optional() });
@@ -112,6 +114,11 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const ref = sessionRef(request.params);
     const body = modelInput.parse(request.body);
     return { model: await sessions.setModel(ref, body.provider, body.modelId) };
+  });
+  app.put("/api/workspaces/:workspaceId/sessions/:sessionId/thinking", async (request) => {
+    const ref = sessionRef(request.params);
+    const body = thinkingInput.parse(request.body);
+    return { thinking: await sessions.setThinkingLevel(ref, body.level) };
   });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/prompt", async (request) => {
     const ref = sessionRef(request.params);

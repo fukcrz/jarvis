@@ -13,6 +13,7 @@ describe("transcript reducer", () => {
       seq: 4,
       status: { sessionId: "session", runState: "running", activeRun: { id: "run", startedAt: "2026-08-09T00:00:00.000Z" } },
       model: { current: { provider: "provider", id: "model-a", name: "Model A", reasoning: true }, available: [{ provider: "provider", id: "model-a", name: "Model A", reasoning: true }, { provider: "provider", id: "model-b", name: "Model B", reasoning: false }] },
+      thinking: { current: "medium", available: ["off", "low", "medium", "high"] },
       liveMessages: [],
       activeTools: [],
     });
@@ -55,6 +56,19 @@ describe("transcript reducer", () => {
 
     expect(result.model.current).toMatchObject({ id: "second", name: "Second" });
     expect(result.model.available).toHaveLength(2);
+  });
+
+  it("updates the thinking snapshot from a server event", () => {
+    const result = applySessionEvents(emptyTranscript, [{
+      version: 1,
+      sessionId: "session",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "thinking.changed",
+      payload: { thinking: { current: "high", available: ["off", "low", "high"] } },
+    }]);
+
+    expect(result.thinking).toEqual({ current: "high", available: ["off", "low", "high"] });
   });
 
   it("creates an assistant partial from a text delta", () => {

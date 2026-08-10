@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ArrowDown, Check, ChevronDown, Clock3, LoaderCircle, RotateCcw, Terminal, XCircle } from "lucide-react";
 import type { MessageTimelineItem, SessionStatus, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
@@ -45,6 +45,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
         <div className="timeline-inner">
           {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "正在加载历史记录…" : "加载更早记录"}</Button> : null}
           {renderTimelineItems(items, streamingMessageId, status)}
+          {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
           {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
           {feedback === undefined || hasActiveActivity(items, status) ? null : <WorkingIndicator feedback={feedback} />}
         </div>
@@ -68,6 +69,25 @@ function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
     <LoaderCircle className="spin" size={15} />
     <span>{feedback.label}</span>
     {elapsed === undefined ? null : <time>{elapsed}</time>}
+  </div>;
+}
+
+function RetryingIndicator({ retrying }: { retrying: NonNullable<SessionStatus["retrying"]> }) {
+  const [now, setNow] = useState(() => Date.now());
+  const endsAt = useMemo(() => Date.now() + retrying.delayMs, [retrying]);
+
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [retrying]);
+
+  const secondsLeft = Math.max(0, Math.ceil((endsAt - now) / 1_000));
+  return <div className="retrying-indicator" role="status" aria-live="polite">
+    <RotateCcw className="spin" size={15} />
+    <span className="retrying-label">模型响应失败，正在重试（{retrying.attempt}/{retrying.maxAttempts}）</span>
+    <span className="retrying-detail">{retrying.errorMessage}</span>
+    <time>{secondsLeft}s</time>
   </div>;
 }
 

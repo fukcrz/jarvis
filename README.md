@@ -29,9 +29,9 @@ Jarvis stores only its Workspace registry in `~/.jarvis/workspaces.json`. Pi JSO
 
 - Expandable project tree with existing and new Pi sessions
 - Project registration, session rename, filtering, and permanent session deletion
-- Authenticated Pi model selection, persisted as Pi `model_change` history
+- Authenticated Pi model selection and per-session thinking levels, persisted as Pi history
 - Text-only streaming prompts
 - Tool execution status and output
 - Stop, refresh, WebSocket reconnect, and paged history
 
-Thinking settings, attachments, archive, terminal/files/Git panels, and extension dialogs are intentionally outside the MVP.
+Attachments, archive, terminal/files/Git panels, and extension dialogs are intentionally outside the MVP.

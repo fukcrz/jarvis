@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronDown, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
-import type { ComposerCommand, ModelDescriptor, SessionRef, SessionSummary, Workspace, WorkspaceFile } from "../shared/protocol";
+import type { ComposerCommand, ModelDescriptor, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
+import { ThinkingSelector } from "./components/thinking-selector";
 import { Sidebar } from "./components/sidebar";
 import { SessionContextMenu, type SessionContextMenuTarget } from "./components/session-context-menu";
 import { ProjectContextMenu, type ProjectContextMenuTarget } from "./components/project-context-menu";
@@ -15,7 +16,7 @@ import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
-import { sessionLabel } from "./lib/utils";
+import { randomUUID, sessionLabel } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
 
 export function App() {
@@ -37,6 +38,7 @@ export function App() {
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
   const [mobileSwitcherOpen, setMobileSwitcherOpen] = useState(false);
   const [modelSwitchPending, setModelSwitchPending] = useState(false);
+  const [thinkingLevelPending, setThinkingLevelPending] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(() => readDrafts());
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuTarget | undefined>();
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenuTarget | undefined>();
@@ -73,7 +75,10 @@ export function App() {
     return () => media.removeEventListener("change", update);
   }, []);
 
-  useEffect(() => { setModelSwitchPending(false); }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
+  useEffect(() => {
+    setModelSwitchPending(false);
+    setThinkingLevelPending(false);
+  }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
 
   useEffect(() => {
     if (selectedRef === undefined) {
@@ -347,7 +352,7 @@ export function App() {
   const submitPrompt = async (text: string): Promise<boolean> => {
     if (selectedRef === undefined) return false;
     try {
-      await api.prompt(selectedRef, text, crypto.randomUUID());
+      await api.prompt(selectedRef, text, randomUUID());
       setSessionsByWorkspace((current) => ({
         ...current,
         [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
@@ -381,6 +386,19 @@ export function App() {
       setPageError(error instanceof Error ? error.message : "无法切换模型");
     } finally {
       setModelSwitchPending(false);
+    }
+  };
+
+  const selectThinkingLevel = async (level: ThinkingLevel) => {
+    if (selectedRef === undefined || thinkingLevelPending) return;
+    setThinkingLevelPending(true);
+    try {
+      await stream.setThinkingLevel(level);
+      setPageError(undefined);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "无法切换思考等级");
+    } finally {
+      setThinkingLevelPending(false);
     }
   };
 
@@ -429,7 +447,10 @@ export function App() {
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? stream.transcript.status.lastError?.message} status={stream.transcript.status} />
-      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle"} commands={composerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} controls={selectedSession === undefined ? undefined : <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle"} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />} />
+      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle"} commands={composerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} controls={selectedSession === undefined ? undefined : <>
+        <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle" || thinkingLevelPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
+        <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle" || modelSwitchPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
+      </>} />
     </>}
   </>;
 

@@ -4,6 +4,8 @@ export const PROTOCOL_VERSION = 1 as const;
 
 export type RunState = "idle" | "running" | "stopping";
 export type ToolState = "queued" | "running" | "completed" | "failed" | "cancelled";
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = typeof THINKING_LEVELS[number];
 
 export interface Workspace {
   id: string;
@@ -55,12 +57,24 @@ export interface SessionModelSnapshot {
   available: ModelDescriptor[];
 }
 
+export interface SessionThinkingSnapshot {
+  current: ThinkingLevel;
+  available: ThinkingLevel[];
+}
+
 export interface SessionStatus {
   sessionId: string;
   runState: RunState;
   activeRun?: {
     id: string;
     startedAt: string;
+  };
+  /** Pi 自动重试进行中（连接错误等可重试失败后指数退避重试） */
+  retrying?: {
+    attempt: number;
+    maxAttempts: number;
+    delayMs: number;
+    errorMessage: string;
   };
   lastError?: {
     code: string;
@@ -117,6 +131,7 @@ export interface SessionStreamSnapshot {
   seq: number;
   status: SessionStatus;
   model: SessionModelSnapshot;
+  thinking: SessionThinkingSnapshot;
   /** Messages from the current run that may not yet have reached JSONL. */
   liveMessages: MessageTimelineItem[];
   partial?: MessageTimelineItem;
@@ -133,11 +148,14 @@ export type SessionEventType =
   | "run.stopping"
   | "run.settled"
   | "run.failed"
+  | "run.retrying"
+  | "run.retryEnd"
   | "message.created"
   | "assistant.delta"
   | "assistant.completed"
   | "tool.upsert"
   | "model.changed"
+  | "thinking.changed"
   | "session.updated";
 
 export interface SessionEvent {
@@ -174,11 +192,14 @@ export const sessionEventSchema = z.object({
     "run.stopping",
     "run.settled",
     "run.failed",
+    "run.retrying",
+    "run.retryEnd",
     "message.created",
     "assistant.delta",
     "assistant.completed",
     "tool.upsert",
     "model.changed",
+    "thinking.changed",
     "session.updated",
   ]),
   payload: z.unknown(),

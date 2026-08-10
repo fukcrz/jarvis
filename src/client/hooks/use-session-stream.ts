@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, sessionPath, socketUrl } from "../api";
-import { isRecord, type ModelDescriptor, type SessionEvent, type SessionRef, sessionEventSchema } from "../../shared/protocol";
+import { isRecord, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, sessionEventSchema } from "../../shared/protocol";
 import { applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, type TranscriptState } from "../transcript";
 
 interface StreamState {
@@ -14,6 +14,7 @@ type Action =
   | { type: "hydrate"; page: Awaited<ReturnType<typeof api.timeline>>; snapshot: Awaited<ReturnType<typeof api.runtime>> }
   | { type: "events"; events: SessionEvent[] }
   | { type: "model"; model: ModelDescriptor }
+  | { type: "thinking"; thinking: SessionThinkingSnapshot }
   | { type: "prepend"; page: Awaited<ReturnType<typeof api.timeline>> }
   | { type: "connection"; value: StreamState["connection"]; error?: string };
 
@@ -24,6 +25,7 @@ function reducer(state: StreamState, action: Action): StreamState {
   if (action.type === "hydrate") return { ...state, transcript: hydrateTranscript(state.transcript, action.page, action.snapshot), error: undefined };
   if (action.type === "events") return { ...state, transcript: applySessionEvents(state.transcript, action.events) };
   if (action.type === "model") return { ...state, transcript: { ...state.transcript, model: { ...state.transcript.model, current: action.model } } };
+  if (action.type === "thinking") return { ...state, transcript: { ...state.transcript, thinking: action.thinking } };
   if (action.type === "prepend") return { ...state, transcript: prependTranscript(state.transcript, action.page) };
   return { ...state, connection: action.value, ...(action.error === undefined ? {} : { error: action.error }) };
 }
@@ -134,6 +136,13 @@ export function useSessionStream(ref: SessionRef | undefined) {
     if (refKeyRef.current === selectedKey) dispatch({ type: "model", model: selected });
   }, [refKey]);
 
+  const setThinkingLevel = useCallback(async (level: ThinkingLevel): Promise<void> => {
+    if (ref === undefined) return;
+    const selectedKey = refKey;
+    const thinking = await api.setThinkingLevel(ref, level);
+    if (refKeyRef.current === selectedKey) dispatch({ type: "thinking", thinking });
+  }, [refKey]);
+
   const loadEarlier = useCallback(async () => {
     if (ref === undefined || !stateRef.current.transcript.hasMore || loadingEarlier) return;
     setLoadingEarlier(true);
@@ -145,7 +154,7 @@ export function useSessionStream(ref: SessionRef | undefined) {
     }
   }, [refKey, loadingEarlier]);
 
-  return { ...state, loadEarlier, loadingEarlier, selectModel };
+  return { ...state, loadEarlier, loadingEarlier, selectModel, setThinkingLevel };
 }
 
 function coalesceStreamEvents(events: SessionEvent[]): SessionEvent[] {

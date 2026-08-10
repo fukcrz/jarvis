@@ -154,6 +154,10 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(invalidModel.statusCode).toBe(400);
     expect(invalidModel.json()).toMatchObject({ error: { code: "INVALID_REQUEST", message: "Invalid request" } });
 
+    const invalidThinking = await server.inject({ method: "PUT", url: "/api/workspaces/00000000-0000-4000-8000-000000000000/sessions/00000000-0000-4000-8000-000000000000/thinking", payload: { level: "turbo" } });
+    expect(invalidThinking.statusCode).toBe(400);
+    expect(invalidThinking.json()).toMatchObject({ error: { code: "INVALID_REQUEST", message: "Invalid request" } });
+
     const workspacePath = join(jarvisHome, "workspace");
     await mkdir(workspacePath);
     const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath, label: "Scratch" } });

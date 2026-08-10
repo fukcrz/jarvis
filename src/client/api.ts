@@ -7,6 +7,8 @@ import type {
   SessionRef,
   SessionStreamSnapshot,
   SessionSummary,
+  SessionThinkingSnapshot,
+  ThinkingLevel,
   TimelinePage,
   WorkspaceFile,
   Workspace,
@@ -65,6 +67,7 @@ export const api = {
   },
   runtime: async (ref: SessionRef): Promise<SessionStreamSnapshot> => request(`${sessionPath(ref)}/runtime`),
   setModel: async (ref: SessionRef, model: Pick<ModelDescriptor, "provider" | "id">): Promise<ModelDescriptor> => (await request<{ model: ModelDescriptor }>(`${sessionPath(ref)}/model`, { method: "PUT", body: JSON.stringify({ provider: model.provider, modelId: model.id }) })).model,
+  setThinkingLevel: async (ref: SessionRef, level: ThinkingLevel): Promise<SessionThinkingSnapshot> => (await request<{ thinking: SessionThinkingSnapshot }>(`${sessionPath(ref)}/thinking`, { method: "PUT", body: JSON.stringify({ level }) })).thinking,
   prompt: async (ref: SessionRef, text: string, clientRequestId: string): Promise<PromptAccepted> => request(`${sessionPath(ref)}/prompt`, { method: "POST", body: JSON.stringify({ text, clientRequestId }) }),
   abort: async (ref: SessionRef, runId?: string): Promise<void> => { await request(`${sessionPath(ref)}/abort`, { method: "POST", body: JSON.stringify(runId === undefined ? {} : { runId }) }); },
 };

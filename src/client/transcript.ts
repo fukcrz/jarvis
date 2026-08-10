@@ -1,4 +1,4 @@
-import type { MessageTimelineItem, ModelDescriptor, SessionEvent, SessionModelSnapshot, SessionStatus, SessionStreamSnapshot, TimelineItem, TimelinePage, ToolTimelineItem } from "../shared/protocol";
+import { THINKING_LEVELS, type MessageTimelineItem, type ModelDescriptor, type SessionEvent, type SessionModelSnapshot, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, type TimelinePage, type ToolTimelineItem } from "../shared/protocol";
 import { isRecord } from "../shared/protocol";
 
 export interface TranscriptState {
@@ -9,6 +9,7 @@ export interface TranscriptState {
   seq: number;
   status: SessionStatus;
   model: SessionModelSnapshot;
+  thinking: SessionThinkingSnapshot;
   streamingMessageId?: string;
 }
 
@@ -20,6 +21,7 @@ export const emptyTranscript: TranscriptState = {
   seq: 0,
   status: { sessionId: "", runState: "idle" },
   model: { available: [] },
+  thinking: { current: "off", available: ["off"] },
 };
 
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
@@ -34,6 +36,7 @@ export function hydrateTranscript(previous: TranscriptState, page: TimelinePage,
     seq: Math.max(previous.seq, snapshot.seq),
     status: snapshot.status,
     model: snapshot.model,
+    thinking: snapshot.thinking,
     ...(snapshot.partial === undefined ? {} : { streamingMessageId: snapshot.partial.id }),
   };
 }
@@ -88,7 +91,12 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const model = recordModelSnapshot(payload?.["model"]);
     return model === undefined ? next : { ...next, model };
   }
-  if (event.type === "run.started" || event.type === "run.stopping" || event.type === "run.settled" || event.type === "run.failed" || event.type === "session.updated") {
+  if (event.type === "thinking.changed") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const thinking = recordThinkingSnapshot(payload?.["thinking"]);
+    return thinking === undefined ? next : { ...next, thinking };
+  }
+  if (event.type === "run.started" || event.type === "run.stopping" || event.type === "run.settled" || event.type === "run.failed" || event.type === "run.retrying" || event.type === "run.retryEnd" || event.type === "session.updated") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const status = recordStatus(payload?.["status"]);
     if (status === undefined) return next;
@@ -163,6 +171,16 @@ function recordModel(value: unknown): ModelDescriptor | undefined {
   return { provider: value["provider"], id: value["id"], name: value["name"], reasoning: value["reasoning"] };
 }
 
+function recordThinkingSnapshot(value: unknown): SessionThinkingSnapshot | undefined {
+  if (!isRecord(value) || !isThinkingLevel(value["current"]) || !Array.isArray(value["available"])) return undefined;
+  const available = value["available"].filter(isThinkingLevel);
+  return { current: value["current"], available };
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === "string" && THINKING_LEVELS.includes(value as ThinkingLevel);
+}
+
 function recordStatus(value: unknown): SessionStatus | undefined {
   if (!isRecord(value) || typeof value["sessionId"] !== "string") return undefined;
   const runState = value["runState"];
@@ -175,5 +193,9 @@ function recordStatus(value: unknown): SessionStatus | undefined {
   const lastError = typeof lastErrorValue?.["code"] === "string" && typeof lastErrorValue["message"] === "string" && typeof lastErrorValue["occurredAt"] === "string"
     ? { code: lastErrorValue["code"], message: lastErrorValue["message"], occurredAt: lastErrorValue["occurredAt"] }
     : undefined;
-  return { sessionId: value["sessionId"], runState, ...(activeRun === undefined ? {} : { activeRun }), ...(lastError === undefined ? {} : { lastError }) };
+  const retryingValue = isRecord(value["retrying"]) ? value["retrying"] : undefined;
+  const retrying = typeof retryingValue?.["attempt"] === "number" && typeof retryingValue["maxAttempts"] === "number" && typeof retryingValue["delayMs"] === "number" && typeof retryingValue["errorMessage"] === "string"
+    ? { attempt: retryingValue["attempt"], maxAttempts: retryingValue["maxAttempts"], delayMs: retryingValue["delayMs"], errorMessage: retryingValue["errorMessage"] }
+    : undefined;
+  return { sessionId: value["sessionId"], runState, ...(activeRun === undefined ? {} : { activeRun }), ...(retrying === undefined ? {} : { retrying }), ...(lastError === undefined ? {} : { lastError }) };
 }

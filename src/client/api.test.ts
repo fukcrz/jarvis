@@ -44,4 +44,18 @@ describe("API client", () => {
     expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
     expect(init?.body).toBe(JSON.stringify({ provider: "provider", modelId: "model" }));
   });
+
+  it("sends the selected thinking level to the session thinking endpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ thinking: { current: "high", available: ["off", "low", "high"] } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ref = { workspaceId: "da69b38d-f132-4c84-8c4f-6174015e9c5e", sessionId: "c2f73ddd-cfc6-464f-acb3-c8f425cea7f0" };
+
+    await expect(api.setThinkingLevel(ref, "high")).resolves.toMatchObject({ current: "high" });
+
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe(`/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}/thinking`);
+    expect(init?.method).toBe("PUT");
+    expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
+    expect(init?.body).toBe(JSON.stringify({ level: "high" }));
+  });
 });

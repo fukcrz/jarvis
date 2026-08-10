@@ -3,7 +3,7 @@ import { buildApp } from "./app.js";
 const production = process.env["NODE_ENV"] === "production";
 const app = await buildApp({ serveStatic: production });
 const port = Number(process.env["PORT"] ?? 39126);
-const host = production ? "127.0.0.1" : "0.0.0.0";
+const host = process.env["HOST"] ?? (production ? "127.0.0.1" : "0.0.0.0");
 
 const close = async (signal: string) => {
   app.log.info({ signal }, "Shutting down Jarvis");

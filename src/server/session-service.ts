@@ -21,6 +21,8 @@ import type {
   SessionStatus,
   SessionStreamSnapshot,
   SessionSummary,
+  SessionThinkingSnapshot,
+  ThinkingLevel,
   TimelineItem,
   TimelinePage,
   ToolTimelineItem,
@@ -51,6 +53,8 @@ interface ActiveSession {
   partial?: MessageTimelineItem;
   activeTools: Map<string, ToolTimelineItem>;
   extensionFailure?: { code: string; message: string };
+  /** Error from the last assistant message; applied at agent_settled once Pi's retries/compaction finish. */
+  pendingRunError?: { code: string; message: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -190,6 +194,7 @@ export class SessionService {
       seq: this.events.currentSeq(active.ref),
       status: active.state,
       model: this.modelSnapshot(active),
+      thinking: this.thinkingSnapshot(active),
       liveMessages: [...active.liveMessages.values()],
       ...(active.partial === undefined ? {} : { partial: active.partial }),
       activeTools: [...active.activeTools.values()],
@@ -226,6 +231,21 @@ export class SessionService {
     }
   }
 
+  async setThinkingLevel(ref: SessionRef, level: ThinkingLevel): Promise<SessionThinkingSnapshot> {
+    const active = await this.getActive(ref);
+    if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) {
+      throw new AppError("SESSION_BUSY", "Stop the current run before changing thinking level", 409);
+    }
+
+    const previous = active.session.thinkingLevel;
+    active.session.setThinkingLevel(level);
+    if (active.session.thinkingLevel !== previous) {
+      active.updatedAt = new Date().toISOString();
+      this.publishSummary(active);
+    }
+    return this.thinkingSnapshot(active);
+  }
+
   async prompt(ref: SessionRef, text: string, clientRequestId: string): Promise<PromptAccepted> {
     const prompt = text.trim();
     if (prompt === "") throw new AppError("PROMPT_EMPTY", "Prompt cannot be empty");
@@ -242,6 +262,7 @@ export class SessionService {
     active.partial = undefined;
     active.activeTools.clear();
     active.extensionFailure = undefined;
+    active.pendingRunError = undefined;
     const accepted: PromptAccepted = { accepted: true, runId: run.id };
     active.requestRuns.set(clientRequestId, accepted);
     if (active.requestRuns.size > 48) active.requestRuns.delete(active.requestRuns.keys().next().value as string);
@@ -375,6 +396,7 @@ export class SessionService {
       requestRuns: new Map(),
       liveMessages: new Map(),
       activeTools: new Map(),
+      pendingRunError: undefined,
       createdAt,
       updatedAt,
     };
@@ -386,6 +408,13 @@ export class SessionService {
 
   private modelSnapshot(active: ActiveSession) {
     return projectModelSnapshot(active.session.model, active.modelRuntime.getAvailableSnapshot());
+  }
+
+  private thinkingSnapshot(active: ActiveSession): SessionThinkingSnapshot {
+    return {
+      current: active.session.thinkingLevel,
+      available: [...active.session.getAvailableThinkingLevels()],
+    };
   }
 
   private async availableModels(runtime: ModelRuntime) {
@@ -444,8 +473,15 @@ export class SessionService {
           this.events.publishSession(active.ref, { type: "assistant.completed", runId, payload: { message } });
         }
         if (stringValue(event.message["stopReason"]) === "error") {
-          const errorMessage = stringValue(event.message["errorMessage"]) || "The model response failed.";
-          this.failRun(active, runId, "PI_RUNTIME_ERROR", errorMessage);
+          // Pi may auto-retry or compact after a failed message; defer the failure
+          // until agent_settled so jarvis stays in sync with the underlying agent.
+          active.pendingRunError = {
+            code: "PI_RUNTIME_ERROR",
+            message: stringValue(event.message["errorMessage"]) || "The model response failed.",
+          };
+        } else {
+          // A successful later message clears any earlier retried error.
+          active.pendingRunError = undefined;
         }
         return;
       }
@@ -478,12 +514,38 @@ export class SessionService {
         this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool } });
         return;
       }
+      case "auto_retry_start": {
+        const runId = active.state.activeRun?.id;
+        if (runId === undefined) return;
+        active.state = {
+          ...active.state,
+          retrying: { attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, errorMessage: event.errorMessage },
+        };
+        this.events.publishSession(active.ref, { type: "run.retrying", runId, payload: { status: active.state } });
+        this.publishSummary(active);
+        return;
+      }
+      case "auto_retry_end": {
+        const runId = active.state.activeRun?.id;
+        if (runId === undefined) return;
+        active.state = { ...active.state, retrying: undefined };
+        this.events.publishSession(active.ref, { type: "run.retryEnd", runId, payload: { status: active.state } });
+        this.publishSummary(active);
+        return;
+      }
       case "agent_settled":
-        if (active.extensionFailure !== undefined) {
+        if (active.pendingRunError !== undefined) {
+          const failure = active.pendingRunError;
+          active.pendingRunError = undefined;
+          this.failRun(active, active.state.activeRun?.id, failure.code, failure.message);
+        } else if (active.extensionFailure !== undefined) {
           this.failRun(active, active.state.activeRun?.id, active.extensionFailure.code, active.extensionFailure.message);
         } else {
           this.settleRun(active, active.state.activeRun?.id);
         }
+        return;
+      case "thinking_level_changed":
+        this.events.publishSession(active.ref, { type: "thinking.changed", payload: { thinking: this.thinkingSnapshot(active) } });
         return;
       case "session_info_changed":
         this.publishSummary(active);
@@ -506,6 +568,7 @@ export class SessionService {
     active.partial = undefined;
     active.activeTools.clear();
     active.extensionFailure = undefined;
+    active.pendingRunError = undefined;
     this.events.publishSession(active.ref, { type: "run.settled", runId, payload: { status: active.state } });
     this.publishSummary(active);
   }
@@ -527,6 +590,7 @@ export class SessionService {
     active.partial = undefined;
     active.activeTools.clear();
     active.extensionFailure = undefined;
+    active.pendingRunError = undefined;
     this.events.publishSession(active.ref, { type: "run.failed", runId, payload: { status: active.state } });
     this.publishSummary(active);
   }
