@@ -277,6 +277,9 @@ export function App() {
       setWorkspaceId(targetWorkspaceId);
       setSessionId(session.id);
       setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
+      // Mobile: jump straight into the new session instead of staying on the list.
+      setMobilePage("chat");
+      setMobileSwitcherOpen(false);
       setPageError(undefined);
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "无法创建会话");
