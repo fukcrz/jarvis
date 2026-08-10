@@ -46,9 +46,9 @@ export function ProjectContextMenu({ target, onClose, onCreateSession, onRename,
     };
   }, [onClose]);
 
-  return <div ref={menuRef} className="context-menu" role="menu" aria-label="Project actions" tabIndex={-1} style={{ left, top }} onContextMenu={(event) => event.preventDefault()}>
-    <button className="context-menu-item" type="button" role="menuitem" onClick={() => onCreateSession(target.workspace)}><MessageSquarePlus size={14} /><span>New session</span></button>
-    <button className="context-menu-item" type="button" role="menuitem" onClick={() => onRename(target.workspace)}><Pencil size={14} /><span>Rename project</span></button>
-    <button className="context-menu-item danger" type="button" role="menuitem" onClick={() => onRemove(target.workspace)}><Trash2 size={14} /><span>Remove project</span></button>
+  return <div ref={menuRef} className="context-menu" role="menu" aria-label="项目操作" tabIndex={-1} style={{ left, top }} onContextMenu={(event) => event.preventDefault()}>
+    <button className="context-menu-item" type="button" role="menuitem" onClick={() => onCreateSession(target.workspace)}><MessageSquarePlus size={14} /><span>新建会话</span></button>
+    <button className="context-menu-item" type="button" role="menuitem" onClick={() => onRename(target.workspace)}><Pencil size={14} /><span>重命名项目</span></button>
+    <button className="context-menu-item danger" type="button" role="menuitem" onClick={() => onRemove(target.workspace)}><Trash2 size={14} /><span>移除项目</span></button>
   </div>;
 }

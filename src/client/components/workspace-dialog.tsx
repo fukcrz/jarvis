@@ -22,7 +22,7 @@ export function WorkspaceDialog(props: WorkspaceDialogProps) {
     try {
       setDirectory(await api.directory(path, roots));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to open directory");
+      setError(reason instanceof Error ? reason.message : "无法打开目录");
     } finally {
       setPending(false);
     }
@@ -43,30 +43,30 @@ export function WorkspaceDialog(props: WorkspaceDialogProps) {
       await props.onAdd(directory.path);
       props.onOpenChange(false);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to add project");
+      setError(reason instanceof Error ? reason.message : "无法添加项目");
     } finally {
       setPending(false);
     }
   };
 
   return <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-    <DialogContent title="Choose project directory" description="Choose a directory on the machine running Jarvis." className="workspace-dialog">
+    <DialogContent title="选择项目目录" description="请选择运行 Jarvis 的设备上的目录。" className="workspace-dialog">
       {error === undefined ? null : <div className="workspace-error" role="alert">{error}</div>}
       <section className="directory-browser">
         <div className="directory-location">
-          {directory?.isRootPicker === true ? null : <Button variant="secondary" size="sm" onClick={() => { void browse(undefined, true); }} disabled={pending}>Drives</Button>}
-          {directory?.parent === undefined ? null : <Button variant="secondary" size="sm" onClick={() => { void browse(directory.parent); }} disabled={pending}>Up</Button>}
-          <span className="directory-path" title={directory?.path}>{directory?.isRootPicker === true ? "Choose a drive" : directory?.path ?? "Opening directory..."}</span>
+          {directory?.isRootPicker === true ? null : <Button variant="secondary" size="sm" onClick={() => { void browse(undefined, true); }} disabled={pending}>磁盘</Button>}
+          {directory?.parent === undefined ? null : <Button variant="secondary" size="sm" onClick={() => { void browse(directory.parent); }} disabled={pending}>上一级</Button>}
+          <span className="directory-path" title={directory?.path}>{directory?.isRootPicker === true ? "选择磁盘" : directory?.path ?? "正在打开目录…"}</span>
         </div>
-        <div className="directory-list" aria-label="Directories">
+        <div className="directory-list" aria-label="目录列表">
           {directory?.entries.map((entry) => <button type="button" className="directory-row" key={entry.path} onClick={() => { void browse(entry.path); }} disabled={pending}>
             {directory?.isRootPicker === true ? <HardDrive size={18} /> : <Folder size={18} />}<span>{entry.name}</span><ChevronRight size={17} />
           </button>)}
-          {directory !== undefined && directory.entries.length === 0 ? <p className="directory-empty">No subdirectories</p> : null}
+          {directory !== undefined && directory.entries.length === 0 ? <p className="directory-empty">没有子目录</p> : null}
         </div>
         <footer className="directory-selection">
-          <div><strong>{directory?.name}</strong><span>{directory?.isRootPicker === true ? "Select a drive to browse its folders" : directory?.path}</span>{directory?.isGitRepository ? <small>Git repository</small> : null}</div>
-          <Button onClick={() => { void add(); }} disabled={directory === undefined || directory.isRootPicker || pending}><FolderPlus size={16} /> Select this folder</Button>
+          <div><strong>{directory?.name}</strong><span>{directory?.isRootPicker === true ? "选择磁盘以浏览其中的文件夹" : directory?.path}</span>{directory?.isGitRepository ? <small>Git 仓库</small> : null}</div>
+          <Button onClick={() => { void add(); }} disabled={directory === undefined || directory.isRootPicker || pending}><FolderPlus size={16} /> 选择此文件夹</Button>
         </footer>
       </section>
     </DialogContent>

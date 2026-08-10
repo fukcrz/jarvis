@@ -97,7 +97,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
     theme: "dark",
     basicSetup,
     extensions: editorExtensions,
-    placeholder: "Ask for follow-up changes",
+    placeholder: "输入后续需求",
   });
 
   const attachContainer = useCallback((element: HTMLDivElement | null) => setContainer(element), [setContainer]);
@@ -133,10 +133,10 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   }, [closeCompletion, completion]);
 
   const completionItems = completion?.items ?? [];
-  const completionLabel = useMemo(() => completion?.trigger === "/" ? "Commands" : "Files", [completion?.trigger]);
+  const completionLabel = useMemo(() => completion?.trigger === "/" ? "命令" : "文件", [completion?.trigger]);
 
   return (
-    <section className="composer" aria-label="Message composer">
+    <section className="composer" aria-label="消息输入框">
       <div className="composer-editor">
         <div className="composer-code-editor" ref={attachContainer} onKeyDownCapture={(event) => {
           if (completionItems.length > 0) {
@@ -175,9 +175,9 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
         <div className="composer-footer">
           <div className="composer-options">{controls}</div>
           {busy ? (
-            <Tooltip label="Stop current run"><Button className="composer-stop" size="icon" aria-label="Stop current run" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
+            <Tooltip label="停止当前执行"><Button className="composer-stop" size="icon" aria-label="停止当前执行" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
           ) : (
-            <Tooltip label="Send message"><Button className="composer-send" size="icon" aria-label="Send message" onClick={() => { void submit(); }} disabled={initialValue.trim() === ""}><ArrowUp size={17} /></Button></Tooltip>
+            <Tooltip label="发送消息"><Button className="composer-send" size="icon" aria-label="发送消息" onClick={() => { void submit(); }} disabled={initialValue.trim() === ""}><ArrowUp size={17} /></Button></Tooltip>
           )}
         </div>
       </div>

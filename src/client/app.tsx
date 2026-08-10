@@ -91,7 +91,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void loadWorkspaces().catch((error: unknown) => setPageError(error instanceof Error ? error.message : "Unable to load projects")).finally(() => setLoading(false));
+    void loadWorkspaces().catch((error: unknown) => setPageError(error instanceof Error ? error.message : "无法加载项目")).finally(() => setLoading(false));
   }, [loadWorkspaces]);
 
   useEffect(() => {
@@ -103,7 +103,7 @@ export function App() {
     void loadProjectSessions(workspaces).then((sessions) => {
       if (!disposed) setSessionsByWorkspace(sessions);
     }).catch((error: unknown) => {
-      if (!disposed) setPageError(error instanceof Error ? error.message : "Unable to load sessions");
+      if (!disposed) setPageError(error instanceof Error ? error.message : "无法加载会话");
     });
     return () => { disposed = true; };
   }, [workspaces, loadProjectSessions]);
@@ -229,7 +229,7 @@ export function App() {
       setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Unable to create session");
+      setPageError(error instanceof Error ? error.message : "无法创建会话");
     }
   };
 
@@ -252,7 +252,7 @@ export function App() {
       setRenameTarget(undefined);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Unable to rename session");
+      setPageError(error instanceof Error ? error.message : "无法重命名会话");
     }
   };
 
@@ -265,7 +265,7 @@ export function App() {
       setProjectRenameTarget(undefined);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Unable to rename project");
+      setPageError(error instanceof Error ? error.message : "无法重命名项目");
     }
   };
 
@@ -294,7 +294,7 @@ export function App() {
       setProjectRemoveTarget(undefined);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Unable to remove project");
+      setPageError(error instanceof Error ? error.message : "无法移除项目");
     } finally {
       setProjectRemovePending(false);
     }
@@ -316,7 +316,7 @@ export function App() {
       setDeleteTarget(undefined);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Unable to delete session");
+      setPageError(error instanceof Error ? error.message : "无法删除会话");
     } finally {
       setDeletePending(false);
     }
@@ -340,7 +340,7 @@ export function App() {
       setPageError(undefined);
       return true;
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Unable to send prompt");
+      setPageError(error instanceof Error ? error.message : "无法发送消息");
       return false;
     }
   };
@@ -350,7 +350,7 @@ export function App() {
     try {
       await api.abort(selectedRef, stream.transcript.status.activeRun?.id);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Unable to stop the run");
+      setPageError(error instanceof Error ? error.message : "无法停止执行");
     }
   };
 
@@ -361,7 +361,7 @@ export function App() {
       await stream.selectModel(model);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Unable to change model");
+      setPageError(error instanceof Error ? error.message : "无法切换模型");
     } finally {
       setModelSwitchPending(false);
     }
@@ -393,7 +393,7 @@ export function App() {
     onLongPressSession={(targetWorkspaceId, session) => setMobileActionTarget({ kind: "session", workspaceId: targetWorkspaceId, session })}
   />;
 
-  if (loading) return <main className="app-loading">Opening workspace...</main>;
+  if (loading) return <main className="app-loading">正在打开工作区…</main>;
 
   return (
     <main className="app-shell">
@@ -401,20 +401,20 @@ export function App() {
       <DialogPrimitive.Root open={mobileOpen} onOpenChange={setMobileOpen}>
         <DialogPrimitive.Portal>
           <DialogPrimitive.Overlay className="dialog-overlay mobile-overlay" />
-          <DialogPrimitive.Content className="mobile-sidebar" aria-label="Project and session navigation">{sidebar}</DialogPrimitive.Content>
+          <DialogPrimitive.Content className="mobile-sidebar" aria-label="项目和会话导航">{sidebar}</DialogPrimitive.Content>
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
       <section className="main-pane">
         <header className="chat-header">
           <div className="chat-title-wrap">
-            <Tooltip label="Open navigation"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={19} /></Button></Tooltip>
+            <Tooltip label="打开导航"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="打开导航" onClick={() => setMobileOpen(true)}><Menu size={19} /></Button></Tooltip>
             <div className="chat-title">
-              <div><h1>{selectedSession === undefined ? "New session" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined || selectedWorkspace === undefined ? null : <Tooltip label="Rename session"><Button variant="ghost" size="icon" aria-label="Rename session" onClick={() => { setRenameTarget({ workspaceId: selectedWorkspace.id, session: selectedSession }); setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); }}><Pencil size={15} /></Button></Tooltip>}</div>
+              <div><h1>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined || selectedWorkspace === undefined ? null : <Tooltip label="重命名会话"><Button variant="ghost" size="icon" aria-label="重命名会话" onClick={() => { setRenameTarget({ workspaceId: selectedWorkspace.id, session: selectedSession }); setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); }}><Pencil size={15} /></Button></Tooltip>}</div>
             </div>
           </div>
         </header>
-        {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="Dismiss error" onClick={() => setPageError(undefined)}>Dismiss</button></div>}
-        {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>No session selected</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> New session</Button></section> : <>
+        {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
+        {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
           <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? stream.transcript.status.lastError?.message} status={stream.transcript.status} />
           <PromptEditor
             key={selectedRef.sessionId}
@@ -472,28 +472,28 @@ export function App() {
       <WorkspaceDialog open={workspaceDialogOpen} onOpenChange={setWorkspaceDialogOpen} onAdd={addWorkspace} />
 
       <Dialog open={renameTarget !== undefined} onOpenChange={(open) => { if (!open) setRenameTarget(undefined); }}>
-        <DialogContent title="Rename session">
-          <form className="rename-form" onSubmit={(event) => { event.preventDefault(); void renameSession(); }}><input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} autoFocus /><Button type="submit" disabled={renameValue.trim() === ""}>Save</Button></form>
+        <DialogContent title="重命名会话">
+          <form className="rename-form" onSubmit={(event) => { event.preventDefault(); void renameSession(); }}><input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} autoFocus /><Button type="submit" disabled={renameValue.trim() === ""}>保存</Button></form>
         </DialogContent>
       </Dialog>
       <Dialog open={projectRenameTarget !== undefined} onOpenChange={(open) => { if (!open) setProjectRenameTarget(undefined); }}>
-        <DialogContent title="Rename project">
-          <form className="rename-form" onSubmit={(event) => { event.preventDefault(); void renameProject(); }}><input value={projectRenameValue} onChange={(event) => setProjectRenameValue(event.target.value)} autoFocus /><Button type="submit" disabled={projectRenameValue.trim() === ""}>Save</Button></form>
+        <DialogContent title="重命名项目">
+          <form className="rename-form" onSubmit={(event) => { event.preventDefault(); void renameProject(); }}><input value={projectRenameValue} onChange={(event) => setProjectRenameValue(event.target.value)} autoFocus /><Button type="submit" disabled={projectRenameValue.trim() === ""}>保存</Button></form>
         </DialogContent>
       </Dialog>
       <Dialog open={projectRemoveTarget !== undefined} onOpenChange={(open) => { if (!open && !projectRemovePending) setProjectRemoveTarget(undefined); }}>
-        <DialogContent title="Remove project" description="This only removes the project from Jarvis.">
-          <p className="delete-session-message"><strong>{projectRemoveTarget?.label ?? ""}</strong> and its session history will remain on disk.</p>
-          <div className="dialog-actions"><Button variant="secondary" onClick={() => setProjectRemoveTarget(undefined)} disabled={projectRemovePending}>Cancel</Button><Button variant="danger" onClick={() => { void removeProject(); }} disabled={projectRemovePending}>{projectRemovePending ? "Removing..." : "Remove project"}</Button></div>
+        <DialogContent title="移除项目" description="此操作只会将项目从 Jarvis 中移除。">
+          <p className="delete-session-message"><strong>{projectRemoveTarget?.label ?? ""}</strong>及其会话历史将保留在磁盘上。</p>
+          <div className="dialog-actions"><Button variant="secondary" onClick={() => setProjectRemoveTarget(undefined)} disabled={projectRemovePending}>取消</Button><Button variant="danger" onClick={() => { void removeProject(); }} disabled={projectRemovePending}>{projectRemovePending ? "正在移除…" : "移除项目"}</Button></div>
         </DialogContent>
       </Dialog>
 
       <Dialog open={deleteTarget !== undefined} onOpenChange={(open) => { if (!open && !deletePending) setDeleteTarget(undefined); }}>
-        <DialogContent title="Delete session" description="This permanently deletes the Pi session history.">
-          <p className="delete-session-message"><strong>{deleteTarget === undefined ? "" : sessionLabel(deleteTarget.session.name, deleteTarget.session.preview)}</strong> will be permanently deleted.</p>
+        <DialogContent title="删除会话" description="此操作将永久删除 Pi 会话历史。">
+          <p className="delete-session-message"><strong>{deleteTarget === undefined ? "" : sessionLabel(deleteTarget.session.name, deleteTarget.session.preview)}</strong>将被永久删除。</p>
           <div className="dialog-actions">
-            <Button variant="secondary" onClick={() => setDeleteTarget(undefined)} disabled={deletePending}>Cancel</Button>
-            <Button variant="danger" onClick={() => { void deleteSession(); }} disabled={deletePending}>{deletePending ? "Deleting..." : "Delete session"}</Button>
+            <Button variant="secondary" onClick={() => setDeleteTarget(undefined)} disabled={deletePending}>取消</Button>
+            <Button variant="danger" onClick={() => { void deleteSession(); }} disabled={deletePending}>{deletePending ? "正在删除…" : "删除会话"}</Button>
           </div>
         </DialogContent>
       </Dialog>

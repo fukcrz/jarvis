@@ -98,7 +98,7 @@ export function useSessionStream(ref: SessionRef | undefined) {
           if (disposed || socket !== connection) return;
           hydrated = false;
           buffered = [];
-          dispatch({ type: "connection", value: "reconnecting", error: error instanceof Error ? error.message : "Unable to load this session" });
+          dispatch({ type: "connection", value: "reconnecting", error: error instanceof Error ? error.message : "无法加载此会话" });
           connection.close();
         });
       });

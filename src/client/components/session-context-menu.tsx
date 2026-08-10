@@ -50,11 +50,11 @@ export function SessionContextMenu({ target, onClose, onRename, onDelete }: Sess
   }, [onClose]);
 
   return (
-    <div ref={menuRef} className="context-menu" role="menu" aria-label="Session actions" tabIndex={-1} style={{ left, top }} onContextMenu={(event) => event.preventDefault()}>
-      <button className="context-menu-item" type="button" role="menuitem" onClick={() => onRename(target)}><Pencil size={14} /><span>Rename session</span></button>
-      <button className="context-menu-item danger" type="button" role="menuitem" disabled={busy} title={busy ? "Stop this session before deleting" : undefined} onClick={() => onDelete(target)}>
+    <div ref={menuRef} className="context-menu" role="menu" aria-label="会话操作" tabIndex={-1} style={{ left, top }} onContextMenu={(event) => event.preventDefault()}>
+      <button className="context-menu-item" type="button" role="menuitem" onClick={() => onRename(target)}><Pencil size={14} /><span>重命名会话</span></button>
+      <button className="context-menu-item danger" type="button" role="menuitem" disabled={busy} title={busy ? "请先停止此会话再删除" : undefined} onClick={() => onDelete(target)}>
         <Trash2 size={14} />
-        <span>Delete session</span>
+        <span>删除会话</span>
       </button>
     </div>
   );

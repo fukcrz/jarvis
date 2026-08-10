@@ -43,7 +43,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
         setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < 72);
       }}>
         <div className="timeline-inner">
-          {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "Loading history" : "Load earlier"}</Button> : null}
+          {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "正在加载历史记录…" : "加载更早记录"}</Button> : null}
           {items.map((item) => item.kind === "message"
             ? <MessageItem key={item.id} item={item} streaming={item.id === streamingMessageId} />
             : <ToolItem key={item.id} item={item} />)}
@@ -51,7 +51,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
           {feedback === undefined ? null : <WorkingIndicator feedback={feedback} />}
         </div>
       </div>
-      {!following ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="Jump to latest" title="Jump to latest" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
+      {!following ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
     </section>
   );
 }
@@ -89,8 +89,8 @@ const MessageItem = memo(function MessageItem({ item, streaming }: { item: Extra
       <div className={`message-content ${streaming ? "streaming" : ""}`}>
         <MarkdownMessage text={item.text} streaming={streaming} />
       </div>
-      <Tooltip label={copied ? "Copied" : "Copy message"}>
-        <button type="button" className="message-copy" aria-label="Copy message" onClick={() => { void copy(); }}><Clipboard size={14} /></button>
+      <Tooltip label={copied ? "已复制" : "复制消息"}>
+        <button type="button" className="message-copy" aria-label="复制消息" onClick={() => { void copy(); }}><Clipboard size={14} /></button>
       </Tooltip>
     </article>
   );
@@ -110,8 +110,8 @@ function ToolItem({ item }: { item: ToolTimelineItem }) {
         <ChevronDown className={open ? "chevron-open" : ""} size={16} />
       </button>
       {open ? <div className="tool-details">
-        {item.inputPreview === undefined ? null : <div><span className="detail-label">Input</span><pre>{item.inputPreview}</pre></div>}
-        {output === undefined ? null : <div><div className="detail-heading"><span className="detail-label">{item.error === undefined ? "Output" : "Error"}</span><Tooltip label="Copy output"><button className="copy-output" type="button" aria-label="Copy output" onClick={() => { void copy(); }}><Clipboard size={13} /></button></Tooltip></div><pre className={item.error === undefined ? "" : "tool-error-output"}>{output}</pre></div>}
+        {item.inputPreview === undefined ? null : <div><span className="detail-label">输入</span><pre>{item.inputPreview}</pre></div>}
+        {output === undefined ? null : <div><div className="detail-heading"><span className="detail-label">{item.error === undefined ? "输出" : "错误"}</span><Tooltip label="复制输出"><button className="copy-output" type="button" aria-label="复制输出" onClick={() => { void copy(); }}><Clipboard size={13} /></button></Tooltip></div><pre className={item.error === undefined ? "" : "tool-error-output"}>{output}</pre></div>}
       </div> : null}
     </article>
   );
@@ -126,9 +126,9 @@ function toolIcon(state: ToolTimelineItem["state"]) {
 }
 
 function toolLabel(state: ToolTimelineItem["state"]): string {
-  if (state === "running") return "Running";
-  if (state === "completed") return "Done";
-  if (state === "failed") return "Failed";
-  if (state === "cancelled") return "Stopped";
-  return "Queued";
+  if (state === "running") return "执行中";
+  if (state === "completed") return "完成";
+  if (state === "failed") return "失败";
+  if (state === "cancelled") return "已停止";
+  return "排队中";
 }

@@ -18,7 +18,7 @@ export function DialogContent({ children, title, description, className, ...prop
             {description === undefined ? null : <DialogPrimitive.Description>{description}</DialogPrimitive.Description>}
           </div>
           <DialogPrimitive.Close asChild>
-            <Button variant="ghost" size="icon" aria-label="Close dialog"><X size={17} /></Button>
+            <Button variant="ghost" size="icon" aria-label="关闭对话框"><X size={17} /></Button>
           </DialogPrimitive.Close>
         </div>
         {children}

@@ -19,17 +19,17 @@ export function MobileActionSheet(props: MobileActionSheetProps) {
   return <DialogPrimitive.Root open={target !== undefined} onOpenChange={(open) => { if (!open) props.onClose(); }}>
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="action-sheet-overlay" />
-      <DialogPrimitive.Content className="action-sheet" aria-label={target?.kind === "project" ? "Project actions" : "Session actions"}>
-        <DialogPrimitive.Title className="action-sheet-title">{target?.kind === "project" ? target.workspace.label : target === undefined ? "" : target.session.name ?? "Session"}</DialogPrimitive.Title>
+      <DialogPrimitive.Content className="action-sheet" aria-label={target?.kind === "project" ? "项目操作" : "会话操作"}>
+        <DialogPrimitive.Title className="action-sheet-title">{target?.kind === "project" ? target.workspace.label : target === undefined ? "" : target.session.name ?? "会话"}</DialogPrimitive.Title>
         {target?.kind === "project" ? <>
-          <button type="button" className="action-sheet-item" onClick={() => props.onCreateSession(target.workspace)}><MessageSquarePlus size={18} />New session</button>
-          <button type="button" className="action-sheet-item" onClick={() => props.onRenameProject(target.workspace)}><Pencil size={18} />Rename project</button>
-          <button type="button" className="action-sheet-item danger" onClick={() => props.onRemoveProject(target.workspace)}><Trash2 size={18} />Remove project</button>
+          <button type="button" className="action-sheet-item" onClick={() => props.onCreateSession(target.workspace)}><MessageSquarePlus size={18} />新建会话</button>
+          <button type="button" className="action-sheet-item" onClick={() => props.onRenameProject(target.workspace)}><Pencil size={18} />重命名项目</button>
+          <button type="button" className="action-sheet-item danger" onClick={() => props.onRemoveProject(target.workspace)}><Trash2 size={18} />移除项目</button>
         </> : target?.kind === "session" ? <>
-          <button type="button" className="action-sheet-item" onClick={() => props.onRenameSession(target.workspaceId, target.session)}><Pencil size={18} />Rename session</button>
-          <button type="button" className="action-sheet-item danger" disabled={target.session.runState !== "idle"} onClick={() => props.onDeleteSession(target.workspaceId, target.session)}><Trash2 size={18} />Delete session</button>
+          <button type="button" className="action-sheet-item" onClick={() => props.onRenameSession(target.workspaceId, target.session)}><Pencil size={18} />重命名会话</button>
+          <button type="button" className="action-sheet-item danger" disabled={target.session.runState !== "idle"} onClick={() => props.onDeleteSession(target.workspaceId, target.session)}><Trash2 size={18} />删除会话</button>
         </> : null}
-        <DialogPrimitive.Close asChild><button type="button" className="action-sheet-cancel">Cancel</button></DialogPrimitive.Close>
+        <DialogPrimitive.Close asChild><button type="button" className="action-sheet-cancel">取消</button></DialogPrimitive.Close>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   </DialogPrimitive.Root>;

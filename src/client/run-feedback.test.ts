@@ -9,13 +9,13 @@ const running = {
 
 describe("run feedback", () => {
   it("shows Pi-style working feedback before the first assistant delta", () => {
-    expect(getRunFeedback(running, [])).toEqual({ label: "Working...", tone: "working", startedAt: running.activeRun.startedAt });
+    expect(getRunFeedback(running, [])).toEqual({ label: "执行中…", tone: "working", startedAt: running.activeRun.startedAt });
     expect(getRunFeedback(running, [], "assistant-message")).toBeUndefined();
   });
 
   it("describes pending tools and stopping runs", () => {
-    expect(getRunFeedback(running, [{ kind: "tool", id: "tool", createdAt: "2026-08-09T00:00:01.000Z", name: "read", title: "Read file", state: "running" }])).toMatchObject({ label: "Running Read file", tone: "working" });
-    expect(getRunFeedback({ ...running, runState: "stopping" }, [])).toMatchObject({ label: "Stopping...", tone: "stopping" });
+    expect(getRunFeedback(running, [{ kind: "tool", id: "tool", createdAt: "2026-08-09T00:00:01.000Z", name: "read", title: "Read file", state: "running" }])).toMatchObject({ label: "执行中 Read file", tone: "working" });
+    expect(getRunFeedback({ ...running, runState: "stopping" }, [])).toMatchObject({ label: "正在停止…", tone: "stopping" });
   });
 
   it("formats an elapsed run duration", () => {
