@@ -281,14 +281,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .message-body.user .message-images a:active img { transform: scale(.98); }
 
 /* --- Mobile selector bottom sheet --- */
-.selector-sheet-list { display: grid; gap: 2px; max-height: min(56dvh, 520px); overflow-y: auto; }
-.selector-sheet-group + .selector-sheet-group { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
-.selector-sheet-provider { padding: 4px 6px; color: var(--subtle); font-size: 10px; font-weight: 700; text-transform: uppercase; }
-.selector-sheet-item { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; width: 100%; gap: 8px; border: 0; border-radius: 6px; background: transparent; padding: 12px 8px; color: var(--ink); font-size: 14px; text-align: left; }
+.selector-sheet-list { display: grid; gap: 2px; max-height: min(44dvh, 400px); overflow-y: auto; }
+.selector-sheet-group + .selector-sheet-group { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
+.selector-sheet-provider { padding: 3px 8px; color: var(--subtle); font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.selector-sheet-item { display: grid; grid-template-columns: 15px minmax(0, 1fr); align-items: center; width: 100%; gap: 6px; border: 0; border-radius: 5px; background: transparent; padding: 7px 9px; color: var(--ink); font-size: 11px; text-align: left; }
 .selector-sheet-item:active { background: var(--surface-hover); }
 .selector-sheet-item:disabled { color: var(--accent-strong); }
-.selector-sheet-check { display: grid; min-height: 15px; color: var(--accent); }
+.selector-sheet-check { display: grid; min-height: 14px; color: var(--accent); }
 @media (max-width: 760px) {
-  .selector-sheet.dialog-content { top: auto; left: 0; right: 0; bottom: 0; width: 100vw; max-width: none; max-height: min(72dvh, 640px); transform: none; border-radius: 14px 14px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); }
-  .selector-sheet.dialog-content .dialog-header { padding: 0 4px 2px; }
+  .selector-sheet.dialog-content { top: auto; left: 0; right: 0; bottom: 0; width: 100vw; max-width: none; max-height: min(62dvh, 520px); gap: 8px; transform: none; border-radius: 14px 14px 0 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
+  .selector-sheet.dialog-content .dialog-header { gap: 12px; padding: 0 2px 2px; }
+  .selector-sheet.dialog-content .dialog-header h2 { font-size: 13px; }
+  .selector-sheet.dialog-content .dialog-header .button-icon { width: 26px; height: 26px; }
 }
