@@ -33,6 +33,16 @@ export interface SessionRef {
   sessionId: string;
 }
 
+export interface ComposerCommand {
+  name: string;
+  description?: string;
+  source: "extension" | "prompt" | "skill";
+}
+
+export interface WorkspaceFile {
+  path: string;
+}
+
 export interface ModelDescriptor {
   provider: string;
   id: string;

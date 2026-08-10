@@ -1,13 +1,13 @@
 import { readdir, realpath, stat } from "node:fs/promises";
 import { platform } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
 import { z } from "zod";
-import type { ApiErrorBody, DirectoryListing, SessionRef } from "../shared/protocol.js";
+import type { ApiErrorBody, DirectoryListing, SessionRef, WorkspaceFile } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { SessionService } from "./session-service.js";
@@ -16,6 +16,7 @@ import { WorkspaceStore } from "./workspace-store.js";
 const workspaceInput = z.object({ cwd: z.string().min(1), label: z.string().max(96).optional() }).strict();
 const workspaceUpdateInput = z.object({ label: z.string().min(1).max(96) }).strict();
 const directoryQuery = z.object({ path: z.string().min(1).optional(), roots: z.enum(["true"]).optional() }).strict();
+const fileSearchQuery = z.object({ query: z.string().max(160).optional() }).strict();
 const sessionNameInput = z.object({ name: z.string().min(1).max(120) }).strict();
 const modelInput = z.object({ provider: z.string().min(1).max(160), modelId: z.string().min(1).max(320) }).strict();
 const promptInput = z.object({ text: z.string(), clientRequestId: z.string().uuid() }).strict();
@@ -92,6 +93,14 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     await sessions.remove(sessionRef(request.params));
     return { removed: true };
   });
+
+  app.get("/api/workspaces/:workspaceId/files", async (request) => {
+    const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
+    const query = fileSearchQuery.parse(request.query);
+    const workspace = workspaces.get(params.workspaceId);
+    return { files: await searchWorkspaceFiles(workspace.cwd, query.query ?? "") };
+  });
+  app.get("/api/workspaces/:workspaceId/sessions/:sessionId/commands", async (request) => ({ commands: await sessions.commands(sessionRef(request.params)) }));
 
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/timeline", async (request) => {
     const ref = sessionRef(request.params);
@@ -201,6 +210,52 @@ async function listDirectory(value: string): Promise<DirectoryListing> {
     if (error instanceof AppError) throw error;
     throw new AppError("DIRECTORY_UNAVAILABLE", `Directory is unavailable: ${value}`, 400);
   }
+}
+
+const IGNORED_SEARCH_DIRECTORIES = new Set([".git", "node_modules", "dist", "coverage", ".next"]);
+const MAX_FILE_SEARCH_RESULTS = 80;
+const MAX_FILE_SEARCH_DEPTH = 14;
+
+async function searchWorkspaceFiles(cwd: string, query: string): Promise<WorkspaceFile[]> {
+  const normalizedQuery = query.trim().replaceAll("\\", "/").toLocaleLowerCase();
+  const matches: Array<{ path: string; score: number }> = [];
+
+  const visit = async (directory: string, depth: number): Promise<void> => {
+    if (matches.length >= MAX_FILE_SEARCH_RESULTS || depth > MAX_FILE_SEARCH_DEPTH) return;
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (matches.length >= MAX_FILE_SEARCH_RESULTS) return;
+      const absolutePath = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!IGNORED_SEARCH_DIRECTORIES.has(entry.name)) await visit(absolutePath, depth + 1);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const path = relative(cwd, absolutePath).replaceAll("\\", "/");
+      const score = fileMatchScore(path.toLocaleLowerCase(), normalizedQuery);
+      if (score !== undefined) matches.push({ path, score });
+    }
+  };
+
+  await visit(cwd, 0);
+  return matches.sort((left, right) => left.score - right.score || left.path.localeCompare(right.path)).map(({ path }) => ({ path }));
+}
+
+function fileMatchScore(path: string, query: string): number | undefined {
+  if (query === "") return path.split("/").length * 100 + path.length;
+  const basenameIndex = path.lastIndexOf("/") + 1;
+  const fileName = path.slice(basenameIndex);
+  if (fileName.startsWith(query)) return path.length;
+  const pathIndex = path.indexOf(query);
+  if (pathIndex >= 0) return 1_000 + pathIndex * 10 + path.length;
+  let queryIndex = 0;
+  for (const character of path) if (character === query[queryIndex]) queryIndex += 1;
+  return queryIndex === query.length ? 10_000 + path.length : undefined;
 }
 
 async function pathExists(path: string): Promise<boolean> {

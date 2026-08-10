@@ -1,5 +1,6 @@
 import type {
   ApiErrorBody,
+  ComposerCommand,
   DirectoryListing,
   ModelDescriptor,
   PromptAccepted,
@@ -7,6 +8,7 @@ import type {
   SessionStreamSnapshot,
   SessionSummary,
   TimelinePage,
+  WorkspaceFile,
   Workspace,
 } from "../shared/protocol";
 
@@ -47,6 +49,13 @@ export const api = {
     const suffix = params.size === 0 ? "" : `?${params.toString()}`;
     return (await request<{ sessions: SessionSummary[] }>(`/api/workspaces/${workspaceId}/sessions${suffix}`)).sessions;
   },
+  searchFiles: async (workspaceId: string, query?: string): Promise<WorkspaceFile[]> => {
+    const params = new URLSearchParams();
+    if (query?.trim()) params.set("query", query.trim());
+    const suffix = params.size === 0 ? "" : `?${params.toString()}`;
+    return (await request<{ files: WorkspaceFile[] }>(`/api/workspaces/${workspaceId}/files${suffix}`)).files;
+  },
+  commands: async (ref: SessionRef): Promise<ComposerCommand[]> => (await request<{ commands: ComposerCommand[] }>(`${sessionPath(ref)}/commands`)).commands,
   createSession: async (workspaceId: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`/api/workspaces/${workspaceId}/sessions`, { method: "POST", body: "{}" })).session,
   removeSession: async (ref: SessionRef): Promise<void> => { await request(sessionPath(ref), { method: "DELETE" }); },
   renameSession: async (ref: SessionRef, name: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(sessionPath(ref), { method: "PATCH", body: JSON.stringify({ name }) })).session,

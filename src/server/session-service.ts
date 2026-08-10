@@ -13,6 +13,7 @@ import {
   type ExtensionError,
 } from "@earendil-works/pi-coding-agent";
 import type {
+  ComposerCommand,
   MessageTimelineItem,
   ModelDescriptor,
   PromptAccepted,
@@ -158,6 +159,27 @@ export class SessionService {
     const requestedStart = Math.max(0, end - clamp(limit, 1, 500));
     const start = expandToUserBoundary(items, requestedStart);
     return { items: items.slice(start, end), start, total: items.length, hasMore: start > 0 };
+  }
+
+  async commands(ref: SessionRef): Promise<ComposerCommand[]> {
+    const active = await this.getActive(ref);
+    return [
+      ...active.session.extensionRunner.getRegisteredCommands().map((command) => ({
+        name: command.invocationName,
+        ...(command.description === undefined ? {} : { description: command.description }),
+        source: "extension" as const,
+      })),
+      ...active.session.promptTemplates.map((template) => ({
+        name: template.name,
+        ...(template.description === undefined ? {} : { description: template.description }),
+        source: "prompt" as const,
+      })),
+      ...active.session.resourceLoader.getSkills().skills.map((skill) => ({
+        name: `skill:${skill.name}`,
+        ...(skill.description === undefined ? {} : { description: skill.description }),
+        source: "skill" as const,
+      })),
+    ];
   }
 
   async runtime(ref: SessionRef): Promise<SessionStreamSnapshot> {

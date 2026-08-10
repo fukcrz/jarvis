@@ -1,7 +1,7 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FolderPlus, Menu, Pencil, Plus } from "lucide-react";
-import type { ModelDescriptor, SessionRef, SessionSummary, Workspace } from "../shared/protocol";
+import type { ComposerCommand, ModelDescriptor, SessionRef, SessionSummary, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
@@ -41,6 +41,7 @@ export function App() {
   const [mobileActionTarget, setMobileActionTarget] = useState<MobileActionTarget | undefined>();
   const [deleteTarget, setDeleteTarget] = useState<Pick<SessionContextMenuTarget, "workspaceId" | "session"> | undefined>();
   const [deletePending, setDeletePending] = useState(false);
+  const [composerCommands, setComposerCommands] = useState<ComposerCommand[]>([]);
 
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId);
   const selectedSession = selectedWorkspace === undefined
@@ -63,6 +64,20 @@ export function App() {
   const stream = useSessionStream(selectedRef);
 
   useEffect(() => { setModelSwitchPending(false); }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
+
+  useEffect(() => {
+    if (selectedRef === undefined) {
+      setComposerCommands([]);
+      return;
+    }
+    let disposed = false;
+    void api.commands(selectedRef).then((commands) => {
+      if (!disposed) setComposerCommands(commands);
+    }).catch(() => {
+      if (!disposed) setComposerCommands([]);
+    });
+    return () => { disposed = true; };
+  }, [selectedRef]);
 
   const loadWorkspaces = useCallback(async () => {
     const values = await api.listWorkspaces();

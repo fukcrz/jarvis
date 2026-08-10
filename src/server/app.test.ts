@@ -89,6 +89,31 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect((roots.json() as { directory: { entries: Array<{ path: string }> } }).directory.entries).toContainEqual(expect.objectContaining({ path: "C:\\" }));
   });
 
+  it("searches workspace files for composer references without exposing ignored directories", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "file-search-workspace");
+    await mkdir(join(workspacePath, "src", "server"), { recursive: true });
+    await mkdir(join(workspacePath, "node_modules", "hidden"), { recursive: true });
+    await mkdir(join(workspacePath, ".git", "objects"), { recursive: true });
+    await writeFile(join(workspacePath, "src", "server", "session-service.ts"), "export {};");
+    await writeFile(join(workspacePath, "README.md"), "# Test");
+    await writeFile(join(workspacePath, "node_modules", "hidden", "package.js"), "module.exports = {};");
+    await writeFile(join(workspacePath, ".git", "objects", "ignored"), "ignored");
+
+    const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } });
+    const workspace = created.json() as { workspace: { id: string } };
+    const searched = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/files?query=session` });
+
+    expect(searched.statusCode).toBe(200);
+    expect(searched.json()).toEqual({ files: [{ path: "src/server/session-service.ts" }] });
+
+    const allFiles = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/files` });
+    expect(allFiles.statusCode).toBe(200);
+    expect(allFiles.json()).toMatchObject({ files: expect.arrayContaining([{ path: "README.md" }, { path: "src/server/session-service.ts" }]) });
+    expect(JSON.stringify(allFiles.json())).not.toContain("node_modules");
+    expect(JSON.stringify(allFiles.json())).not.toContain(".git");
+  });
+
   it("lists selectable child directories and records a project's last opened time", async () => {
     const server = activeApp();
     const browserRoot = join(jarvisHome, "browser-root");
