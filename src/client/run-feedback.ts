@@ -9,7 +9,7 @@ export interface RunFeedback {
 export function getRunFeedback(status: SessionStatus, items: TimelineItem[], streamingMessageId?: string): RunFeedback | undefined {
   if (status.runState === "idle") return undefined;
   if (status.runState === "stopping") return { label: "正在停止…", tone: "stopping", startedAt: status.activeRun?.startedAt };
-  if (streamingMessageId !== undefined) return undefined;
+  if (status.compacting !== undefined || status.retrying !== undefined || streamingMessageId !== undefined) return undefined;
 
   const activeTool = [...items].reverse().find(isPendingTool);
   if (activeTool !== undefined) {

@@ -25,6 +25,7 @@ function projectModel(value: unknown): ModelDescriptor | undefined {
     id,
     name: stringValue(value["name"]) || id,
     reasoning: value["reasoning"] === true,
+    vision: Array.isArray(value["input"]) && value["input"].includes("image"),
   };
 }
 

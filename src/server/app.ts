@@ -21,7 +21,9 @@ const fileSearchQuery = z.object({ query: z.string().max(160).optional() }).stri
 const sessionNameInput = z.object({ name: z.string().min(1).max(120) }).strict();
 const modelInput = z.object({ provider: z.string().min(1).max(160), modelId: z.string().min(1).max(320) }).strict();
 const thinkingInput = z.object({ level: z.enum(THINKING_LEVELS) }).strict();
-const promptInput = z.object({ text: z.string(), clientRequestId: z.string().uuid() }).strict();
+const imageInput = z.object({ mimeType: z.string().min(1).max(120), data: z.string().min(1) }).strict();
+const promptInput = z.object({ text: z.string(), clientRequestId: z.string().uuid(), images: z.array(imageInput).max(8).optional() }).strict();
+const compactInput = z.object({ customInstructions: z.string().max(40_000).optional() }).strict();
 const abortInput = z.object({ runId: z.string().uuid().optional() }).strict();
 const listQuery = z.object({ query: z.string().optional() });
 const timelineQuery = z.object({ before: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(500).optional() });
@@ -33,7 +35,7 @@ export interface JarvisServices {
 }
 
 export async function buildApp(options: { serveStatic?: boolean; staticRoot?: string } = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: { level: process.env["LOG_LEVEL"] ?? "info" } });
+  const app = Fastify({ logger: { level: process.env["LOG_LEVEL"] ?? "info" }, bodyLimit: 25 * 1024 * 1024 });
   const production = process.env["NODE_ENV"] === "production";
   const workspaces = new WorkspaceStore();
   await workspaces.initialize(process.cwd());
@@ -123,7 +125,12 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/prompt", async (request) => {
     const ref = sessionRef(request.params);
     const body = promptInput.parse(request.body);
-    return sessions.prompt(ref, body.text, body.clientRequestId);
+    return sessions.prompt(ref, body.text, body.clientRequestId, body.images);
+  });
+  app.post("/api/workspaces/:workspaceId/sessions/:sessionId/compact", async (request) => {
+    const ref = sessionRef(request.params);
+    const body = compactInput.parse(request.body);
+    return sessions.compact(ref, body.customInstructions);
   });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/abort", async (request) => {
     const ref = sessionRef(request.params);

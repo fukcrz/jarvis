@@ -1,4 +1,4 @@
-import type { MessageTimelineItem, TimelineItem, ToolState, ToolTimelineItem } from "../shared/protocol.js";
+import type { ContextSummaryTimelineItem, ImageAttachment, MessageTimelineItem, TimelineItem, ToolState, ToolTimelineItem } from "../shared/protocol.js";
 
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
 
@@ -7,6 +7,11 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
   const toolIndex = new Map<string, number>();
 
   for (const entry of entries) {
+    const contextSummary = contextSummaryFromEntry(entry);
+    if (contextSummary !== undefined) {
+      items.push(contextSummary);
+      continue;
+    }
     if (!isRecord(entry) || entry["type"] !== "message") continue;
     const message = entry["message"];
     if (!isRecord(message)) continue;
@@ -16,8 +21,12 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
     const role = stringValue(message["role"]);
 
     if (role === "user") {
-      const text = textFromContent(message["content"]);
-      if (text !== "") items.push(messageFromPi(message, "user", text, createdAt, entryId));
+      const { text, images } = userContentFromContent(message["content"]);
+      if (text === "" && images.length === 0) continue;
+      items.push({
+        ...messageFromPi(message, "user", text, createdAt, entryId),
+        ...(images.length === 0 ? {} : { images }),
+      });
       continue;
     }
 
@@ -93,6 +102,24 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
   return items;
 }
 
+export function contextSummaryFromEntry(entry: unknown): ContextSummaryTimelineItem | undefined {
+  if (!isRecord(entry)) return undefined;
+  const type = entry["type"];
+  if (type !== "compaction" && type !== "branch_summary") return undefined;
+  const summary = stringValue(entry["summary"]);
+  if (summary === "") return undefined;
+  const entryId = stringValue(entry["id"]) || crypto.randomUUID();
+  const tokensBefore = type === "compaction" ? numberValue(entry["tokensBefore"]) : undefined;
+  return {
+    kind: "context-summary",
+    id: `context-summary:${entryId}`,
+    createdAt: toIso(entry["timestamp"]),
+    summaryType: type === "compaction" ? "compaction" : "branch",
+    summary,
+    ...(tokensBefore === undefined ? {} : { tokensBefore }),
+  };
+}
+
 export function messageFromPi(message: unknown, role: "user" | "assistant", text: string, fallbackCreatedAt = new Date().toISOString(), fallbackId: string = crypto.randomUUID()): MessageTimelineItem {
   const record = isRecord(message) ? message : {};
   const timestamp = record["timestamp"];
@@ -161,7 +188,37 @@ export function toolWithPartial(tool: ToolTimelineItem, result: unknown): ToolTi
 }
 
 export function textFromContent(content: unknown): string {
-  return textParts(content).join("\n");
+  return contentParts(content).text;
+}
+
+/**
+ * Extracts the visible text and image attachments from a Pi message content
+ * value. Images are passed through as base64 attachments so Jarvis can echo
+ * them back in the timeline.
+ */
+export function contentParts(content: unknown): { text: string; images: ImageAttachment[] } {
+  if (typeof content === "string") return content === "" ? { text: "", images: [] } : { text: content, images: [] };
+  if (!Array.isArray(content)) return { text: "", images: [] };
+  const text: string[] = [];
+  const images: ImageAttachment[] = [];
+  for (const part of content) {
+    if (!isRecord(part)) continue;
+    if (part["type"] === "text") {
+      const value = stringValue(part["text"]);
+      if (value !== "") text.push(value);
+      continue;
+    }
+    if (part["type"] === "image") {
+      const data = stringValue(part["data"]);
+      const mimeType = stringValue(part["mimeType"]) || stringValue(part["mediaType"]);
+      if (data !== "" && mimeType !== "") images.push({ mimeType, data });
+    }
+  }
+  return { text: text.join("\n"), images };
+}
+
+export function userContentFromContent(content: unknown): { text: string; images: ImageAttachment[] } {
+  return contentParts(content);
 }
 
 /**

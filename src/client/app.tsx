@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ChevronDown, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
-import type { ComposerCommand, ModelDescriptor, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
+import { Archive, ArrowLeft, ChevronDown, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
+import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
@@ -39,7 +39,9 @@ export function App() {
   const [mobileSwitcherOpen, setMobileSwitcherOpen] = useState(false);
   const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const [thinkingLevelPending, setThinkingLevelPending] = useState(false);
+  const [compactionPending, setCompactionPending] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(() => readDrafts());
+  const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, ImageAttachment[]>>({});
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuTarget | undefined>();
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenuTarget | undefined>();
   const [mobileActionTarget, setMobileActionTarget] = useState<MobileActionTarget | undefined>();
@@ -62,6 +64,15 @@ export function App() {
   const updateSelectedDraft = useCallback((value: string) => {
     if (selectedSessionId !== undefined) updateDraft(selectedSessionId, value);
   }, [selectedSessionId, updateDraft]);
+  const selectedAttachments = selectedSessionId === undefined ? [] : attachmentsBySession[selectedSessionId] ?? [];
+  const updateSelectedAttachments = useCallback((value: ImageAttachment[]) => {
+    if (selectedSessionId === undefined) return;
+    setAttachmentsBySession((current) => {
+      const existing = current[selectedSessionId] ?? [];
+      if (existing.length === 0 && value.length === 0) return current;
+      return { ...current, [selectedSessionId]: value };
+    });
+  }, [selectedSessionId]);
   const closeSessionMenu = useCallback(() => { setSessionMenu(undefined); }, []);
   const closeProjectMenu = useCallback(() => { setProjectMenu(undefined); }, []);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
@@ -78,6 +89,7 @@ export function App() {
   useEffect(() => {
     setModelSwitchPending(false);
     setThinkingLevelPending(false);
+    setCompactionPending(false);
   }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
 
   useEffect(() => {
@@ -349,10 +361,10 @@ export function App() {
     return api.searchFiles(selectedRef.workspaceId, query);
   }, [selectedRef]);
 
-  const submitPrompt = async (text: string): Promise<boolean> => {
+  const submitPrompt = async (text: string, attachments: ImageAttachment[]): Promise<boolean> => {
     if (selectedRef === undefined) return false;
     try {
-      await api.prompt(selectedRef, text, randomUUID());
+      await api.prompt(selectedRef, text, randomUUID(), attachments);
       setSessionsByWorkspace((current) => ({
         ...current,
         [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
@@ -375,6 +387,22 @@ export function App() {
       setPageError(error instanceof Error ? error.message : "无法停止执行");
     }
   };
+
+  const compact = async () => {
+    if (selectedRef === undefined || compactionPending) return;
+    setCompactionPending(true);
+    try {
+      await api.compact(selectedRef);
+      setPageError(undefined);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "无法压缩上下文");
+      setCompactionPending(false);
+    }
+  };
+
+  useEffect(() => {
+    if (stream.transcript.status.compacting === undefined) setCompactionPending(false);
+  }, [stream.transcript.status.compacting]);
 
   const selectModel = async (model: ModelDescriptor) => {
     if (selectedRef === undefined || modelSwitchPending) return;
@@ -447,9 +475,10 @@ export function App() {
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? stream.transcript.status.lastError?.message} status={stream.transcript.status} />
-      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle"} commands={composerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} controls={selectedSession === undefined ? undefined : <>
-        <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle" || thinkingLevelPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
-        <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle" || modelSwitchPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
+      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={composerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={(message) => { setPageError(message); }} attachDisabled={stream.transcript.model.current?.vision === false} controls={selectedSession === undefined ? undefined : <>
+        <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
+        <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
+        <Tooltip label="压缩上下文"><Button variant="ghost" size="icon" aria-label="压缩上下文" disabled={stream.connection !== "live" || stream.transcript.status.runState !== "idle" || compactionPending} onClick={() => { void compact(); }}><Archive size={15} /></Button></Tooltip>
       </>} />
     </>}
   </>;

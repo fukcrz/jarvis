@@ -13,10 +13,13 @@ import {
   type ExtensionError,
 } from "@earendil-works/pi-coding-agent";
 import type {
+  CompactAccepted,
   ComposerCommand,
+  ImageAttachment,
   MessageTimelineItem,
   ModelDescriptor,
   PromptAccepted,
+  RetryStatus,
   SessionRef,
   SessionStatus,
   SessionStreamSnapshot,
@@ -32,7 +35,7 @@ import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, unsupportedExtensionUi } from "./extension-ui.js";
 import { projectModelSnapshot } from "./model-projection.js";
-import { assistantTextFromContent, messageFromPi, projectHistory, textFromContent, toolFromCall, toolWithPartial, toolWithResult } from "./projection.js";
+import { assistantTextFromContent, contextSummaryFromEntry, messageFromPi, projectHistory, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
 
 interface ActiveRun {
@@ -52,6 +55,8 @@ interface ActiveSession {
   liveMessages: Map<string, MessageTimelineItem>;
   partial?: MessageTimelineItem;
   activeTools: Map<string, ToolTimelineItem>;
+  /** Retains a stop click that arrives before Pi installs its compaction abort controller. */
+  compactionAbortRequested: boolean;
   extensionFailure?: { code: string; message: string };
   /** Error from the last assistant message; applied at agent_settled once Pi's retries/compaction finish. */
   pendingRunError?: { code: string; message: string };
@@ -61,6 +66,9 @@ interface ActiveSession {
 
 const PAGE_LIMIT = 120;
 const MAX_PROMPT_LENGTH = 40_000;
+const MAX_ATTACHMENTS = 8;
+const MAX_ATTACHMENT_DATA_LENGTH = 14_000_000; // ≈ 10 MiB decoded
+const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/heic", "image/heif"]);
 
 export class SessionService {
   private readonly active = new Map<string, ActiveSession>();
@@ -214,6 +222,7 @@ export class SessionService {
       if (model === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "This model is not available for the current Pi profile", 404);
 
       const snapshot = projectModelSnapshot(active.session.model, available);
+      const previousThinking = this.thinkingSnapshot(active);
       if (active.session.model?.provider === provider && active.session.model?.id === modelId) {
         if (snapshot.current === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "Pi did not select the requested model", 409);
         return snapshot.current;
@@ -222,8 +231,14 @@ export class SessionService {
       await active.session.setModel(model);
       active.updatedAt = new Date().toISOString();
       const updated = projectModelSnapshot(active.session.model, available);
+      const updatedThinking = this.thinkingSnapshot(active);
       if (updated.current === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "Pi did not select the requested model", 409);
       this.events.publishSession(active.ref, { type: "model.changed", payload: { model: updated } });
+      // Pi emits thinking_level_changed when it clamps the current value. A
+      // capability-only change needs an explicit browser update as well.
+      if (previousThinking.current === updatedThinking.current && !sameThinkingLevels(previousThinking.available, updatedThinking.available)) {
+        this.events.publishSession(active.ref, { type: "thinking.changed", payload: { thinking: updatedThinking } });
+      }
       this.publishSummary(active);
       return updated.current;
     } finally {
@@ -246,10 +261,11 @@ export class SessionService {
     return this.thinkingSnapshot(active);
   }
 
-  async prompt(ref: SessionRef, text: string, clientRequestId: string): Promise<PromptAccepted> {
+  async prompt(ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[]): Promise<PromptAccepted> {
     const prompt = text.trim();
-    if (prompt === "") throw new AppError("PROMPT_EMPTY", "Prompt cannot be empty");
+    if (prompt === "" && (images === undefined || images.length === 0)) throw new AppError("PROMPT_EMPTY", "Prompt cannot be empty");
     if (prompt.length > MAX_PROMPT_LENGTH) throw new AppError("PROMPT_TOO_LARGE", `Prompt must be at most ${String(MAX_PROMPT_LENGTH)} characters`);
+    const attachments = this.validateAttachments(images);
     const active = await this.getActive(ref);
     const previous = active.requestRuns.get(clientRequestId);
     if (previous !== undefined) return previous;
@@ -269,21 +285,65 @@ export class SessionService {
 
     this.events.publishSession(active.ref, { type: "run.started", runId: run.id, payload: { status: active.state } });
     this.publishSummary(active);
-    void this.executePrompt(active, prompt, run.id);
+    void this.executePrompt(active, prompt, run.id, attachments);
     return accepted;
+  }
+
+  private validateAttachments(images: ImageAttachment[] | undefined): ImageAttachment[] {
+    const attachments = images ?? [];
+    if (attachments.length > MAX_ATTACHMENTS) throw new AppError("ATTACHMENTS_TOO_MANY", `A message can include at most ${String(MAX_ATTACHMENTS)} images`);
+    for (const image of attachments) {
+      if (!ALLOWED_IMAGE_TYPES.has(image.mimeType)) {
+        throw new AppError("ATTACHMENT_TYPE_UNSUPPORTED", `Image type ${image.mimeType} is not supported`);
+      }
+      if (typeof image.data !== "string" || image.data === "" || image.data.length > MAX_ATTACHMENT_DATA_LENGTH) {
+        throw new AppError("ATTACHMENT_TOO_LARGE", "One of the attached images is too large");
+      }
+    }
+    return attachments;
+  }
+
+  async compact(ref: SessionRef, customInstructions?: string): Promise<CompactAccepted> {
+    const active = await this.getActive(ref);
+    if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) {
+      throw new AppError("SESSION_BUSY", "Stop the current run before compacting this session", 409);
+    }
+
+    const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString() };
+    active.state = {
+      sessionId: active.ref.sessionId,
+      runState: "running",
+      activeRun: run,
+      compacting: { reason: "manual", startedAt: run.startedAt },
+    };
+    active.updatedAt = run.startedAt;
+    active.extensionFailure = undefined;
+    active.pendingRunError = undefined;
+    this.events.publishSession(active.ref, { type: "run.started", runId: run.id, payload: { status: active.state } });
+    this.publishSummary(active);
+    void this.executeCompaction(active, customInstructions?.trim() || undefined, run.id);
+    return { accepted: true, runId: run.id };
   }
 
   async abort(ref: SessionRef, runId?: string): Promise<void> {
     const active = await this.getActive(ref);
     const activeRun = active.state.activeRun;
-    if (activeRun === undefined) throw new AppError("RUN_NOT_ACTIVE", "This session does not have an active run", 409);
-    if (runId !== undefined && activeRun.id !== runId) throw new AppError("RUN_NOT_ACTIVE", "This run is no longer active", 409);
+    if (activeRun === undefined && active.state.compacting === undefined) {
+      throw new AppError("RUN_NOT_ACTIVE", "This session does not have an active run", 409);
+    }
+    if (runId !== undefined && activeRun?.id !== runId) throw new AppError("RUN_NOT_ACTIVE", "This run is no longer active", 409);
     active.state = { ...active.state, runState: "stopping" };
-    this.events.publishSession(active.ref, { type: "run.stopping", runId: activeRun.id, payload: { status: active.state } });
+    this.events.publishSession(active.ref, { type: "run.stopping", ...(activeRun === undefined ? {} : { runId: activeRun.id }), payload: { status: active.state } });
     this.publishSummary(active);
+
+    if (active.state.compacting !== undefined) {
+      this.cancelCompaction(active);
+      return;
+    }
+
     try {
       await active.session.abort();
-      if (active.state.activeRun?.id === activeRun.id) this.settleRun(active, activeRun.id);
+      if (activeRun !== undefined && active.state.activeRun?.id === activeRun.id) this.settleRun(active, activeRun.id);
     } catch (error) {
       this.failRun(active, active.state.activeRun?.id, "PI_RUNTIME_ERROR", asMessage(error));
       throw error;
@@ -298,6 +358,8 @@ export class SessionService {
     const sessions = [...this.active.values()].filter((active) => active.ref.workspaceId === workspaceId);
     for (const active of sessions) {
       active.unsubscribe();
+      active.session.abortCompaction();
+      active.session.abortRetry();
       await active.session.abort().catch(() => undefined);
       active.session.dispose();
       this.active.delete(activeKey(active.ref));
@@ -307,6 +369,8 @@ export class SessionService {
   async dispose(): Promise<void> {
     for (const active of this.active.values()) {
       active.unsubscribe();
+      active.session.abortCompaction();
+      active.session.abortRetry();
       await active.session.abort().catch(() => undefined);
       active.session.dispose();
     }
@@ -315,12 +379,28 @@ export class SessionService {
     this.deleting.clear();
   }
 
-  private async executePrompt(active: ActiveSession, prompt: string, runId: string): Promise<void> {
+  private async executePrompt(active: ActiveSession, prompt: string, runId: string, images: ImageAttachment[] = []): Promise<void> {
     try {
-      await active.session.prompt(prompt, { source: "rpc" });
+      await active.session.prompt(prompt, {
+        source: "rpc",
+        ...(images.length === 0
+          ? {}
+          : { images: images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })) }),
+      });
       if (active.state.activeRun?.id === runId && active.session.isIdle) this.settleRun(active, runId);
     } catch (error) {
       if (active.state.activeRun?.id === runId) this.failRun(active, runId, runtimeFailureCode(error), asMessage(error));
+    }
+  }
+
+  private async executeCompaction(active: ActiveSession, customInstructions: string | undefined, runId: string): Promise<void> {
+    try {
+      await active.session.compact(customInstructions);
+      if (active.state.activeRun?.id === runId) this.settleRun(active, runId);
+    } catch (error) {
+      if (active.state.activeRun?.id !== runId) return;
+      if (isCompactionCancellation(error)) this.settleRun(active, runId);
+      else this.failRun(active, runId, "PI_COMPACTION_FAILED", asMessage(error));
     }
   }
 
@@ -396,6 +476,7 @@ export class SessionService {
       requestRuns: new Map(),
       liveMessages: new Map(),
       activeTools: new Map(),
+      compactionAbortRequested: false,
       pendingRunError: undefined,
       createdAt,
       updatedAt,
@@ -454,9 +535,12 @@ export class SessionService {
         const runId = active.state.activeRun?.id;
         if (runId === undefined) return;
         if (isUserMessage(event.message)) {
-          const text = textFromContent(event.message.content);
-          if (text === "") return;
-          const message = messageFromPi(event.message, "user", text);
+          const { text, images } = userContentFromContent(event.message.content);
+          if (text === "" && images.length === 0) return;
+          const message = {
+            ...messageFromPi(event.message, "user", text),
+            ...(images.length === 0 ? {} : { images }),
+          };
           active.liveMessages.set(message.id, message);
           this.events.publishSession(active.ref, { type: "message.created", runId, payload: { message } });
           return;
@@ -514,12 +598,93 @@ export class SessionService {
         this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool } });
         return;
       }
+      case "compaction_start": {
+        const startedAt = active.state.compacting?.reason === event.reason
+          ? active.state.compacting.startedAt
+          : new Date().toISOString();
+        active.state = {
+          ...active.state,
+          compacting: { reason: event.reason, startedAt },
+        };
+        if (active.compactionAbortRequested) this.cancelCompaction(active);
+        this.events.publishSession(active.ref, {
+          type: "run.compactionStarted",
+          ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
+          payload: { status: active.state },
+        });
+        this.publishSummary(active);
+        return;
+      }
+      case "compaction_end": {
+        const runId = active.state.activeRun?.id;
+        const errorMessage = event.errorMessage;
+        active.compactionAbortRequested = false;
+        active.state = { ...active.state, compacting: undefined };
+        if (event.result !== undefined) {
+          const saved = [...active.session.sessionManager.getBranch()]
+            .reverse()
+            .find((entry) => entry.type === "compaction" && entry.summary === event.result?.summary);
+          const item = contextSummaryFromEntry(saved);
+          if (item !== undefined) this.events.publishSession(active.ref, { type: "timeline.upsert", ...(runId === undefined ? {} : { runId }), payload: { item } });
+        } else if (!event.aborted && errorMessage !== undefined) {
+          if (event.reason === "overflow") {
+            // Overflow recovery has no usable answer; the interrupted run fails.
+            active.pendingRunError = { code: "PI_COMPACTION_FAILED", message: errorMessage };
+          } else if (event.reason === "threshold") {
+            // A threshold compaction happens after a valid answer. Preserve it as
+            // visible context feedback rather than reclassifying the answer as failed.
+            active.state = {
+              ...active.state,
+              lastError: { code: "PI_COMPACTION_FAILED", message: errorMessage, occurredAt: new Date().toISOString() },
+            };
+          }
+        }
+        this.events.publishSession(active.ref, {
+          type: "run.compactionEnded",
+          ...(runId === undefined ? {} : { runId }),
+          payload: { status: active.state, aborted: event.aborted, ...(errorMessage === undefined ? {} : { errorMessage }), willRetry: event.willRetry },
+        });
+        this.publishSummary(active);
+        return;
+      }
+      case "summarization_retry_scheduled": {
+        if (active.state.compacting === undefined) return;
+        active.state = {
+          ...active.state,
+          compacting: {
+            ...active.state.compacting,
+            retrying: retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage),
+          },
+        };
+        this.events.publishSession(active.ref, {
+          type: "run.compactionRetrying",
+          ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
+          payload: { status: active.state },
+        });
+        this.publishSummary(active);
+        return;
+      }
+      case "summarization_retry_attempt_start":
+      case "summarization_retry_finished": {
+        if (active.state.compacting?.retrying === undefined) return;
+        active.state = {
+          ...active.state,
+          compacting: { ...active.state.compacting, retrying: undefined },
+        };
+        this.events.publishSession(active.ref, {
+          type: "run.compactionRetrying",
+          ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
+          payload: { status: active.state },
+        });
+        this.publishSummary(active);
+        return;
+      }
       case "auto_retry_start": {
         const runId = active.state.activeRun?.id;
         if (runId === undefined) return;
         active.state = {
           ...active.state,
-          retrying: { attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, errorMessage: event.errorMessage },
+          retrying: retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage),
         };
         this.events.publishSession(active.ref, { type: "run.retrying", runId, payload: { status: active.state } });
         this.publishSummary(active);
@@ -563,10 +728,16 @@ export class SessionService {
       active.activeTools.set(tool.id, cancelled);
       this.events.publishSession(active.ref, { type: "tool.upsert", runId, payload: { tool: cancelled } });
     }
-    active.state = { sessionId: active.ref.sessionId, runState: "idle" };
+    const lastError = active.state.lastError;
+    active.state = {
+      sessionId: active.ref.sessionId,
+      runState: "idle",
+      ...(lastError === undefined ? {} : { lastError }),
+    };
     active.liveMessages.clear();
     active.partial = undefined;
     active.activeTools.clear();
+    active.compactionAbortRequested = false;
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
     this.events.publishSession(active.ref, { type: "run.settled", runId, payload: { status: active.state } });
@@ -589,10 +760,21 @@ export class SessionService {
     active.liveMessages.clear();
     active.partial = undefined;
     active.activeTools.clear();
+    active.compactionAbortRequested = false;
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
     this.events.publishSession(active.ref, { type: "run.failed", runId, payload: { status: active.state } });
     this.publishSummary(active);
+  }
+
+  private cancelCompaction(active: ActiveSession): void {
+    active.compactionAbortRequested = true;
+    active.session.abortCompaction();
+    // Pi emits compaction_start before it creates the controller. Re-run after
+    // that synchronous event stack so a stop click cannot be lost in that gap.
+    queueMicrotask(() => {
+      if (active.compactionAbortRequested && active.state.compacting !== undefined) active.session.abortCompaction();
+    });
   }
 
   private publishSummary(active: ActiveSession, supplied?: SessionSummary): void {
@@ -668,6 +850,25 @@ async function sessionModifiedAt(sessionFile: string | undefined, fallback: stri
   } catch {
     return fallback;
   }
+}
+
+function retryStatus(attempt: number, maxAttempts: number, delayMs: number, errorMessage: string): RetryStatus {
+  return {
+    attempt,
+    maxAttempts,
+    delayMs,
+    retryAt: new Date(Date.now() + delayMs).toISOString(),
+    errorMessage,
+  };
+}
+
+function isCompactionCancellation(error: unknown): boolean {
+  if (error instanceof Error && error.name === "AbortError") return true;
+  return asMessage(error) === "Compaction cancelled";
+}
+
+function sameThinkingLevels(left: readonly ThinkingLevel[], right: readonly ThinkingLevel[]): boolean {
+  return left.length === right.length && left.every((level, index) => level === right[index]);
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

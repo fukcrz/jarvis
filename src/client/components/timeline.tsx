@@ -1,8 +1,9 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ArrowDown, Check, ChevronDown, Clock3, LoaderCircle, RotateCcw, Terminal, XCircle } from "lucide-react";
-import type { MessageTimelineItem, SessionStatus, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
+import { Archive, ArrowDown, Check, ChevronDown, Clock3, GitBranch, LoaderCircle, RotateCcw, Terminal, XCircle } from "lucide-react";
+import type { ContextSummaryTimelineItem, MessageTimelineItem, SessionStatus, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
+import { imageDataUrl } from "../lib/image";
 import { MarkdownMessage } from "./markdown-message";
 import { Button } from "./ui/button";
 
@@ -45,6 +46,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
         <div className="timeline-inner">
           {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "正在加载历史记录…" : "加载更早记录"}</Button> : null}
           {renderTimelineItems(items, streamingMessageId, status)}
+          {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
           {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
           {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
           {feedback === undefined || hasActiveActivity(items, status) ? null : <WorkingIndicator feedback={feedback} />}
@@ -73,38 +75,78 @@ function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
 }
 
 function RetryingIndicator({ retrying }: { retrying: NonNullable<SessionStatus["retrying"]> }) {
+  return <div className="retrying-indicator" role="status" aria-live="polite">
+    <RotateCcw className="spin" size={15} />
+    <span className="retrying-label">模型响应失败，正在重试（{retrying.attempt}/{retrying.maxAttempts}）</span>
+    <span className="retrying-detail">{retrying.errorMessage}</span>
+    <RetryCountdown retrying={retrying} />
+  </div>;
+}
+
+function CompactingIndicator({ compacting }: { compacting: NonNullable<SessionStatus["compacting"]> }) {
+  const label = compacting.reason === "manual"
+    ? "正在压缩上下文"
+    : compacting.reason === "overflow"
+      ? "上下文已满，正在压缩后重试"
+      : "上下文接近上限，正在自动压缩";
+  const retrying = compacting.retrying;
+  return <div className="compacting-indicator" role="status" aria-live="polite">
+    <LoaderCircle className="spin" size={15} />
+    <span className="compacting-label">{label}</span>
+    {retrying === undefined ? null : <>
+      <span className="compacting-detail">摘要生成失败，正在重试（{retrying.attempt}/{retrying.maxAttempts}）：{retrying.errorMessage}</span>
+      <RetryCountdown retrying={retrying} />
+    </>}
+  </div>;
+}
+
+function RetryCountdown({ retrying }: { retrying: NonNullable<SessionStatus["retrying"]> }) {
   const [now, setNow] = useState(() => Date.now());
-  const endsAt = useMemo(() => Date.now() + retrying.delayMs, [retrying]);
+  const endsAt = Date.parse(retrying.retryAt);
 
   useEffect(() => {
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [retrying]);
+  }, [retrying.retryAt]);
 
-  const secondsLeft = Math.max(0, Math.ceil((endsAt - now) / 1_000));
-  return <div className="retrying-indicator" role="status" aria-live="polite">
-    <RotateCcw className="spin" size={15} />
-    <span className="retrying-label">模型响应失败，正在重试（{retrying.attempt}/{retrying.maxAttempts}）</span>
-    <span className="retrying-detail">{retrying.errorMessage}</span>
-    <time>{secondsLeft}s</time>
-  </div>;
+  const secondsLeft = Number.isFinite(endsAt) ? Math.max(0, Math.ceil((endsAt - now) / 1_000)) : 0;
+  return <time>{secondsLeft}s</time>;
 }
 
 const MessageItem = memo(function MessageItem({ item, streaming }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean }) {
+  const images = item.images ?? [];
   return (
     <article className={`message-row ${item.role} ${streaming ? "streaming" : ""}`}>
       <div className={`message-body ${item.role}`}>
-        <div className={`message-content ${streaming ? "streaming" : ""}`}>
+        {images.length === 0 ? null : <div className="message-images">
+          {images.map((image, index) => <a key={`${image.mimeType}:${index}`} href={imageDataUrl(image)} target="_blank" rel="noreferrer" aria-label={`查看图片 ${index + 1}`}><img src={imageDataUrl(image)} alt={`图片 ${index + 1}`} loading="lazy" /></a>)}
+        </div>}
+        {item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
           <MarkdownMessage text={item.text} streaming={streaming} />
-        </div>
+        </div>}
       </div>
     </article>
   );
 });
 
+const ContextSummaryItem = memo(function ContextSummaryItem({ item }: { item: ContextSummaryTimelineItem }) {
+  const [expanded, setExpanded] = useState(false);
+  const isCompaction = item.summaryType === "compaction";
+  const label = isCompaction ? "上下文已压缩" : "分支上下文摘要";
+  return <article className={`context-summary ${item.summaryType}`}>
+    <button className="context-summary-toggle" type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+      <span className="context-summary-icon">{isCompaction ? <Archive size={15} /> : <GitBranch size={15} />}</span>
+      <span className="context-summary-copy"><strong>{label}</strong>{item.tokensBefore === undefined ? null : <small>压缩前 {formatTokenCount(item.tokensBefore)} tokens</small>}</span>
+      <ChevronDown className={expanded ? "chevron-open" : ""} size={15} />
+    </button>
+    {expanded ? <div className="context-summary-details"><div className="message-content"><MarkdownMessage text={item.summary} streaming={false} /></div></div> : null}
+  </article>;
+});
+
 export type TimelineRenderItem =
   | { kind: "message"; item: MessageTimelineItem }
+  | { kind: "context-summary"; item: ContextSummaryTimelineItem }
   | { kind: "activity"; items: ToolTimelineItem[] };
 
 export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] {
@@ -120,7 +162,7 @@ export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] 
       tools.push(item);
     } else {
       flushTools();
-      result.push({ kind: "message", item });
+      result.push(item.kind === "message" ? { kind: "message", item } : { kind: "context-summary", item });
     }
   }
   flushTools();
@@ -136,9 +178,11 @@ function renderTimelineItems(items: TimelineItem[], streamingMessageId: string |
   const lastActivityIndex = grouped.reduce((lastIndex, entry, index) => entry.kind === "activity" ? index : lastIndex, -1);
   const activeActivityIndex = hasActiveActivity(items, status) ? lastActivityIndex : -1;
 
-  return grouped.map((entry, index) => entry.kind === "message"
-    ? <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} />
-    : <ActivityGroup key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={index === activeActivityIndex} startedAt={status.activeRun?.startedAt} stopping={status.runState === "stopping"} />);
+  return grouped.map((entry, index) => {
+    if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} />;
+    if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} />;
+    return <ActivityGroup key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={index === activeActivityIndex} startedAt={status.activeRun?.startedAt} stopping={status.runState === "stopping"} />;
+  });
 }
 
 function ActivityGroup({ items, active, startedAt, stopping }: { items: ToolTimelineItem[]; active: boolean; startedAt?: string; stopping: boolean }) {
@@ -267,6 +311,10 @@ function subtleToolIcon(state: ToolTimelineItem["state"]) {
   if (state === "failed") return <span className="tool-subtle-failure" aria-label="操作未完成">!</span>;
   if (state === "cancelled") return <span className="tool-subtle-failure" aria-label="操作已停止">·</span>;
   return <Check size={14} />;
+}
+
+function formatTokenCount(tokens: number): string {
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(tokens);
 }
 
 function formatDuration(durationMs: number): string {

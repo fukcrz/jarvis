@@ -14,10 +14,10 @@ describe("projectModelSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      current: { provider: "relay", id: "terra", name: "Terra", reasoning: true },
+      current: { provider: "relay", id: "terra", name: "Terra", reasoning: true, vision: false },
       available: [
-        { provider: "deepseek", id: "pro", name: "Pro", reasoning: true },
-        { provider: "relay", id: "terra", name: "Terra", reasoning: true },
+        { provider: "deepseek", id: "pro", name: "Pro", reasoning: true, vision: false },
+        { provider: "relay", id: "terra", name: "Terra", reasoning: true, vision: false },
       ],
     });
   });

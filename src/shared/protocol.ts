@@ -4,6 +4,7 @@ export const PROTOCOL_VERSION = 1 as const;
 
 export type RunState = "idle" | "running" | "stopping";
 export type ToolState = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type CompactionReason = "manual" | "threshold" | "overflow";
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = typeof THINKING_LEVELS[number];
 
@@ -50,6 +51,8 @@ export interface ModelDescriptor {
   id: string;
   name: string;
   reasoning: boolean;
+  /** Whether the model accepts image inputs. */
+  vision: boolean;
 }
 
 export interface SessionModelSnapshot {
@@ -62,6 +65,22 @@ export interface SessionThinkingSnapshot {
   available: ThinkingLevel[];
 }
 
+export interface RetryStatus {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  /** Absolute deadline so reconnecting clients retain the original countdown. */
+  retryAt: string;
+  errorMessage: string;
+}
+
+export interface CompactionStatus {
+  reason: CompactionReason;
+  startedAt: string;
+  /** Retries while generating the compaction summary, not the model response. */
+  retrying?: RetryStatus;
+}
+
 export interface SessionStatus {
   sessionId: string;
   runState: RunState;
@@ -70,12 +89,9 @@ export interface SessionStatus {
     startedAt: string;
   };
   /** Pi 自动重试进行中（连接错误等可重试失败后指数退避重试） */
-  retrying?: {
-    attempt: number;
-    maxAttempts: number;
-    delayMs: number;
-    errorMessage: string;
-  };
+  retrying?: RetryStatus;
+  /** Pi 正在压缩上下文；自动压缩仍属于原始 prompt run。 */
+  compacting?: CompactionStatus;
   lastError?: {
     code: string;
     message: string;
@@ -93,12 +109,20 @@ export interface SessionSummary {
   runState: RunState;
 }
 
+export interface ImageAttachment {
+  mimeType: string;
+  /** Base64-encoded image data. */
+  data: string;
+}
+
 export interface MessageTimelineItem {
   kind: "message";
   id: string;
   role: "user" | "assistant";
   createdAt: string;
   text: string;
+  /** Images attached to a user message. */
+  images?: ImageAttachment[];
 }
 
 export interface ToolTimelineItem {
@@ -118,7 +142,16 @@ export interface ToolTimelineItem {
   error?: string;
 }
 
-export type TimelineItem = MessageTimelineItem | ToolTimelineItem;
+export interface ContextSummaryTimelineItem {
+  kind: "context-summary";
+  id: string;
+  createdAt: string;
+  summaryType: "compaction" | "branch";
+  summary: string;
+  tokensBefore?: number;
+}
+
+export type TimelineItem = MessageTimelineItem | ToolTimelineItem | ContextSummaryTimelineItem;
 
 export interface TimelinePage {
   items: TimelineItem[];
@@ -143,6 +176,11 @@ export interface PromptAccepted {
   runId: string;
 }
 
+export interface CompactAccepted {
+  accepted: true;
+  runId: string;
+}
+
 export type SessionEventType =
   | "run.started"
   | "run.stopping"
@@ -150,10 +188,14 @@ export type SessionEventType =
   | "run.failed"
   | "run.retrying"
   | "run.retryEnd"
+  | "run.compactionStarted"
+  | "run.compactionEnded"
+  | "run.compactionRetrying"
   | "message.created"
   | "assistant.delta"
   | "assistant.completed"
   | "tool.upsert"
+  | "timeline.upsert"
   | "model.changed"
   | "thinking.changed"
   | "session.updated";
@@ -194,10 +236,14 @@ export const sessionEventSchema = z.object({
     "run.failed",
     "run.retrying",
     "run.retryEnd",
+    "run.compactionStarted",
+    "run.compactionEnded",
+    "run.compactionRetrying",
     "message.created",
     "assistant.delta",
     "assistant.completed",
     "tool.upsert",
+    "timeline.upsert",
     "model.changed",
     "thinking.changed",
     "session.updated",

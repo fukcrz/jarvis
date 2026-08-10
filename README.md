@@ -16,7 +16,7 @@ npm run dev
 
 Open `http://<machine-ip>:28471` from any reachable device. In development, Vite listens on port `28471` and Fastify listens on port `39126`, both on all network interfaces.
 
-Development has no authentication and can operate Pi sessions, so do not expose it to an untrusted network. Production builds keep Fastify on `127.0.0.1` and can be run with:
+Jarvis has no authentication and can operate Pi sessions, so do not expose it to an untrusted network. Production builds also bind Fastify to `0.0.0.0` (override the bind address with `HOST`, the port with `PORT`) and can be run with:
 
 ```bash
 npm run build

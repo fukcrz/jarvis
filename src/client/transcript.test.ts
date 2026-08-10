@@ -12,7 +12,7 @@ describe("transcript reducer", () => {
     }, {
       seq: 4,
       status: { sessionId: "session", runState: "running", activeRun: { id: "run", startedAt: "2026-08-09T00:00:00.000Z" } },
-      model: { current: { provider: "provider", id: "model-a", name: "Model A", reasoning: true }, available: [{ provider: "provider", id: "model-a", name: "Model A", reasoning: true }, { provider: "provider", id: "model-b", name: "Model B", reasoning: false }] },
+      model: { current: { provider: "provider", id: "model-a", name: "Model A", reasoning: true, vision: false }, available: [{ provider: "provider", id: "model-a", name: "Model A", reasoning: true, vision: false }, { provider: "provider", id: "model-b", name: "Model B", reasoning: false, vision: false }] },
       thinking: { current: "medium", available: ["off", "low", "medium", "high"] },
       liveMessages: [],
       activeTools: [],
@@ -44,14 +44,54 @@ describe("transcript reducer", () => {
     expect(result.items).toEqual([expect.objectContaining({ id: "user", role: "user", text: "Hello" })]);
   });
 
+  it("keeps an absolute retry deadline and compaction status from a server event", () => {
+    const retryAt = "2026-08-09T00:00:30.000Z";
+    const result = applySessionEvents(emptyTranscript, [{
+      version: 1,
+      sessionId: "session",
+      runId: "run",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "run.compactionRetrying",
+      payload: {
+        status: {
+          sessionId: "session",
+          runState: "running",
+          activeRun: { id: "run", startedAt: "2026-08-09T00:00:00.000Z" },
+          compacting: {
+            reason: "overflow",
+            startedAt: "2026-08-09T00:00:02.000Z",
+            retrying: { attempt: 2, maxAttempts: 4, delayMs: 28_000, retryAt, errorMessage: "rate limited" },
+          },
+        },
+      },
+    }]);
+
+    expect(result.status.compacting).toEqual({
+      reason: "overflow",
+      startedAt: "2026-08-09T00:00:02.000Z",
+      retrying: { attempt: 2, maxAttempts: 4, delayMs: 28_000, retryAt, errorMessage: "rate limited" },
+    });
+  });
+
+  it("adds a live context summary only once by its persisted entry id", () => {
+    const item = { kind: "context-summary" as const, id: "context-summary:compact", createdAt: "2026-08-09T00:00:00.000Z", summaryType: "compaction" as const, summary: "Summary", tokensBefore: 90_000 };
+    const result = applySessionEvents(emptyTranscript, [
+      { version: 1, sessionId: "session", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z", type: "timeline.upsert", payload: { item } },
+      { version: 1, sessionId: "session", seq: 2, emittedAt: "2026-08-09T00:00:01.000Z", type: "timeline.upsert", payload: { item: { ...item, summary: "Updated summary" } } },
+    ]);
+
+    expect(result.items).toEqual([expect.objectContaining({ id: "context-summary:compact", summary: "Updated summary" })]);
+  });
+
   it("updates the selected model from a server event", () => {
-    const result = applySessionEvents({ ...emptyTranscript, model: { available: [{ provider: "provider", id: "first", name: "First", reasoning: false }, { provider: "provider", id: "second", name: "Second", reasoning: true }] } }, [{
+    const result = applySessionEvents({ ...emptyTranscript, model: { available: [{ provider: "provider", id: "first", name: "First", reasoning: false, vision: false }, { provider: "provider", id: "second", name: "Second", reasoning: true, vision: false }] } }, [{
       version: 1,
       sessionId: "session",
       seq: 1,
       emittedAt: "2026-08-09T00:00:00.000Z",
       type: "model.changed",
-      payload: { model: { current: { provider: "provider", id: "second", name: "Second", reasoning: true }, available: [{ provider: "provider", id: "first", name: "First", reasoning: false }, { provider: "provider", id: "second", name: "Second", reasoning: true }] } },
+      payload: { model: { current: { provider: "provider", id: "second", name: "Second", reasoning: true, vision: false }, available: [{ provider: "provider", id: "first", name: "First", reasoning: false, vision: false }, { provider: "provider", id: "second", name: "Second", reasoning: true, vision: false }] } },
     }]);
 
     expect(result.model.current).toMatchObject({ id: "second", name: "Second" });
