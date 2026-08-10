@@ -322,6 +322,11 @@ export function App() {
     }
   };
 
+  const searchWorkspaceFiles = useCallback(async (query: string): Promise<WorkspaceFile[]> => {
+    if (selectedRef === undefined) return [];
+    return api.searchFiles(selectedRef.workspaceId, query);
+  }, [selectedRef]);
+
   const submitPrompt = async (text: string): Promise<boolean> => {
     if (selectedRef === undefined) return false;
     try {
@@ -379,7 +384,10 @@ export function App() {
     onOpenWorkspaceDialog={() => { setWorkspaceDialogOpen(true); setMobileOpen(false); }}
     onCreateSession={(id) => { void createSession(id); setMobileOpen(false); }}
     onSelectSession={chooseSession}
-    onOpenProjectMenu={(workspace, position) => setProjectMenu({ workspace, ...position })}
+    onOpenProjectMenu={(workspace, position) => {
+      if (window.innerWidth <= 760) setMobileActionTarget({ kind: "project", workspace });
+      else setProjectMenu({ workspace, ...position });
+    }}
     onOpenSessionMenu={(targetWorkspaceId, session, position) => setSessionMenu({ workspaceId: targetWorkspaceId, session, ...position })}
     onLongPressProject={(workspace) => setMobileActionTarget({ kind: "project", workspace })}
     onLongPressSession={(targetWorkspaceId, session) => setMobileActionTarget({ kind: "session", workspaceId: targetWorkspaceId, session })}
@@ -412,6 +420,8 @@ export function App() {
             key={selectedRef.sessionId}
             initialValue={selectedDraft}
             busy={stream.transcript.status.runState !== "idle"}
+            commands={composerCommands}
+            searchFiles={searchWorkspaceFiles}
             onDraftChange={updateSelectedDraft}
             onSubmit={submitPrompt}
             onStop={() => { void abort(); }}
