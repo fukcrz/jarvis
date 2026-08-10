@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, type TimelinePage, type ToolTimelineItem } from "../shared/protocol";
+import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, type TimelinePage, type ToolTimelineItem } from "../shared/protocol";
 import { isRecord } from "../shared/protocol";
 
 export interface TranscriptState {
@@ -10,6 +10,7 @@ export interface TranscriptState {
   status: SessionStatus;
   model: SessionModelSnapshot;
   thinking: SessionThinkingSnapshot;
+  contextUsage?: ContextUsage;
   streamingMessageId?: string;
 }
 
@@ -37,6 +38,7 @@ export function hydrateTranscript(previous: TranscriptState, page: TimelinePage,
     status: snapshot.status,
     model: snapshot.model,
     thinking: snapshot.thinking,
+    ...(snapshot.contextUsage === undefined ? {} : { contextUsage: snapshot.contextUsage }),
     ...(snapshot.partial === undefined ? {} : { streamingMessageId: snapshot.partial.id }),
   };
 }
@@ -58,6 +60,16 @@ export function applySessionEvents(state: TranscriptState, events: SessionEvent[
 export function applySessionEvent(state: TranscriptState, event: SessionEvent): TranscriptState {
   if (event.seq <= state.seq) return state;
   const next = { ...state, seq: event.seq };
+  if (event.type === "context.updated") {
+    const payload = isRecord(event.payload) ? event.payload : {};
+    const contextUsage = payload["contextUsage"];
+    if (isRecord(contextUsage)) {
+      const tokens = typeof contextUsage["tokens"] === "number" || contextUsage["tokens"] === null ? contextUsage["tokens"] : null;
+      const percent = typeof contextUsage["percent"] === "number" || contextUsage["percent"] === null ? contextUsage["percent"] : null;
+      const contextWindow = typeof contextUsage["contextWindow"] === "number" ? contextUsage["contextWindow"] : 0;
+      return { ...next, contextUsage: { tokens, percent, contextWindow } };
+    }
+  }
   if (event.type === "message.created") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const message = recordMessage(payload?.["message"]);

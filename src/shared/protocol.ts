@@ -99,6 +99,14 @@ export interface SessionStatus {
   };
 }
 
+export interface ContextUsage {
+  /** Estimated context tokens, or null when unknown (e.g. right after compaction). */
+  tokens: number | null;
+  contextWindow: number;
+  /** Context usage as a percentage of the window, or null when tokens are unknown. */
+  percent: number | null;
+}
+
 export interface SessionSummary {
   id: string;
   workspaceId: string;
@@ -169,6 +177,8 @@ export interface SessionStreamSnapshot {
   liveMessages: MessageTimelineItem[];
   partial?: MessageTimelineItem;
   activeTools: ToolTimelineItem[];
+  /** Estimated context usage, when the current model exposes a context window. */
+  contextUsage?: ContextUsage;
 }
 
 export interface PromptAccepted {
@@ -198,6 +208,7 @@ export type SessionEventType =
   | "timeline.upsert"
   | "model.changed"
   | "thinking.changed"
+  | "context.updated"
   | "session.updated";
 
 export interface SessionEvent {
@@ -246,6 +257,7 @@ export const sessionEventSchema = z.object({
     "timeline.upsert",
     "model.changed",
     "thinking.changed",
+    "context.updated",
     "session.updated",
   ]),
   payload: z.unknown(),

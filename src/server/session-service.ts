@@ -15,6 +15,7 @@ import {
 import type {
   CompactAccepted,
   ComposerCommand,
+  ContextUsage,
   ImageAttachment,
   MessageTimelineItem,
   ModelDescriptor,
@@ -196,6 +197,7 @@ export class SessionService {
 
   async runtime(ref: SessionRef): Promise<SessionStreamSnapshot> {
     const active = await this.getActive(ref);
+    const contextUsage = this.contextUsageSnapshot(active);
     return {
       // Read all fields without an await so this projection and its seq form
       // one join-time snapshot for the client-side watermark algorithm.
@@ -206,6 +208,7 @@ export class SessionService {
       liveMessages: [...active.liveMessages.values()],
       ...(active.partial === undefined ? {} : { partial: active.partial }),
       activeTools: [...active.activeTools.values()],
+      ...(contextUsage === undefined ? {} : { contextUsage }),
     };
   }
 
@@ -407,6 +410,21 @@ export class SessionService {
     }
   }
 
+  private contextUsageSnapshot(active: ActiveSession): ContextUsage | undefined {
+    return active.session.getContextUsage();
+  }
+
+  /** Push the latest estimated context usage to browsers (fires rarely). */
+  private publishContextUsage(active: ActiveSession, runId?: string): void {
+    const contextUsage = this.contextUsageSnapshot(active);
+    if (contextUsage === undefined) return;
+    this.events.publishSession(active.ref, {
+      type: "context.updated",
+      ...(runId === undefined ? {} : { runId }),
+      payload: { contextUsage },
+    });
+  }
+
   private async getActive(ref: SessionRef): Promise<ActiveSession> {
     const key = activeKey(ref);
     if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is being deleted", 409);
@@ -559,6 +577,8 @@ export class SessionService {
           active.partial = undefined;
           this.events.publishSession(active.ref, { type: "assistant.completed", runId, payload: { message } });
         }
+        // Assistant usage is the source for Pi's context estimate; refresh it.
+        this.publishContextUsage(active, runId);
         if (stringValue(event.message["stopReason"]) === "error") {
           // Pi may auto-retry or compact after a failed message; defer the failure
           // until agent_settled so jarvis stays in sync with the underlying agent.
@@ -647,6 +667,8 @@ export class SessionService {
           ...(runId === undefined ? {} : { runId }),
           payload: { status: active.state, aborted: event.aborted, ...(errorMessage === undefined ? {} : { errorMessage }), willRetry: event.willRetry },
         });
+        // After compaction the usage estimate resets; push the fresh value.
+        this.publishContextUsage(active, runId);
         this.publishSummary(active);
         return;
       }
