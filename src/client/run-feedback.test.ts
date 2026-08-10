@@ -18,6 +18,12 @@ describe("run feedback", () => {
     expect(getRunFeedback({ ...running, runState: "stopping" }, [])).toMatchObject({ label: "正在停止…", tone: "stopping" });
   });
 
+  it("does not compete with retry or compaction feedback", () => {
+    const retrying = { attempt: 1, maxAttempts: 3, delayMs: 1_000, retryAt: "2026-08-09T00:00:01.000Z", errorMessage: "temporary" };
+    expect(getRunFeedback({ ...running, retrying }, [])).toBeUndefined();
+    expect(getRunFeedback({ ...running, compacting: { reason: "manual", startedAt: running.activeRun.startedAt, retrying } }, [])).toBeUndefined();
+  });
+
   it("formats an elapsed run duration", () => {
     expect(formatRunElapsed(running.activeRun.startedAt, Date.parse("2026-08-09T00:01:04.000Z"))).toBe("1:04");
     expect(formatRunElapsed(undefined)).toBeUndefined();

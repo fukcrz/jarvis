@@ -21,12 +21,13 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   const scrollRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
   const feedback = getRunFeedback(status, items, streamingMessageId);
+  const statusIndicatorKey = `${status.runState}:${status.compacting?.reason ?? ""}:${status.compacting?.retrying?.retryAt ?? ""}:${status.retrying?.retryAt ?? ""}:${error ?? ""}`;
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
     if (element === null || !following) return;
     element.scrollTop = element.scrollHeight;
-  }, [items, streamingMessageId, feedback?.label, following]);
+  }, [items, streamingMessageId, feedback?.label, following, statusIndicatorKey]);
 
   const loadEarlier = async () => {
     const element = scrollRef.current;
@@ -75,12 +76,7 @@ function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
 }
 
 function RetryingIndicator({ retrying }: { retrying: NonNullable<SessionStatus["retrying"]> }) {
-  return <div className="retrying-indicator" role="status" aria-live="polite">
-    <RotateCcw className="spin" size={15} />
-    <span className="retrying-label">模型响应失败，正在重试（{retrying.attempt}/{retrying.maxAttempts}）</span>
-    <span className="retrying-detail">{retrying.errorMessage}</span>
-    <RetryCountdown retrying={retrying} />
-  </div>;
+  return <RunStatusIndicator className="retrying-indicator" icon={<RotateCcw className="spin" size={15} />} label={`模型响应失败，正在重试（${String(retrying.attempt)}/${String(retrying.maxAttempts)}）`} detail={retrying.errorMessage} retrying={retrying} />;
 }
 
 function CompactingIndicator({ compacting }: { compacting: NonNullable<SessionStatus["compacting"]> }) {
@@ -90,13 +86,14 @@ function CompactingIndicator({ compacting }: { compacting: NonNullable<SessionSt
       ? "上下文已满，正在压缩后重试"
       : "上下文接近上限，正在自动压缩";
   const retrying = compacting.retrying;
-  return <div className="compacting-indicator" role="status" aria-live="polite">
-    <LoaderCircle className="spin" size={15} />
-    <span className="compacting-label">{label}</span>
-    {retrying === undefined ? null : <>
-      <span className="compacting-detail">摘要生成失败，正在重试（{retrying.attempt}/{retrying.maxAttempts}）：{retrying.errorMessage}</span>
-      <RetryCountdown retrying={retrying} />
-    </>}
+  return <RunStatusIndicator className="compacting-indicator" icon={<LoaderCircle className="spin" size={15} />} label={label} detail={retrying === undefined ? undefined : `摘要生成失败，正在重试（${String(retrying.attempt)}/${String(retrying.maxAttempts)}）：${retrying.errorMessage}`} retrying={retrying} />;
+}
+
+function RunStatusIndicator({ className, icon, label, detail, retrying }: { className: string; icon: ReactNode; label: string; detail?: string; retrying?: NonNullable<SessionStatus["retrying"]> }) {
+  return <div className={className} role="status" aria-live="polite">
+    <span className="run-status-icon">{icon}</span>
+    <span className="run-status-copy"><strong>{label}</strong>{detail === undefined ? null : <span>{detail}</span>}</span>
+    {retrying === undefined ? null : <RetryCountdown retrying={retrying} />}
   </div>;
 }
 
@@ -111,7 +108,7 @@ function RetryCountdown({ retrying }: { retrying: NonNullable<SessionStatus["ret
   }, [retrying.retryAt]);
 
   const secondsLeft = Number.isFinite(endsAt) ? Math.max(0, Math.ceil((endsAt - now) / 1_000)) : 0;
-  return <time>{secondsLeft}s</time>;
+  return <time aria-live="off" aria-hidden="true">{secondsLeft}s</time>;
 }
 
 const MessageItem = memo(function MessageItem({ item, streaming }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean }) {

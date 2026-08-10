@@ -29,6 +29,10 @@ function pathParams(pathname: string): { workspaceId?: string; sessionId?: strin
   return {};
 }
 
+const COMMAND_RETRY_BASE_DELAY_MS = 750;
+const COMMAND_RETRY_MAX_DELAY_MS = 10_000;
+const EMPTY_COMPOSER_COMMANDS: ComposerCommand[] = [];
+
 export function App() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -85,6 +89,7 @@ export function App() {
   const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const [thinkingLevelPending, setThinkingLevelPending] = useState(false);
   const [compactionPending, setCompactionPending] = useState(false);
+  const [compactionRequest, setCompactionRequest] = useState<{ runId: string; baselineSeq: number }>();
   const [drafts, setDrafts] = useState<Record<string, string>>(() => readDrafts());
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, ImageAttachment[]>>({});
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuTarget | undefined>();
@@ -92,7 +97,7 @@ export function App() {
   const [mobileActionTarget, setMobileActionTarget] = useState<MobileActionTarget | undefined>();
   const [deleteTarget, setDeleteTarget] = useState<Pick<SessionContextMenuTarget, "workspaceId" | "session"> | undefined>();
   const [deletePending, setDeletePending] = useState(false);
-  const [composerCommands, setComposerCommands] = useState<ComposerCommand[]>([]);
+  const [composerCommands, setComposerCommands] = useState<{ sessionKey: string; items: ComposerCommand[] } | undefined>();
 
   const activeRunStateByWorkspace = useMemo(() => {
     const result: Record<string, "running" | "stopping"> = {};
@@ -111,6 +116,8 @@ export function App() {
     ? undefined
     : { workspaceId: selectedWorkspace.id, sessionId: selectedSession.id }, [selectedWorkspace?.id, selectedSession?.id]);
   const selectedSessionId = selectedRef?.sessionId;
+  const selectedRefKey = selectedRef === undefined ? undefined : `${selectedRef.workspaceId}:${selectedRef.sessionId}`;
+  const selectedComposerCommands = composerCommands !== undefined && composerCommands.sessionKey === selectedRefKey ? composerCommands.items : EMPTY_COMPOSER_COMMANDS;
   const selectedDraft = selectedSessionId === undefined ? "" : drafts[selectedSessionId] ?? "";
   const updateDraft = useCallback((id: string, value: string) => {
     setDrafts((current) => current[id] === value ? current : { ...current, [id]: value });
@@ -161,21 +168,35 @@ export function App() {
     setModelSwitchPending(false);
     setThinkingLevelPending(false);
     setCompactionPending(false);
+    setCompactionRequest(undefined);
   }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
 
   useEffect(() => {
-    if (selectedRef === undefined) {
-      setComposerCommands([]);
-      return;
-    }
+    if (selectedRef === undefined || selectedRefKey === undefined || stream.connection !== "live") return;
+    const ref = selectedRef;
+    const sessionKey = selectedRefKey;
     let disposed = false;
-    void api.commands(selectedRef).then((commands) => {
-      if (!disposed) setComposerCommands(commands);
-    }).catch(() => {
-      if (!disposed) setComposerCommands([]);
-    });
-    return () => { disposed = true; };
-  }, [selectedRef]);
+    let retryTimer: number | undefined;
+    let attempt = 0;
+    const loadCommands = async () => {
+      try {
+        const commands = await api.commands(ref);
+        if (disposed) return;
+        attempt = 0;
+        setComposerCommands({ sessionKey, items: commands });
+      } catch {
+        if (disposed) return;
+        const delay = Math.min(COMMAND_RETRY_BASE_DELAY_MS * 2 ** attempt, COMMAND_RETRY_MAX_DELAY_MS);
+        attempt += 1;
+        retryTimer = window.setTimeout(() => { void loadCommands(); }, delay);
+      }
+    };
+    void loadCommands();
+    return () => {
+      disposed = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    };
+  }, [selectedRef, selectedRefKey, stream.connection]);
 
   const loadWorkspaces = useCallback(async () => {
     const values = await api.listWorkspaces();
@@ -499,19 +520,30 @@ export function App() {
 
   const compact = async () => {
     if (selectedRef === undefined || compactionPending) return;
+    const baselineSeq = stream.transcript.seq;
     setCompactionPending(true);
     try {
-      await api.compact(selectedRef);
+      const accepted = await api.compact(selectedRef, undefined, randomUUID());
+      setCompactionRequest({ runId: accepted.runId, baselineSeq });
       setPageError(undefined);
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "无法压缩上下文");
       setCompactionPending(false);
+      setCompactionRequest(undefined);
     }
   };
 
   useEffect(() => {
-    if (stream.transcript.status.compacting === undefined) setCompactionPending(false);
-  }, [stream.transcript.status.compacting]);
+    if (!compactionPending || compactionRequest === undefined || selectedRefKey === undefined) return;
+    const status = stream.transcript.status;
+    const terminal = status.runState === "idle"
+      && status.activeRun === undefined
+      && status.compacting === undefined
+      && stream.transcript.seq > compactionRequest.baselineSeq;
+    if (!terminal) return;
+    setCompactionPending(false);
+    setCompactionRequest(undefined);
+  }, [compactionPending, compactionRequest, selectedRefKey, stream.transcript.seq, stream.transcript.status.activeRun?.id, stream.transcript.status.runState]);
 
   const selectModel = async (model: ModelDescriptor) => {
     if (selectedRef === undefined || modelSwitchPending) return;
@@ -597,7 +629,7 @@ export function App() {
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? stream.transcript.status.lastError?.message} status={stream.transcript.status} />
-      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={composerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} controls={selectedSession === undefined ? undefined : <>
+      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />

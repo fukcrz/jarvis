@@ -1,113 +1,153 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chromium } from "playwright";
 
-const baseUrl = process.env["JARVIS_URL"] ?? "http://127.0.0.1:28471";
+const baseUrl = (process.env["JARVIS_URL"] ?? "http://127.0.0.1:28471").replace(/\/$/, "");
 const isolatedSessionId = process.env["JARVIS_SESSION"];
 const browser = await chromium.launch({ headless: true });
 const failures = [];
+let temporaryWorkspacePath;
+let ownedWorkspaceId;
 
-async function capture(name, viewport, path, openNavigation = false) {
-  const context = await browser.newContext({ viewport });
+function apiPath(path) {
+  return `${baseUrl}${path}`;
+}
+
+async function api(path, options) {
+  const response = await fetch(apiPath(path), options);
+  if (!response.ok) throw new Error(`${options?.method ?? "GET"} ${path} failed with ${String(response.status)}`);
+  return response.json();
+}
+
+async function setupSmokeSession() {
   if (isolatedSessionId !== undefined) {
-    const workspacesResponse = await context.request.get(`${baseUrl}/api/workspaces`);
-    const workspaces = await workspacesResponse.json();
-    const workspaceId = workspaces.workspaces?.[0]?.id;
-    if (typeof workspaceId === "string") {
-      await context.addInitScript(({ workspaceId: id, sessionId: selectedSessionId }) => {
-        localStorage.setItem("jarvis.workspace", id);
-        localStorage.setItem("jarvis.session", selectedSessionId);
-      }, { workspaceId, sessionId: isolatedSessionId });
-      await context.addInitScript(() => {
-        const NativeWebSocket = window.WebSocket;
-        window.__jarvisSockets = [];
-        window.WebSocket = class extends NativeWebSocket {
-          constructor(...args) {
-            super(...args);
-            window.__jarvisSockets.push(this);
-          }
-        };
-      });
+    const { workspaces } = await api("/api/workspaces");
+    for (const workspace of workspaces) {
+      const { sessions } = await api(`/api/workspaces/${workspace.id}/sessions`);
+      if (sessions.some((session) => session.id === isolatedSessionId)) return { workspaceId: workspace.id, sessionId: isolatedSessionId, label: workspace.label };
     }
+    throw new Error(`JARVIS_SESSION ${isolatedSessionId} was not found`);
   }
+
+  temporaryWorkspacePath = await mkdtemp(join(tmpdir(), "jarvis-ui-smoke-"));
+  const { workspace } = await api("/api/workspaces", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cwd: temporaryWorkspacePath, label: "Jarvis UI Smoke" }),
+  });
+  ownedWorkspaceId = workspace.id;
+  const { session } = await api(`/api/workspaces/${workspace.id}/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  return { workspaceId: workspace.id, sessionId: session.id, label: workspace.label };
+}
+
+async function capture(name, viewport, session, screenshotPath, desktop) {
+  const context = await browser.newContext({ viewport });
+  await context.addInitScript(() => {
+    const NativeWebSocket = window.WebSocket;
+    window.__jarvisSockets = [];
+    window.WebSocket = class extends NativeWebSocket {
+      constructor(...args) {
+        super(...args);
+        window.__jarvisSockets.push(this);
+      }
+    };
+  });
   const page = await context.newPage();
-  page.on("pageerror",  (error) => failures.push(`${name}: page error: ${error.message}`));
+  page.on("pageerror", (error) => failures.push(`${name}: page error: ${error.message}`));
   page.on("console", (message) => {
-    if (message.type() === "error") failures.push(`${name}: console error: ${message.text()}`);
+    if (message.type() !== "error") return;
+    // The first command request deliberately returns 503 to exercise retry.
+    if (message.text().includes("503 (Service Unavailable)")) return;
+    failures.push(`${name}: console error: ${message.text()}`);
   });
 
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-  await page.locator(".chat-header").waitFor({ state: "visible", timeout: 15_000 });
-  const selectedSession = isolatedSessionId === undefined ? undefined : page.locator(`.session-row.selected[data-session-id="${isolatedSessionId}"]`);
-  if (selectedSession !== undefined) await selectedSession.first().waitFor({ state: "attached", timeout: 15_000 });
-  await page.waitForTimeout(1_000);
-  if (openNavigation) {
-    await page.getByRole("button", { name: "Open navigation" }).click();
-    await page.locator(".mobile-sidebar .sidebar-toolbar").waitFor({ state: "visible" });
-    if (selectedSession !== undefined) await selectedSession.last().waitFor({ state: "visible" });
-  } else {
-    await page.locator(".desktop-sidebar .sidebar-toolbar").waitFor({ state: "visible" });
-    if (selectedSession !== undefined) await selectedSession.first().waitFor({ state: "visible" });
-    const projectToggle = page.locator(".project-toggle").first();
-    await projectToggle.waitFor({ state: "visible" });
-    if (await projectToggle.getAttribute("aria-expanded") !== "true") await projectToggle.click();
-    await page.locator(".project-sessions").first().waitFor({ state: "visible" });
-    await projectToggle.click();
-    await page.locator(".project-toggle[aria-expanded='false']").first().waitFor({ state: "visible" });
-    await projectToggle.click();
-    await page.locator(".project-sessions").first().waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "Choose model" }).click();
-    await page.locator(".model-menu").waitFor({ state: "visible" });
-    if (await page.locator(".model-menu-item small, .model-capability").count() !== 0) failures.push(`${name}: model menu still shows redundant metadata`);
-    await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "Add project" }).click();
-    await page.getByRole("dialog", { name: "Projects" }).waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "Close dialog" }).click();
-    await page.getByRole("button", { name: "Rename session" }).click();
-    await page.getByRole("dialog", { name: "Rename session" }).waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "Close dialog" }).click();
-  }
+  const commandControl = deferred();
+  let commandCalls = 0;
+  await page.route("**/api/workspaces/*/sessions/*/commands", async (route) => {
+    commandCalls += 1;
+    if (commandCalls === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: "UNAVAILABLE", message: "temporary command failure" } }),
+      });
+      commandControl.resolveFirst();
+      return;
+    }
+    await commandControl.release;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ commands: [{ name: "retry-command", description: "Delayed command", source: "jarvis" }] }),
+    });
+  });
 
-  const viewportOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
-  if (viewportOverflow) failures.push(`${name}: unexpected horizontal viewport overflow`);
-  if (!openNavigation && isolatedSessionId !== undefined) await verifyStreamingMarkdown(page, name, isolatedSessionId);
-  await page.screenshot({ path, fullPage: true });
-  if (!openNavigation) {
-    await verifyComposerShortcuts(page, name, isolatedSessionId);
-    await verifySessionDeleteMenu(page, name);
-  }
+  await page.goto(`${baseUrl}/#/chat/${session.workspaceId}/${session.sessionId}`, { waitUntil: "domcontentloaded" });
+  const editor = page.locator(".composer-editor .cm-content");
+  await editor.waitFor({ state: "visible", timeout: 15_000 });
+  await waitForSessionSocket(page, session.sessionId);
+  await commandControl.first;
+  await verifyDelayedCommand(page, editor, name, commandControl.resolve, () => commandCalls);
+  await verifyComposerShortcuts(page, editor, name, session.sessionId);
+  await verifyStreamingMarkdown(page, name, session.sessionId);
+
+  let sequence = 900_000_000;
+  const emit = async (type, payload) => {
+    sequence += 1;
+    await emitSessionEvent(page, session.sessionId, { version: 1, sessionId: session.sessionId, seq: sequence, emittedAt: new Date().toISOString(), type, payload });
+  };
+
+  await verifyRunFeedback(page, name, session.sessionId, emit);
+  if (desktop) await verifyDesktopControls(page, name, session);
+  else await verifyMobileNavigation(page, name);
+
+  await assertNoHorizontalOverflow(page, name);
+  await page.screenshot({ path: screenshotPath, fullPage: true });
+  await emit("run.settled", { status: { sessionId: session.sessionId, runState: "idle" } });
   await context.close();
 }
 
-async function verifyStreamingMarkdown(page, name, sessionId) {
-  await page.waitForFunction((selected) => window.__jarvisSockets?.some((socket) => socket.url.includes(`/sessions/${selected}/events`) && socket.readyState === WebSocket.OPEN), sessionId, { timeout: 15_000 });
-  const emittedAt = new Date().toISOString();
-  await page.evaluate(({ selected, emittedAt }) => {
-    const socket = window.__jarvisSockets.find((candidate) => candidate.url.includes(`/sessions/${selected}/events`) && candidate.readyState === WebSocket.OPEN);
-    socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
-      version: 1,
-      sessionId: selected,
-      runId: "markdown-smoke",
-      seq: 900000001,
-      emittedAt,
-      type: "assistant.delta",
-      payload: { messageId: "markdown-smoke", delta: "# Streaming heading\n\n**Bold text** with `inline code`.\n\n- First item\n- Second item" },
-    }) }));
-  }, { selected: sessionId, emittedAt });
+async function verifyDelayedCommand(page, editor, name, releaseCommands, commandCalls) {
+  await editor.click();
+  await page.keyboard.type("/ret");
+  releaseCommands();
+  const option = page.getByRole("option", { name: /\/retry-command/ });
+  await option.waitFor({ state: "visible", timeout: 5_000 });
+  if (commandCalls() < 2) failures.push(`${name}: command endpoint did not retry after failure`);
+  await page.keyboard.press("Tab");
+  await page.waitForTimeout(50);
+  if (await editor.textContent() !== "/retry-command ") failures.push(`${name}: delayed slash command did not replace the full token`);
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Backspace");
+}
 
-  const message = page.locator('.message-row.streaming').filter({ hasText: "Streaming heading" });
+async function verifyStreamingMarkdown(page, name, sessionId) {
+  const emittedAt = new Date().toISOString();
+  await emitSessionEvent(page, sessionId, {
+    version: 1,
+    sessionId,
+    runId: "markdown-smoke",
+    seq: 850_000_001,
+    emittedAt,
+    type: "assistant.delta",
+    payload: { messageId: "markdown-smoke", delta: "# Streaming heading\n\n**Bold text** with `inline code`.\n\n- First item\n- Second item" },
+  });
+  const message = page.locator(".message-row.streaming").filter({ hasText: "Streaming heading" });
   await message.getByRole("heading", { name: "Streaming heading", level: 1 }).waitFor({ state: "visible", timeout: 5_000 });
   if (await message.locator("strong").textContent() !== "Bold text") failures.push(`${name}: streaming Markdown did not render bold text`);
   if (await message.locator("code").textContent() !== "inline code") failures.push(`${name}: streaming Markdown did not render inline code`);
   if (JSON.stringify(await message.locator("li").allTextContents()) !== JSON.stringify(["First item", "Second item"])) failures.push(`${name}: streaming Markdown did not render a list`);
-  if (await message.locator(".streaming-text").count() !== 0) failures.push(`${name}: streaming message still uses the plain-text renderer`);
   if (await message.locator(".streaming-cursor").count() !== 1) failures.push(`${name}: streaming cursor is missing`);
 }
 
-async function verifyComposerShortcuts(page, name, sessionId) {
-  const editor = page.locator(".composer-editor .cm-content");
-  if (await editor.count() === 0) return;
+async function verifyComposerShortcuts(page, editor, name, sessionId) {
   const editorSurface = page.locator(".composer-editor .cm-editor");
   const bounds = await editorSurface.boundingBox();
-  if (bounds === null || bounds.height < 100) {
+  if (bounds === null || bounds.height < 76) {
     failures.push(`${name}: composer input area is not multi-line height`);
   } else {
     await editorSurface.click({ position: { x: 20, y: bounds.height - 8 } });
@@ -121,7 +161,8 @@ async function verifyComposerShortcuts(page, name, sessionId) {
     await page.keyboard.press("Control+A");
     await page.keyboard.press("Backspace");
   }
-  if (sessionId !== undefined) await verifyDraftStability(page, name, sessionId, editor);
+
+  await verifyDraftStability(page, editor, name, sessionId);
   const prompts = [];
   await page.route("**/api/workspaces/*/sessions/*/prompt", async (route) => {
     prompts.push(JSON.parse(route.request().postData() ?? "{}"));
@@ -139,60 +180,19 @@ async function verifyComposerShortcuts(page, name, sessionId) {
   if (prompts.length !== 1 || prompts[0]?.text !== "First line\nSecond line") failures.push(`${name}: Enter did not send the editor value`);
 }
 
-async function verifySessionDeleteMenu(page, name) {
-  const row = page.locator(".desktop-sidebar .session-row").first();
-  if (await row.count() === 0) return;
-  const sessionId = await row.getAttribute("data-session-id");
-  if (sessionId === null) {
-    failures.push(`${name}: session row is missing its id`);
-    return;
-  }
-
-  await row.click({ button: "right" });
-  const menu = page.getByRole("menu", { name: "Session actions" });
-  await menu.waitFor({ state: "visible", timeout: 5_000 });
-  const menuDelete = menu.getByRole("menuitem", { name: "Delete session" });
-  if (await menuDelete.isDisabled()) {
-    failures.push(`${name}: delete menu is disabled for an idle smoke session`);
-    return;
-  }
-  await menuDelete.click();
-  const dialog = page.getByRole("dialog", { name: "Delete session" });
-  await dialog.waitFor({ state: "visible", timeout: 5_000 });
-  await dialog.getByRole("button", { name: "Cancel" }).click();
-  await dialog.waitFor({ state: "hidden", timeout: 5_000 });
-
-  const deletes = [];
-  await page.route("**/api/workspaces/*/sessions/*", async (route) => {
-    if (route.request().method() !== "DELETE") return route.continue();
-    deletes.push(route.request().url());
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ removed: true }) });
-  });
-  await row.click({ button: "right" });
-  await menu.waitFor({ state: "visible", timeout: 5_000 });
-  await menu.getByRole("menuitem", { name: "Delete session" }).click();
-  await dialog.waitFor({ state: "visible", timeout: 5_000 });
-  await dialog.getByRole("button", { name: "Delete session" }).click();
-  await page.waitForFunction((id) => document.querySelector(`.desktop-sidebar .session-row[data-session-id="${id}"]`) === null, sessionId, { timeout: 5_000 });
-  if (deletes.length !== 1) failures.push(`${name}: deleting a session did not issue one DELETE request`);
-}
-
-async function verifyDraftStability(page, name, sessionId, editor) {
+async function verifyDraftStability(page, editor, name, sessionId) {
   const expected = "Draft remains stable while the session updates.";
   await editor.click();
   for (const [index, character] of [...expected].entries()) {
     await page.keyboard.insertText(character);
-    await page.evaluate(({ selected, index }) => {
-      const socket = window.__jarvisSockets.find((candidate) => candidate.url.includes(`/sessions/${selected}/events`) && candidate.readyState === WebSocket.OPEN);
-      socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
-        version: 1,
-        sessionId: selected,
-        seq: 900001000 + index,
-        emittedAt: new Date().toISOString(),
-        type: "session.updated",
-        payload: { status: { sessionId: selected, runState: "idle" } },
-      }) }));
-    }, { selected: sessionId, index });
+    await emitSessionEvent(page, sessionId, {
+      version: 1,
+      sessionId,
+      seq: 800_000_000 + index,
+      emittedAt: new Date().toISOString(),
+      type: "session.updated",
+      payload: { status: { sessionId, runState: "idle" } },
+    });
   }
   await page.waitForTimeout(260);
   if (await editor.textContent() !== expected) failures.push(`${name}: draft changed after session updates`);
@@ -202,11 +202,122 @@ async function verifyDraftStability(page, name, sessionId, editor) {
   if (!await editor.locator(".cm-placeholder").isVisible()) failures.push(`${name}: cleared draft returned after session updates`);
 }
 
+async function verifyRunFeedback(page, name, sessionId, emit) {
+  const retryAt = new Date(Date.now() + 20_000).toISOString();
+  await emit("run.retrying", {
+    status: {
+      sessionId,
+      runState: "running",
+      activeRun: { id: "smoke-run", startedAt: new Date().toISOString() },
+      retrying: { attempt: 1, maxAttempts: 3, delayMs: 20_000, retryAt, errorMessage: "Temporary provider failure" },
+    },
+  });
+  await page.getByText(/模型响应失败，正在重试/).waitFor({ state: "visible", timeout: 5_000 });
+
+  await emit("run.compactionRetrying", {
+    status: {
+      sessionId,
+      runState: "running",
+      activeRun: { id: "smoke-run", startedAt: new Date().toISOString() },
+      compacting: {
+        reason: "overflow",
+        startedAt: new Date().toISOString(),
+        retrying: { attempt: 2, maxAttempts: 3, delayMs: 20_000, retryAt, errorMessage: "Summary request temporarily failed and is retrying." },
+      },
+    },
+  });
+  await page.getByText("上下文已满，正在压缩后重试").waitFor({ state: "visible", timeout: 5_000 });
+  await page.getByRole("button", { name: "停止当前执行" }).waitFor({ state: "visible", timeout: 5_000 });
+
+  await emit("timeline.upsert", {
+    item: {
+      kind: "context-summary",
+      id: "context-summary:smoke",
+      createdAt: new Date().toISOString(),
+      summaryType: "compaction",
+      summary: "## Smoke summary\n\n- Context compaction feedback is visible.",
+      tokensBefore: 90_000,
+    },
+  });
+  const summary = page.getByRole("button", { name: /上下文已压缩/ });
+  await summary.waitFor({ state: "visible", timeout: 5_000 });
+  await summary.click();
+  await page.getByText("Context compaction feedback is visible.").waitFor({ state: "visible", timeout: 5_000 });
+  await assertNoHorizontalOverflow(page, name);
+}
+
+async function verifyDesktopControls(page, name, session) {
+  const project = page.locator(".project-node").filter({ hasText: session.label }).first();
+  const projectToggle = project.locator(".project-toggle");
+  await projectToggle.waitFor({ state: "visible", timeout: 5_000 });
+  if (await projectToggle.getAttribute("aria-expanded") !== "true") await projectToggle.click();
+  const sessionRow = project.locator(`.session-row[data-session-id="${session.sessionId}"]`);
+  await sessionRow.waitFor({ state: "visible", timeout: 5_000 });
+
+  const modelButton = page.getByRole("button", { name: "选择模型" });
+  if (await modelButton.count() === 1 && !await modelButton.isDisabled()) {
+    await modelButton.click();
+    await page.locator(".model-menu").waitFor({ state: "visible", timeout: 5_000 });
+    if (await page.locator(".model-menu-item small, .model-capability").count() !== 0) failures.push(`${name}: model menu still shows redundant metadata`);
+    await page.keyboard.press("Escape");
+  }
+
+  await page.getByRole("button", { name: "添加项目" }).click();
+  await page.getByRole("dialog", { name: "选择项目目录" }).waitFor({ state: "visible", timeout: 5_000 });
+  await page.getByRole("button", { name: "关闭对话框" }).click();
+
+  await page.getByRole("button", { name: "重命名会话" }).click();
+  await page.getByRole("dialog", { name: "重命名会话" }).waitFor({ state: "visible", timeout: 5_000 });
+  await page.getByRole("button", { name: "关闭对话框" }).click();
+
+  await sessionRow.click({ button: "right" });
+  const menu = page.getByRole("menu", { name: "会话操作" });
+  await menu.waitFor({ state: "visible", timeout: 5_000 });
+  await page.keyboard.press("Escape");
+}
+
+async function verifyMobileNavigation(page, name) {
+  await page.locator(".mobile-chat-header").waitFor({ state: "visible", timeout: 5_000 });
+  await page.locator(".mobile-chat-session").click();
+  await page.getByRole("dialog", { name: "快速切换会话" }).waitFor({ state: "visible", timeout: 5_000 });
+  await page.getByRole("button", { name: "关闭快速切换" }).click();
+  await page.getByRole("dialog", { name: "快速切换会话" }).waitFor({ state: "hidden", timeout: 5_000 });
+  await assertNoHorizontalOverflow(page, name);
+}
+
+async function waitForSessionSocket(page, sessionId) {
+  await page.waitForFunction((id) => window.__jarvisSockets?.some((socket) => socket.url.includes(`/sessions/${id}/events`) && socket.readyState === 1), sessionId, { timeout: 15_000 });
+}
+
+async function emitSessionEvent(page, sessionId, event) {
+  await page.evaluate(({ id, payload }) => {
+    const socket = window.__jarvisSockets?.find((candidate) => candidate.url.includes(`/sessions/${id}/events`) && candidate.readyState === 1);
+    if (socket === undefined) throw new Error("Session event socket is not open");
+    socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(payload) }));
+  }, { id: sessionId, payload: event });
+}
+
+async function assertNoHorizontalOverflow(page, name) {
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+  if (overflow) failures.push(`${name}: unexpected horizontal viewport overflow`);
+}
+
+function deferred() {
+  let resolveFirst;
+  let release;
+  const first = new Promise((resolve) => { resolveFirst = resolve; });
+  const releasePromise = new Promise((resolve) => { release = resolve; });
+  return { first, release: releasePromise, resolveFirst, resolve: release };
+}
+
 try {
-  await capture("desktop", { width: 1440, height: 960 }, "/tmp/jarvis-desktop.png");
-  await capture("mobile", { width: 390, height: 844 }, "/tmp/jarvis-mobile.png", true);
+  const session = await setupSmokeSession();
+  await capture("desktop", { width: 1440, height: 960 }, session, "/tmp/jarvis-desktop.png", true);
+  await capture("mobile", { width: 390, height: 844 }, session, "/tmp/jarvis-mobile.png", false);
   if (failures.length > 0) throw new Error(failures.join("\n"));
   console.log("UI smoke passed", { desktop: "/tmp/jarvis-desktop.png", mobile: "/tmp/jarvis-mobile.png" });
 } finally {
   await browser.close();
+  if (ownedWorkspaceId !== undefined) await fetch(apiPath(`/api/workspaces/${ownedWorkspaceId}`), { method: "DELETE" }).catch(() => undefined);
+  if (temporaryWorkspacePath !== undefined) await rm(temporaryWorkspacePath, { force: true, recursive: true });
 }

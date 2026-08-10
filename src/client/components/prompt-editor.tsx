@@ -3,6 +3,7 @@ import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdat
 import { EditorView as CodeMirrorView } from "@codemirror/view";
 import { ArrowUp, Command, FileCode2, LoaderCircle, Plus, Square, X } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, WorkspaceFile } from "../../shared/protocol";
+import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
@@ -11,7 +12,6 @@ const basicSetup: BasicSetupOptions = { lineNumbers: false, foldGutter: false, h
 // Module-level so the array identity never changes; a new identity per render
 // would make useCodeMirror reconfigure (and effectively reset) the editor.
 const editorExtensions: Extension[] = [CodeMirrorView.lineWrapping];
-const MAX_SUGGESTIONS = 8;
 
 type Completion =
   | { kind: "command"; command: ComposerCommand }
@@ -42,11 +42,14 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   const searchRequestRef = useRef(0);
   const completionItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const attachmentsRef = useRef(attachments);
+  const commandsRef = useRef(commands);
+  const searchFilesRef = useRef(searchFiles);
   const preparingRef = useRef(0);
   const galleryRef = useRef<HTMLInputElement | null>(null);
   const [completion, setCompletion] = useState<{ trigger: "/" | "@"; from: number; items: Completion[] } | undefined>();
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [preparingCount, setPreparingCount] = useState(0);
+  const [hasDraft, setHasDraft] = useState(() => initialValue.trim() !== "");
 
   useEffect(() => { busyRef.current = busy; }, [busy]);
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
@@ -61,46 +64,59 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
     setSelectedIndex(0);
   }, []);
 
-  const change = useCallback((next: string, update: ViewUpdate) => {
-    valueRef.current = next;
-    onDraftChange(next);
-    const cursor = update.view.state.selection.main.head;
-    const match = /(?:^|\s)([/@])([^\s]*)$/.exec(next.slice(0, cursor));
-    if (match === null || match.index === undefined) {
+  const refreshCompletion = useCallback((view: EditorView) => {
+    const context = completionContextFor(view.state.doc.toString(), view.state.selection.main.head);
+    if (context === undefined) {
       closeCompletion();
       return;
     }
 
-    const trigger = match[1] as "/" | "@";
-    const query = match[2] ?? "";
-    const from = cursor - query.length - 1;
     const request = ++searchRequestRef.current;
-    if (trigger === "/") {
-      const normalized = query.toLocaleLowerCase();
-      const items = commands
-        .filter((command) => command.name.toLocaleLowerCase().includes(normalized) || command.description?.toLocaleLowerCase().includes(normalized))
-        .slice(0, MAX_SUGGESTIONS)
+    if (context.trigger === "/") {
+      const items = matchingComposerCommands(commandsRef.current, context.query)
         .map((command) => ({ kind: "command" as const, command }));
-      setCompletion(items.length === 0 ? undefined : { trigger, from, items });
+      setCompletion(items.length === 0 ? undefined : { trigger: context.trigger, from: context.from, items });
       setSelectedIndex(0);
       return;
     }
 
-    void searchFiles(query).then((files) => {
+    void searchFilesRef.current(context.query).then((files) => {
       if (request !== searchRequestRef.current) return;
-      const items = files.slice(0, MAX_SUGGESTIONS).map((file) => ({ kind: "file" as const, file }));
-      setCompletion(items.length === 0 ? undefined : { trigger, from, items });
+      const items = files.slice(0, MAX_COMPOSER_SUGGESTIONS).map((file) => ({ kind: "file" as const, file }));
+      setCompletion(items.length === 0 ? undefined : { trigger: context.trigger, from: context.from, items });
       setSelectedIndex(0);
     }).catch(() => {
       if (request === searchRequestRef.current) closeCompletion();
     });
-  }, [closeCompletion, commands, onDraftChange, searchFiles]);
+  }, [closeCompletion]);
+
+  const change = useCallback((next: string, update: ViewUpdate) => {
+    valueRef.current = next;
+    setHasDraft(next.trim() !== "");
+    onDraftChange(next);
+    refreshCompletion(update.view);
+  }, [onDraftChange, refreshCompletion]);
+
+  const update = useCallback((viewUpdate: ViewUpdate) => {
+    if (!viewUpdate.docChanged && viewUpdate.selectionSet) refreshCompletion(viewUpdate.view);
+  }, [refreshCompletion]);
 
   const createEditor = useCallback((view: EditorView) => {
     viewRef.current = view;
     const initial = initialValueRef.current;
     if (initial !== "") view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: initial } });
-  }, []);
+    refreshCompletion(view);
+  }, [refreshCompletion]);
+
+  // Command resources arrive asynchronously. Re-run completion against the
+  // current document even when the user has not typed another character.
+  useEffect(() => {
+    commandsRef.current = commands;
+    const view = viewRef.current;
+    if (view !== undefined) refreshCompletion(view);
+  }, [commands, refreshCompletion]);
+
+  useEffect(() => { searchFilesRef.current = searchFiles; }, [searchFiles]);
 
   const handleFiles = useCallback((files: File[]) => {
     if (files.length === 0) return;
@@ -149,6 +165,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   const { setContainer } = useCodeMirror({
     value: undefined,
     onChange: change,
+    onUpdate: update,
     onCreateEditor: createEditor,
     minHeight: "76px",
     maxHeight: "220px",
@@ -175,6 +192,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
       } else {
         view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
       }
+      setHasDraft(false);
       onAttachmentsChange([]);
     } finally {
       submittingRef.current = false;
@@ -183,18 +201,23 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
 
   const applyCompletion = useCallback((item: Completion) => {
     const view = viewRef.current;
-    const current = completion;
-    if (view === undefined || current === undefined) return;
-    const insert = item.kind === "command" ? `/${item.command.name} ` : `@${item.file.path} `;
-    const cursor = view.state.selection.main.head;
-    view.dispatch({ changes: { from: current.from, to: cursor, insert }, selection: { anchor: current.from + insert.length } });
+    if (view === undefined) return;
+    const value = view.state.doc.toString();
+    const context = completionContextFor(value, view.state.selection.main.head);
+    const trigger = item.kind === "command" ? "/" : "@";
+    if (context === undefined || context.trigger !== trigger) {
+      closeCompletion();
+      return;
+    }
+    const replacement = completionReplacement(value, context, item.kind === "command" ? `/${item.command.name}` : `@${item.file.path}`);
+    view.dispatch({ changes: { from: replacement.from, to: replacement.to, insert: replacement.insert }, selection: { anchor: replacement.cursor } });
     view.focus();
     closeCompletion();
-  }, [closeCompletion, completion]);
+  }, [closeCompletion]);
 
   const completionItems = completion?.items ?? [];
   const completionLabel = useMemo(() => completion?.trigger === "/" ? "命令" : "文件", [completion?.trigger]);
-  const canSend = initialValue.trim() !== "" || attachments.length > 0;
+  const canSend = hasDraft || attachments.length > 0;
   const openAttach = () => {
     if (busy || attachDisabled) return;
     galleryRef.current?.click();
