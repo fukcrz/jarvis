@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, ChevronDown, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
@@ -20,11 +21,22 @@ import { Tooltip } from "./components/ui/tooltip";
 import { randomUUID, sessionLabel } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
 
+/** Extract the entity ids carried by the current hash route. */
+function pathParams(pathname: string): { workspaceId?: string; sessionId?: string } {
+  const parts = pathname.split("/").filter(Boolean);
+  if (parts[0] === "chat" && parts.length >= 3) return { workspaceId: parts[1], sessionId: parts[2] };
+  if (parts[0] === "sessions" && parts.length >= 2) return { workspaceId: parts[1] };
+  return {};
+}
+
 export function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const initialPath = pathParams(location.pathname);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [workspaceId, setWorkspaceId] = useState<string | undefined>(() => window.localStorage.getItem("jarvis.workspace") ?? undefined);
+  const [workspaceId, setWorkspaceId] = useState<string | undefined>(() => initialPath.workspaceId ?? window.localStorage.getItem("jarvis.workspace") ?? undefined);
   const [sessionsByWorkspace, setSessionsByWorkspace] = useState<Record<string, SessionSummary[]>>({});
-  const [sessionId, setSessionId] = useState<string | undefined>(() => window.localStorage.getItem("jarvis.session") ?? undefined);
+  const [sessionId, setSessionId] = useState<string | undefined>(() => initialPath.sessionId ?? window.localStorage.getItem("jarvis.session") ?? undefined);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Record<string, boolean>>(() => readExpandedWorkspaces());
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState<string | undefined>();
@@ -35,9 +47,41 @@ export function App() {
   const [projectRenameValue, setProjectRenameValue] = useState("");
   const [projectRemoveTarget, setProjectRemoveTarget] = useState<Workspace | undefined>();
   const [projectRemovePending, setProjectRemovePending] = useState(false);
-  const [mobilePage, setMobilePage] = useState<"projects" | "sessions" | "chat">(() => window.localStorage.getItem("jarvis.session") === null ? "projects" : "chat");
+  // The mobile page stack is the hash route: #/projects, #/sessions/:workspaceId, #/chat/:workspaceId/:sessionId.
+  const mobilePage: "projects" | "sessions" | "chat" = location.pathname.startsWith("/chat") ? "chat" : location.pathname.startsWith("/sessions") ? "sessions" : "projects";
+  // The session switcher lives in the query string so the back key closes it first.
+  const mobileSwitcherOpen = new URLSearchParams(location.search).get("overlay") === "switcher";
+  const closeMobileSwitcher = useCallback(() => {
+    navigate(location.pathname, { replace: true });
+  }, [location.pathname, navigate]);
+  // When switching sessions from the switcher we pop the overlay entry and then
+  // replace the entry that first entered chat, so the back key goes straight to
+  // the session list instead of walking back through previously viewed sessions.
+  const pendingSessionSwitchRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const target = pendingSessionSwitchRef.current;
+    if (target === undefined) return;
+    pendingSessionSwitchRef.current = undefined;
+    navigate(target, { replace: true });
+  }, [location.pathname, location.search, navigate]);
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
-  const [mobileSwitcherOpen, setMobileSwitcherOpen] = useState(false);
+  // The URL is the source of truth for the selected workspace/session.
+  useEffect(() => {
+    const { workspaceId: pathWorkspaceId, sessionId: pathSessionId } = pathParams(location.pathname);
+    if (pathWorkspaceId !== undefined && pathWorkspaceId !== workspaceId) setWorkspaceId(pathWorkspaceId);
+    if (pathSessionId !== undefined && pathSessionId !== sessionId) setSessionId(pathSessionId);
+  }, [location.pathname, workspaceId, sessionId]);
+
+  // First visit (empty hash): restore from localStorage or land on the project list.
+  useEffect(() => {
+    if (location.pathname !== "/") return;
+    const restoredWorkspace = window.localStorage.getItem("jarvis.workspace");
+    const restoredSession = window.localStorage.getItem("jarvis.session");
+    if (restoredWorkspace !== null && restoredSession !== null) navigate(`/chat/${restoredWorkspace}/${restoredSession}`, { replace: true });
+    else if (restoredWorkspace !== null) navigate(`/sessions/${restoredWorkspace}`, { replace: true });
+    else navigate("/projects", { replace: true });
+  }, [location.pathname, navigate]);
+
   const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const [thinkingLevelPending, setThinkingLevelPending] = useState(false);
   const [compactionPending, setCompactionPending] = useState(false);
@@ -151,7 +195,6 @@ export function App() {
   useEffect(() => {
     if (workspaces.length === 0) {
       setSessionsByWorkspace({});
-      if (window.innerWidth <= 760) setMobilePage("projects");
       return;
     }
     let disposed = false;
@@ -164,28 +207,52 @@ export function App() {
   }, [workspaces, loadProjectSessions]);
 
   useEffect(() => {
+    const { workspaceId: pathWorkspaceId, sessionId: pathSessionId } = pathParams(location.pathname);
     if (workspaces.length === 0) {
       if (!loading) {
         if (workspaceId !== undefined) setWorkspaceId(undefined);
         if (sessionId !== undefined) setSessionId(undefined);
+        // A stale URL (e.g. the last workspace was deleted) must not pin the app.
+        if (pathWorkspaceId !== undefined || pathSessionId !== undefined) navigate("/projects", { replace: true });
       }
       return;
     }
     const workspace = workspaceId === undefined ? undefined : workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace === undefined) {
-      setWorkspaceId(workspaces[0]?.id);
+      const fallback = workspaces[0]?.id;
+      if (fallback === undefined) return;
+      if (pathWorkspaceId === undefined) {
+        // Desktop: expanding a project in the sidebar does not navigate.
+        setWorkspaceId(fallback);
+      } else {
+        navigate(`/sessions/${fallback}`, { replace: true });
+      }
       return;
     }
     const sessions = sessionsByWorkspace[workspace.id];
     if (sessions === undefined) return;
     if (sessionId !== undefined && sessions.some((session) => session.id === sessionId)) return;
     if (window.innerWidth <= 760) {
-      setSessionId(undefined);
-      if (mobilePage === "chat") setMobilePage("sessions");
+      if (pathSessionId !== undefined && !sessions.some((session) => session.id === pathSessionId)) {
+        // The chat URL carries a stale session id (deleted, other workspace).
+        setSessionId(undefined);
+        navigate(`/sessions/${workspace.id}`, { replace: true });
+      } else if (pathSessionId === undefined && sessionId !== undefined && !sessions.some((session) => session.id === sessionId)) {
+        // Mobile has no implicit first-session fallback; clear a stale pick.
+        setSessionId(undefined);
+      }
       return;
     }
-    setSessionId(sessions[0]?.id);
-  }, [workspaces, sessionsByWorkspace, workspaceId, sessionId, loading, mobilePage]);
+    const first = sessions[0]?.id;
+    if (first === undefined) return;
+    if (pathWorkspaceId === workspace.id && pathSessionId !== undefined) {
+      // The URL points at this workspace with a stale session id: fix the URL.
+      navigate(`/chat/${workspace.id}/${first}`, { replace: true });
+    } else {
+      // Desktop sidebar expansion is UI-only; never navigate for it.
+      setSessionId(first);
+    }
+  }, [workspaces, sessionsByWorkspace, workspaceId, sessionId, loading, location.pathname, navigate]);
 
   useEffect(() => {
     setExpandedWorkspaceIds((current) => {
@@ -284,13 +351,20 @@ export function App() {
     try {
       const session = await api.createSession(targetWorkspaceId);
       setSessionsByWorkspace((current) => ({ ...current, [targetWorkspaceId]: mergeSession(current[targetWorkspaceId] ?? [], session) }));
-      setWorkspaceId(targetWorkspaceId);
-      setSessionId(session.id);
       setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
-      // Mobile: jump straight into the new session instead of staying on the list.
-      setMobilePage("chat");
-      setMobileSwitcherOpen(false);
       setPageError(undefined);
+      const target = `/chat/${targetWorkspaceId}/${session.id}`;
+      if (!isMobile) {
+        navigate(target, { replace: true });
+      } else if (mobileSwitcherOpen) {
+        pendingSessionSwitchRef.current = target;
+        navigate(-1);
+      } else if (mobilePage === "sessions") {
+        // Mobile page-level move: session list -> chat.
+        navigate(target);
+      } else {
+        navigate(target, { replace: true });
+      }
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "无法创建会话");
     }
@@ -353,7 +427,8 @@ export function App() {
       if (workspaceId === target.id) {
         setWorkspaceId(remaining[0]?.id);
         setSessionId(undefined);
-        setMobilePage("projects");
+        // Back out of the chat/session page; the guard effect fixes up the rest.
+        navigate("/projects", { replace: true });
       }
       setProjectRemoveTarget(undefined);
       setPageError(undefined);
@@ -374,8 +449,8 @@ export function App() {
       setDrafts((current) => withoutDraft(current, target.session.id));
       if (workspaceId === target.workspaceId && sessionId === target.session.id) {
         setSessionId(undefined);
-        setMobilePage("sessions");
-        setMobileSwitcherOpen(false);
+        // Mobile: back to the session list; desktop: the guard picks the next session.
+        navigate(`/sessions/${target.workspaceId}`, { replace: true });
       }
       setDeleteTarget(undefined);
       setPageError(undefined);
@@ -465,18 +540,31 @@ export function App() {
   };
 
   const chooseSession = (nextWorkspaceId: string, nextSessionId: string) => {
-    setWorkspaceId(nextWorkspaceId);
-    setSessionId(nextSessionId);
     setExpandedWorkspaceIds((current) => ({ ...current, [nextWorkspaceId]: true }));
-    setMobilePage("chat");
-    setMobileSwitcherOpen(false);
+    const target = `/chat/${nextWorkspaceId}/${nextSessionId}`;
+    if (!isMobile) {
+      // Desktop: session selection never enters the history.
+      navigate(target, { replace: true });
+      return;
+    }
+    if (mobileSwitcherOpen) {
+      // Pop the switcher overlay entry; the effect above replaces the
+      // chat-entry entry with the new session.
+      pendingSessionSwitchRef.current = target;
+      navigate(-1);
+      return;
+    }
+    if (mobilePage === "sessions") {
+      // Mobile page-level move: session list -> chat.
+      navigate(target);
+      return;
+    }
+    navigate(target, { replace: true });
   };
 
   const openMobileProject = (workspace: Workspace) => {
-    setWorkspaceId(workspace.id);
-    setSessionId(undefined);
-    setMobilePage("sessions");
-    setMobileSwitcherOpen(false);
+    // Mobile page-level move: project list -> session list.
+    navigate(`/sessions/${workspace.id}`);
   };
 
   const openMobileProjectMenu = (workspace: Workspace) => {
@@ -531,14 +619,14 @@ export function App() {
         {renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "projects" ? <MobileProjectsPage workspaces={workspaces} activeRunStateByWorkspace={activeRunStateByWorkspace} onAddProject={() => setWorkspaceDialogOpen(true)} onOpenProject={openMobileProject} onOpenProjectMenu={openMobileProjectMenu} /> : mobilePage === "sessions" ? <MobileSessionsPage workspace={selectedWorkspace} sessions={sessionsByWorkspace[workspaceId ?? ""] ?? []} onBack={() => setMobilePage("projects")} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(id) => { if (workspaceId !== undefined) chooseSession(workspaceId, id); }} onOpenProjectMenu={openMobileProjectMenu} onOpenSessionMenu={(session) => { if (workspaceId !== undefined) openMobileSessionMenu(workspaceId, session); }} /> : <section className="mobile-chat-page">
+        {mobilePage === "projects" ? <MobileProjectsPage workspaces={workspaces} activeRunStateByWorkspace={activeRunStateByWorkspace} onAddProject={() => setWorkspaceDialogOpen(true)} onOpenProject={openMobileProject} onOpenProjectMenu={openMobileProjectMenu} /> : mobilePage === "sessions" ? <MobileSessionsPage workspace={selectedWorkspace} sessions={sessionsByWorkspace[workspaceId ?? ""] ?? []} onBack={() => navigate("/projects", { replace: true })} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(id) => { if (workspaceId !== undefined) chooseSession(workspaceId, id); }} onOpenProjectMenu={openMobileProjectMenu} onOpenSessionMenu={(session) => { if (workspaceId !== undefined) openMobileSessionMenu(workspaceId, session); }} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
-            <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => setMobilePage("sessions")}><ArrowLeft size={19} /></Button>
-            <button type="button" className="mobile-chat-session" onClick={() => setMobileSwitcherOpen(true)}>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}<ChevronDown size={15} /></button>
+            <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate(`/sessions/${workspaceId ?? ""}`, { replace: true })}><ArrowLeft size={19} /></Button>
+            <button type="button" className="mobile-chat-session" onClick={() => navigate("?overlay=switcher")}>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}<ChevronDown size={15} /></button>
             {selectedSession === undefined || selectedWorkspace === undefined ? null : <Button variant="ghost" size="icon" aria-label="当前会话操作" onClick={() => openMobileSessionMenu(selectedWorkspace.id, selectedSession)}><MoreVertical size={18} /></Button>}
           </header>
           <div className="mobile-chat-content">{renderChatContent()}</div>
-          {mobileSwitcherOpen ? <MobileSessionSwitcher workspace={selectedWorkspace} sessions={sessionsByWorkspace[workspaceId ?? ""] ?? []} selectedSessionId={sessionId} onClose={() => setMobileSwitcherOpen(false)} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(id) => { if (workspaceId !== undefined) chooseSession(workspaceId, id); }} /> : null}
+          {mobileSwitcherOpen ? <MobileSessionSwitcher workspace={selectedWorkspace} sessions={sessionsByWorkspace[workspaceId ?? ""] ?? []} selectedSessionId={sessionId} onClose={closeMobileSwitcher} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(id) => { if (workspaceId !== undefined) chooseSession(workspaceId, id); }} /> : null}
         </section>}
       </div> : null}
 
