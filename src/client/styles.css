@@ -122,7 +122,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .activity-group.completed .activity-state-icon { color: var(--success); }
 .activity-group.failed .activity-state-icon { color: var(--danger); }
 .activity-label { min-width: 0; overflow: hidden; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.activity-detail, .activity-elapsed { flex: 0 0 auto; color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.activity-detail { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }.activity-elapsed { flex: 0 0 auto; color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .activity-summary > svg:last-child { flex: 0 0 auto; margin-left: auto; }
 .activity-items { display: grid; gap: 0; margin-top: 5px; border-left: 1px solid var(--line); padding-left: 7px; }
 .activity-items .tool-item { margin: 0; }
