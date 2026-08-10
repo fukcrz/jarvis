@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
+import { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "./app.js";
 
 interface TestSocket {
@@ -20,14 +21,17 @@ let app: FastifyInstance | undefined;
 let jarvisHome: string;
 let sessionDir: string;
 let previousJarvisHome: string | undefined;
+let previousAgentDir: string | undefined;
 let previousSessionDir: string | undefined;
 
 beforeEach(async () => {
   previousJarvisHome = process.env["JARVIS_HOME"];
+  previousAgentDir = process.env["PI_CODING_AGENT_DIR"];
   previousSessionDir = process.env["PI_CODING_AGENT_SESSION_DIR"];
   jarvisHome = await mkdtemp(join(tmpdir(), "jarvis-app-test-"));
   sessionDir = join(jarvisHome, "sessions");
   process.env["JARVIS_HOME"] = jarvisHome;
+  process.env["PI_CODING_AGENT_DIR"] = join(jarvisHome, "agent");
   process.env["PI_CODING_AGENT_SESSION_DIR"] = sessionDir;
   app = await buildApp();
 });
@@ -36,8 +40,11 @@ afterEach(async () => {
   await app?.close();
   if (previousJarvisHome === undefined) delete process.env["JARVIS_HOME"];
   else process.env["JARVIS_HOME"] = previousJarvisHome;
+  if (previousAgentDir === undefined) delete process.env["PI_CODING_AGENT_DIR"];
+  else process.env["PI_CODING_AGENT_DIR"] = previousAgentDir;
   if (previousSessionDir === undefined) delete process.env["PI_CODING_AGENT_SESSION_DIR"];
   else process.env["PI_CODING_AGENT_SESSION_DIR"] = previousSessionDir;
+  vi.restoreAllMocks();
   await rm(jarvisHome, { force: true, recursive: true });
   app = undefined;
 });
@@ -82,11 +89,15 @@ function nextJsonMessage(socket: TestSocket): Promise<unknown> {
 }
 
 describe("Jarvis HTTP and WebSocket API", () => {
-  it("lists available Windows drives from the directory root picker", async () => {
+  it("lists the platform's directory root picker", async () => {
     const roots = await activeApp().inject({ method: "GET", url: "/api/directories?roots=true" });
     expect(roots.statusCode).toBe(200);
-    expect(roots.json()).toMatchObject({ directory: { name: "Drives", path: "", isRootPicker: true } });
-    expect((roots.json() as { directory: { entries: Array<{ path: string }> } }).directory.entries).toContainEqual(expect.objectContaining({ path: "C:\\" }));
+    if (platform() === "win32") {
+      expect(roots.json()).toMatchObject({ directory: { name: "Drives", path: "", isRootPicker: true } });
+      expect((roots.json() as { directory: { entries: Array<{ path: string }> } }).directory.entries).toContainEqual(expect.objectContaining({ path: "C:\\" }));
+    } else {
+      expect(roots.json()).toMatchObject({ directory: { name: "/", path: "/", isRootPicker: false } });
+    }
   });
 
   it("searches workspace files for composer references without exposing ignored directories", async () => {
@@ -112,6 +123,139 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(allFiles.json()).toMatchObject({ files: expect.arrayContaining([{ path: "README.md" }, { path: "src/server/session-service.ts" }]) });
     expect(JSON.stringify(allFiles.json())).not.toContain("node_modules");
     expect(JSON.stringify(allFiles.json())).not.toContain(".git");
+  });
+
+  it("lists a composer command that Jarvis can execute", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "commands-workspace");
+    await mkdir(workspacePath);
+    const createdWorkspace = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } });
+    const workspace = createdWorkspace.json() as { workspace: { id: string } };
+    const createdSession = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.workspace.id}/sessions`, payload: {} });
+    const session = createdSession.json() as { session: { id: string } };
+
+    const response = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/sessions/${session.session.id}/commands` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ commands: expect.arrayContaining([expect.objectContaining({ name: "compact" })]) });
+  });
+
+  it("starts a manual compaction once for a repeated direct request", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "manual-compact-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const compactSpy = vi.spyOn(AgentSession.prototype, "compact").mockResolvedValue(undefined as never);
+    const requestId = randomUUID();
+    const url = `/api/workspaces/${workspace.id}/sessions/${session.id}/compact`;
+
+    const first = await server.inject({ method: "POST", url, payload: { customInstructions: "Keep the test evidence", clientRequestId: requestId } });
+    expect(first.statusCode).toBe(200);
+    const accepted = first.json() as { accepted: boolean; runId: string };
+    expect(accepted.accepted).toBe(true);
+    await vi.waitFor(() => expect(compactSpy).toHaveBeenCalledWith("Keep the test evidence"));
+
+    const replay = await server.inject({ method: "POST", url, payload: { customInstructions: "Keep the test evidence", clientRequestId: requestId } });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(accepted);
+    expect(compactSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes /compact through Jarvis once and leaves attachments or a same-named Pi template alone", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "compact-command-workspace");
+    await mkdir(join(workspacePath, ".pi", "prompts"), { recursive: true });
+    const createdWorkspace = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } });
+    const workspace = createdWorkspace.json() as { workspace: { id: string } };
+    const createdSession = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.workspace.id}/sessions`, payload: {} });
+    const session = createdSession.json() as { session: { id: string } };
+    const promptPath = join(workspacePath, ".pi", "prompts", "compact.md");
+
+    const compactSpy = vi.spyOn(AgentSession.prototype, "compact").mockResolvedValue(undefined as never);
+    const promptSpy = vi.spyOn(AgentSession.prototype, "prompt").mockResolvedValue(undefined);
+    const requestId = randomUUID();
+    const first = await server.inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.workspace.id}/sessions/${session.session.id}/prompt`,
+      payload: { text: "/compact preserve current work", clientRequestId: requestId },
+    });
+    expect(first.statusCode).toBe(200);
+    const accepted = first.json() as { accepted: boolean; runId: string };
+    expect(accepted.accepted).toBe(true);
+    await vi.waitFor(() => expect(compactSpy).toHaveBeenCalledWith("preserve current work"));
+
+    const replay = await server.inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.workspace.id}/sessions/${session.session.id}/prompt`,
+      payload: { text: "/compact preserve current work", clientRequestId: requestId },
+    });
+    expect(replay.json()).toEqual(accepted);
+    expect(compactSpy).toHaveBeenCalledTimes(1);
+
+    const attachedPrompt = await server.inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.workspace.id}/sessions/${session.session.id}/prompt`,
+      payload: {
+        text: "/compact",
+        clientRequestId: randomUUID(),
+        images: [{ mimeType: "image/png", data: "aGVsbG8=" }],
+      },
+    });
+    expect(attachedPrompt.statusCode).toBe(200);
+    await vi.waitFor(() => expect(promptSpy).toHaveBeenCalledWith("/compact", expect.objectContaining({ images: expect.any(Array) })));
+    expect(compactSpy).toHaveBeenCalledTimes(1);
+
+    await writeFile(promptPath, "---\ndescription: Project compact template\n---\nTemplate body");
+    const templateWorkspace = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } });
+    const templateSession = await server.inject({ method: "POST", url: `/api/workspaces/${templateWorkspace.json<{ workspace: { id: string } }>().workspace.id}/sessions`, payload: {} });
+    const templateRef = { workspaceId: templateWorkspace.json<{ workspace: { id: string } }>().workspace.id, sessionId: templateSession.json<{ session: { id: string } }>().session.id };
+
+    const commands = await server.inject({ method: "GET", url: `/api/workspaces/${templateRef.workspaceId}/sessions/${templateRef.sessionId}/commands` });
+    expect(commands.json()).toMatchObject({ commands: expect.arrayContaining([expect.objectContaining({ name: "compact", source: "prompt" })]) });
+    expect(commands.json()).not.toMatchObject({ commands: expect.arrayContaining([expect.objectContaining({ name: "compact", source: "jarvis" })]) });
+
+    const templateRequest = await server.inject({
+      method: "POST",
+      url: `/api/workspaces/${templateRef.workspaceId}/sessions/${templateRef.sessionId}/prompt`,
+      payload: { text: "/compact", clientRequestId: randomUUID() },
+    });
+    expect(templateRequest.statusCode).toBe(200);
+    await vi.waitFor(() => expect(promptSpy).toHaveBeenCalledWith("/compact", expect.anything()));
+    expect(compactSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers a same-named Pi extension command over Jarvis compact", async () => {
+    const server = activeApp();
+    const extensionsPath = join(jarvisHome, "agent", "extensions");
+    await mkdir(extensionsPath, { recursive: true });
+    await writeFile(join(extensionsPath, "compact-command.js"), `export default function (pi) {
+  pi.registerCommand("compact", {
+    description: "Project compact command",
+    handler: async () => {},
+  });
+}
+`);
+    const workspacePath = join(jarvisHome, "extension-compact-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const compactSpy = vi.spyOn(AgentSession.prototype, "compact").mockResolvedValue(undefined as never);
+    const promptSpy = vi.spyOn(AgentSession.prototype, "prompt").mockResolvedValue(undefined);
+
+    const commands = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${session.id}/commands` });
+    expect(commands.statusCode).toBe(200);
+    expect(commands.json()).toMatchObject({ commands: expect.arrayContaining([{ name: "compact", description: "Project compact command", source: "extension" }]) });
+    expect(commands.json()).not.toMatchObject({ commands: expect.arrayContaining([expect.objectContaining({ name: "compact", source: "jarvis" })]) });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.id}/sessions/${session.id}/prompt`,
+      payload: { text: "/compact", clientRequestId: randomUUID() },
+    });
+    expect(response.statusCode).toBe(200);
+    await vi.waitFor(() => expect(promptSpy).toHaveBeenCalledWith("/compact", expect.anything()));
+    expect(compactSpy).not.toHaveBeenCalled();
   });
 
   it("lists selectable child directories and records a project's last opened time", async () => {

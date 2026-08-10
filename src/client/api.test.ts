@@ -58,4 +58,18 @@ describe("API client", () => {
     expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
     expect(init?.body).toBe(JSON.stringify({ level: "high" }));
   });
+
+  it("sends compaction instructions and an idempotency key", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ accepted: true, runId: "8b2a18fb-9b91-4b1d-9c15-d2c6caf8e99e" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ref = { workspaceId: "da69b38d-f132-4c84-8c4f-6174015e9c5e", sessionId: "c2f73ddd-cfc6-464f-acb3-c8f425cea7f0" };
+    const requestId = "8b2a18fb-9b91-4b1d-9c15-d2c6caf8e99e";
+
+    await api.compact(ref, "Keep test results", requestId);
+
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe(`/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}/compact`);
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(JSON.stringify({ customInstructions: "Keep test results", clientRequestId: requestId }));
+  });
 });

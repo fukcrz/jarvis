@@ -70,6 +70,11 @@ const MAX_PROMPT_LENGTH = 40_000;
 const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_DATA_LENGTH = 14_000_000; // ≈ 10 MiB decoded
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/heic", "image/heif"]);
+const JARVIS_COMPACT_COMMAND: ComposerCommand = {
+  name: "compact",
+  description: "压缩当前会话上下文",
+  source: "jarvis",
+};
 
 export class SessionService {
   private readonly active = new Map<string, ActiveSession>();
@@ -176,7 +181,11 @@ export class SessionService {
 
   async commands(ref: SessionRef): Promise<ComposerCommand[]> {
     const active = await this.getActive(ref);
-    return [
+    return this.composerCommands(active);
+  }
+
+  private composerCommands(active: ActiveSession): ComposerCommand[] {
+    const commands: ComposerCommand[] = [
       ...active.session.extensionRunner.getRegisteredCommands().map((command) => ({
         name: command.invocationName,
         ...(command.description === undefined ? {} : { description: command.description }),
@@ -193,6 +202,9 @@ export class SessionService {
         source: "skill" as const,
       })),
     ];
+    return commands.some((command) => command.name === JARVIS_COMPACT_COMMAND.name)
+      ? commands
+      : [JARVIS_COMPACT_COMMAND, ...commands];
   }
 
   async runtime(ref: SessionRef): Promise<SessionStreamSnapshot> {
@@ -273,8 +285,15 @@ export class SessionService {
     if (prompt.length > MAX_PROMPT_LENGTH) throw new AppError("PROMPT_TOO_LARGE", `Prompt must be at most ${String(MAX_PROMPT_LENGTH)} characters`);
     const attachments = this.validateAttachments(images);
     const active = await this.getActive(ref);
-    const previous = active.requestRuns.get(clientRequestId);
+    const requestKey = `prompt:${clientRequestId}`;
+    const previous = active.requestRuns.get(requestKey);
     if (previous !== undefined) return previous;
+    const compact = attachments.length === 0 ? this.jarvisCompactCommand(active, prompt) : undefined;
+    if (compact !== undefined) {
+      const accepted = this.startCompaction(active, compact.customInstructions);
+      this.rememberRequest(active, requestKey, accepted);
+      return accepted;
+    }
     if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) throw new AppError("SESSION_BUSY", "This session is already running", 409);
 
     const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString() };
@@ -286,8 +305,7 @@ export class SessionService {
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
     const accepted: PromptAccepted = { accepted: true, runId: run.id };
-    active.requestRuns.set(clientRequestId, accepted);
-    if (active.requestRuns.size > 48) active.requestRuns.delete(active.requestRuns.keys().next().value as string);
+    this.rememberRequest(active, requestKey, accepted);
 
     this.events.publishSession(active.ref, { type: "run.started", runId: run.id, payload: { status: active.state } });
     this.publishSummary(active);
@@ -309,8 +327,19 @@ export class SessionService {
     return attachments;
   }
 
-  async compact(ref: SessionRef, customInstructions?: string): Promise<CompactAccepted> {
+  async compact(ref: SessionRef, customInstructions?: string, clientRequestId?: string): Promise<CompactAccepted> {
     const active = await this.getActive(ref);
+    if (clientRequestId === undefined) return this.startCompaction(active, customInstructions);
+
+    const requestKey = `compact:${clientRequestId}`;
+    const previous = active.requestRuns.get(requestKey);
+    if (previous !== undefined) return previous;
+    const accepted = this.startCompaction(active, customInstructions);
+    this.rememberRequest(active, requestKey, accepted);
+    return accepted;
+  }
+
+  private startCompaction(active: ActiveSession, customInstructions?: string): CompactAccepted {
     if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) {
       throw new AppError("SESSION_BUSY", "Stop the current run before compacting this session", 409);
     }
@@ -329,6 +358,24 @@ export class SessionService {
     this.publishSummary(active);
     void this.executeCompaction(active, customInstructions?.trim() || undefined, run.id);
     return { accepted: true, runId: run.id };
+  }
+
+  private jarvisCompactCommand(active: ActiveSession, prompt: string): { customInstructions?: string } | undefined {
+    if (this.hasPiCommand(active, JARVIS_COMPACT_COMMAND.name)) return undefined;
+    const match = /^\/compact(?:\s+([\s\S]*))?$/.exec(prompt);
+    if (match === null) return undefined;
+    const customInstructions = match[1]?.trim();
+    return customInstructions === undefined || customInstructions === "" ? {} : { customInstructions };
+  }
+
+  private hasPiCommand(active: ActiveSession, name: string): boolean {
+    return active.session.extensionRunner.getRegisteredCommands().some((command) => command.invocationName === name)
+      || active.session.promptTemplates.some((template) => template.name === name);
+  }
+
+  private rememberRequest(active: ActiveSession, clientRequestId: string, accepted: PromptAccepted): void {
+    active.requestRuns.set(clientRequestId, accepted);
+    if (active.requestRuns.size > 48) active.requestRuns.delete(active.requestRuns.keys().next().value as string);
   }
 
   async abort(ref: SessionRef, runId?: string): Promise<void> {

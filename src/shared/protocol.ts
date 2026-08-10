@@ -39,7 +39,7 @@ export interface SessionRef {
 export interface ComposerCommand {
   name: string;
   description?: string;
-  source: "extension" | "prompt" | "skill";
+  source: "extension" | "prompt" | "skill" | "jarvis";
 }
 
 export interface WorkspaceFile {

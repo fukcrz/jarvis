@@ -78,7 +78,13 @@ export const api = {
       ...(images === undefined || images.length === 0 ? {} : { images }),
     }),
   }),
-  compact: async (ref: SessionRef, customInstructions?: string): Promise<CompactAccepted> => request(`${sessionPath(ref)}/compact`, { method: "POST", body: JSON.stringify(customInstructions === undefined ? {} : { customInstructions }) }),
+  compact: async (ref: SessionRef, customInstructions?: string, clientRequestId?: string): Promise<CompactAccepted> => request(`${sessionPath(ref)}/compact`, {
+    method: "POST",
+    body: JSON.stringify({
+      ...(customInstructions === undefined ? {} : { customInstructions }),
+      ...(clientRequestId === undefined ? {} : { clientRequestId }),
+    }),
+  }),
   abort: async (ref: SessionRef, runId?: string): Promise<void> => { await request(`${sessionPath(ref)}/abort`, { method: "POST", body: JSON.stringify(runId === undefined ? {} : { runId }) }); },
 };
 
