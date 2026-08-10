@@ -15,7 +15,7 @@ export function ThinkingSelector({ thinking, disabled, pending, onSelect }: Thin
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <Button variant="secondary" size="sm" className="thinking-selector-trigger" aria-label="Thinking level" title={`Thinking: ${thinking.current}`} disabled={disabled || pending || !selectable}>
+        <Button variant="ghost" size="sm" className="thinking-selector-trigger" aria-label="Thinking level" title={`Thinking: ${thinking.current}`} disabled={disabled || pending || !selectable}>
           <span>{thinking.current}</span>
         </Button>
       </DropdownMenu.Trigger>

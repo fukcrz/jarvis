@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdate, useCodeMirror } from "@uiw/react-codemirror";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { ArrowUp, Command, FileCode2, ImagePlus, LoaderCircle, Square, X } from "lucide-react";
+import { ArrowUp, Command, FileCode2, LoaderCircle, Plus, Square, X } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, WorkspaceFile } from "../../shared/protocol";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
 import { Button } from "./ui/button";
@@ -253,7 +253,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
         <div className="composer-footer">
           <div className="composer-options">
             <Tooltip label={attachDisabled ? "当前模型不支持图片" : busy ? "运行中不能添加图片" : "添加图片（支持 Ctrl+V 粘贴）"}>
-              <Button className="composer-attach" size="icon" aria-label="添加图片" disabled={busy || attachDisabled} onClick={openAttach}><ImagePlus size={15} /></Button>
+              <Button variant="ghost" className="composer-attach" size="icon" aria-label="添加图片" disabled={busy || attachDisabled} onClick={openAttach}><Plus size={16} /></Button>
             </Tooltip>
             {controls}
           </div>

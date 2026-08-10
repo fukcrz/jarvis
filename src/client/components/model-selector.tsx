@@ -19,7 +19,7 @@ export function ModelSelector({ model, disabled, pending, onSelect }: ModelSelec
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <Button variant="secondary" size="sm" className="model-selector-trigger" aria-label="选择模型" title={current === undefined ? "选择模型" : displayModelName(current.name)} disabled={disabled || pending || model.available.length === 0}>
+        <Button variant="ghost" size="sm" className="model-selector-trigger" aria-label="选择模型" title={current === undefined ? "选择模型" : displayModelName(current.name)} disabled={disabled || pending || model.available.length === 0}>
           {pending ? <LoaderCircle className="spin" size={14} /> : null}
           <span>{current === undefined ? "选择模型" : displayModelName(current.name)}</span>
           <ChevronDown size={14} />
