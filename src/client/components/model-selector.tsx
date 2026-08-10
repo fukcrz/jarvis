@@ -1,8 +1,11 @@
+import { useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, LoaderCircle } from "lucide-react";
 import type { ModelDescriptor, SessionModelSnapshot } from "../../shared/protocol";
+import { useIsMobile } from "../hooks/use-is-mobile";
 import { displayModelName } from "../model-display";
 import { Button } from "./ui/button";
+import { Dialog, DialogContent } from "./ui/dialog";
 
 interface ModelSelectorProps {
   model: SessionModelSnapshot;
@@ -15,16 +18,43 @@ export function ModelSelector({ model, disabled, pending, onSelect }: ModelSelec
   const current = model.current;
   const grouped = groupByProvider(model.available);
   const currentKey = current === undefined ? undefined : modelKey(current);
+  const isMobile = useIsMobile();
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const triggerLabel = current === undefined ? "选择模型" : displayModelName(current.name);
+
+  const trigger = (
+    <Button variant="ghost" size="sm" className="model-selector-trigger" aria-label="选择模型" title={triggerLabel} disabled={disabled || pending || model.available.length === 0} onClick={isMobile ? () => setSheetOpen(true) : undefined}>
+      {pending ? <LoaderCircle className="spin" size={14} /> : null}
+      <span>{triggerLabel}</span>
+      <ChevronDown size={14} />
+    </Button>
+  );
+
+  if (isMobile) {
+    return (
+      <Dialog open={sheetOpen} onOpenChange={setSheetOpen}>
+        {trigger}
+        <DialogContent className="selector-sheet" title="选择模型">
+          <div className="selector-sheet-list">
+            {grouped.map(([provider, models]) => <div className="selector-sheet-group" key={provider}>
+              <div className="selector-sheet-provider">{provider}</div>
+              {models.map((candidate) => {
+                const selected = modelKey(candidate) === currentKey;
+                return <button type="button" key={modelKey(candidate)} className={`selector-sheet-item ${selected ? "selected" : ""}`} disabled={selected} onClick={() => { onSelect(candidate); setSheetOpen(false); }}>
+                  <span className="selector-sheet-check">{selected ? <Check size={15} /> : null}</span>
+                  <span>{displayModelName(candidate.name)}</span>
+                </button>;
+              })}
+            </div>)}
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <Button variant="ghost" size="sm" className="model-selector-trigger" aria-label="选择模型" title={current === undefined ? "选择模型" : displayModelName(current.name)} disabled={disabled || pending || model.available.length === 0}>
-          {pending ? <LoaderCircle className="spin" size={14} /> : null}
-          <span>{current === undefined ? "选择模型" : displayModelName(current.name)}</span>
-          <ChevronDown size={14} />
-        </Button>
-      </DropdownMenu.Trigger>
+      <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content className="model-menu" sideOffset={8} align="end">
           {grouped.map(([provider, models], groupIndex) => <div className="model-group" key={provider}>

@@ -279,3 +279,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .message-body.user .message-images a { display: block; line-height: 0; }
 .message-body.user .message-images img { display: block; max-width: min(320px, 100%); max-height: 220px; border: 1px solid #3d3a46; border-radius: 8px; object-fit: contain; background: #141418; }
 .message-body.user .message-images a:active img { transform: scale(.98); }
+
+/* --- Mobile selector bottom sheet --- */
+.selector-sheet-list { display: grid; gap: 2px; max-height: min(56dvh, 520px); overflow-y: auto; }
+.selector-sheet-group + .selector-sheet-group { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+.selector-sheet-provider { padding: 4px 6px; color: var(--subtle); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.selector-sheet-item { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; width: 100%; gap: 8px; border: 0; border-radius: 6px; background: transparent; padding: 12px 8px; color: var(--ink); font-size: 14px; text-align: left; }
+.selector-sheet-item:active { background: var(--surface-hover); }
+.selector-sheet-item:disabled { color: var(--accent-strong); }
+.selector-sheet-check { display: grid; min-height: 15px; color: var(--accent); }
+@media (max-width: 760px) {
+  .selector-sheet.dialog-content { top: auto; left: 0; right: 0; bottom: 0; width: 100vw; max-width: none; max-height: min(72dvh, 640px); transform: none; border-radius: 14px 14px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); }
+  .selector-sheet.dialog-content .dialog-header { padding: 0 4px 2px; }
+}
