@@ -239,7 +239,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-page-header h1 { margin: 0; color: var(--ink); font-size: 18px; font-weight: 650; }
 .mobile-sessions-header { gap: 8px; }
 .mobile-page-title { min-width: 0; overflow: hidden; border: 0; background: transparent; padding: 7px 4px; color: var(--ink); font-size: 17px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.mobile-page-list { min-height: 0; overflow-y: auto; padding: 8px 12px 24px; }
+.mobile-page-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px; }
 .mobile-session-list { padding-top: 0; }
 .mobile-project-row, .mobile-session-row { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid rgb(48 48 54 / .7); }
 .mobile-project-select, .mobile-session-select { display: flex; align-items: center; min-width: 0; flex: 1; gap: 11px; border: 0; background: transparent; padding: 15px 8px; color: var(--ink); text-align: left; }
