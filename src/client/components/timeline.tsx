@@ -85,12 +85,14 @@ const MessageItem = memo(function MessageItem({ item, streaming }: { item: Extra
   };
   return (
     <article className={`message-row ${item.role} ${streaming ? "streaming" : ""}`}>
-      <div className={`message-content ${streaming ? "streaming" : ""}`}>
-        <MarkdownMessage text={item.text} streaming={streaming} />
+      <div className={`message-body ${item.role}`}>
+        <div className={`message-content ${streaming ? "streaming" : ""}`}>
+          <MarkdownMessage text={item.text} streaming={streaming} />
+        </div>
+        <Tooltip label={copied ? "已复制" : "复制消息"}>
+          <button type="button" className="message-copy" aria-label="复制消息" onClick={() => { void copy(); }}><Clipboard size={14} /></button>
+        </Tooltip>
       </div>
-      <Tooltip label={copied ? "已复制" : "复制消息"}>
-        <button type="button" className="message-copy" aria-label="复制消息" onClick={() => { void copy(); }}><Clipboard size={14} /></button>
-      </Tooltip>
     </article>
   );
 });
@@ -135,6 +137,7 @@ function renderTimelineItems(items: TimelineItem[], streamingMessageId: string |
 
 function ActivityGroup({ items, active, startedAt, stopping }: { items: ToolTimelineItem[]; active: boolean; startedAt?: string; stopping: boolean }) {
   const [open, setOpen] = useState(false);
+  const [openToolId, setOpenToolId] = useState<string>();
   const [now, setNow] = useState(() => Date.now());
   const state = activityState(items, active);
   const summary = activitySummary(items, state, stopping);
@@ -155,26 +158,26 @@ function ActivityGroup({ items, active, startedAt, stopping }: { items: ToolTime
         {elapsed === undefined ? null : <time className="activity-elapsed">{elapsed}</time>}
         <ChevronDown className={open ? "chevron-open" : ""} size={15} />
       </button>
-      {open ? <div className="activity-items">{items.map((item) => <ToolItem key={item.id} item={item} />)}</div> : null}
+      {open ? <div className="activity-items">{items.map((item) => <ToolItem key={item.id} item={item} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
     </article>
   );
 }
 
-function ToolItem({ item }: { item: ToolTimelineItem }) {
-  return item.name === "bash" ? <CommandToolItem item={item} /> : <GenericToolItem item={item} />;
+function ToolItem({ item, open, onToggle }: { item: ToolTimelineItem; open: boolean; onToggle: () => void }) {
+  return item.name === "bash"
+    ? <CommandToolItem item={item} open={open} onToggle={onToggle} />
+    : <GenericToolItem item={item} open={open} onToggle={onToggle} />;
 }
 
 function activityState(items: ToolTimelineItem[], active: boolean): ToolState {
   // The group owns the visual running state. Individual fast tools may settle
   // while the next tool is being added, but the icon should not oscillate.
   if (active) return "running";
-  if (items.some((item) => item.state === "failed")) return "failed";
-  if (items.every((item) => item.state === "cancelled")) return "cancelled";
+  if (items.length > 0 && items.every((item) => item.state === "cancelled")) return "cancelled";
   return "completed";
 }
 
 function activitySummary(items: ToolTimelineItem[], state: ToolState, stopping: boolean): { label: string; detail?: string } {
-  const failed = items.filter((item) => item.state === "failed").length;
   if (state === "running") {
     const current = [...items].reverse().find((item) => item.state === "running" || item.state === "queued") ?? items.at(-1);
     return {
@@ -182,16 +185,12 @@ function activitySummary(items: ToolTimelineItem[], state: ToolState, stopping: 
       ...(current === undefined ? {} : { detail: toolActivityLabel(current) }),
     };
   }
-  if (failed > 0) return { label: `${failed} 项操作失败`, detail: `共 ${items.length} 项` };
   if (state === "cancelled") return { label: `已停止 ${items.length} 项操作` };
-  return { label: `已完成 ${items.length} 项操作` };
+  return { label: `已执行 ${items.length} 项操作` };
 }
 
 function toolActivityLabel(item: ToolTimelineItem): string {
   const target = compactTarget(item.target);
-  if (item.state === "failed") {
-    return item.name === "bash" ? `执行命令失败${item.exitCode === undefined ? "" : ` · exit ${item.exitCode}`}` : `${item.title}失败`;
-  }
   if (item.name === "bash") return `执行了 ${compactCommand(item.inputPreview ?? item.target)}`;
   if (item.name === "read") return `读取了 ${target || "文件"}`;
   if (item.name === "write") return `写入了 ${target || "文件"}`;
@@ -214,53 +213,54 @@ function compactCommand(value?: string): string {
   return normalized.length > 72 ? `${normalized.slice(0, 69)}…` : normalized;
 }
 
-function GenericToolItem({ item }: { item: ToolTimelineItem }) {
-  const [open, setOpen] = useState(false);
+function GenericToolItem({ item, open, onToggle }: { item: ToolTimelineItem; open: boolean; onToggle: () => void }) {
   const output = item.error ?? item.output;
-  const copy = async () => { if (output !== undefined) await navigator.clipboard.writeText(output); };
   return (
-    <article className={`tool-item ${item.state}`}>
-      <button className="tool-summary" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-        <span className="tool-state-icon">{toolIcon(item.state)}</span>
-        <span className="tool-title">{item.title}</span>
-        {item.target === undefined ? null : <span className="tool-target">{item.target}</span>}
-        <span className="tool-state-label">{toolLabel(item.state)}</span>
-        <ChevronDown className={open ? "chevron-open" : ""} size={16} />
+    <article className={`tool-item tool-list-item ${item.state}`}>
+      <button className="tool-summary" type="button" onClick={onToggle} aria-expanded={open}>
+        <span className="tool-state-icon">{subtleToolIcon(item.state)}</span>
+        <span className="tool-title">{toolActivityLabel(item)}</span>
+        {item.durationMs === undefined ? null : <span className="tool-duration">{formatDuration(item.durationMs)}</span>}
+        {hasToolDetails(item) ? <ChevronDown className={open ? "chevron-open" : ""} size={14} /> : null}
       </button>
-      {open ? <div className="tool-details">
-        {item.inputPreview === undefined ? null : <div><span className="detail-label">输入</span><pre>{item.inputPreview}</pre></div>}
-        {output === undefined ? null : <div><div className="detail-heading"><span className="detail-label">{item.error === undefined ? "输出" : "错误"}</span><Tooltip label="复制输出"><button className="copy-output" type="button" aria-label="复制输出" onClick={() => { void copy(); }}><Clipboard size={13} /></button></Tooltip></div><pre className={item.error === undefined ? "" : "tool-error-output"}>{output}</pre></div>}
+      {open ? <div className="tool-details inline-details">
+        {item.name === "read" ? null : item.inputPreview === undefined ? null : <div className="detail-input"><span className="detail-label">输入</span><code>{item.inputPreview}</code></div>}
+        {output === undefined ? null : <div><pre className={item.error === undefined ? "" : "tool-error-output"}>{output}</pre></div>}
       </div> : null}
     </article>
   );
 }
 
-function CommandToolItem({ item }: { item: ToolTimelineItem }) {
-  const [open, setOpen] = useState(false);
+function CommandToolItem({ item, open, onToggle }: { item: ToolTimelineItem; open: boolean; onToggle: () => void }) {
   const command = item.inputPreview ?? item.target ?? "";
   const output = item.error ?? item.output;
-  const copy = async (value: string | undefined) => { if (value !== undefined) await navigator.clipboard.writeText(value); };
   return (
-    <article className={`tool-item command-item ${item.state}`}>
-      <button className="tool-summary command-summary" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-        <span className="tool-state-icon">{toolIcon(item.state)}</span>
-        <Terminal size={14} className="command-terminal-icon" />
-        <span className="tool-target">{command || "未提供命令"}</span>
+    <article className={`tool-item tool-list-item command-item ${item.state}`}>
+      <button className="tool-summary command-summary" type="button" onClick={onToggle} aria-expanded={open}>
+        <span className="tool-state-icon">{subtleToolIcon(item.state)}</span>
+        <Terminal size={13} className="command-terminal-icon" />
+        <span className="tool-target">{compactCommand(command)}</span>
         {item.durationMs === undefined ? null : <span className="command-duration">{formatDuration(item.durationMs)}</span>}
-        {item.exitCode === undefined ? null : <span className="command-exit">exit {item.exitCode}</span>}
-        <span className="tool-state-label">{toolLabel(item.state)}</span>
-        <ChevronDown className={open ? "chevron-open" : ""} size={16} />
+        {hasToolDetails(item) ? <ChevronDown className={open ? "chevron-open" : ""} size={14} /> : null}
       </button>
-      {open ? <div className="tool-details command-details">
-        <div>
-          <div className="detail-heading"><span className="detail-label">命令</span><Tooltip label="复制命令"><button className="copy-output" type="button" aria-label="复制命令" onClick={() => { void copy(command); }}><Clipboard size={13} /></button></Tooltip></div>
-          <pre className="command-input">$ {command || "(empty)"}</pre>
-        </div>
-        {item.cwd === undefined ? null : <div><span className="detail-label">工作目录</span><pre>{item.cwd}</pre></div>}
-        {output === undefined ? null : <div><div className="detail-heading"><span className="detail-label">{item.error === undefined ? "输出" : "错误"}{item.truncated ? " · 已截断" : ""}</span><Tooltip label="复制输出"><button className="copy-output" type="button" aria-label="复制输出" onClick={() => { void copy(output); }}><Clipboard size={13} /></button></Tooltip></div><pre className={item.error === undefined ? "command-output" : "tool-error-output command-output"}>{output}</pre></div>}
+      {open ? <div className="tool-details command-details inline-details">
+        <div className="detail-command-line"><code>$ {command || "(empty)"}</code></div>
+        {item.cwd === undefined ? null : <div className="detail-input"><span className="detail-label">工作目录</span><code>{item.cwd}</code></div>}
+        {output === undefined ? null : <div><pre className={item.error === undefined ? "command-output" : "tool-error-output command-output"}>{output}</pre></div>}
       </div> : null}
     </article>
   );
+}
+
+function hasToolDetails(item: ToolTimelineItem): boolean {
+  return item.inputPreview !== undefined || item.output !== undefined || item.error !== undefined || item.name === "bash" && item.cwd !== undefined;
+}
+
+function subtleToolIcon(state: ToolTimelineItem["state"]) {
+  if (state === "running" || state === "queued") return <LoaderCircle size={14} className="spin" />;
+  if (state === "failed") return <span className="tool-subtle-failure" aria-label="操作未完成">!</span>;
+  if (state === "cancelled") return <span className="tool-subtle-failure" aria-label="操作已停止">·</span>;
+  return <Check size={14} />;
 }
 
 function formatDuration(durationMs: number): string {
@@ -274,12 +274,4 @@ function toolIcon(state: ToolTimelineItem["state"]) {
   if (state === "failed") return <XCircle size={15} />;
   if (state === "cancelled") return <RotateCcw size={15} />;
   return <Clock3 size={15} />;
-}
-
-function toolLabel(state: ToolTimelineItem["state"]): string {
-  if (state === "running") return "执行中";
-  if (state === "completed") return "完成";
-  if (state === "failed") return "失败";
-  if (state === "cancelled") return "已停止";
-  return "排队中";
 }
