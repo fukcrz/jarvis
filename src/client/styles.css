@@ -135,6 +135,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .activity-items .tool-list-item .tool-target { color: inherit; font-size: 11px; }
 .activity-items .tool-list-item .tool-duration { color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
 .activity-items .tool-list-item .tool-details { margin: 0; border: 0; border-top: 1px solid rgb(255 255 255 / .07); border-radius: 0; background: transparent; padding: 7px 7px 10px 27px; }
+.activity-items, .activity-items .tool-list-item, .activity-items .tool-list-item .tool-details, .activity-items .tool-list-item .inline-details, .activity-items .tool-list-item .tool-details > div, .activity-items .tool-list-item .detail-command-line, .activity-items .tool-list-item .detail-input { min-width: 0; max-width: 100%; }
+.activity-items .tool-list-item .tool-details { overflow: hidden; }
 .activity-items .tool-list-item .inline-details { display: grid; gap: 6px; }
 .activity-items .tool-list-item .tool-details pre { max-height: 260px; }
 .activity-items .tool-list-item .command-details { background: transparent; }

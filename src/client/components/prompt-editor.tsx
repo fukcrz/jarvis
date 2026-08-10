@@ -8,7 +8,9 @@ import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
 const basicSetup: BasicSetupOptions = { lineNumbers: false, foldGutter: false, highlightActiveLine: false };
-const editorExtensions: Extension[] = [];
+// Module-level so the array identity never changes; a new identity per render
+// would make useCodeMirror reconfigure (and effectively reset) the editor.
+const editorExtensions: Extension[] = [CodeMirrorView.lineWrapping];
 const MAX_SUGGESTIONS = 8;
 
 type Completion =
@@ -124,18 +126,24 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
       });
   }, [onAttachmentError, onAttachmentsChange]);
 
-  const pasteHandler = useCallback((event: ClipboardEvent) => {
-    const files = Array.from(event.clipboardData?.items ?? [])
-      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null);
-    if (files.length === 0) return false;
-    event.preventDefault();
-    handleFiles(files);
-    return true;
-  }, [handleFiles]);
+  const handleFilesRef = useRef(handleFiles);
+  useEffect(() => { handleFilesRef.current = handleFiles; }, [handleFiles]);
 
-  const pasteExtension = useMemo(() => CodeMirrorView.domEventHandlers({ paste: pasteHandler }), [pasteHandler]);
+  // Created once with an empty dependency list: the handler reads the latest
+  // handleFiles through a ref so the paste extension stays referentially
+  // stable and useCodeMirror never reconfigures the editor mid-typing.
+  const pasteExtension = useMemo(() => CodeMirrorView.domEventHandlers({
+    paste: (event) => {
+      const files = Array.from(event.clipboardData?.items ?? [])
+        .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null);
+      if (files.length === 0) return false;
+      event.preventDefault();
+      handleFilesRef.current(files);
+      return true;
+    },
+  }), []);
   const extensions = useMemo(() => [...editorExtensions, pasteExtension], [pasteExtension]);
 
   const { setContainer } = useCodeMirror({
