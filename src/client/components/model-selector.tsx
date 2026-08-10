@@ -1,6 +1,6 @@
 import { useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Check, ChevronDown, LoaderCircle } from "lucide-react";
+import { Check, LoaderCircle } from "lucide-react";
 import type { ModelDescriptor, SessionModelSnapshot } from "../../shared/protocol";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { displayModelName } from "../model-display";
@@ -26,7 +26,6 @@ export function ModelSelector({ model, disabled, pending, onSelect }: ModelSelec
     <Button variant="ghost" size="sm" className="model-selector-trigger" aria-label="选择模型" title={triggerLabel} disabled={disabled || pending || model.available.length === 0} onClick={isMobile ? () => setSheetOpen(true) : undefined}>
       {pending ? <LoaderCircle className="spin" size={14} /> : null}
       <span>{triggerLabel}</span>
-      <ChevronDown size={14} />
     </Button>
   );
 

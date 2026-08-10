@@ -30,7 +30,6 @@ export function ContextButton({ contextUsage, disabled, busy, onCompact }: Conte
       <Tooltip label={label}>
         <Button variant="ghost" size="icon" className={`context-ring ${tone}`} aria-label="上下文详情" disabled={disabled} onClick={() => setOpen(true)}>
           {percent === null ? <Archive size={14} /> : <Ring percent={percent} />}
-          {percent === null ? null : <span className="context-ring-label">{Math.round(percent)}</span>}
         </Button>
       </Tooltip>
       <DialogContent className="selector-sheet context-dialog" title="上下文">

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Check, ChevronDown, LoaderCircle } from "lucide-react";
+import { Check, LoaderCircle } from "lucide-react";
 import type { SessionThinkingSnapshot, ThinkingLevel } from "../../shared/protocol";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { Button } from "./ui/button";
@@ -22,7 +22,6 @@ export function ThinkingSelector({ thinking, disabled, pending, onSelect }: Thin
     <Button variant="ghost" size="sm" className="thinking-selector-trigger" aria-label="Thinking level" title={`Thinking: ${thinking.current}`} disabled={disabled || pending || !selectable} onClick={isMobile ? () => setSheetOpen(true) : undefined}>
       {pending ? <LoaderCircle className="spin" size={14} /> : null}
       <span>{thinking.current}</span>
-      <ChevronDown size={14} />
     </Button>
   );
 
