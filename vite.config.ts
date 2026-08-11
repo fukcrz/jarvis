@@ -17,7 +17,7 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:39126",
+        target: `http://127.0.0.1:${process.env["JARVIS_API_PORT"] ?? "39126"}`, 
         changeOrigin: true,
         ws: true,
       },
