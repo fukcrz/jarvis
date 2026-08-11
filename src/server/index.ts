@@ -2,7 +2,10 @@ import { buildApp } from "./app.js";
 
 const production = process.env["NODE_ENV"] === "production";
 const app = await buildApp({ serveStatic: production });
-const port = Number(process.env["PORT"] ?? 39126);
+// Development defaults to a fixed port (39130) so it never collides with the
+// production default (39126). Override either with PORT.
+const defaultPort = production ? 39126 : 39130;
+const port = Number(process.env["PORT"] ?? defaultPort);
 // Listen on all interfaces (LAN access) in every mode. Override with HOST if needed.
 const host = process.env["HOST"] ?? "0.0.0.0";
 
