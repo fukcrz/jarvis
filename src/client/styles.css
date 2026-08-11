@@ -330,7 +330,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .composer-attachment.preparing { display: grid; place-items: center; color: var(--muted); }
 .button.composer-attach { width: 27px; height: 27px; color: var(--subtle); }.button.composer-cancel-edit { width: 27px; height: 27px; color: var(--subtle); }.button.composer-cancel-edit:hover { color: var(--ink); }
 .button.composer-attach:hover:not(:disabled) { color: var(--ink); }
-.button.composer-followup { width: 27px; height: 27px; color: #b08df7; }.button.composer-followup:hover:not(:disabled) { color: #cbaaff; }.button.composer-followup:disabled { color: #4f4f58; }
 .composer-file-input { display: none; }
 /* --- 折叠态（移动端：其他输入框聚焦时输入栏折叠为紧凑按钮） --- */
 .composer.composer-collapsed .composer-editor { display: none; }

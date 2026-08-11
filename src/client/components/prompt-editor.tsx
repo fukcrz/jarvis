@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdate, useCodeMirror } from "@uiw/react-codemirror";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { ArrowUp, Command, FileCode2, ListOrdered, LoaderCircle, MessageSquare, Plus, Puzzle, RotateCcw, Square, X, XCircle } from "lucide-react";
+import { ArrowUp, Command, FileCode2, LoaderCircle, MessageSquare, Plus, Puzzle, RotateCcw, Square, X, XCircle } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionQueue, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
@@ -342,14 +342,14 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
             {Object.entries(extensionStatuses).map(([key, text]) => <span className="composer-extension-status" key={key} title={key}><Puzzle size={11} /><span>{text}</span></span>)}
           </div>}
           {onCancelEdit === undefined ? null : <Tooltip label="取消编辑"><Button variant="ghost" className="composer-cancel-edit" size="icon" aria-label="取消编辑" onClick={onCancelEdit}><X size={15} /></Button></Tooltip>}
-          {busy ? (
-            <>
-              <Tooltip label="排队为后续消息（完成后投递）"><Button className="composer-followup" size="icon" aria-label="排队为后续消息" disabled={!canSend} onClick={() => { void submit("followUp"); }}><ListOrdered size={17} /></Button></Tooltip>
-              <Tooltip label="排队发送（当前回合工具调用后投递）"><Button className="composer-send" size="icon" aria-label="排队发送消息" disabled={!canSend} onClick={() => { void submit("steer"); }}><ArrowUp size={17} /></Button></Tooltip>
-              <Tooltip label="停止当前执行"><Button className="composer-stop" size="icon" aria-label="停止当前执行" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
-            </>
+          {canSend ? (
+            <Tooltip label={busy ? "排队发送（当前回合工具调用后投递）" : "发送消息"}>
+              <Button className="composer-send" size="icon" aria-label={busy ? "排队发送消息" : "发送消息"} onClick={() => { void submit(busy ? "steer" : undefined); }}><ArrowUp size={17} /></Button>
+            </Tooltip>
+          ) : busy ? (
+            <Tooltip label="停止当前执行"><Button className="composer-stop" size="icon" aria-label="停止当前执行" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
           ) : (
-            <Tooltip label="发送消息"><Button className="composer-send" size="icon" aria-label="发送消息" onClick={() => { void submit(); }} disabled={!canSend}><ArrowUp size={17} /></Button></Tooltip>
+            <Tooltip label="发送消息"><Button className="composer-send" size="icon" aria-label="发送消息" disabled><ArrowUp size={17} /></Button></Tooltip>
           )}
         </div>
         <QueueBar queue={queue} onDequeueAll={onDequeueAll} onRemoveQueued={onRemoveQueued} />
