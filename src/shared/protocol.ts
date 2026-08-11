@@ -55,6 +55,8 @@ export interface ModelDescriptor {
   reasoning: boolean;
   /** Whether the model accepts image inputs. */
   vision: boolean;
+  /** Whether the model is inside the enabled scope (enabledModels); false = available but not enabled. */
+  inScope: boolean;
 }
 
 export interface SessionModelSnapshot {

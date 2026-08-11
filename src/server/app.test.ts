@@ -188,6 +188,42 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(response.json()).toMatchObject({ commands: expect.arrayContaining([expect.objectContaining({ name: "compact" })]) });
   });
 
+  it("marks out-of-scope models and still allows selecting them", async () => {
+    const agentDir = join(jarvisHome, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: ["test-a/*"] }));
+    await writeFile(join(agentDir, "models.json"), JSON.stringify({
+      providers: {
+        "test-a": { baseUrl: "http://localhost:1/v1", api: "openai-completions", apiKey: "test-key", models: [{ id: "alpha" }] },
+        "test-b": { baseUrl: "http://localhost:1/v1", api: "openai-completions", apiKey: "test-key", models: [{ id: "beta" }] },
+      },
+    }));
+
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "model-scope-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const baseUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}`;
+
+    const runtime = await server.inject({ method: "GET", url: `${baseUrl}/runtime` });
+    expect(runtime.statusCode).toBe(200);
+    const available = runtime.json<{ model: { available: Array<{ provider: string; id: string; inScope: boolean }> } }>().model.available;
+    expect(available).toEqual(expect.arrayContaining([
+      { provider: "test-a", id: "alpha", name: "alpha", reasoning: false, vision: false, inScope: true },
+      { provider: "test-b", id: "beta", name: "beta", reasoning: false, vision: false, inScope: false },
+    ]));
+
+    // Selecting a model outside the enabled scope is the escape hatch: Pi's
+    // setModel only checks auth, scope only limits cycling/defaults.
+    const switched = await server.inject({ method: "PUT", url: `${baseUrl}/model`, payload: { provider: "test-b", modelId: "beta" } });
+    expect(switched.statusCode).toBe(200);
+    expect(switched.json()).toMatchObject({ model: { provider: "test-b", id: "beta", inScope: false } });
+
+    const after = await server.inject({ method: "GET", url: `${baseUrl}/runtime` });
+    expect(after.json()).toMatchObject({ model: { current: { provider: "test-b", id: "beta", inScope: false } } });
+  });
+
   it("starts a manual compaction once for a repeated direct request", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "manual-compact-workspace");

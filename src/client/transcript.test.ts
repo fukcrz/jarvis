@@ -35,7 +35,7 @@ describe("transcript reducer", () => {
     }, {
       seq: 4,
       status: { sessionId: "session", runState: "running", activeRun: { id: "run", startedAt: "2026-08-09T00:00:00.000Z" } },
-      model: { current: { provider: "provider", id: "model-a", name: "Model A", reasoning: true, vision: false }, available: [{ provider: "provider", id: "model-a", name: "Model A", reasoning: true, vision: false }, { provider: "provider", id: "model-b", name: "Model B", reasoning: false, vision: false }] },
+      model: { current: { provider: "provider", id: "model-a", name: "Model A", reasoning: true, vision: false, inScope: true }, available: [{ provider: "provider", id: "model-a", name: "Model A", reasoning: true, vision: false, inScope: true }, { provider: "provider", id: "model-b", name: "Model B", reasoning: false, vision: false, inScope: true }] },
       thinking: { current: "medium", available: ["off", "low", "medium", "high"] },
       liveMessages: [],
       activeTools: [],
@@ -150,13 +150,13 @@ describe("transcript reducer", () => {
   });
 
   it("updates the selected model from a server event", () => {
-    const result = applySessionEvents({ ...emptyTranscript, model: { available: [{ provider: "provider", id: "first", name: "First", reasoning: false, vision: false }, { provider: "provider", id: "second", name: "Second", reasoning: true, vision: false }] } }, [{
+    const result = applySessionEvents({ ...emptyTranscript, model: { available: [{ provider: "provider", id: "first", name: "First", reasoning: false, vision: false, inScope: true }, { provider: "provider", id: "second", name: "Second", reasoning: true, vision: false, inScope: true }] } }, [{
       version: 1,
       sessionId: "session",
       seq: 1,
       emittedAt: "2026-08-09T00:00:00.000Z",
       type: "model.changed",
-      payload: { model: { current: { provider: "provider", id: "second", name: "Second", reasoning: true, vision: false }, available: [{ provider: "provider", id: "first", name: "First", reasoning: false, vision: false }, { provider: "provider", id: "second", name: "Second", reasoning: true, vision: false }] } },
+      payload: { model: { current: { provider: "provider", id: "second", name: "Second", reasoning: true, vision: false, inScope: true }, available: [{ provider: "provider", id: "first", name: "First", reasoning: false, vision: false, inScope: true }, { provider: "provider", id: "second", name: "Second", reasoning: true, vision: false, inScope: true }] } },
     }]);
 
     expect(result.model.current).toMatchObject({ id: "second", name: "Second" });

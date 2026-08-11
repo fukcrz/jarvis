@@ -376,7 +376,7 @@ function recordModelSnapshot(value: unknown): SessionModelSnapshot | undefined {
 
 function recordModel(value: unknown): ModelDescriptor | undefined {
   if (!isRecord(value) || typeof value["provider"] !== "string" || typeof value["id"] !== "string" || typeof value["name"] !== "string" || typeof value["reasoning"] !== "boolean") return undefined;
-  return { provider: value["provider"], id: value["id"], name: value["name"], reasoning: value["reasoning"], vision: value["vision"] === true };
+  return { provider: value["provider"], id: value["id"], name: value["name"], reasoning: value["reasoning"], vision: value["vision"] === true, inScope: value["inScope"] === true };
 }
 
 function recordThinkingSnapshot(value: unknown): SessionThinkingSnapshot | undefined {

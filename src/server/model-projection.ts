@@ -1,21 +1,21 @@
 import type { ModelDescriptor, SessionModelSnapshot } from "../shared/protocol.js";
 
 /** Project Pi model objects into the stable browser-facing protocol. */
-export function projectModelSnapshot(current: unknown, available: readonly unknown[]): SessionModelSnapshot {
+export function projectModelSnapshot(current: unknown, available: readonly unknown[], inScopeKeys?: ReadonlySet<string>): SessionModelSnapshot {
   const projected = new Map<string, ModelDescriptor>();
   for (const model of available) {
-    const descriptor = projectModel(model);
+    const descriptor = projectModel(model, inScopeKeys);
     if (descriptor !== undefined && !projected.has(modelKey(descriptor))) projected.set(modelKey(descriptor), descriptor);
   }
 
-  const selected = projectModel(current);
+  const selected = projectModel(current, inScopeKeys);
   return {
     ...(selected === undefined ? {} : { current: selected }),
     available: [...projected.values()].sort(compareModels),
   };
 }
 
-function projectModel(value: unknown): ModelDescriptor | undefined {
+function projectModel(value: unknown, inScopeKeys?: ReadonlySet<string>): ModelDescriptor | undefined {
   if (!isRecord(value)) return undefined;
   const provider = stringValue(value["provider"]);
   const id = stringValue(value["id"]);
@@ -26,6 +26,7 @@ function projectModel(value: unknown): ModelDescriptor | undefined {
     name: stringValue(value["name"]) || id,
     reasoning: value["reasoning"] === true,
     vision: Array.isArray(value["input"]) && value["input"].includes("image"),
+    inScope: inScopeKeys === undefined ? true : inScopeKeys.has(`${provider}\u0000${id}`),
   };
 }
 

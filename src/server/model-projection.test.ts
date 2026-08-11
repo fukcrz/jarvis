@@ -14,11 +14,27 @@ describe("projectModelSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      current: { provider: "relay", id: "terra", name: "Terra", reasoning: true, vision: false },
+      current: { provider: "relay", id: "terra", name: "Terra", reasoning: true, vision: false, inScope: true },
       available: [
-        { provider: "deepseek", id: "pro", name: "Pro", reasoning: true, vision: false },
-        { provider: "relay", id: "terra", name: "Terra", reasoning: true, vision: false },
+        { provider: "deepseek", id: "pro", name: "Pro", reasoning: true, vision: false, inScope: true },
+        { provider: "relay", id: "terra", name: "Terra", reasoning: true, vision: false, inScope: true },
       ],
     });
+  });
+
+  it("marks models outside the enabled scope as inScope: false", () => {
+    const snapshot = projectModelSnapshot(
+      { provider: "deepseek", id: "pro", name: "Pro", reasoning: true },
+      [
+        { provider: "deepseek", id: "pro", name: "Pro", reasoning: true },
+        { provider: "relay", id: "terra", name: "Terra", reasoning: true },
+      ],
+      new Set(["deepseek\u0000pro"]),
+    );
+
+    expect(snapshot.available).toEqual([
+      { provider: "deepseek", id: "pro", name: "Pro", reasoning: true, vision: false, inScope: true },
+      { provider: "relay", id: "terra", name: "Terra", reasoning: true, vision: false, inScope: false },
+    ]);
   });
 });

@@ -322,11 +322,10 @@ export class SessionService {
     active.modelSwitching = true;
     try {
       const available = await this.availableModels(active.modelRuntime);
-      const selectable = this.modelsInScope(active, available);
-      const model = selectable.find((candidate) => candidate.provider === provider && candidate.id === modelId);
+      const model = available.find((candidate) => candidate.provider === provider && candidate.id === modelId);
       if (model === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "This model is not available for the current Pi profile", 404);
 
-      const snapshot = projectModelSnapshot(active.session.model, selectable);
+      const snapshot = projectModelSnapshot(active.session.model, available, this.inScopeKeys(active));
       const previousThinking = this.thinkingSnapshot(active);
       if (active.session.model?.provider === provider && active.session.model?.id === modelId) {
         if (snapshot.current === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "Pi did not select the requested model", 409);
@@ -335,7 +334,7 @@ export class SessionService {
 
       await active.session.setModel(model);
       active.updatedAt = new Date().toISOString();
-      const updated = projectModelSnapshot(active.session.model, selectable);
+      const updated = projectModelSnapshot(active.session.model, available, this.inScopeKeys(active));
       const updatedThinking = this.thinkingSnapshot(active);
       if (updated.current === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "Pi did not select the requested model", 409);
       this.events.publishSession(active.ref, { type: "model.changed", payload: { model: updated } });
@@ -878,14 +877,15 @@ export class SessionService {
   }
 
   private modelSnapshot(active: ActiveSession) {
-    return projectModelSnapshot(active.session.model, this.modelsInScope(active, active.modelRuntime.getAvailableSnapshot()));
+    // Mark instead of filter: the model selector keeps the enabled scope by
+    // default, but a "show all" toggle can surface every available model.
+    return projectModelSnapshot(active.session.model, active.modelRuntime.getAvailableSnapshot(), this.inScopeKeys(active));
   }
 
   /** Pi's `enabledModels` becomes `session.scopedModels`; an empty scope means all models. */
-  private modelsInScope<T extends { provider: string; id: string }>(active: ActiveSession, models: readonly T[]): T[] {
-    if (active.session.scopedModels.length === 0) return [...models];
-    const scoped = new Set(active.session.scopedModels.map(({ model }) => `${model.provider}\u0000${model.id}`));
-    return models.filter((model) => scoped.has(`${model.provider}\u0000${model.id}`));
+  private inScopeKeys(active: ActiveSession): ReadonlySet<string> | undefined {
+    if (active.session.scopedModels.length === 0) return undefined;
+    return new Set(active.session.scopedModels.map(({ model }) => `${model.provider}\u0000${model.id}`));
   }
 
   private thinkingSnapshot(active: ActiveSession): SessionThinkingSnapshot {
