@@ -94,8 +94,6 @@ export function App() {
   const [compactionRequest, setCompactionRequest] = useState<{ runId: string; baselineSeq: number }>();
   const [drafts, setDrafts] = useState<Record<string, string>>(() => readDrafts());
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, ImageAttachment[]>>({});
-  const [editingMessage, setEditingMessage] = useState<{ id: string; sessionId: string; draft: string; attachments: ImageAttachment[] }>();
-  const [editDraftInjection, setEditDraftInjection] = useState<{ text: string; nonce: number }>();
   const [forkTarget, setForkTarget] = useState<Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>>();
   const [forkPending, setForkPending] = useState(false);
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuTarget | undefined>();
@@ -182,8 +180,6 @@ export function App() {
     setThinkingLevelPending(false);
     setCompactionPending(false);
     setCompactionRequest(undefined);
-    setEditingMessage(undefined);
-    setEditDraftInjection(undefined);
     setForkTarget(undefined);
     setForkPending(false);
     setSessionNotice(undefined);
@@ -517,50 +513,53 @@ export function App() {
 
   const submitPrompt = async (text: string, attachments: ImageAttachment[]): Promise<boolean> => {
     if (selectedRef === undefined) return false;
-    const edit = editingMessage?.sessionId === selectedRef.sessionId ? editingMessage : undefined;
     // !cmd / !!cmd：直接执行命令而不是发给模型（与 Pi TUI 一致）。
-    if (edit === undefined && attachments.length === 0) {
+    if (attachments.length === 0) {
       const bash = parseBashCommand(text);
       if (bash !== undefined) return submitBash(bash.command, bash.excludeFromContext);
     }
     const clientRequestId = randomUUID();
-    if (edit === undefined) stream.addOptimisticUser(clientRequestId, text, attachments);
-    else stream.replaceUserMessage(edit.id, clientRequestId, text, attachments);
+    stream.addOptimisticUser(clientRequestId, text, attachments);
     try {
-      if (edit === undefined) await api.prompt(selectedRef, text, clientRequestId, attachments);
-      else await api.editAndResend(selectedRef, edit.id, text, clientRequestId, attachments);
+      await api.prompt(selectedRef, text, clientRequestId, attachments);
       setSessionsByWorkspace((current) => ({
         ...current,
         [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
           ? { ...session, runState: "running", updatedAt: new Date().toISOString() }
           : session) ?? [],
       }));
-      setEditingMessage(undefined);
-      setEditDraftInjection(undefined);
       setPageError(undefined);
       return true;
     } catch (error) {
       stream.discardOptimisticUser(clientRequestId);
-      if (edit !== undefined) await stream.refresh().catch(() => undefined);
       if (await recoverSessionConflict(error)) return false;
       setPageError(error instanceof Error ? error.message : "无法发送消息");
       return false;
     }
   };
 
-  const editUserMessage = (message: Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>) => {
-    if (selectedSessionId === undefined || stream.transcript.status.runState !== "idle") return;
-    setEditingMessage({ id: message.id, sessionId: selectedSessionId, draft: selectedDraft, attachments: selectedAttachments });
-    setEditDraftInjection({ text: message.text, nonce: Date.now() });
-    updateSelectedAttachments(message.images ?? []);
-  };
-
-  const cancelMessageEdit = () => {
-    const edit = editingMessage;
-    if (edit === undefined || edit.sessionId !== selectedSessionId) return;
-    updateSelectedAttachments(edit.attachments);
-    setEditDraftInjection({ text: edit.draft, nonce: Date.now() });
-    setEditingMessage(undefined);
+  const editUserMessage = async (message: Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>, text: string): Promise<boolean> => {
+    if (selectedRef === undefined || stream.transcript.status.runState !== "idle") return false;
+    const clientRequestId = randomUUID();
+    const images = message.images ?? [];
+    stream.replaceUserMessage(message.id, clientRequestId, text, images);
+    try {
+      await api.editAndResend(selectedRef, message.id, text, clientRequestId, images);
+      setSessionsByWorkspace((current) => ({
+        ...current,
+        [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
+          ? { ...session, runState: "running", updatedAt: new Date().toISOString() }
+          : session) ?? [],
+      }));
+      setPageError(undefined);
+      return true;
+    } catch (error) {
+      stream.discardOptimisticUser(clientRequestId);
+      await stream.refresh().catch(() => undefined);
+      if (await recoverSessionConflict(error)) return false;
+      setPageError(error instanceof Error ? error.message : "无法重新生成消息");
+      return false;
+    }
   };
 
   const requestForkMessage = (message: Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>) => {
@@ -752,7 +751,7 @@ export function App() {
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} extensionNotices={stream.extensionNotices} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? requestForkMessage : undefined} onDismissExtensionNotice={stream.dismissExtensionNotice} onExtensionUiRespond={stream.respondExtensionUi} />
       <ExtensionPanels panels={stream.extensionPanels} />
-      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage?.sessionId === selectedRef.sessionId ? cancelMessageEdit : undefined} extensionStatuses={stream.extensionPanels.statuses} controls={selectedSession === undefined ? undefined : <>
+      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />
