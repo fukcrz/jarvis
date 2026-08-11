@@ -64,6 +64,8 @@ export function App() {
   // replace the entry that first entered chat, so the back key goes straight to
   // the session list instead of walking back through previously viewed sessions.
   const pendingSessionSwitchRef = useRef<string | undefined>(undefined);
+  // Prevent repeated clicks from creating several unused sessions in the same workspace.
+  const creatingSessionWorkspacesRef = useRef(new Set<string>());
   useEffect(() => {
     const target = pendingSessionSwitchRef.current;
     if (target === undefined) return;
@@ -388,7 +390,17 @@ export function App() {
   }, [stream.transcript.status, selectedRef]);
 
   const createSession = async (targetWorkspaceId = workspaceId) => {
-    if (targetWorkspaceId === undefined) return;
+    if (targetWorkspaceId === undefined || creatingSessionWorkspacesRef.current.has(targetWorkspaceId)) return;
+
+    // An empty session is already a valid target for the next "new session"
+    // action. Reuse it instead of accumulating blank sessions on repeated clicks.
+    const existingEmpty = (sessionsByWorkspace[targetWorkspaceId] ?? []).find((session) => session.preview === null);
+    if (existingEmpty !== undefined) {
+      chooseSession(targetWorkspaceId, existingEmpty.id);
+      return;
+    }
+
+    creatingSessionWorkspacesRef.current.add(targetWorkspaceId);
     try {
       const session = await api.createSession(targetWorkspaceId);
       setSessionsByWorkspace((current) => ({ ...current, [targetWorkspaceId]: mergeSession(current[targetWorkspaceId] ?? [], session) }));
@@ -408,6 +420,8 @@ export function App() {
       }
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "无法创建会话");
+    } finally {
+      creatingSessionWorkspacesRef.current.delete(targetWorkspaceId);
     }
   };
 
