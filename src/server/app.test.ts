@@ -502,6 +502,43 @@ describe("Jarvis HTTP and WebSocket API", () => {
     socket.close();
   });
 
+  it("keeps the originating run active through an extension compaction handoff and continuation", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "compaction-handoff-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    let listener: ((event: { type: string; [key: string]: unknown }) => void) | undefined;
+    vi.spyOn(AgentSession.prototype, "subscribe").mockImplementation((callback) => {
+      listener = callback as unknown as typeof listener;
+      return () => undefined;
+    });
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const sessionUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}`;
+
+    const accepted = (await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Continue this task", clientRequestId: randomUUID() } })).json<{ runId: string }>();
+    await vi.waitFor(() => expect(listener).toBeDefined());
+    listener?.({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "This operation was aborted" } });
+    listener?.({ type: "agent_settled" });
+    listener?.({ type: "compaction_start", reason: "manual" });
+
+    const compacting = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ status: { runState: string; activeRun?: { id: string }; compacting?: unknown } }>();
+    expect(compacting.status).toMatchObject({ runState: "running", activeRun: { id: accepted.runId }, compacting: { reason: "manual" } });
+
+    listener?.({ type: "compaction_end", reason: "manual", result: { summary: "summary" }, aborted: false, willRetry: false });
+    listener?.({ type: "agent_start" });
+    const continuing = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ status: { runState: string; activeRun?: { id: string } } }>();
+    expect(continuing.status).toMatchObject({ runState: "running", activeRun: { id: accepted.runId } });
+
+    listener?.({ type: "message_end", message: { role: "assistant", content: [], stopReason: "stop" } });
+    listener?.({ type: "agent_settled" });
+    await vi.waitFor(async () => {
+      const settled = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ status: { runState: string; lastError?: unknown } }>();
+      expect(settled.status).toMatchObject({ runState: "idle" });
+      expect(settled.status.lastError).toBeUndefined();
+    });
+  });
+
   it("rejects Fork and edit while the session is running", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "message-action-busy-workspace");

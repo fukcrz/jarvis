@@ -1,5 +1,4 @@
 import type {
-  ApiErrorBody,
   BashAccepted,
   CompactAccepted,
   ComposerCommand,
@@ -41,15 +40,31 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (options?.body !== undefined && options.body !== null && !headers.has("content-type")) headers.set("content-type", "application/json");
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
-    const body = await response.json().catch(() => undefined) as ApiErrorBody | undefined;
+    const body = await response.json().catch(() => undefined) as unknown;
+    const error = apiErrorDetails(body);
     throw new ApiError(
-      body?.error.code ?? "REQUEST_FAILED",
-      body?.error.message ?? `Request failed (${String(response.status)})`,
+      error.code ?? "REQUEST_FAILED",
+      error.message ?? `Request failed (${String(response.status)})`,
       response.status,
-      body?.error.requestId,
+      error.requestId,
     );
   }
   return response.json() as Promise<T>;
+}
+
+/** Accept the current API envelope and Fastify's legacy top-level error body. */
+function apiErrorDetails(body: unknown): { code?: string; message?: string; requestId?: string } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return {};
+  const value = body as Record<string, unknown>;
+  const nested = value["error"];
+  const source = typeof nested === "object" && nested !== null && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : value;
+  return {
+    ...(typeof source["code"] === "string" ? { code: source["code"] } : {}),
+    ...(typeof source["message"] === "string" ? { message: source["message"] } : {}),
+    ...(typeof source["requestId"] === "string" ? { requestId: source["requestId"] } : {}),
+  };
 }
 
 export const api = {

@@ -67,6 +67,14 @@ describe("API client", () => {
     await expect(api.compact(ref)).rejects.toMatchObject({ name: "ApiError", code: "SESSION_BUSY", status: 409, requestId: "req-409" });
   });
 
+  it("recognizes legacy Fastify error bodies as recoverable session conflicts", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ statusCode: 409, code: "SESSION_BUSY", error: "Conflict", message: "This session is already running" }), { status: 409 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ref = { workspaceId: "da69b38d-f132-4c84-8c4f-6174015e9c5e", sessionId: "c2f73ddd-cfc6-464f-acb3-c8f425cea7f0" };
+
+    await expect(api.compact(ref)).rejects.toSatisfy((error: unknown) => isSessionConflict(error) && error.message === "This session is already running");
+  });
+
   it("recognizes recoverable session state conflicts only", () => {
     expect(isSessionConflict(new ApiError("SESSION_BUSY", "busy", 409))).toBe(true);
     expect(isSessionConflict(new ApiError("RUN_NOT_ACTIVE", "settled", 409))).toBe(true);

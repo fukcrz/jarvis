@@ -67,6 +67,10 @@ interface ActiveSession {
   extensionUi: ExtensionUiBridge;
   /** Error from the last assistant message; applied at agent_settled once Pi's retries/compaction finish. */
   pendingRunError?: { code: string; message: string };
+  /** A deferred settle lets extension-triggered compaction claim the active run. */
+  settlementTimer?: ReturnType<typeof setTimeout>;
+  /** The current compaction took over immediately after an agent_settled handoff. */
+  compactionHandoff: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -195,6 +199,7 @@ export class SessionService {
       if (match === undefined && active === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
 
       if (active !== undefined) {
+        this.clearSettlementTimer(active);
         active.unsubscribe();
         active.extensionUi.closeAll();
         active.session.dispose();
@@ -534,6 +539,7 @@ export class SessionService {
   async disposeWorkspace(workspaceId: string): Promise<void> {
     const sessions = [...this.active.values()].filter((active) => active.ref.workspaceId === workspaceId);
     for (const active of sessions) {
+      this.clearSettlementTimer(active);
       active.unsubscribe();
       active.extensionUi.closeAll();
       active.session.abortCompaction();
@@ -547,6 +553,7 @@ export class SessionService {
 
   async dispose(): Promise<void> {
     for (const active of this.active.values()) {
+      this.clearSettlementTimer(active);
       active.unsubscribe();
       active.extensionUi.closeAll();
       active.session.abortCompaction();
@@ -568,9 +575,11 @@ export class SessionService {
           ? {}
           : { images: images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })) }),
       });
-      if (active.state.activeRun?.id === runId && active.session.isIdle) this.settleRun(active, runId);
+      if (active.state.activeRun?.id === runId && active.session.isIdle) this.deferAgentSettlement(active);
     } catch (error) {
-      if (active.state.activeRun?.id === runId) this.failRun(active, runId, runtimeFailureCode(error), asMessage(error));
+      // A normal Pi run settles through agent_settled. Keep preflight failures
+      // here, but do not let an extension compaction's abort win the lifecycle race.
+      if (active.state.activeRun?.id === runId && !isOperationCancellation(error)) this.failRun(active, runId, runtimeFailureCode(error), asMessage(error));
     }
   }
 
@@ -731,6 +740,8 @@ export class SessionService {
       activeBash: undefined,
       compactionAbortRequested: false,
       pendingRunError: undefined,
+      settlementTimer: undefined,
+      compactionHandoff: false,
       createdAt,
       updatedAt: await sessionModifiedAt(session.sessionFile, now),
     };
@@ -774,6 +785,22 @@ export class SessionService {
   private handlePiEvent(active: ActiveSession, event: AgentSessionEvent): void {
     active.updatedAt = new Date().toISOString();
     switch (event.type) {
+      case "agent_start": {
+        // Extensions can start a continuation without passing through Jarvis's
+        // HTTP prompt endpoint. Pi is authoritative for that lifecycle.
+        this.clearSettlementTimer(active);
+        if (active.state.runState !== "idle") return;
+        const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
+        active.state = { sessionId: active.ref.sessionId, runState: "running", activeRun: run };
+        active.liveMessages.clear();
+        active.partial = undefined;
+        active.activeTools.clear();
+        active.extensionFailure = undefined;
+        active.pendingRunError = undefined;
+        this.events.publishSession(active.ref, { type: "run.started", runId: run.id, payload: { status: active.state } });
+        this.publishSummary(active);
+        return;
+      }
       case "message_update": {
         if (event.assistantMessageEvent.type !== "text_delta") return;
         const runId = active.state.activeRun?.id;
@@ -861,6 +888,12 @@ export class SessionService {
         return;
       }
       case "compaction_start": {
+        // Extension ctx.compact() resumes immediately after the agent_settled
+        // event. It owns the run that would otherwise settle on this timer.
+        if (active.settlementTimer !== undefined) {
+          this.clearSettlementTimer(active);
+          active.compactionHandoff = true;
+        }
         const startedAt = active.state.compacting?.reason === event.reason
           ? active.state.compacting.startedAt
           : new Date().toISOString();
@@ -880,6 +913,8 @@ export class SessionService {
       case "compaction_end": {
         const runId = active.state.activeRun?.id;
         const errorMessage = event.errorMessage;
+        const handoff = active.compactionHandoff;
+        active.compactionHandoff = false;
         active.compactionAbortRequested = false;
         active.state = { ...active.state, compacting: undefined };
         if (event.result !== undefined) {
@@ -899,6 +934,8 @@ export class SessionService {
               ...active.state,
               lastError: { code: "PI_COMPACTION_FAILED", message: errorMessage, occurredAt: new Date().toISOString() },
             };
+          } else {
+            active.pendingRunError = { code: "PI_COMPACTION_FAILED", message: errorMessage };
           }
         }
         this.events.publishSession(active.ref, {
@@ -909,6 +946,13 @@ export class SessionService {
         // After compaction the usage estimate resets; push the fresh value.
         this.publishContextUsage(active, runId);
         this.publishSummary(active);
+        // A plugin continuation is scheduled after its onComplete callback
+        // returns. Give it one event turn to start; otherwise settle/fail the
+        // original run with the final compaction outcome.
+        if (handoff) {
+          if (event.aborted) active.pendingRunError = undefined;
+          this.deferAgentSettlement(active);
+        }
         return;
       }
       case "summarization_retry_scheduled": {
@@ -963,15 +1007,7 @@ export class SessionService {
         return;
       }
       case "agent_settled":
-        if (active.pendingRunError !== undefined) {
-          const failure = active.pendingRunError;
-          active.pendingRunError = undefined;
-          this.failRun(active, active.state.activeRun?.id, failure.code, failure.message);
-        } else if (active.extensionFailure !== undefined) {
-          this.failRun(active, active.state.activeRun?.id, active.extensionFailure.code, active.extensionFailure.message);
-        } else {
-          this.settleRun(active, active.state.activeRun?.id);
-        }
+        this.deferAgentSettlement(active);
         return;
       case "thinking_level_changed":
         this.events.publishSession(active.ref, { type: "thinking.changed", payload: { thinking: this.thinkingSnapshot(active) } });
@@ -1005,6 +1041,8 @@ export class SessionService {
     active.compactionAbortRequested = false;
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
+    active.compactionHandoff = false;
+    this.clearSettlementTimer(active);
     this.events.publishSession(active.ref, { type: "run.settled", runId, payload: { status: active.state } });
     this.publishSummary(active);
   }
@@ -1029,6 +1067,8 @@ export class SessionService {
     active.compactionAbortRequested = false;
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
+    active.compactionHandoff = false;
+    this.clearSettlementTimer(active);
     this.events.publishSession(active.ref, { type: "run.failed", runId, payload: { status: active.state } });
     this.publishSummary(active);
   }
@@ -1041,6 +1081,34 @@ export class SessionService {
     queueMicrotask(() => {
       if (active.compactionAbortRequested && active.state.compacting !== undefined) active.session.abortCompaction();
     });
+  }
+
+  /**
+   * ctx.compact() first aborts and waits for Pi to emit agent_settled, then
+   * emits compaction_start. Deferring this decision lets that handoff retain
+   * the external run instead of publishing a false idle state in between.
+   */
+  private deferAgentSettlement(active: ActiveSession): void {
+    this.clearSettlementTimer(active);
+    active.settlementTimer = setTimeout(() => {
+      active.settlementTimer = undefined;
+      if (active.state.activeRun === undefined || active.state.compacting !== undefined || active.session.isStreaming) return;
+      if (active.pendingRunError !== undefined) {
+        const failure = active.pendingRunError;
+        active.pendingRunError = undefined;
+        this.failRun(active, active.state.activeRun.id, failure.code, failure.message);
+      } else if (active.extensionFailure !== undefined) {
+        this.failRun(active, active.state.activeRun.id, active.extensionFailure.code, active.extensionFailure.message);
+      } else {
+        this.settleRun(active, active.state.activeRun.id);
+      }
+    }, 0);
+  }
+
+  private clearSettlementTimer(active: ActiveSession): void {
+    if (active.settlementTimer === undefined) return;
+    clearTimeout(active.settlementTimer);
+    active.settlementTimer = undefined;
   }
 
   private publishSummary(active: ActiveSession, supplied?: SessionSummary): void {
@@ -1196,6 +1264,12 @@ function toIso(value: unknown): string {
 
 function runtimeFailureCode(error: unknown): string {
   return isUnsupportedExtensionInteraction(error) ? UNSUPPORTED_EXTENSION_INTERACTION : "PI_RUNTIME_ERROR";
+}
+
+function isOperationCancellation(error: unknown): boolean {
+  if (error instanceof Error && error.name === "AbortError") return true;
+  const message = asMessage(error);
+  return message === "Operation aborted" || message === "This operation was aborted";
 }
 
 function isAssistantMessage(message: unknown): message is { role: "assistant"; content: unknown; timestamp?: number | string } {
