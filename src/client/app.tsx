@@ -780,7 +780,7 @@ export function App() {
             {selectedSession === undefined || selectedWorkspace === undefined ? null : <Button variant="ghost" size="icon" aria-label="当前会话操作" onClick={() => openMobileSessionMenu(selectedWorkspace.id, selectedSession)}><MoreVertical size={18} /></Button>}
           </header>
           <div className="mobile-chat-content">{renderChatContent()}</div>
-          {mobileSwitcherOpen ? <MobileSessionSwitcher workspace={selectedWorkspace} sessions={sessionsByWorkspace[workspaceId ?? ""] ?? []} selectedSessionId={sessionId} onClose={closeMobileSwitcher} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(id) => { if (workspaceId !== undefined) chooseSession(workspaceId, id); }} /> : null}
+          {mobileSwitcherOpen ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedWorkspaceId={workspaceId} selectedSessionId={sessionId} onClose={closeMobileSwitcher} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(nextWorkspaceId, id) => chooseSession(nextWorkspaceId, id)} onOpenSessionMenu={openMobileSessionMenu} /> : null}
         </section>}
       </div> : null}
 
