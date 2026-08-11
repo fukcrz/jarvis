@@ -7,7 +7,9 @@ import {
   createAgentSession,
   getAgentDir,
   ModelRuntime,
+  resolveModelScopeWithDiagnostics,
   SessionManager,
+  SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
   type ExtensionError,
@@ -304,10 +306,11 @@ export class SessionService {
     active.modelSwitching = true;
     try {
       const available = await this.availableModels(active.modelRuntime);
-      const model = available.find((candidate) => candidate.provider === provider && candidate.id === modelId);
+      const selectable = this.modelsInScope(active, available);
+      const model = selectable.find((candidate) => candidate.provider === provider && candidate.id === modelId);
       if (model === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "This model is not available for the current Pi profile", 404);
 
-      const snapshot = projectModelSnapshot(active.session.model, available);
+      const snapshot = projectModelSnapshot(active.session.model, selectable);
       const previousThinking = this.thinkingSnapshot(active);
       if (active.session.model?.provider === provider && active.session.model?.id === modelId) {
         if (snapshot.current === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "Pi did not select the requested model", 409);
@@ -316,7 +319,7 @@ export class SessionService {
 
       await active.session.setModel(model);
       active.updatedAt = new Date().toISOString();
-      const updated = projectModelSnapshot(active.session.model, available);
+      const updated = projectModelSnapshot(active.session.model, selectable);
       const updatedThinking = this.thinkingSnapshot(active);
       if (updated.current === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "Pi did not select the requested model", 409);
       this.events.publishSession(active.ref, { type: "model.changed", payload: { model: updated } });
@@ -702,11 +705,20 @@ export class SessionService {
   private async createActive(ref: SessionRef, workspace: Workspace, manager: SessionManager): Promise<ActiveSession> {
     const agentDir = getAgentDir();
     const modelRuntime = await this.getModelRuntime(agentDir);
+    const settingsManager = SettingsManager.create(workspace.cwd, agentDir);
+    const enabledModels = settingsManager.getEnabledModels();
+    const { scopedModels, diagnostics } = enabledModels !== undefined && enabledModels.length > 0
+      ? await resolveModelScopeWithDiagnostics(enabledModels, modelRuntime)
+      : { scopedModels: [], diagnostics: [] };
+    for (const diagnostic of diagnostics) console.warn(`Model scope warning: ${diagnostic.message}`);
+
     const { session } = await createAgentSession({
       cwd: workspace.cwd,
       agentDir,
       modelRuntime,
       sessionManager: manager,
+      settingsManager,
+      ...(scopedModels.length === 0 ? {} : { scopedModels }),
     });
     const publishExtensionUi = (message: ExtensionUiMessage) => {
       // `bindExtensions` runs only after `active` is registered below, so startup
@@ -759,7 +771,14 @@ export class SessionService {
   }
 
   private modelSnapshot(active: ActiveSession) {
-    return projectModelSnapshot(active.session.model, active.modelRuntime.getAvailableSnapshot());
+    return projectModelSnapshot(active.session.model, this.modelsInScope(active, active.modelRuntime.getAvailableSnapshot()));
+  }
+
+  /** Pi's `enabledModels` becomes `session.scopedModels`; an empty scope means all models. */
+  private modelsInScope<T extends { provider: string; id: string }>(active: ActiveSession, models: readonly T[]): T[] {
+    if (active.session.scopedModels.length === 0) return [...models];
+    const scoped = new Set(active.session.scopedModels.map(({ model }) => `${model.provider}\u0000${model.id}`));
+    return models.filter((model) => scoped.has(`${model.provider}\u0000${model.id}`));
   }
 
   private thinkingSnapshot(active: ActiveSession): SessionThinkingSnapshot {
