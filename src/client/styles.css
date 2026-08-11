@@ -273,17 +273,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-switcher { position: fixed; z-index: 80; inset: 0; display: flex; flex-direction: column; background: var(--canvas); }
 .mobile-switcher-header { display: grid; grid-template-columns: 36px minmax(0, 1fr) 36px; align-items: center; min-height: 56px; border-bottom: 1px solid var(--line); padding: 8px 12px; color: var(--ink); text-align: center; }
 .mobile-switcher-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; font-weight: 650; }
-.mobile-session-projects { display: flex; flex: 0 0 auto; gap: 12px; overflow-x: auto; border-bottom: 1px solid var(--line); padding: 26px 34px 0; scrollbar-width: none; }
+.mobile-session-projects { display: flex; flex: 0 0 auto; gap: 8px; overflow-x: auto; border-bottom: 1px solid var(--line); padding: 12px 16px; scrollbar-width: none; }
 .mobile-session-projects::-webkit-scrollbar { display: none; }
-.mobile-session-projects button { flex: 0 0 auto; min-height: 42px; border: 1px solid #303035; border-radius: 999px; background: #202023; padding: 7px 22px; color: #a5a4ad; font-size: 14px; white-space: nowrap; }
+.mobile-session-projects button { flex: 0 0 auto; min-height: 40px; border: 1px solid #303035; border-radius: 999px; background: #202023; padding: 6px 16px; color: #a5a4ad; font-size: 13px; white-space: nowrap; }
 .mobile-session-projects button.selected { border-color: var(--accent); background: #292535; color: var(--accent-strong); }
-.mobile-switcher-list { flex: 1; padding: 0 30px; }
-.mobile-switcher-list .mobile-session-row { gap: 0; }
-.mobile-switcher-list .mobile-session-select { padding: 31px 21px 31px; }
-.mobile-switcher-list .mobile-session-row > .button { width: 44px; height: auto; min-height: 44px; margin-right: 10px; color: #a5a4ad; }
-.mobile-switcher-list .mobile-session-copy { align-items: center; gap: 16px; }
-.mobile-switcher-list .mobile-session-copy strong { font-size: 16px; font-weight: 600; }
-.mobile-switcher-list .mobile-session-copy small { font-size: 13px; }
+.mobile-switcher-list { flex: 1; padding: 8px 12px 24px; }
 .mobile-switcher-list .mobile-session-row.selected { background: transparent; box-shadow: none; }
 .mobile-switcher-list .mobile-session-row.selected .mobile-session-copy strong { color: var(--accent-strong); }
 .mobile-switcher-new { display: none; }
