@@ -331,6 +331,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .button.composer-attach { width: 27px; height: 27px; color: var(--subtle); }.button.composer-cancel-edit { width: 27px; height: 27px; color: var(--subtle); }.button.composer-cancel-edit:hover { color: var(--ink); }
 .button.composer-attach:hover:not(:disabled) { color: var(--ink); }
 .composer-file-input { display: none; }
+/* --- 折叠态（移动端：其他输入框聚焦时输入栏折叠为紧凑按钮） --- */
+.composer.composer-collapsed .composer-editor { display: none; }
+.composer-collapsed-button { display: flex; align-items: center; justify-content: center; width: min(280px, 100%); min-height: 46px; margin: 0 auto; gap: 7px; border: 1px solid #3d3a4e; border-radius: 23px; background: radial-gradient(120% 120% at 30% 20%, #2e2c3a 0%, #1d1b26 55%, #141318 100%); color: #cfc9e6; box-shadow: 0 6px 24px rgb(0 0 0 / .45), inset 0 1px 0 rgb(255 255 255 / .06); font-size: 13px; cursor: pointer; }
+.composer-collapsed-button:active { transform: scale(.97); }
 
 /* --- Images in user messages --- */
 .message-images { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 8px; }

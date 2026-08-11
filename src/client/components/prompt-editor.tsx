@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdate, useCodeMirror } from "@uiw/react-codemirror";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { ArrowUp, Command, FileCode2, LoaderCircle, Plus, Puzzle, Square, X, XCircle } from "lucide-react";
+import { ArrowUp, Command, FileCode2, LoaderCircle, MessageSquare, Plus, Puzzle, Square, X, XCircle } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
@@ -40,9 +40,15 @@ interface PromptEditorProps {
   /** Lightweight extension status labels shown inside the composer chrome. */
   extensionStatuses?: Record<string, string>;
   controls?: ReactNode;
+  /** 移动端：其他输入框聚焦时折叠为紧凑的"发消息"按钮（编辑器保持挂载，草稿不丢）。 */
+  collapsed?: boolean;
+  /** 折叠按钮点击回调：App 负责收起当前输入焦点并展开编辑器。 */
+  onCollapsedClick?: () => void;
+  /** 暴露"聚焦编辑器"的方法，供折叠态点击恢复后调用。 */
+  focusRequestRef?: RefObject<(() => void) | undefined>;
 }
 
-export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, extensionStatuses = {}, controls }: PromptEditorProps) {
+export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, extensionStatuses = {}, controls, collapsed = false, onCollapsedClick, focusRequestRef }: PromptEditorProps) {
   const isMobile = useIsMobile();
   const initialValueRef = useRef(initialValue);
   const valueRef = useRef(initialValue);
@@ -89,6 +95,14 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   useEffect(() => {
     completionItemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
   }, [completion?.items.length, selectedIndex]);
+
+  // 折叠态下编辑器不可见，恢复展开后由 App 通过该回调重新聚焦（延迟读取
+  // viewRef，早于编辑器创建时调用只是空操作）。
+  useEffect(() => {
+    if (focusRequestRef === undefined) return;
+    focusRequestRef.current = () => { viewRef.current?.focus(); };
+    return () => { focusRequestRef.current = undefined; };
+  }, [focusRequestRef]);
 
   const closeCompletion = useCallback(() => {
     searchRequestRef.current += 1;
@@ -260,7 +274,8 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   };
 
   return (
-    <section className="composer" aria-label="消息输入框">
+    <section className={`composer${collapsed ? " composer-collapsed" : ""}`} aria-label="消息输入框">
+      {collapsed ? <button type="button" className="composer-collapsed-button" onClick={onCollapsedClick}><MessageSquare size={16} /><span>发消息</span></button> : null}
       <div className="composer-editor">
         {attachments.length === 0 && preparingCount === 0 ? null : <div className="composer-attachments">
           {attachments.map((attachment, index) => (

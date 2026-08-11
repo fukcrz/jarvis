@@ -93,6 +93,9 @@ export function App() {
   const [deleteTarget, setDeleteTarget] = useState<Pick<SessionContextMenuTarget, "workspaceId" | "session"> | undefined>();
   const [deletePending, setDeletePending] = useState(false);
   const [composerCommands, setComposerCommands] = useState<{ sessionKey: string; items: ComposerCommand[] } | undefined>();
+  // 移动端：非底部输入框聚焦时，输入栏折叠为紧凑按钮（见 PromptEditor）。
+  const [composerCollapsed, setComposerCollapsed] = useState(false);
+  const composerFocusRef = useRef<(() => void) | undefined>(undefined);
 
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId);
   const selectedSession = selectedWorkspace === undefined
@@ -157,6 +160,45 @@ export function App() {
     };
   }, []);
 
+  // 移动端：其他输入框（历史消息编辑、扩展输入等）聚焦时把底部输入栏折叠为
+  // 紧凑按钮，避免键盘顶起后两个输入框竞争垂直空间；失焦或回到输入栏时恢复。
+  useEffect(() => {
+    if (!isMobile) {
+      setComposerCollapsed(false);
+      return;
+    }
+    const isEditable = (element: Element | null): boolean =>
+      element !== null && (element instanceof HTMLElement && element.isContentEditable || element.matches("input, textarea"));
+    const inComposer = (element: Element | null): boolean =>
+      element !== null && element.closest(".composer") !== null;
+    const onFocusIn = (event: FocusEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !isEditable(target) || inComposer(target)) return;
+      // 仅当聊天页输入栏存在时折叠（会话列表页没有输入栏）。
+      if (document.querySelector(".composer") === null) return;
+      setComposerCollapsed(true);
+    };
+    const onFocusOut = () => {
+      const active = document.activeElement;
+      if (!isEditable(active) || inComposer(active)) setComposerCollapsed(false);
+    };
+    document.addEventListener("focusin", onFocusIn);
+    document.addEventListener("focusout", onFocusOut);
+    return () => {
+      document.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("focusout", onFocusOut);
+    };
+  }, [isMobile]);
+
+  /** 折叠按钮：收起当前输入焦点，展开输入栏并聚焦编辑器。 */
+  const expandComposer = useCallback(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.closest(".composer") === null) active.blur();
+    setComposerCollapsed(false);
+    // 等展开态渲染完成（编辑器脱离 display:none）后再聚焦，rAF 保证已提交。
+    window.requestAnimationFrame(() => composerFocusRef.current?.());
+  }, []);
+
   useEffect(() => {
     setModelSwitchPending(false);
     setThinkingLevelPending(false);
@@ -165,6 +207,7 @@ export function App() {
     setForkTarget(undefined);
     setForkPending(false);
     setSessionNotice(undefined);
+    setComposerCollapsed(false);
   }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
 
   useEffect(() => {
@@ -726,7 +769,7 @@ export function App() {
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? requestForkMessage : undefined} onExtensionUiRespond={stream.respondExtensionUi} />
       <ExtensionPanels panels={stream.extensionPanels} />
-      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} controls={selectedSession === undefined ? undefined : <>
+      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />
