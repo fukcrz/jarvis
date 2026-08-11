@@ -173,6 +173,16 @@ export interface TimelinePage {
   hasMore: boolean;
 }
 
+export interface ExtensionUiSnapshot {
+  /** Dialogs that are still waiting for a browser response. */
+  dialogs: Array<{ request: Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>; createdAt: string }>;
+  statuses: Record<string, string>;
+  widgets: Record<string, { lines: string[]; placement: "aboveEditor" | "belowEditor" }>;
+  title?: string;
+  /** Monotonic revision lets a reconnect inject the latest extension draft once. */
+  editorText?: { text: string; revision: number };
+}
+
 export interface SessionStreamSnapshot {
   seq: number;
   status: SessionStatus;
@@ -186,6 +196,8 @@ export interface SessionStreamSnapshot {
   activeBash?: ToolTimelineItem;
   /** Estimated context usage, when the current model exposes a context window. */
   contextUsage?: ContextUsage;
+  /** Ephemeral extension UI state, retained across browser reconnects. */
+  extensionUi?: ExtensionUiSnapshot;
 }
 
 export interface PromptAccepted {

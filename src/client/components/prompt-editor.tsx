@@ -44,6 +44,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   const searchRequestRef = useRef(0);
   const completionItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const attachmentsRef = useRef(attachments);
+  const injectedTextRef = useRef(injectedText);
   const commandsRef = useRef(commands);
   const searchFilesRef = useRef(searchFiles);
   const preparingRef = useRef(0);
@@ -56,15 +57,17 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   useEffect(() => { busyRef.current = busy; }, [busy]);
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
 
-  useEffect(() => {
-    if (injectedText === undefined) return;
-    const view = viewRef.current;
-    if (view === undefined) return;
-    const text = injectedText.text;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+  const applyInjectedText = useCallback((view: EditorView, injection: { text: string; nonce: number } | undefined) => {
+    if (injection === undefined) return;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: injection.text }, selection: { anchor: injection.text.length } });
     view.focus();
-    view.dispatch({ selection: { anchor: view.state.doc.length } });
-  }, [injectedText?.nonce]);
+  }, []);
+
+  useEffect(() => {
+    injectedTextRef.current = injectedText;
+    const view = viewRef.current;
+    if (view !== undefined) applyInjectedText(view, injectedText);
+  }, [applyInjectedText, injectedText]);
 
   useEffect(() => {
     completionItemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
@@ -117,8 +120,9 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
     viewRef.current = view;
     const initial = initialValueRef.current;
     if (initial !== "") view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: initial } });
+    applyInjectedText(view, injectedTextRef.current);
     refreshCompletion(view);
-  }, [refreshCompletion]);
+  }, [applyInjectedText, refreshCompletion]);
 
   // Command resources arrive asynchronously. Re-run completion against the
   // current document even when the user has not typed another character.

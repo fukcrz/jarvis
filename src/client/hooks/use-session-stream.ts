@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, sessionPath, socketUrl } from "../api";
-import { isRecord, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, sessionEventSchema } from "../../shared/protocol";
+import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, sessionEventSchema } from "../../shared/protocol";
 import { applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, type TranscriptState } from "../transcript";
 
 interface StreamState {
@@ -52,6 +52,7 @@ export function useSessionStream(ref: SessionRef | undefined) {
   const refKeyRef = useRef(refKey);
   const requestFrame = useRef<number | undefined>(undefined);
   const queuedEvents = useRef<SessionEvent[]>([]);
+  const defaultDocumentTitle = useRef(document.title);
 
   useEffect(() => { stateRef.current = state; }, [state]);
   useEffect(() => { refKeyRef.current = refKey; }, [refKey]);
@@ -91,9 +92,13 @@ export function useSessionStream(ref: SessionRef | undefined) {
     }
     if (ref === undefined) {
       dispatch({ type: "reset" });
+      setExtensionPanels({ widgets: {}, statuses: {} });
+      document.title = defaultDocumentTitle.current;
       return;
     }
     dispatch({ type: "reset" });
+    setExtensionPanels({ widgets: {}, statuses: {} });
+    document.title = defaultDocumentTitle.current;
     let disposed = false;
     let socket: WebSocket | undefined;
     let reconnectTimer: number | undefined;
@@ -121,6 +126,8 @@ export function useSessionStream(ref: SessionRef | undefined) {
         void Promise.all([api.timeline(ref), api.runtime(ref)]).then(([page, snapshot]) => {
           if (disposed || socket !== connection) return;
           dispatch({ type: "hydrate", page, snapshot });
+          setExtensionPanels(extensionPanelsFromSnapshot(snapshot.extensionUi));
+          document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
           hydrated = true;
           for (const event of buffered.filter((event) => event.seq > snapshot.seq)) receiveEvent(event);
           buffered = [];
@@ -185,16 +192,25 @@ export function useSessionStream(ref: SessionRef | undefined) {
   }, [refKey, loadingEarlier]);
 
   const respondExtensionUi = useCallback(async (id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> => {
-    if (ref === undefined) return;
+    if (ref === undefined) throw new Error("会话已关闭");
     try {
       await api.respondExtensionUi(ref, id, response);
     } catch (error) {
-      // 请求已超时/关闭时服务端返回 404，卡片会收到 uiSettled 事件自行收敛。
       console.warn("extension UI respond failed", error);
+      throw error;
     }
   }, [refKey]);
 
   return { ...state, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi };
+}
+
+function extensionPanelsFromSnapshot(snapshot: ExtensionUiSnapshot | undefined): ExtensionPanelState {
+  if (snapshot === undefined) return { widgets: {}, statuses: {} };
+  return {
+    statuses: { ...snapshot.statuses },
+    widgets: Object.fromEntries(Object.entries(snapshot.widgets).map(([key, widget]) => [key, { lines: [...widget.lines], placement: widget.placement }])),
+    ...(snapshot.editorText === undefined ? {} : { editorText: { text: snapshot.editorText.text, nonce: snapshot.editorText.revision } }),
+  };
 }
 
 function sideEffectFor(event: SessionEvent): PanelSideEffect | undefined {

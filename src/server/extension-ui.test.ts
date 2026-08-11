@@ -43,6 +43,24 @@ describe("ExtensionUiBridge", () => {
     expect(messages.at(-1)).toMatchObject({ type: "outcome", id: request!.id, outcome: "answered", value: "two" });
   });
 
+  it("keeps a reconnectable snapshot for dialogs and extension panels", () => {
+    const { bridge } = setup();
+    bridge.context.setStatus("review", "Waiting for approval");
+    bridge.context.setWidget("review", ["1 change pending"], { placement: "belowEditor" });
+    bridge.context.setTitle("Review · Jarvis");
+    bridge.context.setEditorText("Draft from extension");
+    bridge.context.select("Choose", ["one", "two"], { timeout: 10_000 });
+
+    expect(bridge.snapshot()).toMatchObject({
+      dialogs: [{ request: { method: "select", title: "Choose", options: ["one", "two"], timeout: 10_000 } }],
+      statuses: { review: "Waiting for approval" },
+      widgets: { review: { lines: ["1 change pending"], placement: "belowEditor" } },
+      title: "Review · Jarvis",
+      editorText: { text: "Draft from extension", revision: 1 },
+    });
+    bridge.closeAll();
+  });
+
   it("resolves confirm with boolean and publishes confirmed outcome", async () => {
     const { bridge, messages } = setup();
     const promise = bridge.context.confirm("Sure?", "Do it?");

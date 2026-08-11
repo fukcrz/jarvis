@@ -132,27 +132,36 @@ function ExtensionUiCard({ item, onRespond }: { item: ExtensionUiTimelineItem; o
   const request = item.request;
   if (request.method === "notify") {
     const tone = request.notifyType ?? "info";
-    return (
-      <article className={`extension-notice ${tone}`}>
-        <span className="extension-notice-icon">{tone === "error" ? <XCircle size={13} /> : tone === "warning" ? <CircleAlert size={13} /> : <Info size={13} />}</span>
-        <span>{request.message}</span>
-      </article>
-    );
+    return <article className={`extension-notice ${tone}`} role="status">
+      <span className="extension-notice-icon">{tone === "error" ? <XCircle size={14} /> : tone === "warning" ? <CircleAlert size={14} /> : <Info size={14} />}</span>
+      <span>{request.message}</span>
+    </article>;
   }
   const pending = item.outcome === undefined;
   const dialogRequest = request as Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
-  return (
-    <article className={`extension-card ${item.outcome ?? "pending"}`}>
-      <header className="extension-card-header">
-        <Puzzle size={13} />
-        <span>{dialogRequest.title}</span>
-        {pending ? null : <span className="extension-card-state">{extensionOutcomeLabel(item)}</span>}
-      </header>
-      <div className="extension-card-body">
-        {pending ? <ExtensionCardPrompt request={dialogRequest} onRespond={onRespond} /> : <ExtensionCardResult item={item} />}
-      </div>
-    </article>
-  );
+  return <article className={`extension-card ${item.outcome ?? "pending"}`} aria-label={`扩展请求：${dialogRequest.title}`}>
+    <header className="extension-card-header">
+      <span className="extension-card-badge"><Puzzle size={14} /></span>
+      <span className="extension-card-kicker">扩展需要你的确认</span>
+      {pending ? <ExtensionTimeout timeout={dialogRequest.timeout} createdAt={item.createdAt} /> : <span className="extension-card-state">{extensionOutcomeLabel(item)}</span>}
+    </header>
+    <div className="extension-card-body">
+      <h3>{dialogRequest.title}</h3>
+      {pending ? <ExtensionCardPrompt request={dialogRequest} onRespond={onRespond} /> : <ExtensionCardResult item={item} />}
+    </div>
+  </article>;
+}
+
+function ExtensionTimeout({ timeout, createdAt }: { timeout?: number; createdAt: string }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (timeout === undefined) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [timeout]);
+  if (timeout === undefined) return <span className="extension-card-state pending"><Clock3 size={12} /> 等待操作</span>;
+  const seconds = Math.max(0, Math.ceil((Date.parse(createdAt) + timeout - now) / 1_000));
+  return <span className={`extension-card-state pending ${seconds <= 30 ? "urgent" : ""}`}><Clock3 size={12} /> {seconds === 0 ? "即将超时" : `${seconds} 秒后超时`}</span>;
 }
 
 function extensionOutcomeLabel(item: ExtensionUiTimelineItem): string {
@@ -167,50 +176,44 @@ function extensionOutcomeLabel(item: ExtensionUiTimelineItem): string {
 }
 
 function ExtensionCardResult({ item }: { item: ExtensionUiTimelineItem }) {
-  if (item.outcome === "answered") {
-    if (item.request.method === "confirm") {
-      return <p className="extension-card-result">{item.confirmed === true ? "允许" : "拒绝"}</p>;
-    }
-    if (item.request.method === "select") {
-      const option = item.request.options.find((candidate) => candidate === item.value);
-      return <p className="extension-card-result">{option === undefined ? (item.value === undefined ? "（未选择）" : item.value) : option}</p>;
-    }
-    return <p className="extension-card-result">{item.value ?? "（空）"}</p>;
-  }
-  return <p className="extension-card-result muted">{extensionOutcomeLabel(item)}</p>;
+  const value = item.outcome === "answered"
+    ? item.request.method === "confirm" ? (item.confirmed === true ? "允许" : "拒绝")
+      : item.request.method === "select" ? (item.value ?? "（未选择）")
+        : (item.value === "" ? "（空内容）" : item.value ?? "（空）")
+    : extensionOutcomeLabel(item);
+  return <div className="extension-card-result"><Check size={15} /><span>{value}</span></div>;
 }
 
 function ExtensionCardPrompt({ request, onRespond }: { request: Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>; onRespond: TimelineProps["onExtensionUiRespond"] }) {
   const [value, setValue] = useState(request.method === "editor" ? (request.prefill ?? "") : "");
-  const respond = (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => { if (onRespond !== undefined) onRespond(request.id, response); };
-  if (request.method === "select") {
-    return <div className="extension-options">
-      {request.options.map((option) => (
-        <button key={option} type="button" className="extension-option" onClick={() => respond({ value: option })}>
-          <span>{option}</span>
-          <Check size={13} />
-        </button>
-      ))}
-    </div>;
-  }
-  if (request.method === "confirm") {
-    return <div className="extension-dialog">
-      {request.message === undefined ? null : <p className="extension-dialog-message">{request.message}</p>}
-      <div className="extension-dialog-actions">
-        <Button variant="ghost" size="sm" onClick={() => respond({ cancelled: true })}>取消</Button>
-        <Button variant="default" size="sm" onClick={() => respond({ confirmed: true })}>允许</Button>
-      </div>
-    </div>;
-  }
+  const [submitting, setSubmitting] = useState(false);
+  const respond = (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => {
+    if (submitting || onRespond === undefined) return;
+    setSubmitting(true);
+    Promise.resolve(onRespond(request.id, response)).catch(() => setSubmitting(false));
+  };
+  if (request.method === "select") return <div className="extension-options" aria-label="可选项">
+    {request.options.map((option) => <button key={option} type="button" className="extension-option" disabled={submitting} onClick={() => respond({ value: option })}><span>{option}</span><Check size={15} /></button>)}
+  </div>;
+  if (request.method === "confirm") return <div className="extension-dialog">
+    {request.message === undefined ? null : <p className="extension-dialog-message">{request.message}</p>}
+    <div className="extension-dialog-actions confirm-actions">
+      <Button variant="ghost" size="sm" disabled={submitting} onClick={() => respond({ cancelled: true })}>取消</Button>
+      <Button variant="secondary" size="sm" disabled={submitting} onClick={() => respond({ confirmed: false })}>拒绝</Button>
+      <Button variant="default" size="sm" disabled={submitting} onClick={() => respond({ confirmed: true })}>{submitting ? "正在提交…" : "允许"}</Button>
+    </div>
+  </div>;
   const multiline = request.method === "editor";
+  const submitValue = () => respond({ value });
   return <div className="extension-dialog">
     {multiline
-      ? <textarea className="extension-input multiline" value={value} onChange={(event) => setValue(event.target.value)} rows={5} />
-      : <input className="extension-input" placeholder={request.placeholder} value={value} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); respond({ value }); } }} autoFocus />}
+      ? <textarea autoFocus className="extension-input multiline" value={value} disabled={submitting} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); submitValue(); } }} rows={6} />
+      : <input autoFocus className="extension-input" placeholder={request.placeholder} value={value} disabled={submitting} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); submitValue(); } }} />}
     <div className="extension-dialog-actions">
-      <Button variant="ghost" size="sm" onClick={() => respond({ cancelled: true })}>取消</Button>
-      <Button variant="default" size="sm" disabled={value.trim() === ""} onClick={() => respond({ value })}>提交</Button>
+      <Button variant="ghost" size="sm" disabled={submitting} onClick={() => respond({ cancelled: true })}>取消</Button>
+      <Button variant="default" size="sm" disabled={submitting} onClick={submitValue}>{submitting ? "正在提交…" : multiline ? "提交修改" : "提交"}</Button>
     </div>
+    {multiline ? <small className="extension-dialog-hint">按 Ctrl / ⌘ + Enter 提交</small> : null}
   </div>;
 }
 

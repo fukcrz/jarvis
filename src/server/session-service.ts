@@ -230,6 +230,7 @@ export class SessionService {
       activeTools: [...active.activeTools.values()],
       ...(active.activeBash === undefined ? {} : { activeBash: active.activeBash }),
       ...(contextUsage === undefined ? {} : { contextUsage }),
+      extensionUi: active.extensionUi.snapshot(),
     };
   }
 
@@ -466,6 +467,8 @@ export class SessionService {
   async resolveExtensionUi(ref: SessionRef, id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> {
     const active = await this.getActive(ref);
     if (!active.extensionUi.respond({ id, ...response })) {
+      // A stale id and a malformed response deliberately share the same public
+      // result: callers cannot probe another pending dialog's shape.
       throw new AppError("UI_REQUEST_NOT_FOUND", "This extension UI request is no longer pending", 404);
     }
   }
@@ -642,41 +645,23 @@ export class SessionService {
       modelRuntime,
       sessionManager: manager,
     });
-    const extensionState: { active?: ActiveSession; startupFailure?: { code: string; message: string } } = {};
-    const onExtensionError = (error: ExtensionError) => {
-      console.warn("Pi extension error", error);
-      if (!isUnsupportedExtensionInteraction(error)) return;
-      const failure = { code: UNSUPPORTED_EXTENSION_INTERACTION, message: error.error };
-      if (extensionState.active === undefined) extensionState.startupFailure = failure;
-      else extensionState.active.extensionFailure = failure;
-    };
     const publishExtensionUi = (message: ExtensionUiMessage) => {
-      const target = extensionState.active;
-      if (target === undefined) return;
+      // `bindExtensions` runs only after `active` is registered below, so startup
+      // dialogs never disappear or deadlock.
       if (message.type === "request") {
-        this.events.publishSession(target.ref, { type: "extension.uiRequest", payload: { request: message.request } });
+        this.events.publishSession(active.ref, { type: "extension.uiRequest", payload: { request: message.request } });
       } else {
-        this.events.publishSession(target.ref, {
+        this.events.publishSession(active.ref, {
           type: "extension.uiSettled",
           payload: { id: message.id, outcome: message.outcome, ...(message.value === undefined ? {} : { value: message.value }), ...(message.confirmed === undefined ? {} : { confirmed: message.confirmed }) },
         });
       }
     };
     const extensionUi = new ExtensionUiBridge(publishExtensionUi);
-    try {
-      await session.bindExtensions({ mode: "rpc", uiContext: extensionUi.context, onError: onExtensionError });
-    } catch (error) {
-      console.warn("Pi extension binding failed", error);
-    }
-
     const actualRef: SessionRef = { workspaceId: workspace.id, sessionId: session.sessionId };
     const now = new Date().toISOString();
-    const header = manager.getHeader();
-    const headerTimestamp = header?.timestamp;
-    const createdAt = typeof headerTimestamp === "string" && Number.isFinite(Date.parse(headerTimestamp))
-      ? new Date(headerTimestamp).toISOString()
-      : now;
-    const updatedAt = await sessionModifiedAt(session.sessionFile, now);
+    const headerTimestamp = manager.getHeader()?.timestamp;
+    const createdAt = typeof headerTimestamp === "string" && Number.isFinite(Date.parse(headerTimestamp)) ? new Date(headerTimestamp).toISOString() : now;
     const active: ActiveSession = {
       ref: actualRef,
       cwd: workspace.cwd,
@@ -685,9 +670,7 @@ export class SessionService {
       modelSwitching: false,
       extensionUi,
       unsubscribe: () => undefined,
-      state: extensionState.startupFailure === undefined
-        ? { sessionId: session.sessionId, runState: "idle" }
-        : { sessionId: session.sessionId, runState: "idle", lastError: { ...extensionState.startupFailure, occurredAt: now } },
+      state: { sessionId: session.sessionId, runState: "idle" },
       requestRuns: new Map(),
       liveMessages: new Map(),
       activeTools: new Map(),
@@ -695,11 +678,18 @@ export class SessionService {
       compactionAbortRequested: false,
       pendingRunError: undefined,
       createdAt,
-      updatedAt,
+      updatedAt: await sessionModifiedAt(session.sessionFile, now),
     };
-    extensionState.active = active;
     active.unsubscribe = session.subscribe((event) => this.handlePiEvent(active, event));
     this.active.set(activeKey(actualRef), active);
+    const onExtensionError = (error: ExtensionError) => {
+      console.warn("Pi extension error", error);
+      if (!isUnsupportedExtensionInteraction(error)) return;
+      active.extensionFailure = { code: UNSUPPORTED_EXTENSION_INTERACTION, message: error.error };
+    };
+    void session.bindExtensions({ mode: "rpc", uiContext: extensionUi.context, onError: onExtensionError }).catch((error: unknown) => {
+      console.warn("Pi extension binding failed", error);
+    });
     return active;
   }
 

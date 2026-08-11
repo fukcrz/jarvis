@@ -483,6 +483,28 @@ describe("Jarvis HTTP and WebSocket API", () => {
 });
 
 describe("extension UI endpoint", () => {
+  it("publishes session_start dialogs and retains them in the runtime snapshot", async () => {
+    const server = activeApp();
+    const extensionsPath = join(jarvisHome, "agent", "extensions");
+    await mkdir(extensionsPath, { recursive: true });
+    await writeFile(join(extensionsPath, "startup-confirm.ts"), `export default function (pi) {
+      pi.on("session_start", async (_event, ctx) => { await ctx.ui.confirm("Confirm startup", "Allow this session?"); });
+    }`);
+    const workspacePath = join(jarvisHome, "extension-ui-startup-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const runtimeUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}/runtime`;
+
+    await vi.waitFor(async () => {
+      const runtime = (await server.inject({ method: "GET", url: runtimeUrl })).json<{ extensionUi?: { dialogs: Array<{ request: { id: string; method: string; title: string } }> } }>();
+      expect(runtime.extensionUi?.dialogs).toEqual([expect.objectContaining({ request: expect.objectContaining({ method: "confirm", title: "Confirm startup" }) })]);
+    });
+    const runtime = (await server.inject({ method: "GET", url: runtimeUrl })).json<{ extensionUi: { dialogs: Array<{ request: { id: string } }> } }>();
+    const response = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${session.id}/extension-ui`, payload: { id: runtime.extensionUi.dialogs[0]!.request.id, confirmed: false } });
+    expect(response.statusCode).toBe(200);
+  });
+
   it("resolves a pending extension UI request and rejects unknown ids", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "extension-ui-workspace");

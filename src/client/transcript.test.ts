@@ -204,6 +204,22 @@ describe("transcript reducer", () => {
     expect(settled.items.some((item) => item.kind === "tool" && item.id === "bash:bash-run")).toBe(false);
   });
 
+  it("hydrates pending extension dialogs from the runtime snapshot", () => {
+    const hydrated = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, {
+      seq: 9,
+      status: { sessionId: "session", runState: "running" },
+      model: { available: [] },
+      thinking: { current: "off", available: ["off"] },
+      liveMessages: [],
+      activeTools: [],
+      extensionUi: {
+        dialogs: [{ createdAt: "2026-08-09T00:00:00.000Z", request: { id: "a", method: "confirm", title: "Allow?", message: "Continue?", timeout: 5_000 } }],
+        statuses: {}, widgets: {},
+      },
+    });
+    expect(hydrated.items).toEqual([expect.objectContaining({ kind: "extension-ui", id: "ext:a", request: expect.objectContaining({ method: "confirm", timeout: 5_000 }) })]);
+  });
+
   it("hydrates a live bash item from the runtime snapshot after a reconnect", () => {
     const hydrated = hydrateTranscript(emptyTranscript, {
       items: [],

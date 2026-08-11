@@ -322,35 +322,18 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .context-compact { width: 100%; }
 
 /* --- Extension UI (ctx.ui bridge) --- */
-.extension-card { margin: 10px 0 14px; border: 1px solid #343943; border-radius: 8px; background: #1b1d21; }
-.extension-card.pending { border-color: #3d4560; }
-.extension-card-header { display: flex; align-items: center; gap: 6px; padding: 9px 11px 0; color: var(--muted); font-size: 11px; font-weight: 600; }
-.extension-card-header svg { flex: 0 0 auto; color: var(--accent); }
-.extension-card-state { margin-left: auto; color: var(--subtle); font-weight: 500; }
-.extension-card-body { padding: 8px 11px 10px; }
-.extension-card-result { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.extension-card-result.muted { color: var(--subtle); }
-.extension-options { display: grid; gap: 2px; }
-.extension-option { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 8px; border: 0; border-radius: 5px; background: transparent; padding: 7px 9px; color: var(--ink); font-size: 12px; text-align: left; }
-.extension-option:hover, .extension-option:active { background: var(--surface-hover); }
-.extension-option svg { flex: 0 0 auto; color: var(--subtle); opacity: 0; }
-.extension-option:hover svg { opacity: 1; }
-.extension-dialog { display: grid; gap: 9px; }
-.extension-dialog-message { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
-.extension-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.extension-input { width: 100%; border: 1px solid var(--line-strong); border-radius: 5px; background: #19191b; padding: 7px 9px; color: var(--ink); font-size: 12px; }
-.extension-input:focus { outline: none; border-color: #5f5c73; }
-.extension-input.multiline { min-height: 96px; resize: vertical; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-.extension-notice { display: flex; align-items: center; gap: 7px; margin: 6px 0 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.extension-notice-icon { display: grid; place-items: center; flex: 0 0 auto; }
-.extension-notice.info .extension-notice-icon { color: var(--accent); }
-.extension-notice.warning .extension-notice-icon { color: var(--warm); }
-.extension-notice.error .extension-notice-icon { color: var(--danger); }
-.extension-panels { display: grid; width: min(870px, 100%); gap: 6px; margin: 0 auto 8px; }
-.extension-status { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
-.extension-status svg { flex: 0 0 auto; color: var(--accent); }
-.extension-widget { overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: #1b1d21; }
-.extension-widget-header { display: flex; align-items: center; gap: 6px; padding: 6px 9px; color: var(--subtle); font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
-.extension-widget-header svg { color: var(--accent); }
-.extension-widget-body { margin: 0; padding: 0 9px 7px; color: var(--muted); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
-@media (max-width: 760px) { .extension-panels { padding: 0 12px; } }
+.extension-card { position: relative; width: min(680px, 100%); margin: 14px 0 22px; overflow: hidden; border: 1px solid #484362; border-radius: 12px; background: linear-gradient(135deg, #23212e 0%, #1c1c22 62%); box-shadow: 0 10px 26px rgb(0 0 0 / .16); }
+.extension-card.pending { border-color: #756da3; box-shadow: 0 0 0 1px rgb(182 168 255 / .1), 0 12px 30px rgb(0 0 0 / .18); }
+.extension-card-header { display: flex; align-items: center; min-height: 40px; gap: 8px; border-bottom: 1px solid rgb(255 255 255 / .07); background: rgb(255 255 255 / .025); padding: 7px 13px; color: var(--muted); }
+.extension-card-badge { display: grid; place-items: center; width: 23px; height: 23px; flex: 0 0 auto; border: 1px solid #5c5780; border-radius: 7px; background: #322e4b; color: var(--accent-strong); }
+.extension-card-kicker { color: #c1bbd8; font-size: 10px; font-weight: 750; letter-spacing: .055em; text-transform: uppercase; }
+.extension-card-state { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--subtle); font-size: 10px; font-weight: 650; white-space: nowrap; }
+.extension-card-state.pending { color: #cbc4f6; }.extension-card-state.urgent { color: var(--warm); }
+.extension-card-body { display: grid; gap: 13px; padding: 15px; }.extension-card-body h3 { margin: 0; color: var(--ink); font-size: 14px; line-height: 1.42; }
+.extension-card-result { display: flex; align-items: flex-start; gap: 7px; border-top: 1px solid rgb(255 255 255 / .07); padding-top: 11px; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }.extension-card-result svg { flex: 0 0 auto; margin-top: 2px; color: var(--success); }
+.extension-options { display: grid; gap: 6px; }.extension-option { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 10px; border: 1px solid transparent; border-radius: 8px; background: rgb(255 255 255 / .035); padding: 10px 11px; color: var(--ink); font-size: 12px; text-align: left; transition: background .14s ease, border-color .14s ease, transform .14s ease; }.extension-option:hover:not(:disabled), .extension-option:focus-visible { border-color: #6b648f; background: #333047; transform: translateX(2px); }.extension-option svg { flex: 0 0 auto; color: var(--accent-strong); }
+.extension-dialog { display: grid; gap: 10px; }.extension-dialog-message { margin: -3px 0 1px; border-left: 2px solid #857ec1; padding-left: 10px; color: #c5c1d0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }.extension-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }.extension-dialog-actions.confirm-actions { padding-top: 2px; }
+.extension-input { width: 100%; border: 1px solid #4a4855; border-radius: 8px; background: #15151a; padding: 9px 10px; color: var(--ink); font-size: 12px; line-height: 1.5; }.extension-input:focus { outline: none; border-color: #8279bb; box-shadow: 0 0 0 3px rgb(182 168 255 / .12); }.extension-input.multiline { min-height: 126px; resize: vertical; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }.extension-dialog-hint { margin: -3px 0 0; color: var(--subtle); font-size: 10px; }
+.extension-notice { display: flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; margin: 8px 0 14px; border: 1px solid rgb(182 168 255 / .2); border-radius: 999px; background: rgb(182 168 255 / .07); padding: 6px 10px; color: #c9c6d3; font-size: 11px; line-height: 1.45; }.extension-notice-icon { display: grid; place-items: center; flex: 0 0 auto; }.extension-notice.info .extension-notice-icon { color: var(--accent); }.extension-notice.warning { border-color: rgb(244 190 112 / .28); background: rgb(244 190 112 / .08); }.extension-notice.warning .extension-notice-icon { color: var(--warm); }.extension-notice.error { border-color: rgb(239 143 147 / .3); background: rgb(239 143 147 / .08); }.extension-notice.error .extension-notice-icon { color: var(--danger); }
+.extension-panels { display: grid; width: min(870px, 100%); gap: 7px; margin: 0 auto; padding-inline: clamp(20px, 5vw, 70px); }.extension-panels.aboveEditor { margin-bottom: 9px; }.extension-panels.belowEditor { margin-top: -8px; padding-bottom: 13px; }.extension-status { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }.extension-status svg { flex: 0 0 auto; color: var(--accent); }.extension-widget { overflow: hidden; border: 1px solid #3d3b46; border-radius: 9px; background: #1b1b20; }.extension-widget-header { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid rgb(255 255 255 / .06); padding: 7px 10px; color: #aaa5b6; font-size: 10px; font-weight: 700; letter-spacing: .045em; text-transform: uppercase; }.extension-widget-header svg { color: var(--accent); }.extension-widget-body { margin: 0; padding: 8px 10px 9px; color: var(--muted); font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
+@media (max-width: 760px) { .extension-card { width: 100%; margin-block: 12px 18px; }.extension-card-body { padding: 13px; }.extension-panels { padding-inline: 12px; }.extension-panels.belowEditor { margin-top: -4px; padding-bottom: 10px; }.extension-dialog-actions { justify-content: stretch; }.extension-dialog-actions .button { flex: 1 1 auto; min-height: 34px; } }

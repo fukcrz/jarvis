@@ -678,12 +678,13 @@ export function App() {
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? stream.transcript.status.lastError?.message} status={stream.transcript.status} onExtensionUiRespond={stream.respondExtensionUi} />
-      {Object.keys(stream.extensionPanels.widgets).length === 0 && Object.keys(stream.extensionPanels.statuses).length === 0 ? null : <ExtensionPanels panels={stream.extensionPanels} />}
+      <ExtensionPanels panels={stream.extensionPanels} placement="aboveEditor" />
       <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />
       </>} />
+      <ExtensionPanels panels={stream.extensionPanels} placement="belowEditor" />
     </>}
   </>;
 
@@ -828,15 +829,15 @@ function readDrafts(): Record<string, string> {
   }
 }
 
-function ExtensionPanels({ panels }: { panels: ExtensionPanelState }) {
-  const widgets = Object.entries(panels.widgets).filter(([, widget]) => widget.placement === "aboveEditor");
-  const statuses = Object.entries(panels.statuses);
+function ExtensionPanels({ panels, placement }: { panels: ExtensionPanelState; placement: "aboveEditor" | "belowEditor" }) {
+  const widgets = Object.entries(panels.widgets).filter(([, widget]) => widget.placement === placement);
+  const statuses = placement === "aboveEditor" ? Object.entries(panels.statuses) : [];
   if (widgets.length === 0 && statuses.length === 0) return null;
-  return <div className="extension-panels">
-    {statuses.map(([key, text]) => <div key={`status:${key}`} className="extension-status"><Puzzle size={11} /><span>{text}</span></div>)}
-    {widgets.map(([key, widget]) => <div key={`widget:${key}`} className="extension-widget">
-      <div className="extension-widget-header"><Puzzle size={11} /><span>{key}</span></div>
+  return <aside className={`extension-panels ${placement}`} aria-label="扩展面板">
+    {statuses.map(([key, text]) => <div key={`status:${key}`} className="extension-status"><Puzzle size={12} /><span>{text}</span></div>)}
+    {widgets.map(([key, widget]) => <section key={`widget:${key}`} className="extension-widget">
+      <div className="extension-widget-header"><Puzzle size={12} /><span>{key}</span></div>
       <pre className="extension-widget-body">{widget.lines.join("\n")}</pre>
-    </div>)}
-  </div>;
+    </section>)}
+  </aside>;
 }
