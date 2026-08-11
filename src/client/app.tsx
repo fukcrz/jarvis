@@ -96,6 +96,8 @@ export function App() {
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, ImageAttachment[]>>({});
   const [editingMessage, setEditingMessage] = useState<{ id: string; sessionId: string; draft: string; attachments: ImageAttachment[] }>();
   const [editDraftInjection, setEditDraftInjection] = useState<{ text: string; nonce: number }>();
+  const [forkTarget, setForkTarget] = useState<Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>>();
+  const [forkPending, setForkPending] = useState(false);
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuTarget | undefined>();
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenuTarget | undefined>();
   const [mobileActionTarget, setMobileActionTarget] = useState<MobileActionTarget | undefined>();
@@ -182,6 +184,8 @@ export function App() {
     setCompactionRequest(undefined);
     setEditingMessage(undefined);
     setEditDraftInjection(undefined);
+    setForkTarget(undefined);
+    setForkPending(false);
     setSessionNotice(undefined);
   }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
 
@@ -559,15 +563,25 @@ export function App() {
     setEditingMessage(undefined);
   };
 
-  const forkMessage = async (message: Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>) => {
+  const requestForkMessage = (message: Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>) => {
     if (selectedRef === undefined || stream.transcript.status.runState !== "idle") return;
+    setForkTarget(message);
+  };
+
+  const confirmForkMessage = async () => {
+    const message = forkTarget;
+    if (message === undefined || selectedRef === undefined || forkPending || stream.transcript.status.runState !== "idle") return;
+    setForkPending(true);
     try {
       const session = await api.forkSession(selectedRef, message.id);
       setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session) }));
+      setForkTarget(undefined);
       setPageError(undefined);
       chooseSession(selectedRef.workspaceId, session.id);
     } catch (error) {
-      if (!(await recoverSessionConflict(error))) setPageError(error instanceof Error ? error.message : "无法 Fork 会话");
+      if (!(await recoverSessionConflict(error))) setPageError(error instanceof Error ? error.message : "无法创建分支");
+    } finally {
+      setForkPending(false);
     }
   };
 
@@ -736,7 +750,7 @@ export function App() {
   const renderChatContent = () => <>
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
-      <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} extensionNotices={stream.extensionNotices} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? forkMessage : undefined} onDismissExtensionNotice={stream.dismissExtensionNotice} onExtensionUiRespond={stream.respondExtensionUi} />
+      <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} extensionNotices={stream.extensionNotices} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? requestForkMessage : undefined} onDismissExtensionNotice={stream.dismissExtensionNotice} onExtensionUiRespond={stream.respondExtensionUi} />
       <ExtensionPanels panels={stream.extensionPanels} />
       <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage?.sessionId === selectedRef.sessionId ? cancelMessageEdit : undefined} extensionStatuses={stream.extensionPanels.statuses} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
@@ -822,6 +836,16 @@ export function App() {
         <DialogContent title="移除项目" description="此操作只会将项目从 Jarvis 中移除。">
           <p className="delete-session-message"><strong>{projectRemoveTarget?.label ?? ""}</strong>及其会话历史将保留在磁盘上。</p>
           <div className="dialog-actions"><Button variant="secondary" onClick={() => setProjectRemoveTarget(undefined)} disabled={projectRemovePending}>取消</Button><Button variant="danger" onClick={() => { void removeProject(); }} disabled={projectRemovePending}>{projectRemovePending ? "正在移除…" : "移除项目"}</Button></div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={forkTarget !== undefined} onOpenChange={(open) => { if (!open && !forkPending) setForkTarget(undefined); }}>
+        <DialogContent title="创建会话分支" description="将从选中的消息处复制上下文并创建一个新的会话。">
+          <p className="delete-session-message">确定要从这条消息创建分支吗？原会话不会受到影响。</p>
+          <div className="dialog-actions">
+            <Button variant="secondary" onClick={() => setForkTarget(undefined)} disabled={forkPending}>取消</Button>
+            <Button className="fork-confirm-button" onClick={() => { void confirmForkMessage(); }} disabled={forkPending}>{forkPending ? "正在创建…" : "创建分支"}</Button>
+          </div>
         </DialogContent>
       </Dialog>
 

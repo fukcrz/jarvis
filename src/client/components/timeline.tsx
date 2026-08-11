@@ -1,11 +1,12 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { Archive, ArrowDown, Check, CircleAlert, Clock3, GitBranch, LoaderCircle, MoreHorizontal, RefreshCw, RotateCcw, Terminal, X, XCircle } from "lucide-react";
+import { Archive, ArrowDown, Check, CircleAlert, Clock3, GitBranch, LoaderCircle, Pencil, RefreshCw, RotateCcw, Terminal, X, XCircle } from "lucide-react";
 import type { ContextSummaryTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
 import { MarkdownMessage } from "./markdown-message";
 import { Button } from "./ui/button";
+import { Tooltip } from "./ui/tooltip";
 
 interface TimelineProps {
   items: TimelineItem[];
@@ -180,13 +181,13 @@ const MessageItem = memo(function MessageItem({ item, streaming, onEdit, onFork 
   return (
     <article className={`message-row ${item.role} ${streaming ? "streaming" : ""}`}>
       <div className={`message-body ${item.role}`}>
-        <MessageActions item={item} streaming={streaming} onEdit={onEdit} onFork={onFork} />
         {images.length === 0 ? null : <div className="message-images" aria-label="消息图片">
           {images.map((image, index) => <button key={`${image.mimeType}:${index}`} type="button" className="message-image-thumb" aria-label={`预览图片 ${index + 1}`} onClick={() => setPreviewIndex(index)}><img src={imageDataUrl(image)} alt={`图片 ${index + 1}`} loading="lazy" /></button>)}
         </div>}
         {item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
           <MarkdownMessage text={item.text} streaming={streaming} />
         </div>}
+        <MessageActions item={item} streaming={streaming} onEdit={onEdit} onFork={onFork} />
         {preview === undefined ? null : <div className="image-lightbox" role="dialog" aria-label={`预览图片 ${previewIndex! + 1}`} onClick={() => setPreviewIndex(undefined)}>
           <button type="button" className="image-lightbox-close" aria-label="关闭图片预览" onClick={() => setPreviewIndex(undefined)}><XCircle size={20} /></button>
           <img src={imageDataUrl(preview)} alt={`图片 ${previewIndex! + 1}`} onClick={(event) => event.stopPropagation()} />
@@ -197,23 +198,14 @@ const MessageItem = memo(function MessageItem({ item, streaming, onEdit, onFork 
 });
 
 function MessageActions({ item, streaming, onEdit, onFork }: { item: MessageTimelineItem; streaming: boolean; onEdit?: (item: MessageTimelineItem) => void; onFork?: (item: MessageTimelineItem) => void }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
   if (streaming || (onEdit === undefined && onFork === undefined)) return null;
-  return <div className="message-actions" ref={rootRef} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setOpen(false); } }}>
-    <button type="button" aria-label="消息操作" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}><MoreHorizontal size={15} /></button>
-    {open ? <div className="message-action-menu" role="menu">
-      {item.role !== "user" || onEdit === undefined ? null : <button type="button" role="menuitem" onClick={() => { setOpen(false); onEdit(item); }}>编辑并重发</button>}
-      {onFork === undefined ? null : <button type="button" role="menuitem" onClick={() => { setOpen(false); onFork(item); }}>Fork 会话</button>}
-    </div> : null}
+  return <div className="message-actions">
+    {item.role !== "user" || onEdit === undefined ? null : <Tooltip label="编辑并重新生成">
+      <button type="button" className="message-action-button" aria-label="编辑并重新生成" onClick={() => onEdit(item)}><Pencil size={14} /></button>
+    </Tooltip>}
+    {onFork === undefined ? null : <Tooltip label="从此处分支">
+      <button type="button" className="message-action-button" aria-label="从此处分支" onClick={() => onFork(item)}><GitBranch size={14} /></button>
+    </Tooltip>}
   </div>;
 }
 
@@ -352,7 +344,7 @@ function renderTimelineItems(items: TimelineItem[], streamingMessageId: string |
   const activeActivityIndex = hasActiveActivity(items, status) ? lastActivityIndex : -1;
 
   return grouped.map((entry, index) => {
-    if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} onEdit={onEditUserMessage} onFork={onForkMessage} />;
+    if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} onEdit={onEditUserMessage} onFork={entry.item.role === "user" ? onForkMessage : undefined} />;
     if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} />;
     if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={onExtensionUiRespond} />;
     return <ActivityGroup key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={index === activeActivityIndex} startedAt={status.activeRun?.startedAt} stopping={status.runState === "stopping"} />;
