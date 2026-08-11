@@ -29,16 +29,15 @@ export function ContextButton({ contextUsage, disabled, busy, onCompact }: Conte
     <Dialog open={open} onOpenChange={setOpen}>
       <Tooltip label={label}>
         <Button variant="ghost" size="icon" className={`context-ring ${tone}`} aria-label="上下文详情" disabled={disabled} onClick={() => setOpen(true)}>
-          {percent === null ? <Archive size={14} /> : <Ring percent={percent} />}
+          {/* 始终显示圆形进度环：用量未知（如压缩后）时显示空环，而不是退化成图标 */}
+          <Ring percent={percent ?? 0} />
         </Button>
       </Tooltip>
       <DialogContent className="selector-sheet context-dialog" title="上下文">
         <div className="context-dialog-body">
           <div className={`context-dialog-ring ${tone}`}>
-            {percent === null ? <Archive size={24} /> : <>
-              <Ring percent={percent} />
-              <span>{Math.round(percent)}%</span>
-            </>}
+            <Ring percent={percent ?? 0} />
+            <span>{percent === null ? "—" : `${Math.round(percent)}%`}</span>
           </div>
           <div className="context-dialog-stats">
             <div><span>已用</span><strong>{percent === null ? "—" : formatTokens(contextUsage?.tokens ?? 0)}</strong></div>
