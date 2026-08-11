@@ -33,6 +33,7 @@ describe("projectHistory", () => {
 
     expect(items).toEqual([
       expect.objectContaining({ kind: "message", role: "user", text: "Inspect the repository" }),
+      expect.objectContaining({ kind: "thinking", state: "completed", text: "hidden" }),
       expect.objectContaining({ kind: "message", role: "assistant", text: "I will inspect it." }),
       expect.objectContaining({ kind: "tool", id: "tool-1", name: "read", state: "completed", target: "package.json", output: "{\"name\":\"jarvis\"}" }),
     ]);
@@ -84,18 +85,39 @@ describe("projectHistory", () => {
     ]);
   });
 
-  it("does not leak thinking content into the browser projection", () => {
+  it("projects thinking blocks as collapsible cards before the answer", () => {
     const items = projectHistory([{
       type: "message",
       id: "assistant-entry",
       message: { role: "assistant", content: [{ type: "thinking", thinking: "private" }, { type: "text", text: "Visible answer" }] },
     }]);
 
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ kind: "message", text: "Visible answer" });
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ kind: "thinking", id: "thinking:assistant-entry", state: "completed", text: "private" });
+    expect(items[1]).toMatchObject({ kind: "message", text: "Visible answer" });
+    // 思考内容不进消息正文，正文仍只含可见回答。
+    expect(items[1]).not.toHaveProperty("text", expect.stringContaining("private"));
   });
 
-  it("filters harness reasoning incorrectly persisted as a text part", () => {
+  it("recovers harness reasoning persisted as a <thinking> text part", () => {
+    const items = projectHistory([{
+      type: "message",
+      id: "assistant-entry",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "<thinking>private planning</thinking> Visible answer" },
+        ],
+      },
+    }]);
+
+    expect(items).toEqual([
+      expect.objectContaining({ kind: "thinking", state: "completed", text: "private planning" }),
+      expect.objectContaining({ kind: "message", text: "Visible answer" }),
+    ]);
+  });
+
+  it("keeps unclosed <thinking> markers out of the visible answer", () => {
     const items = projectHistory([{
       type: "message",
       id: "assistant-entry",

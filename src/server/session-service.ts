@@ -30,6 +30,7 @@ import type {
   SessionSummary,
   SessionThinkingSnapshot,
   ThinkingLevel,
+  ThinkingTimelineItem,
   TimelineItem,
   TimelinePage,
   ToolTimelineItem,
@@ -39,7 +40,7 @@ import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
 import { projectModelSnapshot } from "./model-projection.js";
-import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, messageFromPi, projectHistory, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
+import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, messageFromPi, projectHistory, thinkingTextFromContent, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
 
 interface ActiveRun {
@@ -59,6 +60,8 @@ interface ActiveSession {
   requestRuns: Map<string, PromptAccepted>;
   liveMessages: Map<string, MessageTimelineItem>;
   partial?: MessageTimelineItem;
+  /** 当前 run 正在流式的思考块（message_end 定稿前）。 */
+  partialThinking?: ThinkingTimelineItem;
   activeTools: Map<string, ToolTimelineItem>;
   /** 正在执行的用户 !cmd 命令（流式输出尚未落盘）。 */
   activeBash?: ToolTimelineItem;
@@ -288,6 +291,7 @@ export class SessionService {
       thinking: this.thinkingSnapshot(active),
       liveMessages: [...active.liveMessages.values()],
       ...(active.partial === undefined ? {} : { partial: active.partial }),
+      ...(active.partialThinking === undefined ? {} : { partialThinking: active.partialThinking }),
       activeTools: [...active.activeTools.values()],
       ...(active.activeBash === undefined ? {} : { activeBash: active.activeBash }),
       ...(contextUsage === undefined ? {} : { contextUsage }),
@@ -373,6 +377,7 @@ export class SessionService {
     active.updatedAt = run.startedAt;
     active.liveMessages.clear();
     active.partial = undefined;
+    active.partialThinking = undefined;
     active.activeTools.clear();
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
@@ -418,6 +423,7 @@ export class SessionService {
     active.updatedAt = run.startedAt;
     active.liveMessages.clear();
     active.partial = undefined;
+    active.partialThinking = undefined;
     active.activeTools.clear();
     active.activeBash = item;
     active.extensionFailure = undefined;
@@ -813,6 +819,7 @@ export class SessionService {
         active.state = { sessionId: active.ref.sessionId, runState: "running", activeRun: run };
         active.liveMessages.clear();
         active.partial = undefined;
+        active.partialThinking = undefined;
         active.activeTools.clear();
         active.extensionFailure = undefined;
         active.pendingRunError = undefined;
@@ -821,6 +828,22 @@ export class SessionService {
         return;
       }
       case "message_update": {
+        if (event.assistantMessageEvent.type === "thinking_delta") {
+          const runId = active.state.activeRun?.id;
+          if (runId === undefined) return;
+          const identity = messageFromPi(event.message, "assistant", "");
+          const thinkingId = `${identity.id}:thinking`;
+          active.partialThinking ??= {
+            kind: "thinking",
+            id: thinkingId,
+            createdAt: identity.createdAt,
+            state: "running",
+            text: "",
+          };
+          active.partialThinking.text += event.assistantMessageEvent.delta;
+          this.events.publishSession(active.ref, { type: "thinking.delta", runId, payload: { thinkingId, createdAt: active.partialThinking.createdAt, delta: event.assistantMessageEvent.delta } });
+          return;
+        }
         if (event.assistantMessageEvent.type !== "text_delta") return;
         const runId = active.state.activeRun?.id;
         if (runId === undefined) return;
@@ -859,6 +882,21 @@ export class SessionService {
           return;
         }
         if (!isAssistantMessage(event.message)) return;
+        const identity = messageFromPi(event.message, "assistant", "", active.partial?.createdAt);
+        // 思考块定稿：以最终 content 里的 thinking 部分为准（流式期间部分 provider
+        // 只在 message_end 才返回思考内容），兜底用流式累积的文本。
+        const thinkingText = thinkingTextFromContent(event.message.content);
+        if (active.partialThinking !== undefined || thinkingText !== "") {
+          const thinking: ThinkingTimelineItem = {
+            kind: "thinking",
+            id: `${identity.id}:thinking`,
+            createdAt: active.partialThinking?.createdAt ?? identity.createdAt,
+            state: "completed",
+            text: thinkingText !== "" ? thinkingText : (active.partialThinking?.text ?? ""),
+          };
+          active.partialThinking = undefined;
+          this.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: { thinkingId: thinking.id, createdAt: thinking.createdAt, text: thinking.text } });
+        }
         const text = assistantTextFromContent(event.message.content);
         const completed = text === ""
           ? undefined
@@ -1062,6 +1100,7 @@ export class SessionService {
     };
     active.liveMessages.clear();
     active.partial = undefined;
+    active.partialThinking = undefined;
     active.activeTools.clear();
     active.activeBash = undefined;
     active.compactionAbortRequested = false;
@@ -1088,6 +1127,7 @@ export class SessionService {
     }
     active.liveMessages.clear();
     active.partial = undefined;
+    active.partialThinking = undefined;
     active.activeTools.clear();
     active.activeBash = undefined;
     active.compactionAbortRequested = false;

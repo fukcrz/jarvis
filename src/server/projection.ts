@@ -1,4 +1,4 @@
-import type { ContextSummaryTimelineItem, ImageAttachment, MessageTimelineItem, TimelineItem, ToolState, ToolTimelineItem } from "../shared/protocol.js";
+import type { ContextSummaryTimelineItem, ImageAttachment, MessageTimelineItem, ThinkingTimelineItem, TimelineItem, ToolState, ToolTimelineItem } from "../shared/protocol.js";
 
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
 
@@ -31,6 +31,8 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
     }
 
     if (role === "assistant") {
+      const thinkingText = thinkingTextFromContent(message["content"]);
+      if (thinkingText !== "") items.push(thinkingFromPi(message, thinkingText, createdAt, entryId));
       const text = assistantTextFromContent(message["content"]);
       if (text !== "") items.push(messageFromPi(message, "assistant", text, createdAt, entryId));
       const content = message["content"];
@@ -127,6 +129,50 @@ export function contextSummaryFromEntry(entry: unknown): ContextSummaryTimelineI
     summaryType: type === "compaction" ? "compaction" : "branch",
     summary,
     ...(tokensBefore === undefined ? {} : { tokensBefore }),
+  };
+}
+
+/**
+ * 提取模型推理内容：pi 正常用 `type: "thinking"` 内容块，早期 harness 会话则把
+ * 推理写在 `<thinking>…</thinking>` 文本前缀里。两者都投影为时间线上的思考卡片。
+ */
+export function thinkingTextFromContent(content: unknown): string {
+  const thinking: string[] = [];
+  if (typeof content === "string") {
+    const extracted = legacyThinkingFromText(content);
+    if (extracted !== "") thinking.push(extracted);
+    return thinking.join("\n\n");
+  }
+  if (!Array.isArray(content)) return "";
+  for (const part of content) {
+    if (!isRecord(part)) continue;
+    if (part["type"] === "thinking") {
+      const text = stringValue(part["thinking"]);
+      if (text !== "") thinking.push(text);
+      continue;
+    }
+    if (part["type"] === "text") {
+      const extracted = legacyThinkingFromText(stringValue(part["text"]));
+      if (extracted !== "") thinking.push(extracted);
+    }
+  }
+  return thinking.join("\n\n");
+}
+
+function legacyThinkingFromText(text: string): string {
+  const matches = [...text.matchAll(/<thinking>([\s\S]*?)<\/thinking>/g)];
+  return matches.map((match) => (match[1] ?? "").trim()).filter(Boolean).join("\n\n");
+}
+
+export function thinkingFromPi(message: unknown, text: string, createdAt: string, fallbackId: string): ThinkingTimelineItem {
+  const record = isRecord(message) ? message : {};
+  const timestamp = record["timestamp"];
+  return {
+    kind: "thinking",
+    id: `thinking:${stringValue(record["id"]) || fallbackId}`,
+    createdAt: toIso(timestamp ?? createdAt),
+    state: "completed",
+    text,
   };
 }
 

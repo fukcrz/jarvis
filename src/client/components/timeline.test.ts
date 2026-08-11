@@ -23,6 +23,16 @@ function message(id: string): TimelineItem {
   };
 }
 
+function thinking(id: string): TimelineItem {
+  return {
+    kind: "thinking",
+    id,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    state: "completed",
+    text: "thinking",
+  };
+}
+
 describe("groupTimelineItems", () => {
   it("groups only consecutive tool items", () => {
     const result = groupTimelineItems([tool("a"), tool("b", "bash"), message("m"), tool("c")]);
@@ -38,6 +48,17 @@ describe("groupTimelineItems", () => {
     expect(groupTimelineItems([message("a"), message("b")])).toEqual([
       { kind: "message", item: message("a") },
       { kind: "message", item: message("b") },
+    ]);
+  });
+
+  it("keeps thinking cards as their own entries and splits tool runs around them", () => {
+    const result = groupTimelineItems([tool("a"), thinking("t"), message("m"), tool("c")]);
+
+    expect(result).toEqual([
+      { kind: "activity", items: [tool("a")] },
+      { kind: "thinking", item: thinking("t") },
+      { kind: "message", item: message("m") },
+      { kind: "activity", items: [tool("c")] },
     ]);
   });
 
