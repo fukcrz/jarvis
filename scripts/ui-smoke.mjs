@@ -104,7 +104,7 @@ async function capture(name, viewport, session, screenshotPath, desktop) {
   await verifyRunFeedback(page, name, session.sessionId, emit);
   await verifyExtensionUi(page, name, session, emit);
   if (desktop) await verifyDesktopControls(page, name, session);
-  else await verifyMobileNavigation(page, name);
+  else await verifyMobileNavigation(page, name, session);
 
   await assertNoHorizontalOverflow(page, name);
   await page.screenshot({ path: screenshotPath, fullPage: true });
@@ -339,12 +339,19 @@ async function verifyDesktopControls(page, name, session) {
   await page.keyboard.press("Escape");
 }
 
-async function verifyMobileNavigation(page, name) {
+async function verifyMobileNavigation(page, name, session) {
   await page.locator(".mobile-chat-header").waitFor({ state: "visible", timeout: 5_000 });
-  await page.locator(".mobile-chat-session").click();
-  await page.getByRole("dialog", { name: "快速切换会话" }).waitFor({ state: "visible", timeout: 5_000 });
-  await page.getByRole("button", { name: "关闭快速切换" }).click();
-  await page.getByRole("dialog", { name: "快速切换会话" }).waitFor({ state: "hidden", timeout: 5_000 });
+  await page.getByRole("button", { name: "返回会话列表" }).click();
+  await page.locator(".mobile-all-sessions-page").waitFor({ state: "visible", timeout: 5_000 });
+  const sessionProject = page.getByRole("button", { name: session.label, exact: true });
+  await sessionProject.click();
+  if (!await sessionProject.evaluate((node) => node.classList.contains("selected"))) failures.push(`${name}: selected mobile project filter was not retained`);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const restoredProject = page.getByRole("button", { name: session.label, exact: true });
+  if (!await restoredProject.evaluate((node) => node.classList.contains("selected"))) failures.push(`${name}: mobile project filter was not restored`);
+  await page.locator(`.mobile-session-row[data-session-id="${session.sessionId}"]`).click();
+  await page.locator(".mobile-chat-header").waitFor({ state: "visible", timeout: 5_000 });
+  await waitForSessionSocket(page, session.sessionId);
   await assertNoHorizontalOverflow(page, name);
 }
 

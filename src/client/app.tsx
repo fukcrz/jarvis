@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowLeft, ChevronDown, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
+import { ArrowLeft, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, isSessionConflict, socketUrl } from "./api";
@@ -11,7 +11,7 @@ import { Sidebar } from "./components/sidebar";
 import { SessionContextMenu, type SessionContextMenuTarget } from "./components/session-context-menu";
 import { ProjectContextMenu, type ProjectContextMenuTarget } from "./components/project-context-menu";
 import { MobileActionSheet, type MobileActionTarget } from "./components/mobile-action-sheet";
-import { MobileProjectsPage, MobileSessionsPage, MobileSessionSwitcher } from "./components/mobile-navigation";
+import { MobileSessionSwitcher } from "./components/mobile-navigation";
 import { Timeline } from "./components/timeline";
 import type { ExtensionPanelState } from "./hooks/use-session-stream";
 import { ContextButton } from "./components/context-button";
@@ -53,25 +53,10 @@ export function App() {
   const [projectRenameValue, setProjectRenameValue] = useState("");
   const [projectRemoveTarget, setProjectRemoveTarget] = useState<Workspace | undefined>();
   const [projectRemovePending, setProjectRemovePending] = useState(false);
-  // The mobile page stack is the hash route: #/projects, #/sessions/:workspaceId, #/chat/:workspaceId/:sessionId.
-  const mobilePage: "projects" | "sessions" | "chat" = location.pathname.startsWith("/chat") ? "chat" : location.pathname.startsWith("/sessions") ? "sessions" : "projects";
-  // The session switcher lives in the query string so the back key closes it first.
-  const mobileSwitcherOpen = new URLSearchParams(location.search).get("overlay") === "switcher";
-  const closeMobileSwitcher = useCallback(() => {
-    navigate(location.pathname, { replace: true });
-  }, [location.pathname, navigate]);
-  // When switching sessions from the switcher we pop the overlay entry and then
-  // replace the entry that first entered chat, so the back key goes straight to
-  // the session list instead of walking back through previously viewed sessions.
-  const pendingSessionSwitchRef = useRef<string | undefined>(undefined);
+  // Mobile uses the global session list as its home: #/projects and #/chat/:workspaceId/:sessionId.
+  const mobilePage: "sessions" | "chat" = location.pathname.startsWith("/chat") ? "chat" : "sessions";
   // Prevent repeated clicks from creating several unused sessions in the same workspace.
   const creatingSessionWorkspacesRef = useRef(new Set<string>());
-  useEffect(() => {
-    const target = pendingSessionSwitchRef.current;
-    if (target === undefined) return;
-    pendingSessionSwitchRef.current = undefined;
-    navigate(target, { replace: true });
-  }, [location.pathname, location.search, navigate]);
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
   // The URL is the source of truth for the selected workspace/session.
   useEffect(() => {
@@ -80,9 +65,13 @@ export function App() {
     if (pathSessionId !== undefined && pathSessionId !== sessionId) setSessionId(pathSessionId);
   }, [location.pathname, workspaceId, sessionId]);
 
-  // First visit (empty hash): restore from localStorage or land on the project list.
+  // First visit (empty hash): mobile lands on the global session list; desktop restores its previous workspace.
   useEffect(() => {
     if (location.pathname !== "/") return;
+    if (window.innerWidth <= 760) {
+      navigate("/projects", { replace: true });
+      return;
+    }
     const restoredWorkspace = window.localStorage.getItem("jarvis.workspace");
     const restoredSession = window.localStorage.getItem("jarvis.session");
     if (restoredWorkspace !== null && restoredSession !== null) navigate(`/chat/${restoredWorkspace}/${restoredSession}`, { replace: true });
@@ -104,15 +93,6 @@ export function App() {
   const [deleteTarget, setDeleteTarget] = useState<Pick<SessionContextMenuTarget, "workspaceId" | "session"> | undefined>();
   const [deletePending, setDeletePending] = useState(false);
   const [composerCommands, setComposerCommands] = useState<{ sessionKey: string; items: ComposerCommand[] } | undefined>();
-
-  const activeRunStateByWorkspace = useMemo(() => {
-    const result: Record<string, "running" | "stopping"> = {};
-    for (const [id, sessions] of Object.entries(sessionsByWorkspace)) {
-      const active = sessions.find((session): session is SessionSummary & { runState: "running" | "stopping" } => session.runState !== "idle");
-      if (active !== undefined) result[id] = active.runState;
-    }
-    return result;
-  }, [sessionsByWorkspace]);
 
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId);
   const selectedSession = selectedWorkspace === undefined
@@ -268,7 +248,7 @@ export function App() {
         // Desktop: expanding a project in the sidebar does not navigate.
         setWorkspaceId(fallback);
       } else {
-        navigate(`/sessions/${fallback}`, { replace: true });
+        navigate(isMobile ? "/projects" : `/sessions/${fallback}`, { replace: true });
       }
       return;
     }
@@ -279,7 +259,7 @@ export function App() {
       if (pathSessionId !== undefined && !sessions.some((session) => session.id === pathSessionId)) {
         // The chat URL carries a stale session id (deleted, other workspace).
         setSessionId(undefined);
-        navigate(`/sessions/${workspace.id}`, { replace: true });
+        navigate("/projects", { replace: true });
       } else if (pathSessionId === undefined && sessionId !== undefined && !sessions.some((session) => session.id === sessionId)) {
         // Mobile has no implicit first-session fallback; clear a stale pick.
         setSessionId(undefined);
@@ -409,11 +389,8 @@ export function App() {
       const target = `/chat/${targetWorkspaceId}/${session.id}`;
       if (!isMobile) {
         navigate(target, { replace: true });
-      } else if (mobileSwitcherOpen) {
-        pendingSessionSwitchRef.current = target;
-        navigate(-1);
       } else if (mobilePage === "sessions") {
-        // Mobile page-level move: session list -> chat.
+        // Mobile page-level move: global session list -> chat.
         navigate(target);
       } else {
         navigate(target, { replace: true });
@@ -505,7 +482,7 @@ export function App() {
       if (workspaceId === target.workspaceId && sessionId === target.session.id) {
         setSessionId(undefined);
         // Mobile: back to the session list; desktop: the guard picks the next session.
-        navigate(`/sessions/${target.workspaceId}`, { replace: true });
+        navigate(isMobile ? "/projects" : `/sessions/${target.workspaceId}`, { replace: true });
       }
       setDeleteTarget(undefined);
       setPageError(undefined);
@@ -714,28 +691,12 @@ export function App() {
       navigate(target, { replace: true });
       return;
     }
-    if (mobileSwitcherOpen) {
-      // Pop the switcher overlay entry; the effect above replaces the
-      // chat-entry entry with the new session.
-      pendingSessionSwitchRef.current = target;
-      navigate(-1);
-      return;
-    }
     if (mobilePage === "sessions") {
       // Mobile page-level move: session list -> chat.
       navigate(target);
       return;
     }
     navigate(target, { replace: true });
-  };
-
-  const openMobileProject = (workspace: Workspace) => {
-    // Mobile page-level move: project list -> session list.
-    navigate(`/sessions/${workspace.id}`);
-  };
-
-  const openMobileProjectMenu = (workspace: Workspace) => {
-    setMobileActionTarget({ kind: "project", workspace });
   };
 
   const openMobileSessionMenu = (workspaceId: string, session: SessionSummary) => {
@@ -787,14 +748,13 @@ export function App() {
         {renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "projects" ? <MobileProjectsPage workspaces={workspaces} activeRunStateByWorkspace={activeRunStateByWorkspace} onAddProject={() => setWorkspaceDialogOpen(true)} onOpenProject={openMobileProject} onOpenProjectMenu={openMobileProjectMenu} /> : mobilePage === "sessions" ? <MobileSessionsPage workspace={selectedWorkspace} sessions={sessionsByWorkspace[workspaceId ?? ""] ?? []} onBack={() => navigate("/projects", { replace: true })} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(id) => { if (workspaceId !== undefined) chooseSession(workspaceId, id); }} onOpenProjectMenu={openMobileProjectMenu} onOpenSessionMenu={(session) => { if (workspaceId !== undefined) openMobileSessionMenu(workspaceId, session); }} /> : <section className="mobile-chat-page">
+        {mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
-            <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate(`/sessions/${workspaceId ?? ""}`, { replace: true })}><ArrowLeft size={19} /></Button>
-            <button type="button" className="mobile-chat-session" onClick={() => navigate("?overlay=switcher")}>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}<ChevronDown size={15} /></button>
+            <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate("/projects", { replace: true })}><ArrowLeft size={19} /></Button>
+            <div className="mobile-chat-session">{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</div>
             {selectedSession === undefined || selectedWorkspace === undefined ? null : <Button variant="ghost" size="icon" aria-label="当前会话操作" onClick={() => openMobileSessionMenu(selectedWorkspace.id, selectedSession)}><MoreVertical size={18} /></Button>}
           </header>
           <div className="mobile-chat-content">{renderChatContent()}</div>
-          {mobileSwitcherOpen ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedWorkspaceId={workspaceId} selectedSessionId={sessionId} onClose={closeMobileSwitcher} onCreateSession={() => { void createSession(workspaceId); }} onSelectSession={(nextWorkspaceId, id) => chooseSession(nextWorkspaceId, id)} onOpenSessionMenu={openMobileSessionMenu} /> : null}
         </section>}
       </div> : null}
 
