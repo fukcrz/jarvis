@@ -79,6 +79,7 @@ export const api = {
   },
   commands: async (ref: SessionRef): Promise<ComposerCommand[]> => (await request<{ commands: ComposerCommand[] }>(`${sessionPath(ref)}/commands`)).commands,
   createSession: async (workspaceId: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`/api/workspaces/${workspaceId}/sessions`, { method: "POST", body: "{}" })).session,
+  forkSession: async (ref: SessionRef, messageId: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`${sessionPath(ref)}/fork`, { method: "POST", body: JSON.stringify({ messageId }) })).session,
   removeSession: async (ref: SessionRef): Promise<void> => { await request(sessionPath(ref), { method: "DELETE" }); },
   renameSession: async (ref: SessionRef, name: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(sessionPath(ref), { method: "PATCH", body: JSON.stringify({ name }) })).session,
   timeline: async (ref: SessionRef, before?: number): Promise<TimelinePage> => {
@@ -95,6 +96,10 @@ export const api = {
       clientRequestId,
       ...(images === undefined || images.length === 0 ? {} : { images }),
     }),
+  }),
+  editAndResend: async (ref: SessionRef, messageId: string, text: string, clientRequestId: string, images?: ImageAttachment[]): Promise<PromptAccepted> => request(`${sessionPath(ref)}/edit-and-resend`, {
+    method: "POST",
+    body: JSON.stringify({ messageId, text, clientRequestId, ...(images === undefined || images.length === 0 ? {} : { images }) }),
   }),
   compact: async (ref: SessionRef, customInstructions?: string, clientRequestId?: string): Promise<CompactAccepted> => request(`${sessionPath(ref)}/compact`, {
     method: "POST",

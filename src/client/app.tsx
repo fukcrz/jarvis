@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowLeft, ChevronDown, ClipboardList, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
-import type { ComposerCommand, ExtensionUiTimelineItem, ImageAttachment, ModelDescriptor, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
+import { ArrowLeft, ChevronDown, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
+import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, isSessionConflict, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
@@ -94,6 +94,8 @@ export function App() {
   const [compactionRequest, setCompactionRequest] = useState<{ runId: string; baselineSeq: number }>();
   const [drafts, setDrafts] = useState<Record<string, string>>(() => readDrafts());
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, ImageAttachment[]>>({});
+  const [editingMessage, setEditingMessage] = useState<{ id: string; sessionId: string; draft: string; attachments: ImageAttachment[] }>();
+  const [editDraftInjection, setEditDraftInjection] = useState<{ text: string; nonce: number }>();
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuTarget | undefined>();
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenuTarget | undefined>();
   const [mobileActionTarget, setMobileActionTarget] = useState<MobileActionTarget | undefined>();
@@ -140,12 +142,6 @@ export function App() {
   const closeProjectMenu = useCallback(() => { setProjectMenu(undefined); }, []);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
   const stream = useSessionStream(selectedRef);
-  const pendingExtensionItems = useMemo(() => stream.transcript.items.filter((item): item is ExtensionUiTimelineItem => item.kind === "extension-ui" && item.outcome === undefined), [stream.transcript.items]);
-  const [activeExtensionId, setActiveExtensionId] = useState<string>();
-
-  useEffect(() => {
-    if (activeExtensionId !== undefined && !pendingExtensionItems.some((item) => item.id === activeExtensionId)) setActiveExtensionId(undefined);
-  }, [activeExtensionId, pendingExtensionItems]);
 
   const recoverSessionConflict = useCallback(async (error: unknown): Promise<boolean> => {
     if (!isSessionConflict(error)) return false;
@@ -184,7 +180,8 @@ export function App() {
     setThinkingLevelPending(false);
     setCompactionPending(false);
     setCompactionRequest(undefined);
-    setActiveExtensionId(undefined);
+    setEditingMessage(undefined);
+    setEditDraftInjection(undefined);
     setSessionNotice(undefined);
   }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
 
@@ -516,28 +513,61 @@ export function App() {
 
   const submitPrompt = async (text: string, attachments: ImageAttachment[]): Promise<boolean> => {
     if (selectedRef === undefined) return false;
+    const edit = editingMessage?.sessionId === selectedRef.sessionId ? editingMessage : undefined;
     // !cmd / !!cmd：直接执行命令而不是发给模型（与 Pi TUI 一致）。
-    if (attachments.length === 0) {
+    if (edit === undefined && attachments.length === 0) {
       const bash = parseBashCommand(text);
       if (bash !== undefined) return submitBash(bash.command, bash.excludeFromContext);
     }
     const clientRequestId = randomUUID();
-    stream.addOptimisticUser(clientRequestId, text, attachments);
+    if (edit === undefined) stream.addOptimisticUser(clientRequestId, text, attachments);
+    else stream.replaceUserMessage(edit.id, clientRequestId, text, attachments);
     try {
-      await api.prompt(selectedRef, text, clientRequestId, attachments);
+      if (edit === undefined) await api.prompt(selectedRef, text, clientRequestId, attachments);
+      else await api.editAndResend(selectedRef, edit.id, text, clientRequestId, attachments);
       setSessionsByWorkspace((current) => ({
         ...current,
         [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
           ? { ...session, runState: "running", updatedAt: new Date().toISOString() }
           : session) ?? [],
       }));
+      setEditingMessage(undefined);
+      setEditDraftInjection(undefined);
       setPageError(undefined);
       return true;
     } catch (error) {
       stream.discardOptimisticUser(clientRequestId);
+      if (edit !== undefined) await stream.refresh().catch(() => undefined);
       if (await recoverSessionConflict(error)) return false;
       setPageError(error instanceof Error ? error.message : "无法发送消息");
       return false;
+    }
+  };
+
+  const editUserMessage = (message: Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>) => {
+    if (selectedSessionId === undefined || stream.transcript.status.runState !== "idle") return;
+    setEditingMessage({ id: message.id, sessionId: selectedSessionId, draft: selectedDraft, attachments: selectedAttachments });
+    setEditDraftInjection({ text: message.text, nonce: Date.now() });
+    updateSelectedAttachments(message.images ?? []);
+  };
+
+  const cancelMessageEdit = () => {
+    const edit = editingMessage;
+    if (edit === undefined || edit.sessionId !== selectedSessionId) return;
+    updateSelectedAttachments(edit.attachments);
+    setEditDraftInjection({ text: edit.draft, nonce: Date.now() });
+    setEditingMessage(undefined);
+  };
+
+  const forkMessage = async (message: Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>) => {
+    if (selectedRef === undefined || stream.transcript.status.runState !== "idle") return;
+    try {
+      const session = await api.forkSession(selectedRef, message.id);
+      setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session) }));
+      setPageError(undefined);
+      chooseSession(selectedRef.workspaceId, session.id);
+    } catch (error) {
+      if (!(await recoverSessionConflict(error))) setPageError(error instanceof Error ? error.message : "无法 Fork 会话");
     }
   };
 
@@ -585,7 +615,7 @@ export function App() {
     if (selectedRefKey === undefined) return;
     const onKeyDownCapture = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (document.querySelector('[role="dialog"], [role="menu"], .composer-completions, .cm-tooltip-autocomplete, [data-radix-popper-content-wrapper]') !== null) return;
+      if (document.querySelector('[role="dialog"], [role="menu"], .extension-operation.pending, .composer-completions, .cm-tooltip-autocomplete, [data-radix-popper-content-wrapper]') !== null) return;
       if (statusRef.current.runState === "idle") return;
       event.preventDefault();
       event.stopPropagation();
@@ -706,10 +736,9 @@ export function App() {
   const renderChatContent = () => <>
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
-      <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} extensionNotices={stream.extensionNotices} activeExtensionId={activeExtensionId} onActiveExtensionChange={setActiveExtensionId} onDismissExtensionNotice={stream.dismissExtensionNotice} onExtensionUiRespond={stream.respondExtensionUi} />
+      <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} extensionNotices={stream.extensionNotices} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? forkMessage : undefined} onDismissExtensionNotice={stream.dismissExtensionNotice} onExtensionUiRespond={stream.respondExtensionUi} />
       <ExtensionPanels panels={stream.extensionPanels} />
-      {pendingExtensionItems.length === 0 ? null : <PendingExtensionActions count={pendingExtensionItems.length} onOpen={() => setActiveExtensionId(pendingExtensionItems[0]?.id)} />}
-      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} controls={selectedSession === undefined ? undefined : <>
+      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage?.sessionId === selectedRef.sessionId ? cancelMessageEdit : undefined} extensionStatuses={stream.extensionPanels.statuses} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />
@@ -835,14 +864,6 @@ function mergeWorkspace(current: Workspace[], next: Workspace): Workspace[] {
   const copy = [...current];
   copy[existing] = next;
   return copy.sort((a, b) => a.label.localeCompare(b.label));
-}
-
-function PendingExtensionActions({ count, onOpen }: { count: number; onOpen: () => void }) {
-  return <button type="button" className="pending-extension-actions" onClick={onOpen}>
-    <ClipboardList size={14} />
-    <span>{count} 项待处理操作</span>
-    <span className="pending-extension-actions-hint">查看</span>
-  </button>;
 }
 
 function readExpandedWorkspaces(): Record<string, boolean> {

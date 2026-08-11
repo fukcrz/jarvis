@@ -54,6 +54,13 @@ export function removeOptimisticUserMessage(state: TranscriptState, id: string):
   return { ...state, items: state.items.filter((item) => item.id !== itemId) };
 }
 
+export function replaceUserMessageWithOptimistic(state: TranscriptState, messageId: string, optimisticId: string, text: string, images: MessageTimelineItem["images"] = []): TranscriptState {
+  const target = state.items.findIndex((item) => item.kind === "message" && item.id === messageId && item.role === "user");
+  if (target === -1) return addOptimisticUserMessage(state, optimisticId, text, images);
+  const item: MessageTimelineItem = { kind: "message", id: `optimistic:user:${optimisticId}`, role: "user", createdAt: new Date().toISOString(), text, ...(images.length === 0 ? {} : { images }) };
+  return { ...state, items: [...state.items.slice(0, target), item] };
+}
+
 export function prependTranscript(state: TranscriptState, page: TimelinePage): TranscriptState {
   return {
     ...state,
@@ -71,6 +78,13 @@ export function applySessionEvents(state: TranscriptState, events: SessionEvent[
 export function applySessionEvent(state: TranscriptState, event: SessionEvent): TranscriptState {
   if (event.seq <= state.seq) return state;
   const next = { ...state, seq: event.seq };
+  if (event.type === "session.rewritten") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const items = Array.isArray(payload?.["items"]) ? payload["items"].flatMap(recordTimelineItem) : undefined;
+    const status = recordStatus(payload?.["status"]);
+    if (items === undefined || status === undefined) return next;
+    return { ...next, items, start: 0, total: items.length, hasMore: false, status, streamingMessageId: undefined };
+  }
   if (event.type === "context.updated") {
     const payload = isRecord(event.payload) ? event.payload : {};
     const contextUsage = payload["contextUsage"];
@@ -217,6 +231,15 @@ function upsert(items: TimelineItem[], item: TimelineItem): void {
     return;
   }
   items.push(item);
+}
+
+function recordTimelineItem(value: unknown): TimelineItem[] {
+  const message = recordMessage(value);
+  if (message !== undefined) return [message];
+  const tool = recordTool(value);
+  if (tool !== undefined) return [tool];
+  const summary = recordContextSummary(value);
+  return summary === undefined ? [] : [summary];
 }
 
 function recordMessage(value: unknown): MessageTimelineItem | undefined {

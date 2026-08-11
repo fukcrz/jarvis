@@ -123,6 +123,44 @@ export class SessionService {
     return summary;
   }
 
+  async fork(ref: SessionRef, messageId: string): Promise<SessionSummary> {
+    const active = await this.getActive(ref);
+    this.assertSessionIdle(active, "Fork");
+    const entryId = findVisibleMessageEntryId(active.session.sessionManager.getBranch(), messageId);
+    if (entryId === undefined) throw new AppError("MESSAGE_NOT_FOUND", "Message not found in this session", 404);
+    const sourcePath = active.session.sessionFile;
+    if (sourcePath === undefined) throw new AppError("SESSION_NOT_READY", "Wait for this message to be saved before forking", 409);
+
+    const sessionDir = sessionDirectoryFor(active.cwd, getAgentDir());
+    // createBranchedSession mutates its manager, so never call it on the
+    // currently active source manager.
+    const manager = sessionDir === undefined ? SessionManager.open(sourcePath) : SessionManager.open(sourcePath, sessionDir);
+    manager.createBranchedSession(entryId);
+    const workspace = this.workspaces.get(ref.workspaceId);
+    const forked = await this.createActive({ workspaceId: ref.workspaceId, sessionId: "" }, workspace, manager);
+    const summary = this.summaryFromActive(forked);
+    this.events.publishWorkspace(ref.workspaceId, { version: 1, type: "session.created", workspaceId: ref.workspaceId, session: summary });
+    return summary;
+  }
+
+  async editAndResend(ref: SessionRef, messageId: string, text: string, clientRequestId: string, images?: ImageAttachment[]): Promise<PromptAccepted> {
+    const active = await this.getActive(ref);
+    this.assertSessionIdle(active, "Editing");
+    const entry = findUserMessageEntry(active.session.sessionManager.getBranch(), messageId);
+    if (entry === undefined) throw new AppError("MESSAGE_NOT_FOUND", "User message not found in this session", 404);
+
+    const parentId = stringValue(entry["parentId"]) || undefined;
+    if (parentId === undefined) active.session.sessionManager.resetLeaf();
+    else active.session.sessionManager.branch(parentId);
+    active.extensionUi.reset();
+    this.events.publishSession(active.ref, {
+      type: "session.rewritten",
+      payload: { items: projectHistory(active.session.sessionManager.getBranch()), status: { sessionId: active.ref.sessionId, runState: "idle" } },
+    });
+    await this.reopenAtCurrentBranch(active);
+    return this.prompt(ref, text, clientRequestId, images);
+  }
+
   async rename(ref: SessionRef, name: string): Promise<SessionSummary> {
     const value = name.trim();
     if (value === "") throw new AppError("SESSION_NAME_INVALID", "Session name is required");
@@ -190,6 +228,22 @@ export class SessionService {
   async commands(ref: SessionRef): Promise<ComposerCommand[]> {
     const active = await this.getActive(ref);
     return this.composerCommands(active);
+  }
+
+  private assertSessionIdle(active: ActiveSession, action: string): void {
+    if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) {
+      throw new AppError("SESSION_BUSY", `${action} requires an idle session`, 409);
+    }
+  }
+
+  /** Recreate Pi's in-memory agent context after moving a session leaf. */
+  private async reopenAtCurrentBranch(active: ActiveSession): Promise<void> {
+    const key = activeKey(active.ref);
+    active.unsubscribe();
+    active.extensionUi.closeAll();
+    active.session.dispose();
+    this.active.delete(key);
+    await this.createActive(active.ref, this.workspaces.get(active.ref.workspaceId), active.session.sessionManager);
   }
 
   private composerCommands(active: ActiveSession): ComposerCommand[] {
@@ -1095,6 +1149,26 @@ function expandToUserBoundary(items: TimelineItem[], start: number): number {
     if (item?.kind === "message" && item.role === "user") return index;
   }
   return 0;
+}
+
+function findVisibleMessageEntryId(entries: readonly unknown[], messageId: string): string | undefined {
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry["type"] !== "message") continue;
+    const projected = projectHistory([entry]).find((item): item is MessageTimelineItem => item.kind === "message");
+    if (projected?.id === messageId) return stringValue(entry["id"]) || undefined;
+  }
+  return undefined;
+}
+
+function findUserMessageEntry(entries: readonly unknown[], messageId: string): Record<string, unknown> | undefined {
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry["type"] !== "message") continue;
+    const message = entry["message"];
+    if (!isRecord(message) || message["role"] !== "user") continue;
+    const projected = projectHistory([entry]).find((item): item is MessageTimelineItem => item.kind === "message");
+    if (projected?.id === messageId) return entry;
+  }
+  return undefined;
 }
 
 function firstUserMessage(entries: readonly unknown[]): string | null {

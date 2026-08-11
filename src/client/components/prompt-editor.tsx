@@ -32,12 +32,16 @@ interface PromptEditorProps {
   attachDisabled: boolean;
   /** 扩展 setEditorText 注入的草稿（nonce 变化时替换编辑器内容）。 */
   injectedText?: { text: string; nonce: number };
+  /** 用户编辑历史消息时注入的草稿，优先于扩展草稿。 */
+  draftInjection?: { text: string; nonce: number };
+  /** Exits a historical-message edit and restores the previous composer draft. */
+  onCancelEdit?: () => void;
   /** Lightweight extension status labels shown inside the composer chrome. */
   extensionStatuses?: Record<string, string>;
   controls?: ReactNode;
 }
 
-export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, extensionStatuses = {}, controls }: PromptEditorProps) {
+export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, extensionStatuses = {}, controls }: PromptEditorProps) {
   const initialValueRef = useRef(initialValue);
   const valueRef = useRef(initialValue);
   const viewRef = useRef<EditorView | undefined>(undefined);
@@ -47,6 +51,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   const completionItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const attachmentsRef = useRef(attachments);
   const injectedTextRef = useRef(injectedText);
+  const draftInjectionRef = useRef(draftInjection);
   const commandsRef = useRef(commands);
   const searchFilesRef = useRef(searchFiles);
   const preparingRef = useRef(0);
@@ -72,6 +77,12 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
     const view = viewRef.current;
     if (view !== undefined) applyInjectedText(view, injectedText);
   }, [applyInjectedText, injectedText]);
+
+  useEffect(() => {
+    draftInjectionRef.current = draftInjection;
+    const view = viewRef.current;
+    if (view !== undefined) applyInjectedText(view, draftInjection);
+  }, [applyInjectedText, draftInjection]);
 
   useEffect(() => {
     completionItemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
@@ -125,6 +136,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
     const initial = initialValueRef.current;
     if (initial !== "") view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: initial } });
     applyInjectedText(view, injectedTextRef.current);
+    applyInjectedText(view, draftInjectionRef.current);
     refreshCompletion(view);
   }, [applyInjectedText, refreshCompletion]);
 
@@ -303,6 +315,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
           {Object.entries(extensionStatuses).length === 0 ? null : <div className="composer-extension-statuses" aria-label="扩展状态">
             {Object.entries(extensionStatuses).map(([key, text]) => <span className="composer-extension-status" key={key} title={key}><Puzzle size={11} /><span>{text}</span></span>)}
           </div>}
+          {onCancelEdit === undefined ? null : <Tooltip label="取消编辑"><Button variant="ghost" className="composer-cancel-edit" size="icon" aria-label="取消编辑" onClick={onCancelEdit}><X size={15} /></Button></Tooltip>}
           {busy ? (
             <Tooltip label="停止当前执行"><Button className="composer-stop" size="icon" aria-label="停止当前执行" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
           ) : (

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, sessionPath, socketUrl } from "../api";
 import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, sessionEventSchema } from "../../shared/protocol";
-import { addOptimisticUserMessage, applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, removeOptimisticUserMessage, type TranscriptState } from "../transcript";
+import { addOptimisticUserMessage, applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, removeOptimisticUserMessage, replaceUserMessageWithOptimistic, type TranscriptState } from "../transcript";
 
 interface StreamState {
   transcript: TranscriptState;
@@ -31,6 +31,7 @@ type Action =
   | { type: "prepend"; page: Awaited<ReturnType<typeof api.timeline>> }
   | { type: "optimistic-user"; id: string; text: string; images: import("../../shared/protocol").ImageAttachment[] }
   | { type: "discard-optimistic-user"; id: string }
+  | { type: "replace-user"; messageId: string; id: string; text: string; images: import("../../shared/protocol").ImageAttachment[] }
   | { type: "connection"; value: StreamState["connection"]; error?: string };
 
 const initialState: StreamState = { transcript: emptyTranscript, connection: "offline" };
@@ -44,6 +45,7 @@ function reducer(state: StreamState, action: Action): StreamState {
   if (action.type === "prepend") return { ...state, transcript: prependTranscript(state.transcript, action.page) };
   if (action.type === "optimistic-user") return { ...state, transcript: addOptimisticUserMessage(state.transcript, action.id, action.text, action.images) };
   if (action.type === "discard-optimistic-user") return { ...state, transcript: removeOptimisticUserMessage(state.transcript, action.id) };
+  if (action.type === "replace-user") return { ...state, transcript: replaceUserMessageWithOptimistic(state.transcript, action.messageId, action.id, action.text, action.images) };
   return { ...state, connection: action.value, ...(action.error === undefined ? {} : { error: action.error }) };
 }
 
@@ -74,6 +76,7 @@ export function useSessionStream(ref: SessionRef | undefined) {
     const events = queuedEvents.current.splice(0);
     const transcriptEvents: SessionEvent[] = [];
     const sideEffects: PanelSideEffect[] = [];
+    const historyRewritten = events.some((event) => event.type === "session.rewritten");
     for (const event of events) {
       if (event.type === "extension.uiRequest") {
         const effect = sideEffectFor(event);
@@ -86,10 +89,15 @@ export function useSessionStream(ref: SessionRef | undefined) {
     if (transcriptEvents.length > 0) {
       dispatch({ type: "events", events: coalesceStreamEvents(transcriptEvents) });
     }
-    if (sideEffects.length > 0) {
-      setExtensionPanels((previous) => applySideEffects(previous, sideEffects));
+    if (historyRewritten || sideEffects.length > 0) {
+      setExtensionPanels((previous) => applySideEffects(historyRewritten ? { widgets: {}, statuses: {} } : previous, sideEffects));
       const notices = sideEffects.flatMap((effect) => effect.kind === "notify" ? [{ id: effect.id, message: effect.message, tone: effect.tone }] : []);
-      if (notices.length > 0) setExtensionNotices((previous) => [...previous, ...notices].slice(-4));
+      if (historyRewritten) {
+        setExtensionNotices(notices);
+        document.title = defaultDocumentTitle.current;
+      } else if (notices.length > 0) {
+        setExtensionNotices((previous) => [...previous, ...notices].slice(-4));
+      }
     }
   }, []);
 
@@ -234,9 +242,10 @@ export function useSessionStream(ref: SessionRef | undefined) {
     dispatch({ type: "optimistic-user", id, text, images });
   }, []);
   const discardOptimisticUser = useCallback((id: string) => { dispatch({ type: "discard-optimistic-user", id }); }, []);
+  const replaceUserMessage = useCallback((messageId: string, id: string, text: string, images: import("../../shared/protocol").ImageAttachment[]) => { dispatch({ type: "replace-user", messageId, id, text, images }); }, []);
   const dismissExtensionNotice = useCallback((id: string) => { setExtensionNotices((previous) => previous.filter((notice) => notice.id !== id)); }, []);
 
-  return { ...state, refresh, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, extensionNotices, dismissExtensionNotice, respondExtensionUi, addOptimisticUser, discardOptimisticUser };
+  return { ...state, refresh, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, extensionNotices, dismissExtensionNotice, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
 }
 
 function extensionPanelsFromSnapshot(snapshot: ExtensionUiSnapshot | undefined): ExtensionPanelState {

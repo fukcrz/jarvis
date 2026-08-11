@@ -74,6 +74,21 @@ describe("API client", () => {
     expect(isSessionConflict(new ApiError("SESSION_BUSY", "busy", 500))).toBe(false);
   });
 
+  it("sends Fork and edit-and-resend message operations to their session endpoints", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (path) => new Response(JSON.stringify(String(path).endsWith("/fork") ? { session: { id: "forked" } } : { accepted: true, runId: "run" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ref = { workspaceId: "da69b38d-f132-4c84-8c4f-6174015e9c5e", sessionId: "c2f73ddd-cfc6-464f-acb3-c8f425cea7f0" };
+    const requestId = "8b2a18fb-9b91-4b1d-9c15-d2c6caf8e99e";
+
+    await api.forkSession(ref, "message:user:1");
+    await api.editAndResend(ref, "message:user:1", "Edited", requestId, [{ mimeType: "image/png", data: "abc" }]);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}/fork`);
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ messageId: "message:user:1" }));
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(`/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}/edit-and-resend`);
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ messageId: "message:user:1", text: "Edited", clientRequestId: requestId, images: [{ mimeType: "image/png", data: "abc" }] }));
+  });
+
   it("sends compaction instructions and an idempotency key", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ accepted: true, runId: "8b2a18fb-9b91-4b1d-9c15-d2c6caf8e99e" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

@@ -239,6 +239,7 @@ export type SessionEventType =
   | "model.changed"
   | "thinking.changed"
   | "context.updated"
+  | "session.rewritten"
   | "session.updated";
 
 export type ExtensionUiRequest =
@@ -317,6 +318,7 @@ export const sessionEventSchema = z.object({
     "model.changed",
     "thinking.changed",
     "context.updated",
+    "session.rewritten",
     "session.updated",
   ]),
   payload: z.unknown(),

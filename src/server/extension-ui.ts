@@ -125,6 +125,16 @@ export class ExtensionUiBridge {
     };
   }
 
+  /** Clear browser-only UI state when the session history is rewritten. */
+  reset(): void {
+    this.closeAll();
+    this.cards.clear();
+    for (const key of Object.keys(this.statuses)) delete this.statuses[key];
+    for (const key of Object.keys(this.widgets)) delete this.widgets[key];
+    this.title = undefined;
+    this.editorText = undefined;
+  }
+
   respond(response: { id: string; value?: string; confirmed?: boolean; cancelled?: boolean }): boolean {
     const pending = this.pending.get(response.id);
     if (pending === undefined) return false;

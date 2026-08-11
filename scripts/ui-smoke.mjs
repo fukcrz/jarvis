@@ -282,17 +282,12 @@ async function verifyExtensionUi(page, name, session, emit) {
       timeout: 20_000,
     },
   });
-  const operation = page.getByRole("button", { name: /需要确认.*允许删除构建缓存/ });
+  const operation = page.locator(".extension-operation.pending", { hasText: "允许删除构建缓存" });
   await operation.waitFor({ state: "visible", timeout: 5_000 });
-  const pendingActions = page.getByRole("button", { name: /1 项待处理操作/ });
-  await pendingActions.waitFor({ state: "visible", timeout: 5_000 });
-  await pendingActions.click();
-  const dialog = page.getByRole("dialog", { name: "允许删除构建缓存" });
-  await dialog.waitFor({ state: "visible", timeout: 5_000 });
-  await dialog.getByRole("button", { name: "允许" }).click();
+  if (await page.getByRole("dialog", { name: "允许删除构建缓存" }).count() !== 0) failures.push(`${name}: extension confirmation opened a dialog instead of rendering inline`);
+  await operation.getByRole("button", { name: "允许" }).click();
   await page.waitForTimeout(50);
   if (submitted?.id !== requestId || submitted?.confirmed !== true) failures.push(`${name}: extension confirmation did not submit the selected response`);
-  await dialog.waitFor({ state: "hidden", timeout: 5_000 });
 
   await emit("extension.uiSettled", { id: requestId, outcome: "answered", confirmed: true });
   await page.getByText("已允许", { exact: true }).waitFor({ state: "visible", timeout: 5_000 });

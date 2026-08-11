@@ -30,6 +30,33 @@ describe("transcript reducer", () => {
     expect(result.items[1]).toMatchObject({ id: "t1", state: "completed", output: "done" });
   });
 
+  it("replaces the transcript and resets pagination when history is rewritten", () => {
+    const previous = {
+      ...emptyTranscript,
+      items: [
+        { kind: "message" as const, id: "old-user", role: "user" as const, createdAt: "2026-08-09T00:00:00.000Z", text: "Old" },
+        { kind: "message" as const, id: "old-answer", role: "assistant" as const, createdAt: "2026-08-09T00:00:01.000Z", text: "Old answer" },
+      ],
+      start: 20,
+      total: 24,
+      hasMore: true,
+      seq: 4,
+    };
+    const result = applySessionEvents(previous, [{
+      version: 1,
+      sessionId: "session",
+      seq: 5,
+      emittedAt: "2026-08-09T00:00:02.000Z",
+      type: "session.rewritten",
+      payload: {
+        items: [{ kind: "message", id: "kept", role: "user", createdAt: "2026-08-09T00:00:00.000Z", text: "Kept" }],
+        status: { sessionId: "session", runState: "idle" },
+      },
+    }]);
+    expect(result).toMatchObject({ start: 0, total: 1, hasMore: false, streamingMessageId: undefined, status: { runState: "idle" } });
+    expect(result.items).toEqual([expect.objectContaining({ id: "kept" })]);
+  });
+
   it("shows optimistic image messages and replaces them with the server image message", () => {
     const image = { mimeType: "image/png", data: "abc" };
     const optimistic = addOptimisticUserMessage(emptyTranscript, "request-1", "See this", [image]);

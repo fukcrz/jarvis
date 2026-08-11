@@ -88,6 +88,54 @@ function nextJsonMessage(socket: TestSocket): Promise<unknown> {
   });
 }
 
+async function writeConversationSession(workspacePath: string): Promise<{ id: string; user1: string; assistant1: string; user2: string; assistant2: string }> {
+  const id = randomUUID();
+  const timestamp = new Date("2026-08-09T00:00:00.000Z");
+  const entry = (entryId: string, parentId: string | null, role: "user" | "assistant", text: string, offset: number) => {
+    const entryTimestamp = new Date(timestamp.getTime() + offset).toISOString();
+    const messageTimestamp = timestamp.getTime() + offset;
+    return {
+      type: "message",
+      id: entryId,
+      parentId,
+      timestamp: entryTimestamp,
+      message: role === "user"
+        ? { role, content: text, timestamp: messageTimestamp }
+        : {
+          role,
+          content: [{ type: "text", text }],
+          api: "openai-completions",
+          provider: "openai",
+          model: "test-model",
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+          stopReason: "stop",
+          timestamp: messageTimestamp,
+        },
+    };
+  };
+  const user1 = randomUUID();
+  const assistant1 = randomUUID();
+  const user2 = randomUUID();
+  const assistant2 = randomUUID();
+  const header = { type: "session", version: 3, id, timestamp: timestamp.toISOString(), cwd: workspacePath };
+  const entries = [
+    header,
+    entry(user1, null, "user", "First question", 1_000),
+    entry(assistant1, user1, "assistant", "First answer", 2_000),
+    entry(user2, assistant1, "user", "Second question", 3_000),
+    entry(assistant2, user2, "assistant", "Second answer", 4_000),
+  ];
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(join(sessionDir, `${timestamp.toISOString().replace(/[:.]/g, "-")}_${id}.jsonl`), `${entries.map((value) => JSON.stringify(value)).join("\n")}\n`);
+  return {
+    id,
+    user1: `message:user:${String(timestamp.getTime() + 1_000)}`,
+    assistant1: `message:assistant:${String(timestamp.getTime() + 2_000)}`,
+    user2: `message:user:${String(timestamp.getTime() + 3_000)}`,
+    assistant2: `message:assistant:${String(timestamp.getTime() + 4_000)}`,
+  };
+}
+
 describe("Jarvis HTTP and WebSocket API", () => {
   it("lists the platform's directory root picker", async () => {
     const roots = await activeApp().inject({ method: "GET", url: "/api/directories?roots=true" });
@@ -399,6 +447,77 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(listed.statusCode).toBe(200);
     expect(listed.json()).toEqual({ sessions: [] });
     socket.close();
+  });
+
+  it("forks user and assistant message history into independent sessions", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "fork-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+    const baseUrl = `/api/workspaces/${workspace.id}/sessions/${source.id}`;
+
+    const forkAtUser = await server.inject({ method: "POST", url: `${baseUrl}/fork`, payload: { messageId: source.user2 } });
+    const forkAtAssistant = await server.inject({ method: "POST", url: `${baseUrl}/fork`, payload: { messageId: source.assistant1 } });
+    expect(forkAtUser.statusCode).toBe(200);
+    expect(forkAtAssistant.statusCode).toBe(200);
+    const userFork = forkAtUser.json<{ session: { id: string } }>().session;
+    const assistantFork = forkAtAssistant.json<{ session: { id: string } }>().session;
+    expect(userFork.id).not.toBe(source.id);
+    expect(assistantFork.id).not.toBe(source.id);
+
+    const userHistory = (await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${userFork.id}/timeline` })).json<{ items: Array<{ id: string }> }>();
+    const assistantHistory = (await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${assistantFork.id}/timeline` })).json<{ items: Array<{ id: string }> }>();
+    expect(userHistory.items.map((item) => item.id)).toEqual([source.user1, source.assistant1, source.user2]);
+    expect(assistantHistory.items.map((item) => item.id)).toEqual([source.user1, source.assistant1]);
+  });
+
+  it("edits only a user message, truncates the visible tail, and publishes a rewrite", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "edit-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+    const baseUrl = `/api/workspaces/${workspace.id}/sessions/${source.id}`;
+
+    const invalid = await server.inject({ method: "POST", url: `${baseUrl}/edit-and-resend`, payload: { messageId: source.assistant1, text: "No", clientRequestId: randomUUID() } });
+    expect(invalid.statusCode).toBe(404);
+    expect(invalid.json()).toMatchObject({ error: { code: "MESSAGE_NOT_FOUND" } });
+
+    const address = await server.listen({ host: "127.0.0.1", port: 0 });
+    const endpoint = new URL(`${baseUrl}/events`, address);
+    endpoint.protocol = "ws:";
+    const socket = createSocket(endpoint.toString());
+    await waitForOpen(socket);
+    const promptSpy = vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+
+    const rewritten = nextJsonMessage(socket);
+    const response = await server.inject({ method: "POST", url: `${baseUrl}/edit-and-resend`, payload: { messageId: source.user2, text: "Edited question", clientRequestId: randomUUID() } });
+    expect(response.statusCode).toBe(200);
+    await vi.waitFor(() => expect(promptSpy).toHaveBeenCalledWith("Edited question", expect.objectContaining({ source: "rpc" })));
+    await expect(rewritten).resolves.toMatchObject({ type: "session.rewritten", sessionId: source.id, payload: { items: [{ id: source.user1 }, { id: source.assistant1 }], status: { runState: "idle" } } });
+
+    const timeline = (await server.inject({ method: "GET", url: `${baseUrl}/timeline` })).json<{ items: Array<{ id: string }> }>();
+    expect(timeline.items.map((item) => item.id)).toEqual([source.user1, source.assistant1]);
+    socket.close();
+  });
+
+  it("rejects Fork and edit while the session is running", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "message-action-busy-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+    const baseUrl = `/api/workspaces/${workspace.id}/sessions/${source.id}`;
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    await server.inject({ method: "POST", url: `${baseUrl}/prompt`, payload: { text: "Keep running", clientRequestId: randomUUID() } });
+
+    const fork = await server.inject({ method: "POST", url: `${baseUrl}/fork`, payload: { messageId: source.user1 } });
+    const edit = await server.inject({ method: "POST", url: `${baseUrl}/edit-and-resend`, payload: { messageId: source.user1, text: "Edited", clientRequestId: randomUUID() } });
+    expect(fork.statusCode).toBe(409);
+    expect(edit.statusCode).toBe(409);
+    expect(fork.json()).toMatchObject({ error: { code: "SESSION_BUSY" } });
+    expect(edit.json()).toMatchObject({ error: { code: "SESSION_BUSY" } });
   });
 
   it("delivers a workspace event through the standard WebSocket endpoint", async () => {

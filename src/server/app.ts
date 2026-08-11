@@ -23,6 +23,8 @@ const modelInput = z.object({ provider: z.string().min(1).max(160), modelId: z.s
 const thinkingInput = z.object({ level: z.enum(THINKING_LEVELS) }).strict();
 const imageInput = z.object({ mimeType: z.string().min(1).max(120), data: z.string().min(1) }).strict();
 const promptInput = z.object({ text: z.string(), clientRequestId: z.string().uuid(), images: z.array(imageInput).max(8).optional() }).strict();
+const messageActionInput = z.object({ messageId: z.string().min(1).max(200) }).strict();
+const editAndResendInput = z.object({ messageId: z.string().min(1).max(200), text: z.string(), clientRequestId: z.string().uuid(), images: z.array(imageInput).max(8).optional() }).strict();
 const compactInput = z.object({ customInstructions: z.string().max(40_000).optional(), clientRequestId: z.string().uuid().optional() }).strict();
 const bashInput = z.object({ command: z.string().min(1).max(40_000), excludeFromContext: z.boolean().optional(), clientRequestId: z.string().uuid() }).strict();
 const abortInput = z.object({ runId: z.string().uuid().optional() }).strict();
@@ -133,6 +135,16 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const ref = sessionRef(request.params);
     const body = promptInput.parse(request.body);
     return sessions.prompt(ref, body.text, body.clientRequestId, body.images);
+  });
+  app.post("/api/workspaces/:workspaceId/sessions/:sessionId/fork", async (request) => {
+    const ref = sessionRef(request.params);
+    const body = messageActionInput.parse(request.body);
+    return { session: await sessions.fork(ref, body.messageId) };
+  });
+  app.post("/api/workspaces/:workspaceId/sessions/:sessionId/edit-and-resend", async (request) => {
+    const ref = sessionRef(request.params);
+    const body = editAndResendInput.parse(request.body);
+    return sessions.editAndResend(ref, body.messageId, body.text, body.clientRequestId, body.images);
   });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/compact", async (request) => {
     const ref = sessionRef(request.params);
