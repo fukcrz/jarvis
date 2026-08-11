@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { Archive, ArrowDown, Check, CircleAlert, Clock3, GitBranch, LoaderCircle, Pencil, RefreshCw, RotateCcw, Terminal, X, XCircle } from "lucide-react";
+import { Archive, ArrowDown, Check, CircleAlert, Clock3, GitBranch, LoaderCircle, Pencil, RefreshCw, RotateCcw, X, XCircle } from "lucide-react";
 import type { ContextSummaryTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
@@ -381,7 +381,7 @@ function ActivityGroup({ items, active, startedAt, stopping }: { items: ToolTime
     <article className={`activity-group ${state}`}>
       <button className="activity-summary" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <span className="activity-state-icon">{toolIcon(state)}</span>
-        <span className="activity-label">{summary.label}</span>
+        {summary.label === undefined ? null : <span className="activity-label">{summary.label}</span>}
         {summary.detail === undefined ? null : <span className="activity-detail">{summary.detail}</span>}
         {elapsed === undefined ? null : <time className="activity-elapsed">{elapsed}</time>}
       </button>
@@ -404,11 +404,11 @@ function activityState(items: ToolTimelineItem[], active: boolean): ToolState {
   return "completed";
 }
 
-function activitySummary(items: ToolTimelineItem[], state: ToolState, stopping: boolean): { label: string; detail?: string } {
+function activitySummary(items: ToolTimelineItem[], state: ToolState, stopping: boolean): { label?: string; detail?: string } {
   if (state === "running") {
     const current = [...items].reverse().find((item) => item.state === "running" || item.state === "queued") ?? items.at(-1);
     return {
-      label: stopping ? `正在停止 ${items.length} 项操作…` : `正在处理 ${items.length} 项操作…`,
+      ...(stopping ? { label: `正在停止 ${items.length} 项操作…` } : {}),
       ...(current === undefined ? {} : { detail: toolActivityLabel(current) }),
     };
   }
@@ -464,7 +464,6 @@ function CommandToolItem({ item, open, onToggle }: { item: ToolTimelineItem; ope
     <article className={`tool-item tool-list-item command-item ${item.state}`}>
       <button className="tool-summary command-summary" type="button" onClick={onToggle} aria-expanded={open}>
         <span className="tool-state-icon">{subtleToolIcon(item.state)}</span>
-        <Terminal size={13} className="command-terminal-icon" />
         <span className="tool-target">{compactCommand(command)}</span>
         {item.excludeFromContext === true ? <span className="command-excluded" title="输出不会发送给模型">不进上下文</span> : null}
         {item.durationMs === undefined ? null : <span className="command-duration">{formatDuration(item.durationMs)}</span>}
