@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Archive, ArrowDown, Check, ChevronDown, CircleAlert, Clock3, GitBranch, LoaderCircle, RefreshCw, RotateCcw, Terminal, X, XCircle } from "lucide-react";
+import { Archive, ArrowDown, Check, CircleAlert, Clock3, GitBranch, LoaderCircle, RefreshCw, RotateCcw, Terminal, X, XCircle } from "lucide-react";
 import type { ContextSummaryTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
@@ -149,7 +149,7 @@ function RunFailureCard({ failure, onRetryCompaction }: { failure: NonNullable<S
     <header className="run-failure-header">
       <span className="run-failure-icon"><CircleAlert size={16} /></span>
       <span className="run-failure-copy"><strong>{title}</strong><span>{summary}</span></span>
-      <button type="button" className="run-failure-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? "收起诊断" : "查看诊断"}<ChevronDown className={open ? "chevron-open" : ""} size={14} /></button>
+      <button type="button" className="run-failure-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? "收起诊断" : "查看诊断"}</button>
     </header>
     {open ? <div className="run-failure-diagnostics">
       <dl>
@@ -276,7 +276,6 @@ const ContextSummaryItem = memo(function ContextSummaryItem({ item }: { item: Co
     <button className="context-summary-toggle" type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
       <span className="context-summary-icon">{isCompaction ? <Archive size={15} /> : <GitBranch size={15} />}</span>
       <span className="context-summary-copy"><strong>{label}</strong>{item.tokensBefore === undefined ? null : <small>压缩前 {formatTokenCount(item.tokensBefore)} tokens</small>}</span>
-      <ChevronDown className={expanded ? "chevron-open" : ""} size={15} />
     </button>
     {expanded ? <div className="context-summary-details"><div className="message-content"><MarkdownMessage text={item.summary} streaming={false} /></div></div> : null}
   </article>;
@@ -349,7 +348,6 @@ function ActivityGroup({ items, active, startedAt, stopping }: { items: ToolTime
         <span className="activity-label">{summary.label}</span>
         {summary.detail === undefined ? null : <span className="activity-detail">{summary.detail}</span>}
         {elapsed === undefined ? null : <time className="activity-elapsed">{elapsed}</time>}
-        <ChevronDown className={open ? "chevron-open" : ""} size={15} />
       </button>
       {open ? <div className="activity-items">{items.map((item) => <ToolItem key={item.id} item={item} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
     </article>
@@ -414,7 +412,6 @@ function GenericToolItem({ item, open, onToggle }: { item: ToolTimelineItem; ope
         <span className="tool-state-icon">{subtleToolIcon(item.state)}</span>
         <span className="tool-title">{toolActivityLabel(item)}</span>
         {item.durationMs === undefined ? null : <span className="tool-duration">{formatDuration(item.durationMs)}</span>}
-        {hasToolDetails(item) ? <ChevronDown className={open ? "chevron-open" : ""} size={14} /> : null}
       </button>
       {open ? <div className="tool-details inline-details">
         {item.name === "read" ? null : item.inputPreview === undefined ? null : <div className="detail-input"><span className="detail-label">输入</span><code>{item.inputPreview}</code></div>}
@@ -435,7 +432,6 @@ function CommandToolItem({ item, open, onToggle }: { item: ToolTimelineItem; ope
         <span className="tool-target">{compactCommand(command)}</span>
         {item.excludeFromContext === true ? <span className="command-excluded" title="输出不会发送给模型">不进上下文</span> : null}
         {item.durationMs === undefined ? null : <span className="command-duration">{formatDuration(item.durationMs)}</span>}
-        {hasToolDetails(item) ? <ChevronDown className={open ? "chevron-open" : ""} size={14} /> : null}
       </button>
       {open ? <div className="tool-details command-details inline-details">
         <div className="detail-command-line"><code>$ {command || "(empty)"}</code></div>
@@ -444,10 +440,6 @@ function CommandToolItem({ item, open, onToggle }: { item: ToolTimelineItem; ope
       </div> : null}
     </article>
   );
-}
-
-function hasToolDetails(item: ToolTimelineItem): boolean {
-  return item.inputPreview !== undefined || item.output !== undefined || item.error !== undefined || item.name === "bash" && item.cwd !== undefined;
 }
 
 function subtleToolIcon(state: ToolTimelineItem["state"]) {
