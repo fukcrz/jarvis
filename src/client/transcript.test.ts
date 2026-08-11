@@ -150,4 +150,75 @@ describe("transcript reducer", () => {
     expect(completed.streamingMessageId).toBeUndefined();
     expect(completed.items).toEqual([expect.objectContaining({ id: "partial", text: "# Complete" })]);
   });
+
+  it("creates a running bash item from run.started and streams deltas into it", () => {
+    const started = applySessionEvents(emptyTranscript, [{
+      version: 1,
+      sessionId: "session",
+      runId: "bash-run",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "run.started",
+      payload: {
+        status: { sessionId: "session", runState: "running", activeRun: { id: "bash-run", startedAt: "2026-08-09T00:00:00.000Z", kind: "bash" } },
+        bash: { kind: "tool", id: "bash:bash-run", createdAt: "2026-08-09T00:00:00.000Z", name: "bash", title: "Run command", state: "running", target: "npm test", inputPreview: "npm test", excludeFromContext: true, output: "" },
+      },
+    }]);
+    expect(started.status.activeRun).toMatchObject({ id: "bash-run", kind: "bash" });
+    expect(started.items).toEqual([expect.objectContaining({ id: "bash:bash-run", name: "bash", state: "running", excludeFromContext: true })]);
+
+    const streamed = applySessionEvents(started, [
+      { version: 1, sessionId: "session", runId: "bash-run", seq: 2, emittedAt: "2026-08-09T00:00:01.000Z", type: "bash.delta", payload: { delta: "one\n" } },
+      { version: 1, sessionId: "session", runId: "bash-run", seq: 3, emittedAt: "2026-08-09T00:00:02.000Z", type: "bash.delta", payload: { delta: "two" } },
+    ]);
+    expect(streamed.items).toEqual([expect.objectContaining({ id: "bash:bash-run", output: "one\ntwo" })]);
+  });
+
+  it("replaces the live bash item with the persisted entry on bash.settled", () => {
+    const live = applySessionEvents(emptyTranscript, [{
+      version: 1,
+      sessionId: "session",
+      runId: "bash-run",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "run.started",
+      payload: {
+        status: { sessionId: "session", runState: "running", activeRun: { id: "bash-run", startedAt: "2026-08-09T00:00:00.000Z", kind: "bash" } },
+        bash: { kind: "tool", id: "bash:bash-run", createdAt: "2026-08-09T00:00:00.000Z", name: "bash", title: "Run command", state: "running", target: "npm test", inputPreview: "npm test", output: "partial" },
+      },
+    }]);
+    const settled = applySessionEvents(live, [{
+      version: 1,
+      sessionId: "session",
+      runId: "bash-run",
+      seq: 2,
+      emittedAt: "2026-08-09T00:00:02.000Z",
+      type: "bash.settled",
+      payload: {
+        item: { kind: "tool", id: "bash:entry-1", createdAt: "2026-08-09T00:00:02.000Z", name: "bash", title: "Run command", state: "completed", target: "npm test", inputPreview: "npm test", exitCode: 0, output: "all good" },
+        cancelled: false,
+        exitCode: 0,
+      },
+    }]);
+    expect(settled.items).toEqual([expect.objectContaining({ id: "bash:entry-1", state: "completed", exitCode: 0, output: "all good" })]);
+    expect(settled.items.some((item) => item.kind === "tool" && item.id === "bash:bash-run")).toBe(false);
+  });
+
+  it("hydrates a live bash item from the runtime snapshot after a reconnect", () => {
+    const hydrated = hydrateTranscript(emptyTranscript, {
+      items: [],
+      start: 0,
+      total: 0,
+      hasMore: false,
+    }, {
+      seq: 9,
+      status: { sessionId: "session", runState: "running", activeRun: { id: "bash-run", startedAt: "2026-08-09T00:00:00.000Z", kind: "bash" } },
+      model: { available: [] },
+      thinking: { current: "off", available: ["off"] },
+      liveMessages: [],
+      activeTools: [],
+      activeBash: { kind: "tool", id: "bash:bash-run", createdAt: "2026-08-09T00:00:00.000Z", name: "bash", title: "Run command", state: "running", target: "npm test", inputPreview: "npm test", output: "so far" },
+    });
+    expect(hydrated.items).toEqual([expect.objectContaining({ id: "bash:bash-run", output: "so far" })]);
+  });
 });

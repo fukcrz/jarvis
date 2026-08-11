@@ -25,6 +25,18 @@ export function sessionLabel(name: string | null, preview: string | null): strin
   return name?.trim() || preview?.trim().replace(/\s+/g, " ").slice(0, 72) || "新会话";
 }
 
+/**
+ * 解析输入框里的 bang 命令：`!cmd` 输出进上下文，`!!cmd` 不进。
+ * 返回 undefined 表示这不是一条命令（与 Pi TUI 一致：单独的 `!` 按普通消息发送）。
+ */
+export function parseBashCommand(text: string): { command: string; excludeFromContext: boolean } | undefined {
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith("!")) return undefined;
+  const excludeFromContext = trimmed.startsWith("!!");
+  const command = trimmed.slice(excludeFromContext ? 2 : 1).trim();
+  return command === "" ? undefined : { command, excludeFromContext };
+}
+
 /** 默认收起时最多显示的会话数量（执行中的会话超过该数量时以执行中的数量为准）。 */
 export const SESSIONS_COLLAPSED_LIMIT = 5;
 

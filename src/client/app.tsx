@@ -18,7 +18,7 @@ import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
-import { randomUUID, sessionLabel } from "./lib/utils";
+import { randomUUID, parseBashCommand, sessionLabel } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
 
 /** Extract the entity ids carried by the current hash route. */
@@ -493,6 +493,11 @@ export function App() {
 
   const submitPrompt = async (text: string, attachments: ImageAttachment[]): Promise<boolean> => {
     if (selectedRef === undefined) return false;
+    // !cmd / !!cmd：直接执行命令而不是发给模型（与 Pi TUI 一致）。
+    if (attachments.length === 0) {
+      const bash = parseBashCommand(text);
+      if (bash !== undefined) return submitBash(bash.command, bash.excludeFromContext);
+    }
     try {
       await api.prompt(selectedRef, text, randomUUID(), attachments);
       setSessionsByWorkspace((current) => ({
@@ -509,6 +514,28 @@ export function App() {
     }
   };
 
+  const submitBash = async (command: string, excludeFromContext: boolean): Promise<boolean> => {
+    if (selectedRef === undefined) return false;
+    if (stream.transcript.status.runState !== "idle" || compactionPending) {
+      setPageError("当前有任务正在执行，请先停止后再运行命令");
+      return false;
+    }
+    try {
+      await api.bash(selectedRef, command, excludeFromContext, randomUUID());
+      setSessionsByWorkspace((current) => ({
+        ...current,
+        [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
+          ? { ...session, runState: "running", updatedAt: new Date().toISOString() }
+          : session) ?? [],
+      }));
+      setPageError(undefined);
+      return true;
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "无法执行命令");
+      return false;
+    }
+  };
+
   const abort = async () => {
     if (selectedRef === undefined) return;
     try {
@@ -517,6 +544,27 @@ export function App() {
       setPageError(error instanceof Error ? error.message : "无法停止执行");
     }
   };
+
+  // ESC 停止当前任务（模型运行 / !cmd 命令 / 压缩）。对话框、菜单和输入框
+  // 自动补全打开时不拦截，让它们优先消费 Esc；在捕获阶段检查弹层，避免
+  // 弹层自身的 Esc 处理器先一步把 DOM 移除导致误判。
+  const abortRef = useRef(abort);
+  const statusRef = useRef(stream.transcript.status);
+  useEffect(() => { abortRef.current = abort; });
+  useEffect(() => { statusRef.current = stream.transcript.status; });
+  useEffect(() => {
+    if (selectedRefKey === undefined) return;
+    const onKeyDownCapture = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (document.querySelector('[role="dialog"], [role="menu"], .composer-completions, .cm-tooltip-autocomplete, [data-radix-popper-content-wrapper]') !== null) return;
+      if (statusRef.current.runState === "idle") return;
+      event.preventDefault();
+      event.stopPropagation();
+      void abortRef.current();
+    };
+    window.addEventListener("keydown", onKeyDownCapture, true);
+    return () => window.removeEventListener("keydown", onKeyDownCapture, true);
+  }, [selectedRefKey]);
 
   const compact = async () => {
     if (selectedRef === undefined || compactionPending) return;

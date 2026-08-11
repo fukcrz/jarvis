@@ -166,9 +166,15 @@ function coalesceStreamEvents(events: SessionEvent[]): SessionEvent[] {
     const sameMessage = previousPayload?.["messageId"] === payload?.["messageId"];
     if (previous !== undefined && previous.type === "assistant.delta" && event.type === "assistant.delta" && sameMessage && typeof previousPayload?.["delta"] === "string" && typeof payload?.["delta"] === "string") {
       result[result.length - 1] = { ...event, payload: { messageId: payload["messageId"], delta: previousPayload["delta"] + payload["delta"] } };
-    } else {
-      result.push(event);
+      continue;
     }
+    const previousBash = previous?.type === "bash.delta" && isRecord(previous.payload) ? previous.payload : undefined;
+    const bashPayload = event.type === "bash.delta" && isRecord(event.payload) ? event.payload : undefined;
+    if (previous !== undefined && previous.type === "bash.delta" && event.type === "bash.delta" && previous.runId === event.runId && typeof previousBash?.["delta"] === "string" && typeof bashPayload?.["delta"] === "string") {
+      result[result.length - 1] = { ...event, payload: { delta: previousBash["delta"] + bashPayload["delta"] } };
+      continue;
+    }
+    result.push(event);
   }
   return result;
 }

@@ -434,4 +434,50 @@ describe("Jarvis HTTP and WebSocket API", () => {
     await expect(received).resolves.toEqual(expected);
     socket.close();
   });
+
+  it("starts a bash run for !cmd and streams output deltas to the session socket", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "bash-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const bashSpy = vi.spyOn(AgentSession.prototype, "executeBash").mockImplementation(async (command, onChunk) => {
+      onChunk?.(`ran ${command}`);
+      return { output: `ran ${command}`, exitCode: 0, cancelled: false, truncated: false } as never;
+    });
+    const requestId = randomUUID();
+    const url = `/api/workspaces/${workspace.id}/sessions/${session.id}/bash`;
+
+    const response = await server.inject({ method: "POST", url, payload: { command: "echo hi", excludeFromContext: true, clientRequestId: requestId } });
+    expect(response.statusCode).toBe(200);
+    const accepted = response.json() as { accepted: boolean; runId: string };
+    expect(accepted.accepted).toBe(true);
+    await vi.waitFor(() => expect(bashSpy).toHaveBeenCalledWith("echo hi", expect.any(Function), expect.objectContaining({ excludeFromContext: true })));
+
+    const replay = await server.inject({ method: "POST", url, payload: { command: "echo hi", excludeFromContext: true, clientRequestId: requestId } });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(accepted);
+    expect(bashSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an empty bash command and a bash command while a run is active", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "bash-validation-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const url = `/api/workspaces/${workspace.id}/sessions/${session.id}/bash`;
+
+    const empty = await server.inject({ method: "POST", url, payload: { command: "   ", excludeFromContext: false, clientRequestId: randomUUID() } });
+    expect(empty.statusCode).toBe(400);
+    expect(empty.json()).toMatchObject({ error: { code: "COMMAND_EMPTY" } });
+
+    const promptSpy = vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${session.id}/prompt`, payload: { text: "keep running", clientRequestId: randomUUID() } });
+    await vi.waitFor(() => expect(promptSpy).toHaveBeenCalled());
+
+    const busy = await server.inject({ method: "POST", url, payload: { command: "echo busy", excludeFromContext: false, clientRequestId: randomUUID() } });
+    expect(busy.statusCode).toBe(409);
+    expect(busy.json()).toMatchObject({ error: { code: "SESSION_BUSY" } });
+  });
 });

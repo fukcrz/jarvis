@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSummary } from "../../shared/protocol";
-import { matchesSessionQuery, normalizeSessionSearch, sessionLabel, sessionListWindow, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
+import { matchesSessionQuery, normalizeSessionSearch, parseBashCommand, sessionLabel, sessionListWindow, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
 
 const session: SessionSummary = {
   id: "session-1",
@@ -105,5 +105,24 @@ describe("session list window", () => {
     const small = sessionListWindow([idle("s-0")], 0);
     expect(small.sessions).toHaveLength(1);
     expect(small.hasMore).toBe(false);
+  });
+});
+
+describe("bang command parsing", () => {
+  it("parses !cmd with the output sent to the model", () => {
+    expect(parseBashCommand("!npm test")).toEqual({ command: "npm test", excludeFromContext: false });
+    expect(parseBashCommand("  !  ls -la")).toEqual({ command: "ls -la", excludeFromContext: false });
+    expect(parseBashCommand("!echo multi\nline")).toEqual({ command: "echo multi\nline", excludeFromContext: false });
+  });
+
+  it("parses !!cmd as excluded from the model context", () => {
+    expect(parseBashCommand("!!git status")).toEqual({ command: "git status", excludeFromContext: true });
+    expect(parseBashCommand("!!  pwd")).toEqual({ command: "pwd", excludeFromContext: true });
+  });
+
+  it("treats non-bang text and a bare ! as a normal prompt", () => {
+    expect(parseBashCommand("normal prompt")).toBeUndefined();
+    expect(parseBashCommand("!")).toBeUndefined();
+    expect(parseBashCommand("!!")).toBeUndefined();
   });
 });

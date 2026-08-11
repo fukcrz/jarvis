@@ -1,5 +1,6 @@
 import type {
   ApiErrorBody,
+  BashAccepted,
   CompactAccepted,
   ComposerCommand,
   DirectoryListing,
@@ -84,6 +85,10 @@ export const api = {
       ...(customInstructions === undefined ? {} : { customInstructions }),
       ...(clientRequestId === undefined ? {} : { clientRequestId }),
     }),
+  }),
+  bash: async (ref: SessionRef, command: string, excludeFromContext: boolean, clientRequestId: string): Promise<BashAccepted> => request(`${sessionPath(ref)}/bash`, {
+    method: "POST",
+    body: JSON.stringify({ command, excludeFromContext, clientRequestId }),
   }),
   abort: async (ref: SessionRef, runId?: string): Promise<void> => { await request(`${sessionPath(ref)}/abort`, { method: "POST", body: JSON.stringify(runId === undefined ? {} : { runId }) }); },
 };

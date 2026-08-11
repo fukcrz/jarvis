@@ -74,32 +74,42 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
     }
 
     if (role === "bashExecution") {
-      const command = stringValue(message["command"]);
-      const output = stringValue(message["output"]);
-      const exitCode = numberValue(message["exitCode"]);
-      const state = message["cancelled"] === true
-        ? "cancelled" as const
-        : exitCode !== undefined && exitCode !== 0
-          ? "failed" as const
-          : "completed" as const;
-      items.push({
-        kind: "tool",
-        id: `bash:${entryId}`,
-        createdAt,
-        name: "bash",
-        title: "Run command",
-        state,
-        ...(command === "" ? {} : { target: command, inputPreview: command }),
-        ...(exitCode === undefined ? {} : { exitCode }),
-        ...(message["truncated"] === true ? { truncated: true } : {}),
-        ...(state === "failed"
-          ? (output === "" ? {} : { error: truncate(output) })
-          : (output === "" ? {} : { output: truncate(output) })),
-      });
+      const item = bashExecutionItem(entryId, createdAt, message);
+      if (item !== undefined) items.push(item);
     }
   }
 
   return items;
+}
+
+/**
+ * 把 Pi 会话文件里的 bashExecution 消息投影为时间线条目。
+ * jarvis 服务端用它把用户 !cmd 的执行结果落盘后再投影回浏览器。
+ */
+export function bashExecutionItem(entryId: string, createdAt: string, message: Record<string, unknown>): ToolTimelineItem | undefined {
+  const command = stringValue(message["command"]);
+  const output = stringValue(message["output"]);
+  const exitCode = numberValue(message["exitCode"]);
+  const state = message["cancelled"] === true
+    ? "cancelled" as const
+    : exitCode !== undefined && exitCode !== 0
+      ? "failed" as const
+      : "completed" as const;
+  return {
+    kind: "tool",
+    id: `bash:${entryId}`,
+    createdAt,
+    name: "bash",
+    title: "Run command",
+    state,
+    ...(command === "" ? {} : { target: command, inputPreview: command }),
+    ...(exitCode === undefined ? {} : { exitCode }),
+    ...(message["truncated"] === true ? { truncated: true } : {}),
+    ...(message["excludeFromContext"] === true ? { excludeFromContext: true } : {}),
+    ...(state === "failed"
+      ? (output === "" ? {} : { error: truncate(output) })
+      : (output === "" ? {} : { output: truncate(output) })),
+  };
 }
 
 export function contextSummaryFromEntry(entry: unknown): ContextSummaryTimelineItem | undefined {

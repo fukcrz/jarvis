@@ -13,6 +13,7 @@ import {
   type ExtensionError,
 } from "@earendil-works/pi-coding-agent";
 import type {
+  BashAccepted,
   CompactAccepted,
   ComposerCommand,
   ContextUsage,
@@ -36,12 +37,13 @@ import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, unsupportedExtensionUi } from "./extension-ui.js";
 import { projectModelSnapshot } from "./model-projection.js";
-import { assistantTextFromContent, contextSummaryFromEntry, messageFromPi, projectHistory, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
+import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, messageFromPi, projectHistory, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
 
 interface ActiveRun {
   id: string;
   startedAt: string;
+  kind: "llm" | "bash" | "compaction";
 }
 
 interface ActiveSession {
@@ -56,6 +58,8 @@ interface ActiveSession {
   liveMessages: Map<string, MessageTimelineItem>;
   partial?: MessageTimelineItem;
   activeTools: Map<string, ToolTimelineItem>;
+  /** 正在执行的用户 !cmd 命令（流式输出尚未落盘）。 */
+  activeBash?: ToolTimelineItem;
   /** Retains a stop click that arrives before Pi installs its compaction abort controller. */
   compactionAbortRequested: boolean;
   extensionFailure?: { code: string; message: string };
@@ -69,6 +73,7 @@ const PAGE_LIMIT = 120;
 const MAX_PROMPT_LENGTH = 40_000;
 const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_DATA_LENGTH = 14_000_000; // ≈ 10 MiB decoded
+const MAX_BASH_OUTPUT_CHARS = 100_000; // 流式气泡的最大输出长度，落盘结果由 Pi 自行截断
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/heic", "image/heif"]);
 const JARVIS_COMPACT_COMMAND: ComposerCommand = {
   name: "compact",
@@ -220,6 +225,7 @@ export class SessionService {
       liveMessages: [...active.liveMessages.values()],
       ...(active.partial === undefined ? {} : { partial: active.partial }),
       activeTools: [...active.activeTools.values()],
+      ...(active.activeBash === undefined ? {} : { activeBash: active.activeBash }),
       ...(contextUsage === undefined ? {} : { contextUsage }),
     };
   }
@@ -296,7 +302,7 @@ export class SessionService {
     }
     if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) throw new AppError("SESSION_BUSY", "This session is already running", 409);
 
-    const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString() };
+    const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
     active.state = { sessionId: ref.sessionId, runState: "running", activeRun: run };
     active.updatedAt = run.startedAt;
     active.liveMessages.clear();
@@ -310,6 +316,52 @@ export class SessionService {
     this.events.publishSession(active.ref, { type: "run.started", runId: run.id, payload: { status: active.state } });
     this.publishSummary(active);
     void this.executePrompt(active, prompt, run.id, attachments);
+    return accepted;
+  }
+
+  /**
+   * 执行用户输入框的 !cmd 命令（! 输出进上下文，!! 不进）。
+   * 流式中禁用；执行期间会话进入 running 状态，停止按钮/ESC 会中止命令。
+   */
+  async bash(ref: SessionRef, command: string, excludeFromContext: boolean, clientRequestId: string): Promise<BashAccepted> {
+    const value = command.trim();
+    if (value === "") throw new AppError("COMMAND_EMPTY", "Command cannot be empty");
+    if (value.length > MAX_PROMPT_LENGTH) throw new AppError("COMMAND_TOO_LARGE", `Command must be at most ${String(MAX_PROMPT_LENGTH)} characters`);
+    const active = await this.getActive(ref);
+    const requestKey = `bash:${clientRequestId}`;
+    const previous = active.requestRuns.get(requestKey);
+    if (previous !== undefined) return previous;
+    if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) {
+      throw new AppError("SESSION_BUSY", "This session is already running", 409);
+    }
+
+    const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "bash" };
+    const item: ToolTimelineItem = {
+      kind: "tool",
+      id: `bash:${run.id}`,
+      createdAt: run.startedAt,
+      name: "bash",
+      title: "Run command",
+      state: "running",
+      target: value,
+      inputPreview: value,
+      ...(excludeFromContext ? { excludeFromContext: true } : {}),
+      output: "",
+    };
+    active.state = { sessionId: ref.sessionId, runState: "running", activeRun: run };
+    active.updatedAt = run.startedAt;
+    active.liveMessages.clear();
+    active.partial = undefined;
+    active.activeTools.clear();
+    active.activeBash = item;
+    active.extensionFailure = undefined;
+    active.pendingRunError = undefined;
+    const accepted: BashAccepted = { accepted: true, runId: run.id };
+    this.rememberRequest(active, requestKey, accepted);
+
+    this.events.publishSession(active.ref, { type: "run.started", runId: run.id, payload: { status: active.state, bash: item } });
+    this.publishSummary(active);
+    void this.executeBashRun(active, value, excludeFromContext, run.id);
     return accepted;
   }
 
@@ -344,7 +396,7 @@ export class SessionService {
       throw new AppError("SESSION_BUSY", "Stop the current run before compacting this session", 409);
     }
 
-    const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString() };
+    const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "compaction" };
     active.state = {
       sessionId: active.ref.sessionId,
       runState: "running",
@@ -393,6 +445,11 @@ export class SessionService {
       this.cancelCompaction(active);
       return;
     }
+    if (activeRun?.kind === "bash") {
+      // executeBashRun 会在命令结束时自行 settle。
+      active.session.abortBash();
+      return;
+    }
 
     try {
       await active.session.abort();
@@ -413,6 +470,7 @@ export class SessionService {
       active.unsubscribe();
       active.session.abortCompaction();
       active.session.abortRetry();
+      active.session.abortBash();
       await active.session.abort().catch(() => undefined);
       active.session.dispose();
       this.active.delete(activeKey(active.ref));
@@ -424,6 +482,7 @@ export class SessionService {
       active.unsubscribe();
       active.session.abortCompaction();
       active.session.abortRetry();
+      active.session.abortBash();
       await active.session.abort().catch(() => undefined);
       active.session.dispose();
     }
@@ -455,6 +514,68 @@ export class SessionService {
       if (isCompactionCancellation(error)) this.settleRun(active, runId);
       else this.failRun(active, runId, "PI_COMPACTION_FAILED", asMessage(error));
     }
+  }
+
+  private async executeBashRun(active: ActiveSession, command: string, excludeFromContext: boolean, runId: string): Promise<void> {
+    try {
+      const result = await active.session.executeBash(command, (delta) => {
+        const item = active.activeBash;
+        if (item === undefined || delta === "") return;
+        if (item.truncated === true) return;
+        const appended = (item.output ?? "") + delta;
+        if (appended.length > MAX_BASH_OUTPUT_CHARS) {
+          // 流式视图截断；落盘结果由 Pi 完整截断并保留完整输出文件。
+          item.output = appended.slice(0, MAX_BASH_OUTPUT_CHARS);
+          item.truncated = true;
+        } else {
+          item.output = appended;
+        }
+        this.events.publishSession(active.ref, { type: "bash.delta", runId, payload: { delta } });
+      }, { excludeFromContext, id: runId });
+      if (active.state.activeRun?.id !== runId) return;
+      // Pi 在空闲时会立即把 bashExecution 结果写入会话文件；从分支重新投影出落盘条目。
+      const item = this.lastBashItem(active, command);
+      active.activeBash = undefined;
+      this.events.publishSession(active.ref, {
+        type: "bash.settled",
+        runId,
+        payload: {
+          ...(item === undefined ? {} : { item }),
+          cancelled: result.cancelled,
+          ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }),
+          ...(result.truncated ? { truncated: true } : {}),
+          ...(result.fullOutputPath === undefined ? {} : { fullOutputPath: result.fullOutputPath }),
+        },
+      });
+      this.settleRun(active, runId);
+    } catch (error) {
+      if (active.state.activeRun?.id !== runId) return;
+      const message = asMessage(error);
+      const failed = active.activeBash === undefined
+        ? undefined
+        : { ...active.activeBash, state: "failed" as const, output: undefined, error: message, truncated: false };
+      active.activeBash = undefined;
+      this.events.publishSession(active.ref, {
+        type: "bash.settled",
+        runId,
+        payload: { ...(failed === undefined ? {} : { item: failed }), failed: true, errorMessage: message },
+      });
+      this.failRun(active, runId, "BASH_EXECUTION_FAILED", message);
+    }
+  }
+
+  /** 从会话分支中找出最近一条命令相同的 bashExecution 落盘条目。 */
+  private lastBashItem(active: ActiveSession, command: string): ToolTimelineItem | undefined {
+    for (const entry of [...active.session.sessionManager.getBranch()].reverse()) {
+      if (!isRecord(entry) || entry["type"] !== "message") continue;
+      const message = entry["message"];
+      if (!isRecord(message) || message["role"] !== "bashExecution") continue;
+      if (stringValue(message["command"]) !== command) continue;
+      const entryId = stringValue(entry["id"]) || crypto.randomUUID();
+      const createdAt = toIso(entry["timestamp"] ?? message["timestamp"]);
+      return bashExecutionItem(entryId, createdAt, message);
+    }
+    return undefined;
   }
 
   private contextUsageSnapshot(active: ActiveSession): ContextUsage | undefined {
@@ -544,6 +665,7 @@ export class SessionService {
       requestRuns: new Map(),
       liveMessages: new Map(),
       activeTools: new Map(),
+      activeBash: undefined,
       compactionAbortRequested: false,
       pendingRunError: undefined,
       createdAt,
@@ -809,6 +931,7 @@ export class SessionService {
     active.liveMessages.clear();
     active.partial = undefined;
     active.activeTools.clear();
+    active.activeBash = undefined;
     active.compactionAbortRequested = false;
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
@@ -832,6 +955,7 @@ export class SessionService {
     active.liveMessages.clear();
     active.partial = undefined;
     active.activeTools.clear();
+    active.activeBash = undefined;
     active.compactionAbortRequested = false;
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
@@ -968,6 +1092,16 @@ function isMissingFile(error: unknown): boolean {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toIso(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+  if (typeof value === "string" && Number.isFinite(Date.parse(value))) return new Date(value).toISOString();
+  return new Date().toISOString();
 }
 
 function runtimeFailureCode(error: unknown): string {

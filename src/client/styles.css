@@ -158,6 +158,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .command-summary > .tool-target { flex: 1 1 auto; min-width: 0; }
 .command-terminal-icon { color: var(--muted); }
 .command-duration, .command-exit { color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+.command-excluded { flex: 0 0 auto; border: 1px solid #4a4556; border-radius: 999px; background: #2b2833; padding: 1px 7px; color: #9a93ad; font-size: 10px; line-height: 1.5; white-space: nowrap; }
 .command-exit { color: var(--success); }
 .command-item.failed .command-exit { color: var(--danger); }
 .command-details { background: #17191d; }

@@ -183,7 +183,8 @@ function renderTimelineItems(items: TimelineItem[], streamingMessageId: string |
 }
 
 function ActivityGroup({ items, active, startedAt, stopping }: { items: ToolTimelineItem[]; active: boolean; startedAt?: string; stopping: boolean }) {
-  const [open, setOpen] = useState(false);
+  // 用户 !cmd 命令（id 以 bash: 开头）默认展开成可见的命令气泡，像 TUI 一样。
+  const [open, setOpen] = useState(() => items.some((item) => item.name === "bash" && item.id.startsWith("bash:")));
   const [openToolId, setOpenToolId] = useState<string>();
   const [now, setNow] = useState(() => Date.now());
   const state = activityState(items, active);
@@ -287,6 +288,7 @@ function CommandToolItem({ item, open, onToggle }: { item: ToolTimelineItem; ope
         <span className="tool-state-icon">{subtleToolIcon(item.state)}</span>
         <Terminal size={13} className="command-terminal-icon" />
         <span className="tool-target">{compactCommand(command)}</span>
+        {item.excludeFromContext === true ? <span className="command-excluded" title="输出不会发送给模型">不进上下文</span> : null}
         {item.durationMs === undefined ? null : <span className="command-duration">{formatDuration(item.durationMs)}</span>}
         {hasToolDetails(item) ? <ChevronDown className={open ? "chevron-open" : ""} size={14} /> : null}
       </button>

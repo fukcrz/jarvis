@@ -3,6 +3,7 @@ import { z } from "zod";
 export const PROTOCOL_VERSION = 1 as const;
 
 export type RunState = "idle" | "running" | "stopping";
+export type RunKind = "llm" | "bash" | "compaction";
 export type ToolState = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type CompactionReason = "manual" | "threshold" | "overflow";
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -87,6 +88,8 @@ export interface SessionStatus {
   activeRun?: {
     id: string;
     startedAt: string;
+    /** 运行类别：模型对话 / 用户 !cmd 命令 / 上下文压缩。缺省视为 llm。 */
+    kind?: RunKind;
   };
   /** Pi 自动重试进行中（连接错误等可重试失败后指数退避重试） */
   retrying?: RetryStatus;
@@ -148,6 +151,8 @@ export interface ToolTimelineItem {
   truncated?: boolean;
   output?: string;
   error?: string;
+  /** 用户 !cmd 命令：true 表示输出不发送给模型（!! 前缀）。 */
+  excludeFromContext?: boolean;
 }
 
 export interface ContextSummaryTimelineItem {
@@ -177,11 +182,18 @@ export interface SessionStreamSnapshot {
   liveMessages: MessageTimelineItem[];
   partial?: MessageTimelineItem;
   activeTools: ToolTimelineItem[];
+  /** 正在执行的用户 !cmd 命令（流式输出尚未落盘）。 */
+  activeBash?: ToolTimelineItem;
   /** Estimated context usage, when the current model exposes a context window. */
   contextUsage?: ContextUsage;
 }
 
 export interface PromptAccepted {
+  accepted: true;
+  runId: string;
+}
+
+export interface BashAccepted {
   accepted: true;
   runId: string;
 }
@@ -206,6 +218,8 @@ export type SessionEventType =
   | "assistant.completed"
   | "tool.upsert"
   | "timeline.upsert"
+  | "bash.delta"
+  | "bash.settled"
   | "model.changed"
   | "thinking.changed"
   | "context.updated"
@@ -255,6 +269,8 @@ export const sessionEventSchema = z.object({
     "assistant.completed",
     "tool.upsert",
     "timeline.upsert",
+    "bash.delta",
+    "bash.settled",
     "model.changed",
     "thinking.changed",
     "context.updated",

@@ -26,7 +26,7 @@ export const emptyTranscript: TranscriptState = {
 };
 
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
-  const live = [...snapshot.liveMessages, ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial])];
+  const live = [...snapshot.liveMessages, ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial]), ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
   return {
     // History and the snapshot are authoritative after a reconnect. Keeping an
     // old in-memory tail here can resurrect an already-settled partial/tool.
@@ -98,6 +98,25 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const tool = recordTool(payload?.["tool"]);
     return tool === undefined ? next : { ...next, items: mergeTimeline(next.items, [tool]) };
   }
+  if (event.type === "bash.delta") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const runId = typeof payload?.["runId"] === "string" ? payload["runId"] : event.runId;
+    const delta = typeof payload?.["delta"] === "string" ? payload["delta"] : "";
+    if (runId === undefined || delta === "") return next;
+    const id = `bash:${runId}`;
+    const existing = next.items.find((item): item is ToolTimelineItem => item.kind === "tool" && item.id === id);
+    const item: ToolTimelineItem = existing === undefined
+      ? { kind: "tool", id, createdAt: event.emittedAt, name: "bash", title: "Run command", state: "running", output: delta }
+      : { ...existing, state: "running", output: (existing.output ?? "") + delta };
+    return { ...next, items: mergeTimeline(next.items, [item]) };
+  }
+  if (event.type === "bash.settled") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const runId = typeof payload?.["runId"] === "string" ? payload["runId"] : event.runId;
+    const settled = runId === undefined ? next : { ...next, items: next.items.filter((item) => item.kind !== "tool" || item.id !== `bash:${runId}`) };
+    const item = recordTool(payload?.["item"]);
+    return item === undefined ? settled : { ...settled, items: mergeTimeline(settled.items, [item]) };
+  }
   if (event.type === "timeline.upsert") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const item = recordContextSummary(payload?.["item"]);
@@ -113,7 +132,16 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const thinking = recordThinkingSnapshot(payload?.["thinking"]);
     return thinking === undefined ? next : { ...next, thinking };
   }
-  if (event.type === "run.started" || event.type === "run.stopping" || event.type === "run.settled" || event.type === "run.failed" || event.type === "run.retrying" || event.type === "run.retryEnd" || event.type === "run.compactionStarted" || event.type === "run.compactionEnded" || event.type === "run.compactionRetrying" || event.type === "session.updated") {
+  if (event.type === "run.started") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const status = recordStatus(payload?.["status"]);
+    const bashItem = recordTool(payload?.["bash"]);
+    if (status === undefined) return next;
+    return bashItem === undefined
+      ? { ...next, status }
+      : { ...next, status, items: mergeTimeline(next.items, [bashItem]) };
+  }
+  if (event.type === "run.stopping" || event.type === "run.settled" || event.type === "run.failed" || event.type === "run.retrying" || event.type === "run.retryEnd" || event.type === "run.compactionStarted" || event.type === "run.compactionEnded" || event.type === "run.compactionRetrying" || event.type === "session.updated") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const status = recordStatus(payload?.["status"]);
     if (status === undefined) return next;
@@ -168,6 +196,7 @@ function recordTool(value: unknown): ToolTimelineItem | undefined {
     ...(typeof value["exitCode"] === "number" && Number.isFinite(value["exitCode"]) ? { exitCode: value["exitCode"] } : {}),
     ...(typeof value["durationMs"] === "number" && Number.isFinite(value["durationMs"]) ? { durationMs: value["durationMs"] } : {}),
     ...(value["truncated"] === true ? { truncated: true } : {}),
+    ...(value["excludeFromContext"] === true ? { excludeFromContext: true } : {}),
     ...(typeof value["output"] === "string" ? { output: value["output"] } : {}),
     ...(typeof value["error"] === "string" ? { error: value["error"] } : {}),
   };
@@ -218,7 +247,7 @@ function recordStatus(value: unknown): SessionStatus | undefined {
   if (runState !== "idle" && runState !== "running" && runState !== "stopping") return undefined;
   const activeRunValue = isRecord(value["activeRun"]) ? value["activeRun"] : undefined;
   const activeRun = typeof activeRunValue?.["id"] === "string" && typeof activeRunValue["startedAt"] === "string"
-    ? { id: activeRunValue["id"], startedAt: activeRunValue["startedAt"] }
+    ? { id: activeRunValue["id"], startedAt: activeRunValue["startedAt"], kind: activeRunValue["kind"] === "bash" ? "bash" as const : activeRunValue["kind"] === "compaction" ? "compaction" as const : "llm" as const }
     : undefined;
   const lastErrorValue = isRecord(value["lastError"]) ? value["lastError"] : undefined;
   const lastError = typeof lastErrorValue?.["code"] === "string" && typeof lastErrorValue["message"] === "string" && typeof lastErrorValue["occurredAt"] === "string"
