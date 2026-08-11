@@ -273,7 +273,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-switcher { position: fixed; z-index: 80; inset: 0; display: flex; flex-direction: column; background: var(--canvas); }
 .mobile-switcher-header { display: grid; grid-template-columns: 36px minmax(0, 1fr) 36px; align-items: center; min-height: 56px; border-bottom: 1px solid var(--line); padding: 8px 12px; color: var(--ink); text-align: center; }
 .mobile-switcher-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; font-weight: 650; }
-.mobile-session-projects { display: flex; flex: 0 0 auto; gap: 12px; overflow-x: auto; border-bottom: 1px solid var(--line); padding: 26px 34px 23px; scrollbar-width: none; }
+.mobile-session-projects { display: flex; flex: 0 0 auto; gap: 12px; overflow-x: auto; border-bottom: 1px solid var(--line); padding: 26px 34px 0; scrollbar-width: none; }
 .mobile-session-projects::-webkit-scrollbar { display: none; }
 .mobile-session-projects button { flex: 0 0 auto; min-height: 42px; border: 1px solid #303035; border-radius: 999px; background: #202023; padding: 7px 22px; color: #a5a4ad; font-size: 14px; white-space: nowrap; }
 .mobile-session-projects button.selected { border-color: var(--accent); background: #292535; color: var(--accent-strong); }
