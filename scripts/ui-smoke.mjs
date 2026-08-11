@@ -92,7 +92,7 @@ async function capture(name, viewport, session, screenshotPath, desktop) {
   await waitForSessionSocket(page, session.sessionId);
   await commandControl.first;
   await verifyDelayedCommand(page, editor, name, commandControl.resolve, () => commandCalls);
-  await verifyComposerShortcuts(page, editor, name, session.sessionId);
+  await verifyComposerShortcuts(page, editor, name, session.sessionId, desktop);
   await verifyStreamingMarkdown(page, name, session.sessionId);
 
   let sequence = 900_000_000;
@@ -145,7 +145,7 @@ async function verifyStreamingMarkdown(page, name, sessionId) {
   if (await message.locator(".streaming-cursor").count() !== 1) failures.push(`${name}: streaming cursor is missing`);
 }
 
-async function verifyComposerShortcuts(page, editor, name, sessionId) {
+async function verifyComposerShortcuts(page, editor, name, sessionId, desktop) {
   const editorSurface = page.locator(".composer-editor .cm-editor");
   const bounds = await editorSurface.boundingBox();
   if (bounds === null || bounds.height < 76) {
@@ -177,8 +177,18 @@ async function verifyComposerShortcuts(page, editor, name, sessionId) {
   const lines = await page.locator(".composer-editor .cm-line").allTextContents();
   if (JSON.stringify(lines) !== JSON.stringify(["First line", "Second line"])) failures.push(`${name}: Shift+Enter did not add a newline`);
   await page.keyboard.press("Enter");
+  if (desktop) {
+    await page.waitForFunction(() => document.querySelector(".composer-editor .cm-placeholder") !== null, undefined, { timeout: 5_000 });
+    if (prompts.length !== 1 || prompts[0]?.text !== "First line\nSecond line") failures.push(`${name}: Enter did not send the editor value`);
+    return;
+  }
+
+  await page.waitForTimeout(100);
+  const mobileLines = await page.locator(".composer-editor .cm-line").allTextContents();
+  if (prompts.length !== 0 || JSON.stringify(mobileLines) !== JSON.stringify(["First line", "Second line", ""])) failures.push(`${name}: Enter sent instead of adding a newline`);
+  await page.getByRole("button", { name: "发送消息" }).click();
   await page.waitForFunction(() => document.querySelector(".composer-editor .cm-placeholder") !== null, undefined, { timeout: 5_000 });
-  if (prompts.length !== 1 || prompts[0]?.text !== "First line\nSecond line") failures.push(`${name}: Enter did not send the editor value`);
+  if (prompts.length !== 1 || prompts[0]?.text !== "First line\nSecond line\n") failures.push(`${name}: send button did not submit the mobile editor value`);
 }
 
 async function verifyDraftStability(page, editor, name, sessionId) {

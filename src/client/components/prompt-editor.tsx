@@ -5,6 +5,7 @@ import { ArrowUp, Command, FileCode2, LoaderCircle, Plus, Puzzle, Square, X, XCi
 import type { ComposerCommand, ImageAttachment, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
+import { useIsMobile } from "../hooks/use-is-mobile";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
@@ -42,6 +43,7 @@ interface PromptEditorProps {
 }
 
 export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, extensionStatuses = {}, controls }: PromptEditorProps) {
+  const isMobile = useIsMobile();
   const initialValueRef = useRef(initialValue);
   const valueRef = useRef(initialValue);
   const viewRef = useRef<EditorView | undefined>(undefined);
@@ -287,13 +289,16 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
               closeCompletion();
               return;
             }
-            if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.nativeEvent.isComposing) {
+            if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               applyCompletion(completionItems[selectedIndex] ?? completionItems[0]!);
               return;
             }
           }
-          if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || busyRef.current || submittingRef.current) return;
+          // Phone keyboards use Enter to insert a newline. On mobile, only an
+          // explicit Ctrl/Cmd+Enter shortcut submits; the send button is primary.
+          const explicitSubmit = (event.ctrlKey || event.metaKey) && event.key === "Enter";
+          if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || busyRef.current || submittingRef.current || (isMobile && !explicitSubmit)) return;
           if (valueRef.current.trim() === "" && attachmentsRef.current.length === 0) return;
           event.preventDefault();
           event.stopPropagation();
