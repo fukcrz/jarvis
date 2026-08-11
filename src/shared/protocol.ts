@@ -176,6 +176,8 @@ export interface TimelinePage {
 export interface ExtensionUiSnapshot {
   /** Dialogs that are still waiting for a browser response. */
   dialogs: Array<{ request: Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>; createdAt: string }>;
+  /** Extension dialogs and notices retained for browser refresh/reconnect. */
+  cards?: ExtensionUiTimelineItem[];
   statuses: Record<string, string>;
   widgets: Record<string, { lines: string[]; placement: "aboveEditor" | "belowEditor" }>;
   title?: string;

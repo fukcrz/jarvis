@@ -26,12 +26,12 @@ export const emptyTranscript: TranscriptState = {
 };
 
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
-  const extensionItems: ExtensionUiTimelineItem[] = (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }));
+  const extensionItems: ExtensionUiTimelineItem[] = snapshot.extensionUi?.cards ?? (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }));
   const live = [...snapshot.liveMessages, ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial]), ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
   return {
     // History and the snapshot are authoritative after a reconnect. Keeping an
     // old in-memory tail here can resurrect an already-settled partial/tool.
-    items: mergeTimeline(page.items, live, extensionItems),
+    items: sortTimelineByCreatedAt(mergeTimeline(page.items, live, extensionItems)),
     start: page.start,
     total: page.total,
     hasMore: page.hasMore,
@@ -184,6 +184,17 @@ function mergeTimeline(...groups: TimelineItem[][]): TimelineItem[] {
     for (const item of group) upsert(result, item);
   }
   return result;
+}
+
+/** Runtime-only cards need to rejoin persisted history at their original time. */
+function sortTimelineByCreatedAt(items: TimelineItem[]): TimelineItem[] {
+  return items
+    .map((item, index) => ({ item, index, timestamp: Date.parse(item.createdAt) }))
+    .sort((a, b) => {
+      const byTime = (Number.isFinite(a.timestamp) ? a.timestamp : 0) - (Number.isFinite(b.timestamp) ? b.timestamp : 0);
+      return byTime === 0 ? a.index - b.index : byTime;
+    })
+    .map(({ item }) => item);
 }
 
 function upsert(items: TimelineItem[], item: TimelineItem): void {

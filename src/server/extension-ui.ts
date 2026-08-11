@@ -1,5 +1,5 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import type { ExtensionUiOutcome, ExtensionUiRequest, ExtensionUiSnapshot } from "../shared/protocol.js";
+import type { ExtensionUiOutcome, ExtensionUiRequest, ExtensionUiSnapshot, ExtensionUiTimelineItem } from "../shared/protocol.js";
 
 export const UNSUPPORTED_EXTENSION_INTERACTION = "UNSUPPORTED_EXTENSION_INTERACTION";
 
@@ -56,6 +56,8 @@ export type ExtensionUiMessage =
  */
 export class ExtensionUiBridge {
   private readonly pending = new Map<string, PendingDialog>();
+  /** Ephemeral browser-facing history, retained while this session is active. */
+  private readonly cards = new Map<string, ExtensionUiTimelineItem>();
   private readonly statuses: Record<string, string> = {};
   private readonly widgets: ExtensionUiSnapshot["widgets"] = {};
   private title: string | undefined;
@@ -113,7 +115,8 @@ export class ExtensionUiBridge {
 
   snapshot(): ExtensionUiSnapshot {
     return {
-      dialogs: [...this.pending.values()].map(({ request, createdAt }) => ({ request: { ...request, ...(request.method === "select" ? { options: [...request.options] } : {}) }, createdAt })),
+      dialogs: [...this.pending.values()].map(({ request, createdAt }) => ({ request: cloneDialogRequest(request), createdAt })),
+      cards: [...this.cards.values()].map(cloneCard),
       statuses: { ...this.statuses },
       widgets: Object.fromEntries(Object.entries(this.widgets).map(([key, widget]) => [key, { ...widget, lines: [...widget.lines] }])),
       ...(this.title === undefined ? {} : { title: this.title }),
@@ -134,12 +137,15 @@ export class ExtensionUiBridge {
     pending.cleanup();
     if (hasOnlyCancel) {
       const defaultValue = request.method === "confirm" ? false : undefined;
+      this.settleCard(request.id, "cancelled", undefined, request.method === "confirm" ? false : undefined);
       pending.resolve(defaultValue);
       this.publishOutcome(request.id, "cancelled", undefined, request.method === "confirm" ? false : undefined);
     } else if (request.method === "confirm") {
+      this.settleCard(request.id, "answered", undefined, response.confirmed);
       pending.resolve(response.confirmed!);
       this.publishOutcome(request.id, "answered", undefined, response.confirmed);
     } else {
+      this.settleCard(request.id, "answered", response.value);
       pending.resolve(response.value!);
       this.publishOutcome(request.id, "answered", response.value);
     }
@@ -149,8 +155,10 @@ export class ExtensionUiBridge {
   closeAll(): void {
     for (const pending of [...this.pending.values()]) {
       pending.cleanup();
-      pending.resolve(pending.request.method === "confirm" ? false : undefined);
-      this.publishOutcome(pending.request.id, "closed", undefined, pending.request.method === "confirm" ? false : undefined);
+      const confirmed = pending.request.method === "confirm" ? false : undefined;
+      this.settleCard(pending.request.id, "closed", undefined, confirmed);
+      pending.resolve(confirmed);
+      this.publishOutcome(pending.request.id, "closed", undefined, confirmed);
     }
   }
 
@@ -160,6 +168,7 @@ export class ExtensionUiBridge {
   }
 
   private request(request: ExtensionUiRequest): void {
+    if (request.method === "notify") this.rememberCard({ kind: "extension-ui", id: `ext:${request.id}`, createdAt: new Date().toISOString(), request });
     this.publish({ type: "request", request });
   }
 
@@ -177,8 +186,10 @@ export class ExtensionUiBridge {
       };
       const settle = (outcome: Extract<ExtensionUiOutcome, "closed" | "timeout">, value: DialogValue) => {
         cleanup();
+        const confirmed = requestWithId.method === "confirm" ? false : undefined;
+        this.settleCard(id, outcome, undefined, confirmed);
         resolve(value);
-        this.publishOutcome(id, outcome, undefined, requestWithId.method === "confirm" ? false : undefined);
+        this.publishOutcome(id, outcome, undefined, confirmed);
       };
       const pending: PendingDialog = {
         request: requestWithId,
@@ -189,11 +200,35 @@ export class ExtensionUiBridge {
       };
       opts?.signal?.addEventListener("abort", onAbort, { once: true });
       this.pending.set(id, pending);
+      this.rememberCard({ kind: "extension-ui", id: `ext:${id}`, createdAt, request: requestWithId });
       this.request(requestWithId);
     });
+  }
+
+  private rememberCard(card: ExtensionUiTimelineItem): void {
+    this.cards.set(card.id, cloneCard(card));
+    while (this.cards.size > 100) this.cards.delete(this.cards.keys().next().value!);
+  }
+
+  private settleCard(id: string, outcome: ExtensionUiOutcome, value?: string, confirmed?: boolean): void {
+    const key = `ext:${id}`;
+    const card = this.cards.get(key);
+    if (card === undefined) return;
+    this.cards.set(key, { ...card, outcome, ...(value === undefined ? {} : { value }), ...(confirmed === undefined ? {} : { confirmed }) });
   }
 
   private publishOutcome(id: string, outcome: ExtensionUiOutcome, value?: string, confirmed?: boolean): void {
     this.publish({ type: "outcome", id, outcome, value, confirmed });
   }
+}
+
+function cloneDialogRequest(request: DialogRequest): DialogRequest {
+  return { ...request, ...(request.method === "select" ? { options: [...request.options] } : {}) };
+}
+
+function cloneCard(card: ExtensionUiTimelineItem): ExtensionUiTimelineItem {
+  const request = card.request.method === "select"
+    ? { ...card.request, options: [...card.request.options] }
+    : { ...card.request };
+  return { ...card, request } as ExtensionUiTimelineItem;
 }

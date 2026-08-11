@@ -220,6 +220,39 @@ describe("transcript reducer", () => {
     expect(hydrated.items).toEqual([expect.objectContaining({ kind: "extension-ui", id: "ext:a", request: expect.objectContaining({ method: "confirm", timeout: 5_000 }) })]);
   });
 
+  it("rehydrates extension cards at their original chronological position", () => {
+    const hydrated = hydrateTranscript(emptyTranscript, {
+      items: [
+        { kind: "tool", id: "tool", createdAt: "2026-08-09T00:00:00.000Z", name: "question", title: "Question", state: "completed" },
+        { kind: "message", id: "later", role: "assistant", createdAt: "2026-08-09T00:00:02.000Z", text: "Later message" },
+      ],
+      start: 0,
+      total: 2,
+      hasMore: false,
+    }, {
+      seq: 10,
+      status: { sessionId: "session", runState: "idle" },
+      model: { available: [] },
+      thinking: { current: "off", available: ["off"] },
+      liveMessages: [],
+      activeTools: [],
+      extensionUi: {
+        dialogs: [],
+        cards: [{
+          kind: "extension-ui",
+          id: "ext:answered",
+          createdAt: "2026-08-09T00:00:01.000Z",
+          request: { id: "answered", method: "input", title: "Name?", placeholder: "Type here" },
+          outcome: "answered",
+          value: "Ada",
+        }],
+        statuses: {}, widgets: {},
+      },
+    });
+    expect(hydrated.items.map((item) => item.id)).toEqual(["tool", "ext:answered", "later"]);
+    expect(hydrated.items[1]).toMatchObject({ outcome: "answered", value: "Ada" });
+  });
+
   it("hydrates a live bash item from the runtime snapshot after a reconnect", () => {
     const hydrated = hydrateTranscript(emptyTranscript, {
       items: [],

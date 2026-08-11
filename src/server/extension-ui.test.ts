@@ -61,7 +61,7 @@ describe("ExtensionUiBridge", () => {
     bridge.closeAll();
   });
 
-  it("resolves confirm with boolean and publishes confirmed outcome", async () => {
+  it("resolves confirm with boolean and retains the settled card in its snapshot", async () => {
     const { bridge, messages } = setup();
     const promise = bridge.context.confirm("Sure?", "Do it?");
     const request = dialogRequest(messages);
@@ -70,6 +70,12 @@ describe("ExtensionUiBridge", () => {
     bridge.respond({ id: request!.id, confirmed: true });
     await expect(promise).resolves.toBe(true);
     expect(messages.at(-1)).toMatchObject({ type: "outcome", outcome: "answered", confirmed: true });
+    expect(bridge.snapshot().cards).toEqual([expect.objectContaining({
+      id: `ext:${request!.id}`,
+      request: expect.objectContaining({ method: "confirm", title: "Sure?" }),
+      outcome: "answered",
+      confirmed: true,
+    })]);
   });
 
   it("maps cancel to undefined and publishes cancelled", async () => {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdate, useCodeMirror } from "@uiw/react-codemirror";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { ArrowUp, Command, FileCode2, LoaderCircle, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Command, FileCode2, LoaderCircle, Plus, Puzzle, Square, X } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
@@ -32,10 +32,12 @@ interface PromptEditorProps {
   attachDisabled: boolean;
   /** 扩展 setEditorText 注入的草稿（nonce 变化时替换编辑器内容）。 */
   injectedText?: { text: string; nonce: number };
+  /** Lightweight extension status labels shown inside the composer chrome. */
+  extensionStatuses?: Record<string, string>;
   controls?: ReactNode;
 }
 
-export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, controls }: PromptEditorProps) {
+export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, extensionStatuses = {}, controls }: PromptEditorProps) {
   const initialValueRef = useRef(initialValue);
   const valueRef = useRef(initialValue);
   const viewRef = useRef<EditorView | undefined>(undefined);
@@ -296,6 +298,9 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
             </Tooltip>
             {controls}
           </div>
+          {Object.entries(extensionStatuses).length === 0 ? null : <div className="composer-extension-statuses" aria-label="扩展状态">
+            {Object.entries(extensionStatuses).map(([key, text]) => <span className="composer-extension-status" key={key} title={key}><Puzzle size={11} /><span>{text}</span></span>)}
+          </div>}
           {busy ? (
             <Tooltip label="停止当前执行"><Button className="composer-stop" size="icon" aria-label="停止当前执行" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
           ) : (
