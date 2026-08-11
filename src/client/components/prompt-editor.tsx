@@ -201,12 +201,11 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
     onChange: change,
     onUpdate: update,
     onCreateEditor: createEditor,
-    minHeight: "76px",
-    maxHeight: "220px",
+    minHeight: isMobile ? "48px" : "76px",
+    maxHeight: isMobile ? "168px" : "220px",
     theme: "dark",
     basicSetup,
     extensions,
-    placeholder: "输入后续需求",
   });
 
   const attachContainer = useCallback((element: HTMLDivElement | null) => setContainer(element), [setContainer]);
