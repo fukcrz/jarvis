@@ -271,7 +271,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-row-chevron { margin-left: auto; color: var(--subtle); }
 .mobile-project-select .sidebar-activity { margin-right: 0; }
 .mobile-session-copy { display: flex; min-width: 0; flex: 1; align-items: baseline; justify-content: space-between; gap: 10px; }
-.mobile-session-copy strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 550; }
+.mobile-session-copy strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 550; }
 .mobile-session-copy small { flex: 0 0 auto; color: var(--subtle); font-size: 11px; }
 .mobile-page-empty { padding: 40px 16px; color: var(--subtle); text-align: center; font-size: 13px; }
 .mobile-search-wrap { display: flex; align-items: center; gap: 8px; margin: 18px 16px 10px; border: 1px solid var(--line); border-radius: 7px; background: #19191d; padding: 8px 10px; color: var(--subtle); }
@@ -284,6 +284,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-session-projects::-webkit-scrollbar { display: none; }
 .mobile-session-projects button { flex: 0 0 auto; min-height: 32px; border: 1px solid #303035; border-radius: 999px; background: #202023; padding: 4px 13px; color: #a5a4ad; font-size: 11px; white-space: nowrap; }
 .mobile-session-projects button.selected { border-color: var(--accent); background: #292535; color: var(--accent-strong); }
+.mobile-session-projects .mobile-add-project { display: flex; align-items: center; justify-content: center; width: 32px; padding: 4px 0; color: var(--subtle); }
+.mobile-session-projects .mobile-add-project:active { border-color: var(--accent); color: var(--accent-strong); }
 .mobile-switcher-list { flex: 1; padding: 8px 12px 24px; }
 .mobile-switcher-list .mobile-session-row.selected { background: transparent; box-shadow: none; }
 .mobile-switcher-list .mobile-session-row.selected .mobile-session-copy strong { color: var(--accent-strong); }
