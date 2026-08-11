@@ -830,6 +830,13 @@ export class SessionService {
           };
           active.liveMessages.set(message.id, message);
           this.events.publishSession(active.ref, { type: "message.created", runId, payload: { message } });
+          // Pi emits message_end before it persists the message. Publish the
+          // first prompt immediately with an explicit preview so the browser
+          // does not have to wait for the whole agent run to settle before
+          // replacing the "新会话" fallback title.
+          if (firstUserMessage(active.session.sessionManager.getBranch()) === null && text !== "") {
+            this.publishSummary(active, this.summaryFromActive(active, text));
+          }
           return;
         }
         if (!isAssistantMessage(event.message)) return;
@@ -1130,12 +1137,12 @@ export class SessionService {
     };
   }
 
-  private summaryFromActive(active: ActiveSession): SessionSummary {
+  private summaryFromActive(active: ActiveSession, previewOverride?: string): SessionSummary {
     return {
       id: active.ref.sessionId,
       workspaceId: active.ref.workspaceId,
       name: active.session.sessionName ?? null,
-      preview: firstUserMessage(active.session.sessionManager.getBranch()),
+      preview: previewOverride ?? firstUserMessage(active.session.sessionManager.getBranch()),
       createdAt: active.createdAt,
       updatedAt: active.updatedAt,
       runState: active.state.runState,
