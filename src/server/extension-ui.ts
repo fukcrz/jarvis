@@ -116,7 +116,8 @@ export class ExtensionUiBridge {
   snapshot(): ExtensionUiSnapshot {
     return {
       dialogs: [...this.pending.values()].map(({ request, createdAt }) => ({ request: cloneDialogRequest(request), createdAt })),
-      cards: [...this.cards.values()].map(cloneCard),
+      // Notifications are transient toasts, not reconnectable timeline history.
+      cards: [...this.cards.values()].filter((card) => card.request.method !== "notify").map(cloneCard),
       statuses: { ...this.statuses },
       widgets: Object.fromEntries(Object.entries(this.widgets).map(([key, widget]) => [key, { ...widget, lines: [...widget.lines] }])),
       ...(this.title === undefined ? {} : { title: this.title }),
@@ -168,7 +169,6 @@ export class ExtensionUiBridge {
   }
 
   private request(request: ExtensionUiRequest): void {
-    if (request.method === "notify") this.rememberCard({ kind: "extension-ui", id: `ext:${request.id}`, createdAt: new Date().toISOString(), request });
     this.publish({ type: "request", request });
   }
 

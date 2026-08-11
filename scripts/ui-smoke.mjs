@@ -102,6 +102,7 @@ async function capture(name, viewport, session, screenshotPath, desktop) {
   };
 
   await verifyRunFeedback(page, name, session.sessionId, emit);
+  await verifyExtensionUi(page, name, session, emit);
   if (desktop) await verifyDesktopControls(page, name, session);
   else await verifyMobileNavigation(page, name);
 
@@ -243,7 +244,64 @@ async function verifyRunFeedback(page, name, sessionId, emit) {
   await summary.waitFor({ state: "visible", timeout: 5_000 });
   await summary.click();
   await page.getByText("Context compaction feedback is visible.").waitFor({ state: "visible", timeout: 5_000 });
+
+  await emit("run.failed", {
+    status: {
+      sessionId,
+      runState: "idle",
+      lastError: {
+        code: "PI_COMPACTION_FAILED",
+        message: "409 Conflict: summary rejected (request id: smoke-request-409)",
+        occurredAt: new Date().toISOString(),
+      },
+    },
+  });
+  await page.getByText("上下文压缩未完成").waitFor({ state: "visible", timeout: 5_000 });
+  await page.getByRole("button", { name: "重试压缩" }).waitFor({ state: "visible", timeout: 5_000 });
+  await page.getByRole("button", { name: "查看诊断" }).click();
+  await page.getByText("PI_COMPACTION_FAILED").waitFor({ state: "visible", timeout: 5_000 });
+  await page.getByText("smoke-request-409", { exact: true }).waitFor({ state: "visible", timeout: 5_000 });
+  await page.getByText("409 Conflict: summary rejected (request id: smoke-request-409)").waitFor({ state: "visible", timeout: 5_000 });
   await assertNoHorizontalOverflow(page, name);
+}
+
+async function verifyExtensionUi(page, name, session, emit) {
+  const requestId = "c0ffee00-0000-4000-8000-000000000001";
+  let submitted;
+  await page.route("**/api/workspaces/*/sessions/*/extension-ui", async (route) => {
+    submitted = JSON.parse(route.request().postData() ?? "{}");
+    await route.fulfill({ contentType: "application/json", body: "{}" });
+  });
+
+  await emit("extension.uiRequest", {
+    request: {
+      id: requestId,
+      method: "confirm",
+      title: "允许删除构建缓存",
+      message: "将删除临时构建文件。",
+      timeout: 20_000,
+    },
+  });
+  const operation = page.getByRole("button", { name: /需要确认.*允许删除构建缓存/ });
+  await operation.waitFor({ state: "visible", timeout: 5_000 });
+  const pendingActions = page.getByRole("button", { name: /1 项待处理操作/ });
+  await pendingActions.waitFor({ state: "visible", timeout: 5_000 });
+  await pendingActions.click();
+  const dialog = page.getByRole("dialog", { name: "允许删除构建缓存" });
+  await dialog.waitFor({ state: "visible", timeout: 5_000 });
+  await dialog.getByRole("button", { name: "允许" }).click();
+  await page.waitForTimeout(50);
+  if (submitted?.id !== requestId || submitted?.confirmed !== true) failures.push(`${name}: extension confirmation did not submit the selected response`);
+  await dialog.waitFor({ state: "hidden", timeout: 5_000 });
+
+  await emit("extension.uiSettled", { id: requestId, outcome: "answered", confirmed: true });
+  await page.getByText("已允许", { exact: true }).waitFor({ state: "visible", timeout: 5_000 });
+
+  await emit("extension.uiRequest", {
+    request: { id: "c0ffee00-0000-4000-8000-000000000002", method: "notify", message: "扩展通知冒烟验证", notifyType: "info" },
+  });
+  await page.getByText("扩展通知冒烟验证", { exact: true }).waitFor({ state: "visible", timeout: 5_000 });
+  if (await page.locator(".extension-notice").count() !== 0) failures.push(`${name}: extension notify leaked into timeline history`);
 }
 
 async function verifyDesktopControls(page, name, session) {

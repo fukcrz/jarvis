@@ -18,10 +18,22 @@ import type {
 } from "../shared/protocol";
 
 export class ApiError extends Error {
-  constructor(readonly code: string, message: string, readonly status: number) {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status: number,
+    readonly requestId?: string,
+  ) {
     super(message);
     this.name = "ApiError";
   }
+}
+
+/** A state race the client can recover from by hydrating the latest session. */
+export function isSessionConflict(error: unknown): error is ApiError {
+  return error instanceof ApiError
+    && error.status === 409
+    && (error.code === "SESSION_BUSY" || error.code === "RUN_NOT_ACTIVE");
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -30,7 +42,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
     const body = await response.json().catch(() => undefined) as ApiErrorBody | undefined;
-    throw new ApiError(body?.error.code ?? "REQUEST_FAILED", body?.error.message ?? `Request failed (${String(response.status)})`, response.status);
+    throw new ApiError(
+      body?.error.code ?? "REQUEST_FAILED",
+      body?.error.message ?? `Request failed (${String(response.status)})`,
+      response.status,
+      body?.error.requestId,
+    );
   }
   return response.json() as Promise<T>;
 }

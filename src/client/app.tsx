@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowLeft, ChevronDown, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
-import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
+import { ArrowLeft, ChevronDown, ClipboardList, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
+import type { ComposerCommand, ExtensionUiTimelineItem, ImageAttachment, ModelDescriptor, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
-import { api, socketUrl } from "./api";
+import { api, isSessionConflict, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
 import { ThinkingSelector } from "./components/thinking-selector";
@@ -45,6 +45,7 @@ export function App() {
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Record<string, boolean>>(() => readExpandedWorkspaces());
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState<string | undefined>();
+  const [sessionNotice, setSessionNotice] = useState<string | undefined>();
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ workspaceId: string; session: SessionSummary } | undefined>();
   const [renameValue, setRenameValue] = useState("");
@@ -139,6 +140,19 @@ export function App() {
   const closeProjectMenu = useCallback(() => { setProjectMenu(undefined); }, []);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
   const stream = useSessionStream(selectedRef);
+  const pendingExtensionItems = useMemo(() => stream.transcript.items.filter((item): item is ExtensionUiTimelineItem => item.kind === "extension-ui" && item.outcome === undefined), [stream.transcript.items]);
+  const [activeExtensionId, setActiveExtensionId] = useState<string>();
+
+  useEffect(() => {
+    if (activeExtensionId !== undefined && !pendingExtensionItems.some((item) => item.id === activeExtensionId)) setActiveExtensionId(undefined);
+  }, [activeExtensionId, pendingExtensionItems]);
+
+  const recoverSessionConflict = useCallback(async (error: unknown): Promise<boolean> => {
+    if (!isSessionConflict(error)) return false;
+    setSessionNotice("会话状态已同步");
+    await stream.refresh().catch(() => undefined);
+    return true;
+  }, [stream.refresh]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 760px)");
@@ -170,7 +184,15 @@ export function App() {
     setThinkingLevelPending(false);
     setCompactionPending(false);
     setCompactionRequest(undefined);
+    setActiveExtensionId(undefined);
+    setSessionNotice(undefined);
   }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
+
+  useEffect(() => {
+    if (sessionNotice === undefined) return;
+    const timer = window.setTimeout(() => setSessionNotice(undefined), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [sessionNotice]);
 
   useEffect(() => {
     if (selectedRef === undefined || selectedRefKey === undefined || stream.connection !== "live") return;
@@ -499,8 +521,10 @@ export function App() {
       const bash = parseBashCommand(text);
       if (bash !== undefined) return submitBash(bash.command, bash.excludeFromContext);
     }
+    const clientRequestId = randomUUID();
+    stream.addOptimisticUser(clientRequestId, text, attachments);
     try {
-      await api.prompt(selectedRef, text, randomUUID(), attachments);
+      await api.prompt(selectedRef, text, clientRequestId, attachments);
       setSessionsByWorkspace((current) => ({
         ...current,
         [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
@@ -510,6 +534,8 @@ export function App() {
       setPageError(undefined);
       return true;
     } catch (error) {
+      stream.discardOptimisticUser(clientRequestId);
+      if (await recoverSessionConflict(error)) return false;
       setPageError(error instanceof Error ? error.message : "无法发送消息");
       return false;
     }
@@ -532,6 +558,7 @@ export function App() {
       setPageError(undefined);
       return true;
     } catch (error) {
+      if (await recoverSessionConflict(error)) return false;
       setPageError(error instanceof Error ? error.message : "无法执行命令");
       return false;
     }
@@ -542,6 +569,7 @@ export function App() {
     try {
       await api.abort(selectedRef, stream.transcript.status.activeRun?.id);
     } catch (error) {
+      if (await recoverSessionConflict(error)) return;
       setPageError(error instanceof Error ? error.message : "无法停止执行");
     }
   };
@@ -576,9 +604,10 @@ export function App() {
       setCompactionRequest({ runId: accepted.runId, baselineSeq });
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法压缩上下文");
       setCompactionPending(false);
       setCompactionRequest(undefined);
+      if (await recoverSessionConflict(error)) return;
+      setPageError(error instanceof Error ? error.message : "无法压缩上下文");
     }
   };
 
@@ -601,7 +630,7 @@ export function App() {
       await stream.selectModel(model);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法切换模型");
+      if (!(await recoverSessionConflict(error))) setPageError(error instanceof Error ? error.message : "无法切换模型");
     } finally {
       setModelSwitchPending(false);
     }
@@ -614,7 +643,7 @@ export function App() {
       await stream.setThinkingLevel(level);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法切换思考等级");
+      if (!(await recoverSessionConflict(error))) setPageError(error instanceof Error ? error.message : "无法切换思考等级");
     } finally {
       setThinkingLevelPending(false);
     }
@@ -677,8 +706,9 @@ export function App() {
   const renderChatContent = () => <>
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
-      <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? stream.transcript.status.lastError?.message} status={stream.transcript.status} onExtensionUiRespond={stream.respondExtensionUi} />
+      <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} extensionNotices={stream.extensionNotices} activeExtensionId={activeExtensionId} onActiveExtensionChange={setActiveExtensionId} onDismissExtensionNotice={stream.dismissExtensionNotice} onExtensionUiRespond={stream.respondExtensionUi} />
       <ExtensionPanels panels={stream.extensionPanels} />
+      {pendingExtensionItems.length === 0 ? null : <PendingExtensionActions count={pendingExtensionItems.length} onOpen={() => setActiveExtensionId(pendingExtensionItems[0]?.id)} />}
       <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
@@ -805,6 +835,14 @@ function mergeWorkspace(current: Workspace[], next: Workspace): Workspace[] {
   const copy = [...current];
   copy[existing] = next;
   return copy.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function PendingExtensionActions({ count, onOpen }: { count: number; onOpen: () => void }) {
+  return <button type="button" className="pending-extension-actions" onClick={onOpen}>
+    <ClipboardList size={14} />
+    <span>{count} 项待处理操作</span>
+    <span className="pending-extension-actions-hint">查看</span>
+  </button>;
 }
 
 function readExpandedWorkspaces(): Record<string, boolean> {

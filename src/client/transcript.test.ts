@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEvent } from "../shared/protocol";
-import { applySessionEvents, emptyTranscript, hydrateTranscript } from "./transcript";
+import { addOptimisticUserMessage, applySessionEvents, emptyTranscript, hydrateTranscript } from "./transcript";
 
 describe("transcript reducer", () => {
   it("drops events at or below the snapshot watermark and merges a tool by id", () => {
@@ -28,6 +28,21 @@ describe("transcript reducer", () => {
     expect(result.seq).toBe(6);
     expect(result.items).toHaveLength(2);
     expect(result.items[1]).toMatchObject({ id: "t1", state: "completed", output: "done" });
+  });
+
+  it("shows optimistic image messages and replaces them with the server image message", () => {
+    const image = { mimeType: "image/png", data: "abc" };
+    const optimistic = addOptimisticUserMessage(emptyTranscript, "request-1", "See this", [image]);
+    expect(optimistic.items).toEqual([expect.objectContaining({ id: "optimistic:user:request-1", images: [image] })]);
+    const result = applySessionEvents(optimistic, [{
+      version: 1,
+      sessionId: "session",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "message.created",
+      payload: { message: { kind: "message", id: "user", role: "user", createdAt: "2026-08-09T00:00:00.000Z", text: "See this", images: [image] } },
+    }]);
+    expect(result.items).toEqual([expect.objectContaining({ id: "user", images: [image] })]);
   });
 
   it("adds the server message.created payload without relying on an optimistic echo", () => {
@@ -288,13 +303,13 @@ describe("extension UI events", () => {
     })]);
   });
 
-  it("keeps notify cards without interactive state", () => {
+  it("keeps notify requests out of transcript history", () => {
     const next = applySessionEvents(emptyTranscript, [{
       version: 1, sessionId: "session", seq: 11, emittedAt: "2026-08-09T00:00:11.000Z",
       type: "extension.uiRequest",
       payload: { request: { id: "22222222-2222-4222-8222-222222222222", method: "notify", message: "已暂存 3 个文件", notifyType: "info" } },
     }]);
-    expect(next.items).toEqual([expect.objectContaining({ kind: "extension-ui", request: expect.objectContaining({ method: "notify", message: "已暂存 3 个文件" }) })]);
+    expect(next.items).toEqual([]);
   });
 
   it("updates the card with the answered value on uiSettled", () => {
@@ -316,12 +331,22 @@ describe("extension UI events", () => {
     expect(next.items).toEqual([]);
   });
 
-  it("marks confirm cards with confirmed outcome", () => {
+  it("retains realtime editor timeout", () => {
+    const next = applySessionEvents(emptyTranscript, [{
+      version: 1, sessionId: "session", seq: 13, emittedAt: "2026-08-09T00:00:13.000Z",
+      type: "extension.uiRequest",
+      payload: { request: { id: "editor-timeout", method: "editor", title: "编辑内容", prefill: "draft", timeout: 5_000 } },
+    }]);
+    expect(next.items).toEqual([expect.objectContaining({ request: expect.objectContaining({ method: "editor", prefill: "draft", timeout: 5_000 }) })]);
+  });
+
+  it("retains realtime confirm timeout and marks its confirmed outcome", () => {
     const pending = applySessionEvents(emptyTranscript, [{
       version: 1, sessionId: "session", seq: 13, emittedAt: "2026-08-09T00:00:13.000Z",
       type: "extension.uiRequest",
-      payload: { request: { id: "44444444-4444-4444-8444-444444444444", method: "confirm", title: "允许？", message: "执行 rm -rf dist" } },
+      payload: { request: { id: "44444444-4444-4444-8444-444444444444", method: "confirm", title: "允许？", message: "执行 rm -rf dist", timeout: 5_000 } },
     }]);
+    expect(pending.items).toEqual([expect.objectContaining({ request: expect.objectContaining({ timeout: 5_000 }) })]);
     const next = applySessionEvents(pending, [{
       version: 1, sessionId: "session", seq: 14, emittedAt: "2026-08-09T00:00:14.000Z",
       type: "extension.uiSettled",

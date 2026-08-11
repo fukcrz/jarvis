@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdate, useCodeMirror } from "@uiw/react-codemirror";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { ArrowUp, Command, FileCode2, LoaderCircle, Plus, Puzzle, Square, X } from "lucide-react";
+import { ArrowUp, Command, FileCode2, LoaderCircle, Plus, Puzzle, Square, X, XCircle } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
@@ -55,6 +55,8 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [preparingCount, setPreparingCount] = useState(0);
   const [hasDraft, setHasDraft] = useState(() => initialValue.trim() !== "");
+  const [previewIndex, setPreviewIndex] = useState<number>();
+  const preview = previewIndex === undefined ? undefined : attachments[previewIndex];
 
   useEffect(() => { busyRef.current = busy; }, [busy]);
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
@@ -237,7 +239,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   const completionLabel = useMemo(() => completion?.trigger === "/" ? "命令" : "文件", [completion?.trigger]);
   const canSend = hasDraft || attachments.length > 0;
   const openAttach = () => {
-    if (busy || attachDisabled) return;
+    if (attachDisabled) return;
     galleryRef.current?.click();
   };
   const removeAttachment = (index: number) => {
@@ -250,8 +252,8 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
         {attachments.length === 0 && preparingCount === 0 ? null : <div className="composer-attachments">
           {attachments.map((attachment, index) => (
             <div className="composer-attachment" key={`${attachment.mimeType}:${index}`}>
-              <img src={imageDataUrl(attachment)} alt={`附件 ${index + 1}`} />
-              <button type="button" aria-label="移除图片" onClick={() => { removeAttachment(index); }}><X size={10} /></button>
+              <button type="button" className="composer-attachment-preview" aria-label={`预览图片 ${index + 1}`} onClick={() => { setPreviewIndex(index); }}><img src={imageDataUrl(attachment)} alt={`附件 ${index + 1}`} /></button>
+              <button type="button" className="composer-attachment-remove" aria-label="移除图片" onClick={() => { removeAttachment(index); }}><X size={10} /></button>
             </div>
           ))}
           {preparingCount === 0 ? null : <div className="composer-attachment preparing" aria-label="正在处理图片"><LoaderCircle className="spin" size={16} /></div>}
@@ -293,8 +295,8 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
         </div>}
         <div className="composer-footer">
           <div className="composer-options">
-            <Tooltip label={attachDisabled ? "当前模型不支持图片" : busy ? "运行中不能添加图片" : "添加图片（支持 Ctrl+V 粘贴）"}>
-              <Button variant="ghost" className="composer-attach" size="icon" aria-label="添加图片" disabled={busy || attachDisabled} onClick={openAttach}><Plus size={16} /></Button>
+            <Tooltip label={attachDisabled ? "当前模型不支持图片" : "添加图片（支持 Ctrl+V 粘贴）"}>
+              <Button variant="ghost" className="composer-attach" size="icon" aria-label="添加图片" disabled={attachDisabled} onClick={openAttach}><Plus size={16} /></Button>
             </Tooltip>
             {controls}
           </div>
@@ -309,6 +311,10 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
         </div>
       </div>
       <input ref={galleryRef} className="composer-file-input" type="file" accept="image/*" multiple onChange={(event) => { handleFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
+      {preview === undefined ? null : <div className="image-lightbox" role="dialog" aria-label={`预览图片 ${previewIndex! + 1}`} onClick={() => setPreviewIndex(undefined)}>
+        <button type="button" className="image-lightbox-close" aria-label="关闭图片预览" onClick={() => setPreviewIndex(undefined)}><XCircle size={20} /></button>
+        <img src={imageDataUrl(preview)} alt={`图片 ${previewIndex! + 1}`} onClick={(event) => event.stopPropagation()} />
+      </div>}
     </section>
   );
 }

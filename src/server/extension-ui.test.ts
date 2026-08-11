@@ -124,7 +124,7 @@ describe("ExtensionUiBridge", () => {
     expect(messages.at(-1)).toMatchObject({ type: "outcome", outcome: "closed" });
   });
 
-  it("fire-and-forget methods publish requests without pending state", async () => {
+  it("keeps notify transient while fire-and-forget methods publish requests", async () => {
     const { bridge, messages } = setup();
     bridge.context.notify("Hello", "info");
     bridge.context.setStatus("key", "value");
@@ -135,6 +135,7 @@ describe("ExtensionUiBridge", () => {
       "notify", "setStatus", "setWidget", "setTitle", "set_editor_text",
     ]);
     expect(messages.filter((m) => m.type === "outcome")).toHaveLength(0);
+    expect(bridge.snapshot().cards).toEqual([]);
   });
 
   it("custom() resolves undefined like RPC mode", async () => {

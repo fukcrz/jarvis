@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, sessionPath, socketUrl } from "../api";
 import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, sessionEventSchema } from "../../shared/protocol";
-import { applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, type TranscriptState } from "../transcript";
+import { addOptimisticUserMessage, applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, removeOptimisticUserMessage, type TranscriptState } from "../transcript";
 
 interface StreamState {
   transcript: TranscriptState;
@@ -16,6 +16,12 @@ export interface ExtensionPanelState {
   editorText?: { text: string; nonce: number };
 }
 
+export interface ExtensionNotice {
+  id: string;
+  message: string;
+  tone: "info" | "warning" | "error";
+}
+
 type Action =
   | { type: "reset" }
   | { type: "hydrate"; page: Awaited<ReturnType<typeof api.timeline>>; snapshot: Awaited<ReturnType<typeof api.runtime>> }
@@ -23,6 +29,8 @@ type Action =
   | { type: "model"; model: ModelDescriptor }
   | { type: "thinking"; thinking: SessionThinkingSnapshot }
   | { type: "prepend"; page: Awaited<ReturnType<typeof api.timeline>> }
+  | { type: "optimistic-user"; id: string; text: string; images: import("../../shared/protocol").ImageAttachment[] }
+  | { type: "discard-optimistic-user"; id: string }
   | { type: "connection"; value: StreamState["connection"]; error?: string };
 
 const initialState: StreamState = { transcript: emptyTranscript, connection: "offline" };
@@ -34,6 +42,8 @@ function reducer(state: StreamState, action: Action): StreamState {
   if (action.type === "model") return { ...state, transcript: { ...state.transcript, model: { ...state.transcript.model, current: action.model } } };
   if (action.type === "thinking") return { ...state, transcript: { ...state.transcript, thinking: action.thinking } };
   if (action.type === "prepend") return { ...state, transcript: prependTranscript(state.transcript, action.page) };
+  if (action.type === "optimistic-user") return { ...state, transcript: addOptimisticUserMessage(state.transcript, action.id, action.text, action.images) };
+  if (action.type === "discard-optimistic-user") return { ...state, transcript: removeOptimisticUserMessage(state.transcript, action.id) };
   return { ...state, connection: action.value, ...(action.error === undefined ? {} : { error: action.error }) };
 }
 
@@ -41,12 +51,14 @@ type PanelSideEffect =
   | { kind: "status"; key: string; text: string | undefined }
   | { kind: "widget"; key: string; lines: string[] | undefined; placement: "aboveEditor" | "belowEditor" }
   | { kind: "title"; title: string }
-  | { kind: "editor"; text: string };
+  | { kind: "editor"; text: string }
+  | { kind: "notify"; id: string; message: string; tone: ExtensionNotice["tone"] };
 
 export function useSessionStream(ref: SessionRef | undefined) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [extensionPanels, setExtensionPanels] = useState<ExtensionPanelState>({ widgets: {}, statuses: {} });
+  const [extensionNotices, setExtensionNotices] = useState<ExtensionNotice[]>([]);
   const stateRef = useRef(state);
   const refKey = ref === undefined ? undefined : `${ref.workspaceId}:${ref.sessionId}`;
   const refKeyRef = useRef(refKey);
@@ -76,6 +88,8 @@ export function useSessionStream(ref: SessionRef | undefined) {
     }
     if (sideEffects.length > 0) {
       setExtensionPanels((previous) => applySideEffects(previous, sideEffects));
+      const notices = sideEffects.flatMap((effect) => effect.kind === "notify" ? [{ id: effect.id, message: effect.message, tone: effect.tone }] : []);
+      if (notices.length > 0) setExtensionNotices((previous) => [...previous, ...notices].slice(-4));
     }
   }, []);
 
@@ -93,11 +107,13 @@ export function useSessionStream(ref: SessionRef | undefined) {
     if (ref === undefined) {
       dispatch({ type: "reset" });
       setExtensionPanels({ widgets: {}, statuses: {} });
+      setExtensionNotices([]);
       document.title = defaultDocumentTitle.current;
       return;
     }
     dispatch({ type: "reset" });
     setExtensionPanels({ widgets: {}, statuses: {} });
+    setExtensionNotices([]);
     document.title = defaultDocumentTitle.current;
     let disposed = false;
     let socket: WebSocket | undefined;
@@ -129,7 +145,10 @@ export function useSessionStream(ref: SessionRef | undefined) {
           setExtensionPanels(extensionPanelsFromSnapshot(snapshot.extensionUi));
           document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
           hydrated = true;
-          for (const event of buffered.filter((event) => event.seq > snapshot.seq)) receiveEvent(event);
+          // Most buffered events are covered by the authoritative snapshot. A
+          // notify is intentionally not in that snapshot, so preserve it even
+          // when its sequence was included in the hydrate response.
+          for (const event of buffered.filter((event) => event.seq > snapshot.seq || sideEffectFor(event)?.kind === "notify")) receiveEvent(event);
           buffered = [];
           attempt = 0;
           dispatch({ type: "connection", value: "live" });
@@ -180,6 +199,16 @@ export function useSessionStream(ref: SessionRef | undefined) {
     if (refKeyRef.current === selectedKey) dispatch({ type: "thinking", thinking });
   }, [refKey]);
 
+  const refresh = useCallback(async () => {
+    if (ref === undefined) return;
+    const selectedKey = refKey;
+    const [page, snapshot] = await Promise.all([api.timeline(ref), api.runtime(ref)]);
+    if (refKeyRef.current !== selectedKey) return;
+    dispatch({ type: "hydrate", page, snapshot });
+    setExtensionPanels(extensionPanelsFromSnapshot(snapshot.extensionUi));
+    document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
+  }, [refKey]);
+
   const loadEarlier = useCallback(async () => {
     if (ref === undefined || !stateRef.current.transcript.hasMore || loadingEarlier) return;
     setLoadingEarlier(true);
@@ -201,7 +230,13 @@ export function useSessionStream(ref: SessionRef | undefined) {
     }
   }, [refKey]);
 
-  return { ...state, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi };
+  const addOptimisticUser = useCallback((id: string, text: string, images: import("../../shared/protocol").ImageAttachment[]) => {
+    dispatch({ type: "optimistic-user", id, text, images });
+  }, []);
+  const discardOptimisticUser = useCallback((id: string) => { dispatch({ type: "discard-optimistic-user", id }); }, []);
+  const dismissExtensionNotice = useCallback((id: string) => { setExtensionNotices((previous) => previous.filter((notice) => notice.id !== id)); }, []);
+
+  return { ...state, refresh, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, extensionNotices, dismissExtensionNotice, respondExtensionUi, addOptimisticUser, discardOptimisticUser };
 }
 
 function extensionPanelsFromSnapshot(snapshot: ExtensionUiSnapshot | undefined): ExtensionPanelState {
@@ -218,6 +253,13 @@ function sideEffectFor(event: SessionEvent): PanelSideEffect | undefined {
   const request = isRecord(payload?.["request"]) ? payload["request"] : undefined;
   if (request === undefined) return undefined;
   const method = request["method"];
+  if (method === "notify") {
+    const id = request["id"];
+    const message = request["message"];
+    const tone = request["notifyType"];
+    if (typeof id !== "string" || typeof message !== "string" || (tone !== undefined && tone !== "info" && tone !== "warning" && tone !== "error")) return undefined;
+    return { kind: "notify", id, message, tone: tone ?? "info" };
+  }
   if (method === "setStatus") {
     const key = request["statusKey"];
     if (typeof key !== "string") return undefined;
@@ -250,6 +292,9 @@ function applySideEffects(previous: ExtensionPanelState, effects: PanelSideEffec
   let title: string | undefined;
   let editor: string | undefined;
   for (const effect of effects) {
+    if (effect.kind === "notify") {
+      continue;
+    }
     if (effect.kind === "status") {
       const statuses = { ...next.statuses };
       if (effect.text === undefined) delete statuses[effect.key];

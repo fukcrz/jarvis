@@ -26,7 +26,7 @@ export const emptyTranscript: TranscriptState = {
 };
 
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
-  const extensionItems: ExtensionUiTimelineItem[] = snapshot.extensionUi?.cards ?? (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }));
+  const extensionItems: ExtensionUiTimelineItem[] = (snapshot.extensionUi?.cards ?? (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }))).filter((item) => item.request.method !== "notify");
   const live = [...snapshot.liveMessages, ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial]), ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
   return {
     // History and the snapshot are authoritative after a reconnect. Keeping an
@@ -42,6 +42,16 @@ export function hydrateTranscript(previous: TranscriptState, page: TimelinePage,
     ...(snapshot.contextUsage === undefined ? {} : { contextUsage: snapshot.contextUsage }),
     ...(snapshot.partial === undefined ? {} : { streamingMessageId: snapshot.partial.id }),
   };
+}
+
+export function addOptimisticUserMessage(state: TranscriptState, id: string, text: string, images: MessageTimelineItem["images"] = []): TranscriptState {
+  const item: MessageTimelineItem = { kind: "message", id: `optimistic:user:${id}`, role: "user", createdAt: new Date().toISOString(), text, ...(images.length === 0 ? {} : { images }) };
+  return { ...state, items: mergeTimeline(state.items, [item]) };
+}
+
+export function removeOptimisticUserMessage(state: TranscriptState, id: string): TranscriptState {
+  const itemId = `optimistic:user:${id}`;
+  return { ...state, items: state.items.filter((item) => item.id !== itemId) };
 }
 
 export function prependTranscript(state: TranscriptState, page: TimelinePage): TranscriptState {
@@ -74,7 +84,9 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
   if (event.type === "message.created") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const message = recordMessage(payload?.["message"]);
-    return message === undefined ? next : { ...next, items: mergeTimeline(next.items, [message]) };
+    if (message === undefined) return next;
+    const withoutMatchingOptimistic = next.items.filter((item) => item.kind !== "message" || item.role !== "user" || !item.id.startsWith("optimistic:user:") || !sameUserMessage(item, message));
+    return { ...next, items: mergeTimeline(withoutMatchingOptimistic, [message]) };
   }
   if (event.type === "assistant.delta") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -126,7 +138,8 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
   if (event.type === "extension.uiRequest") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const request = recordExtensionUiRequest(payload?.["request"]);
-    if (request === undefined) return next;
+    // Notifications are transient browser chrome, never transcript history.
+    if (request === undefined || request.method === "notify") return next;
     const item: ExtensionUiTimelineItem = { kind: "extension-ui", id: `ext:${request.id}`, createdAt: event.emittedAt, request };
     return { ...next, items: mergeTimeline(next.items, [item]) };
   }
@@ -209,7 +222,17 @@ function upsert(items: TimelineItem[], item: TimelineItem): void {
 function recordMessage(value: unknown): MessageTimelineItem | undefined {
   if (!isRecord(value) || value["kind"] !== "message") return undefined;
   if ((value["role"] !== "user" && value["role"] !== "assistant") || typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["text"] !== "string") return undefined;
-  return { kind: "message", id: value["id"], role: value["role"], createdAt: value["createdAt"], text: value["text"] };
+  const images = Array.isArray(value["images"])
+    ? value["images"].flatMap((image) => isRecord(image) && typeof image["mimeType"] === "string" && typeof image["data"] === "string" ? [{ mimeType: image["mimeType"], data: image["data"] }] : [])
+    : [];
+  return { kind: "message", id: value["id"], role: value["role"], createdAt: value["createdAt"], text: value["text"], ...(images.length === 0 ? {} : { images }) };
+}
+
+function sameUserMessage(a: MessageTimelineItem, b: MessageTimelineItem): boolean {
+  if (a.role !== "user" || b.role !== "user" || a.text !== b.text) return false;
+  const aImages = a.images ?? [];
+  const bImages = b.images ?? [];
+  return aImages.length === bImages.length && aImages.every((image, index) => image.mimeType === bImages[index]?.mimeType && image.data === bImages[index]?.data);
 }
 
 function recordTool(value: unknown): ToolTimelineItem | undefined {
@@ -245,15 +268,15 @@ function recordExtensionUiRequest(value: unknown): ExtensionUiRequest | undefine
   }
   if (method === "confirm") {
     if (typeof value["title"] !== "string") return undefined;
-    return { id: value["id"], method, title: value["title"], ...(typeof value["message"] === "string" ? { message: value["message"] } : {}) };
+    return { id: value["id"], method, title: value["title"], ...(typeof value["message"] === "string" ? { message: value["message"] } : {}), ...(typeof value["timeout"] === "number" ? { timeout: value["timeout"] } : {}) };
   }
   if (method === "input") {
     if (typeof value["title"] !== "string") return undefined;
-    return { id: value["id"], method, title: value["title"], ...(typeof value["placeholder"] === "string" ? { placeholder: value["placeholder"] } : {}) };
+    return { id: value["id"], method, title: value["title"], ...(typeof value["placeholder"] === "string" ? { placeholder: value["placeholder"] } : {}), ...(typeof value["timeout"] === "number" ? { timeout: value["timeout"] } : {}) };
   }
   if (method === "editor") {
     if (typeof value["title"] !== "string") return undefined;
-    return { id: value["id"], method, title: value["title"], ...(typeof value["prefill"] === "string" ? { prefill: value["prefill"] } : {}) };
+    return { id: value["id"], method, title: value["title"], ...(typeof value["prefill"] === "string" ? { prefill: value["prefill"] } : {}), ...(typeof value["timeout"] === "number" ? { timeout: value["timeout"] } : {}) };
   }
   if (method === "notify") {
     if (typeof value["message"] !== "string") return undefined;

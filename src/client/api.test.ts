@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api } from "./api";
+import { api, ApiError, isSessionConflict } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -57,6 +57,21 @@ describe("API client", () => {
     expect(init?.method).toBe("PUT");
     expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
     expect(init?.body).toBe(JSON.stringify({ level: "high" }));
+  });
+
+  it("retains server request ids on API errors", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { code: "SESSION_BUSY", message: "This session is already running", requestId: "req-409" } }), { status: 409 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ref = { workspaceId: "da69b38d-f132-4c84-8c4f-6174015e9c5e", sessionId: "c2f73ddd-cfc6-464f-acb3-c8f425cea7f0" };
+
+    await expect(api.compact(ref)).rejects.toMatchObject({ name: "ApiError", code: "SESSION_BUSY", status: 409, requestId: "req-409" });
+  });
+
+  it("recognizes recoverable session state conflicts only", () => {
+    expect(isSessionConflict(new ApiError("SESSION_BUSY", "busy", 409))).toBe(true);
+    expect(isSessionConflict(new ApiError("RUN_NOT_ACTIVE", "settled", 409))).toBe(true);
+    expect(isSessionConflict(new ApiError("MODEL_NOT_AVAILABLE", "conflict", 409))).toBe(false);
+    expect(isSessionConflict(new ApiError("SESSION_BUSY", "busy", 500))).toBe(false);
   });
 
   it("sends compaction instructions and an idempotency key", async () => {
