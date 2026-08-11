@@ -2,6 +2,19 @@ import { buildApp } from "./app.js";
 
 const production = process.env["NODE_ENV"] === "production";
 const app = await buildApp({ serveStatic: production });
+
+// Extension code can leave async continuations (streams, timers, compaction
+// callbacks) running after a session is disposed. A stale extension ctx throws
+// inside those unawaited callbacks, and Node's default behavior would take the
+// whole server down. Log instead and keep serving: Jarvis's state lives on
+// disk, not in this process.
+process.on("unhandledRejection", (reason) => {
+  app.log.error({ err: reason }, "Unhandled promise rejection; keeping the server alive");
+});
+process.on("uncaughtException", (error) => {
+  app.log.error({ err: error }, "Uncaught exception; keeping the server alive");
+});
+
 // Development defaults to a fixed port (39130) so it never collides with the
 // production default (39126). Override either with PORT.
 const defaultPort = production ? 39126 : 39130;
