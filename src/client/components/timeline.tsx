@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { Archive, ArrowDown, Check, CircleAlert, Clock3, GitBranch, LoaderCircle, Pencil, RefreshCw, RotateCcw, X, XCircle } from "lucide-react";
-import type { ContextSummaryTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
+import { Archive, ArrowDown, Bell, Brain, Check, CircleAlert, Clock3, GitBranch, LoaderCircle, Pencil, RefreshCw, RotateCcw, X, XCircle } from "lucide-react";
+import type { ContextSummaryTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
 import { MarkdownMessage } from "./markdown-message";
@@ -21,14 +21,12 @@ interface TimelineProps {
   onDismissNotice?: () => void;
   status: SessionStatus;
   onRetryCompaction?: () => void;
-  extensionNotices?: Array<{ id: string; message: string; tone: "info" | "warning" | "error" }>;
-  onDismissExtensionNotice?: (id: string) => void;
   onEditUserMessage?: (item: MessageTimelineItem, text: string) => Promise<boolean>;
   onForkMessage?: (item: MessageTimelineItem) => void;
   onExtensionUiRespond?: (id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void | Promise<void>;
 }
 
-export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, extensionNotices = [], onDismissExtensionNotice, onEditUserMessage, onForkMessage, onExtensionUiRespond }: TimelineProps) {
+export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
   const [editingMessageId, setEditingMessageId] = useState<string>();
@@ -68,17 +66,8 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
         </div>
       </div>
       {!following ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
-      {extensionNotices.length === 0 ? null : <aside className="extension-toasts" aria-label="扩展通知">{extensionNotices.map((toast) => <ExtensionToast key={toast.id} toast={toast} onDismiss={onDismissExtensionNotice} />)}</aside>}
     </section>
   );
-}
-
-function ExtensionToast({ toast, onDismiss }: { toast: NonNullable<TimelineProps["extensionNotices"]>[number]; onDismiss: TimelineProps["onDismissExtensionNotice"] }) {
-  useEffect(() => {
-    const timer = window.setTimeout(() => onDismiss?.(toast.id), toast.tone === "error" ? 8_000 : 4_500);
-    return () => window.clearTimeout(timer);
-  }, [onDismiss, toast.id, toast.tone]);
-  return <div className={`extension-toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}><span>{toast.message}</span>{onDismiss === undefined ? null : <button type="button" aria-label="关闭扩展通知" onClick={() => onDismiss(toast.id)}><X size={14} /></button>}</div>;
 }
 
 function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
@@ -224,6 +213,7 @@ type ExtensionDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "
 type ExtensionResponse = { value?: string; confirmed?: boolean; cancelled?: boolean };
 
 function ExtensionUiOperation({ item, onRespond }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"] }) {
+  if (item.request.method === "notify") return <ExtensionNotification item={item} />;
   const request = item.request as ExtensionDialogRequest;
   const [value, setValue] = useState(request.method === "editor" ? request.prefill ?? "" : "");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -267,6 +257,15 @@ function ExtensionUiOperation({ item, onRespond }: { item: ExtensionUiTimelineIt
       {request.method === "confirm" ? <><button type="button" disabled={submitting} onClick={() => respond({ confirmed: false })}>拒绝</button><button type="button" className="accent" disabled={submitting} onClick={() => respond({ confirmed: true })}>{submitting ? "正在提交…" : "允许"}</button></> : <><button type="button" disabled={submitting} onClick={() => respond({ cancelled: true })}>取消</button><button type="button" className="accent" disabled={submitting} onClick={() => respond({ value })}>{submitting ? "正在提交…" : request.method === "editor" ? "提交修改" : "提交"}</button></>}
     </div>
     {request.method === "editor" ? <small className="extension-interaction-hint">按 Ctrl / Cmd + Enter 提交</small> : null}
+  </article>;
+}
+
+function ExtensionNotification({ item }: { item: ExtensionUiTimelineItem }) {
+  const tone = item.request.method === "notify" ? item.request.notifyType ?? "info" : "info";
+  const Icon = tone === "error" ? CircleAlert : tone === "warning" ? CircleAlert : Bell;
+  return <article className={`extension-notification ${tone}`} role={tone === "error" ? "alert" : "status"}>
+    <span className="extension-notification-icon"><Icon size={15} /></span>
+    <span>{item.request.method === "notify" ? item.request.message : ""}</span>
   </article>;
 }
 
@@ -321,6 +320,7 @@ export type TimelineRenderItem =
   | { kind: "message"; item: MessageTimelineItem }
   | { kind: "context-summary"; item: ContextSummaryTimelineItem }
   | { kind: "extension-ui"; item: ExtensionUiTimelineItem }
+  | { kind: "thinking"; item: ThinkingTimelineItem }
   | { kind: "activity"; items: ToolTimelineItem[] };
 
 export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] {
@@ -338,6 +338,7 @@ export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] 
       flushTools();
       if (item.kind === "message") result.push({ kind: "message", item });
       else if (item.kind === "extension-ui") result.push({ kind: "extension-ui", item });
+      else if (item.kind === "thinking") result.push({ kind: "thinking", item });
       else result.push({ kind: "context-summary", item });
     }
   }
@@ -346,7 +347,9 @@ export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] 
 }
 
 function hasActiveActivity(items: TimelineItem[], status: SessionStatus): boolean {
-  return status.runState !== "idle" && items.at(-1)?.kind === "tool";
+  if (status.runState === "idle") return false;
+  const last = items.at(-1);
+  return last?.kind === "tool" || (last?.kind === "thinking" && last.state === "running");
 }
 
 function renderTimelineItems(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], editingMessageId: string | undefined, setEditingMessageId: (id: string | undefined) => void): ReactNode[] {
@@ -358,8 +361,32 @@ function renderTimelineItems(items: TimelineItem[], streamingMessageId: string |
     if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} editing={entry.item.id === editingMessageId} onStartEdit={() => setEditingMessageId(entry.item.id)} onCancelEdit={() => setEditingMessageId(undefined)} onEdit={onEditUserMessage} onFork={entry.item.role === "user" ? onForkMessage : undefined} />;
     if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} />;
     if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={onExtensionUiRespond} />;
+    if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} />;
     return <ActivityGroup key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={index === activeActivityIndex} startedAt={status.activeRun?.startedAt} stopping={status.runState === "stopping"} />;
   });
+}
+
+function ThinkingItem({ item }: { item: ThinkingTimelineItem }) {
+  // 思考时默认展开看流式内容；思考结束后自动收起成一行标题。
+  const [open, setOpen] = useState(() => item.state === "running");
+  const wasRunning = useRef(item.state === "running");
+  useEffect(() => {
+    if (wasRunning.current && item.state === "completed") {
+      setOpen(false);
+      wasRunning.current = false;
+    } else if (item.state === "running") {
+      wasRunning.current = true;
+    }
+  }, [item.state]);
+  return (
+    <article className={`thinking-item ${item.state}`}>
+      <button className="thinking-summary" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+        <span className="thinking-state-icon">{item.state === "running" ? <LoaderCircle size={14} className="spin" /> : <Brain size={14} />}</span>
+        <span className="thinking-title">{item.state === "running" ? "思考中…" : "思考过程"}</span>
+      </button>
+      {open ? <div className="thinking-details"><div className="message-content"><MarkdownMessage text={item.text} streaming={item.state === "running"} /></div></div> : null}
+    </article>
+  );
 }
 
 function ActivityGroup({ items, active, startedAt, stopping }: { items: ToolTimelineItem[]; active: boolean; startedAt?: string; stopping: boolean }) {

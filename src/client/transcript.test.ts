@@ -312,6 +312,50 @@ describe("transcript reducer", () => {
     });
     expect(hydrated.items).toEqual([expect.objectContaining({ id: "bash:bash-run", output: "so far" })]);
   });
+
+  it("hydrates a streaming thinking block from the runtime snapshot after a reconnect", () => {
+    const hydrated = hydrateTranscript(emptyTranscript, {
+      items: [],
+      start: 0,
+      total: 0,
+      hasMore: false,
+    }, {
+      seq: 9,
+      status: { sessionId: "session", runState: "running", activeRun: { id: "run", startedAt: "2026-08-09T00:00:00.000Z" } },
+      model: { available: [] },
+      thinking: { current: "off", available: ["off"] },
+      liveMessages: [],
+      activeTools: [],
+      partialThinking: { kind: "thinking", id: "message:assistant:0:thinking", createdAt: "2026-08-09T00:00:00.000Z", state: "running", text: "so far" },
+    });
+    expect(hydrated.items).toEqual([expect.objectContaining({ kind: "thinking", id: "message:assistant:0:thinking", state: "running", text: "so far" })]);
+  });
+
+  it("streams thinking deltas into a running thinking card", () => {
+    const streamed = applySessionEvents(emptyTranscript, [
+      { version: 1, sessionId: "session", runId: "run", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z", type: "thinking.delta", payload: { thinkingId: "t1", createdAt: "2026-08-09T00:00:00.000Z", delta: "Let me check" } },
+      { version: 1, sessionId: "session", runId: "run", seq: 2, emittedAt: "2026-08-09T00:00:01.000Z", type: "thinking.delta", payload: { thinkingId: "t1", createdAt: "2026-08-09T00:00:00.000Z", delta: " the files." } },
+    ]);
+    expect(streamed.items).toEqual([expect.objectContaining({ kind: "thinking", id: "t1", state: "running", text: "Let me check the files." })]);
+    expect(streamed.streamingMessageId).toBeUndefined();
+  });
+
+  it("finalizes a thinking card with the completed state and authoritative text", () => {
+    const running = applySessionEvents(emptyTranscript, [{
+      version: 1, sessionId: "session", runId: "run", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z", type: "thinking.delta", payload: { thinkingId: "t1", createdAt: "2026-08-09T00:00:00.000Z", delta: "partial" },
+    }]);
+    const completed = applySessionEvents(running, [{
+      version: 1, sessionId: "session", runId: "run", seq: 2, emittedAt: "2026-08-09T00:00:01.000Z", type: "thinking.completed", payload: { thinkingId: "t1", createdAt: "2026-08-09T00:00:00.000Z", text: "authoritative" },
+    }]);
+    expect(completed.items).toEqual([expect.objectContaining({ kind: "thinking", id: "t1", state: "completed", text: "authoritative" })]);
+  });
+
+  it("creates a completed thinking card when only message_end carries the thinking text", () => {
+    const completed = applySessionEvents(emptyTranscript, [{
+      version: 1, sessionId: "session", runId: "run", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z", type: "thinking.completed", payload: { thinkingId: "t2", createdAt: "2026-08-09T00:00:00.000Z", text: "full text" },
+    }]);
+    expect(completed.items).toEqual([expect.objectContaining({ kind: "thinking", id: "t2", state: "completed", text: "full text" })]);
+  });
 });
 
 describe("extension UI events", () => {
@@ -330,13 +374,17 @@ describe("extension UI events", () => {
     })]);
   });
 
-  it("keeps notify requests out of transcript history", () => {
+  it("adds notify requests to the session timeline", () => {
     const next = applySessionEvents(emptyTranscript, [{
       version: 1, sessionId: "session", seq: 11, emittedAt: "2026-08-09T00:00:11.000Z",
       type: "extension.uiRequest",
       payload: { request: { id: "22222222-2222-4222-8222-222222222222", method: "notify", message: "已暂存 3 个文件", notifyType: "info" } },
     }]);
-    expect(next.items).toEqual([]);
+    expect(next.items).toEqual([expect.objectContaining({
+      kind: "extension-ui",
+      id: "ext:22222222-2222-4222-8222-222222222222",
+      request: expect.objectContaining({ method: "notify", message: "已暂存 3 个文件" }),
+    })]);
   });
 
   it("updates the card with the answered value on uiSettled", () => {

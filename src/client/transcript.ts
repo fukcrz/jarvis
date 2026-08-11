@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ExtensionUiRequest, type ExtensionUiTimelineItem, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, type TimelinePage, type ToolTimelineItem } from "../shared/protocol";
+import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ExtensionUiRequest, type ExtensionUiTimelineItem, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem } from "../shared/protocol";
 import { isRecord } from "../shared/protocol";
 
 export interface TranscriptState {
@@ -26,8 +26,8 @@ export const emptyTranscript: TranscriptState = {
 };
 
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
-  const extensionItems: ExtensionUiTimelineItem[] = (snapshot.extensionUi?.cards ?? (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }))).filter((item) => item.request.method !== "notify");
-  const live = [...snapshot.liveMessages, ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial]), ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
+  const extensionItems: ExtensionUiTimelineItem[] = snapshot.extensionUi?.cards ?? (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }));
+  const live = [...snapshot.liveMessages, ...(snapshot.partialThinking === undefined ? [] : [snapshot.partialThinking]), ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial]), ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
   return {
     // History and the snapshot are authoritative after a reconnect. Keeping an
     // old in-memory tail here can resurrect an already-settled partial/tool.
@@ -120,6 +120,28 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const updated = { ...next, items: mergeTimeline(next.items, [message]) };
     return updated.streamingMessageId === message.id ? withoutStreamingMessage(updated) : updated;
   }
+  if (event.type === "thinking.delta") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const id = typeof payload?.["thinkingId"] === "string" ? payload["thinkingId"] : undefined;
+    const delta = typeof payload?.["delta"] === "string" ? payload["delta"] : "";
+    if (id === undefined || delta === "") return next;
+    const createdAt = typeof payload?.["createdAt"] === "string" ? payload["createdAt"] : event.emittedAt;
+    const existing = next.items.find((item): item is ThinkingTimelineItem => item.kind === "thinking" && item.id === id);
+    const item: ThinkingTimelineItem = existing === undefined
+      ? { kind: "thinking", id, createdAt, state: "running", text: delta }
+      : { ...existing, text: existing.text + delta };
+    return { ...next, items: mergeTimeline(next.items, [item]) };
+  }
+  if (event.type === "thinking.completed") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const id = typeof payload?.["thinkingId"] === "string" ? payload["thinkingId"] : undefined;
+    if (id === undefined) return next;
+    const createdAt = typeof payload?.["createdAt"] === "string" ? payload["createdAt"] : event.emittedAt;
+    const existing = next.items.find((item): item is ThinkingTimelineItem => item.kind === "thinking" && item.id === id);
+    const text = typeof payload?.["text"] === "string" && payload["text"] !== "" ? payload["text"] : (existing?.text ?? "");
+    const item: ThinkingTimelineItem = { kind: "thinking", id, createdAt: existing?.createdAt ?? createdAt, state: "completed", text };
+    return { ...next, items: mergeTimeline(next.items, [item]) };
+  }
   if (event.type === "tool.upsert") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const tool = recordTool(payload?.["tool"]);
@@ -152,8 +174,7 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
   if (event.type === "extension.uiRequest") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const request = recordExtensionUiRequest(payload?.["request"]);
-    // Notifications are transient browser chrome, never transcript history.
-    if (request === undefined || request.method === "notify") return next;
+    if (request === undefined) return next;
     const item: ExtensionUiTimelineItem = { kind: "extension-ui", id: `ext:${request.id}`, createdAt: event.emittedAt, request };
     return { ...next, items: mergeTimeline(next.items, [item]) };
   }
@@ -238,6 +259,8 @@ function recordTimelineItem(value: unknown): TimelineItem[] {
   if (message !== undefined) return [message];
   const tool = recordTool(value);
   if (tool !== undefined) return [tool];
+  const thinking = recordThinkingItem(value);
+  if (thinking !== undefined) return [thinking];
   const summary = recordContextSummary(value);
   return summary === undefined ? [] : [summary];
 }
@@ -256,6 +279,14 @@ function sameUserMessage(a: MessageTimelineItem, b: MessageTimelineItem): boolea
   const aImages = a.images ?? [];
   const bImages = b.images ?? [];
   return aImages.length === bImages.length && aImages.every((image, index) => image.mimeType === bImages[index]?.mimeType && image.data === bImages[index]?.data);
+}
+
+function recordThinkingItem(value: unknown): ThinkingTimelineItem | undefined {
+  if (!isRecord(value) || value["kind"] !== "thinking") return undefined;
+  const state = value["state"];
+  if (state !== "running" && state !== "completed") return undefined;
+  if (typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["text"] !== "string") return undefined;
+  return { kind: "thinking", id: value["id"], createdAt: value["createdAt"], state, text: value["text"] };
 }
 
 function recordTool(value: unknown): ToolTimelineItem | undefined {

@@ -5,6 +5,7 @@ export const PROTOCOL_VERSION = 1 as const;
 export type RunState = "idle" | "running" | "stopping";
 export type RunKind = "llm" | "bash" | "compaction";
 export type ToolState = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type ThinkingState = "running" | "completed";
 export type CompactionReason = "manual" | "threshold" | "overflow";
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = typeof THINKING_LEVELS[number];
@@ -155,6 +156,15 @@ export interface ToolTimelineItem {
   excludeFromContext?: boolean;
 }
 
+/** 模型推理过程：思考时展开流式展示，完成后自动收起。 */
+export interface ThinkingTimelineItem {
+  kind: "thinking";
+  id: string;
+  createdAt: string;
+  state: ThinkingState;
+  text: string;
+}
+
 export interface ContextSummaryTimelineItem {
   kind: "context-summary";
   id: string;
@@ -164,7 +174,7 @@ export interface ContextSummaryTimelineItem {
   tokensBefore?: number;
 }
 
-export type TimelineItem = MessageTimelineItem | ToolTimelineItem | ContextSummaryTimelineItem | ExtensionUiTimelineItem;
+export type TimelineItem = MessageTimelineItem | ToolTimelineItem | ThinkingTimelineItem | ContextSummaryTimelineItem | ExtensionUiTimelineItem;
 
 export interface TimelinePage {
   items: TimelineItem[];
@@ -176,7 +186,7 @@ export interface TimelinePage {
 export interface ExtensionUiSnapshot {
   /** Dialogs that are still waiting for a browser response. */
   dialogs: Array<{ request: Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>; createdAt: string }>;
-  /** Extension dialogs and notices retained for browser refresh/reconnect. */
+  /** Extension dialogs, interactions, and notifications retained for browser refresh/reconnect. */
   cards?: ExtensionUiTimelineItem[];
   statuses: Record<string, string>;
   widgets: Record<string, { lines: string[]; placement: "aboveEditor" | "belowEditor" }>;
@@ -193,6 +203,8 @@ export interface SessionStreamSnapshot {
   /** Messages from the current run that may not yet have reached JSONL. */
   liveMessages: MessageTimelineItem[];
   partial?: MessageTimelineItem;
+  /** 当前 run 正在流式的思考块（尚未 message_end 定稿）。 */
+  partialThinking?: ThinkingTimelineItem;
   activeTools: ToolTimelineItem[];
   /** 正在执行的用户 !cmd 命令（流式输出尚未落盘）。 */
   activeBash?: ToolTimelineItem;
@@ -230,6 +242,8 @@ export type SessionEventType =
   | "message.created"
   | "assistant.delta"
   | "assistant.completed"
+  | "thinking.delta"
+  | "thinking.completed"
   | "tool.upsert"
   | "timeline.upsert"
   | "bash.delta"
@@ -309,6 +323,8 @@ export const sessionEventSchema = z.object({
     "message.created",
     "assistant.delta",
     "assistant.completed",
+    "thinking.delta",
+    "thinking.completed",
     "tool.upsert",
     "timeline.upsert",
     "bash.delta",

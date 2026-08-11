@@ -124,7 +124,7 @@ describe("ExtensionUiBridge", () => {
     expect(messages.at(-1)).toMatchObject({ type: "outcome", outcome: "closed" });
   });
 
-  it("keeps notify transient while fire-and-forget methods publish requests", async () => {
+  it("retains notify in the session snapshot while fire-and-forget methods publish requests", async () => {
     const { bridge, messages } = setup();
     bridge.context.notify("Hello", "info");
     bridge.context.setStatus("key", "value");
@@ -135,7 +135,9 @@ describe("ExtensionUiBridge", () => {
       "notify", "setStatus", "setWidget", "setTitle", "set_editor_text",
     ]);
     expect(messages.filter((m) => m.type === "outcome")).toHaveLength(0);
-    expect(bridge.snapshot().cards).toEqual([]);
+    expect(bridge.snapshot().cards).toEqual([expect.objectContaining({
+      request: expect.objectContaining({ method: "notify", message: "Hello", notifyType: "info" }),
+    })]);
   });
 
   it("custom() resolves undefined like RPC mode", async () => {

@@ -16,12 +16,6 @@ export interface ExtensionPanelState {
   editorText?: { text: string; nonce: number };
 }
 
-export interface ExtensionNotice {
-  id: string;
-  message: string;
-  tone: "info" | "warning" | "error";
-}
-
 type Action =
   | { type: "reset" }
   | { type: "hydrate"; page: Awaited<ReturnType<typeof api.timeline>>; snapshot: Awaited<ReturnType<typeof api.runtime>> }
@@ -53,14 +47,12 @@ type PanelSideEffect =
   | { kind: "status"; key: string; text: string | undefined }
   | { kind: "widget"; key: string; lines: string[] | undefined; placement: "aboveEditor" | "belowEditor" }
   | { kind: "title"; title: string }
-  | { kind: "editor"; text: string }
-  | { kind: "notify"; id: string; message: string; tone: ExtensionNotice["tone"] };
+  | { kind: "editor"; text: string };
 
 export function useSessionStream(ref: SessionRef | undefined) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [extensionPanels, setExtensionPanels] = useState<ExtensionPanelState>({ widgets: {}, statuses: {} });
-  const [extensionNotices, setExtensionNotices] = useState<ExtensionNotice[]>([]);
   const stateRef = useRef(state);
   const refKey = ref === undefined ? undefined : `${ref.workspaceId}:${ref.sessionId}`;
   const refKeyRef = useRef(refKey);
@@ -91,13 +83,7 @@ export function useSessionStream(ref: SessionRef | undefined) {
     }
     if (historyRewritten || sideEffects.length > 0) {
       setExtensionPanels((previous) => applySideEffects(historyRewritten ? { widgets: {}, statuses: {} } : previous, sideEffects));
-      const notices = sideEffects.flatMap((effect) => effect.kind === "notify" ? [{ id: effect.id, message: effect.message, tone: effect.tone }] : []);
-      if (historyRewritten) {
-        setExtensionNotices(notices);
-        document.title = defaultDocumentTitle.current;
-      } else if (notices.length > 0) {
-        setExtensionNotices((previous) => [...previous, ...notices].slice(-4));
-      }
+      if (historyRewritten) document.title = defaultDocumentTitle.current;
     }
   }, []);
 
@@ -115,13 +101,11 @@ export function useSessionStream(ref: SessionRef | undefined) {
     if (ref === undefined) {
       dispatch({ type: "reset" });
       setExtensionPanels({ widgets: {}, statuses: {} });
-      setExtensionNotices([]);
       document.title = defaultDocumentTitle.current;
       return;
     }
     dispatch({ type: "reset" });
     setExtensionPanels({ widgets: {}, statuses: {} });
-    setExtensionNotices([]);
     document.title = defaultDocumentTitle.current;
     let disposed = false;
     let socket: WebSocket | undefined;
@@ -153,10 +137,9 @@ export function useSessionStream(ref: SessionRef | undefined) {
           setExtensionPanels(extensionPanelsFromSnapshot(snapshot.extensionUi));
           document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
           hydrated = true;
-          // Most buffered events are covered by the authoritative snapshot. A
-          // notify is intentionally not in that snapshot, so preserve it even
-          // when its sequence was included in the hydrate response.
-          for (const event of buffered.filter((event) => event.seq > snapshot.seq || sideEffectFor(event)?.kind === "notify")) receiveEvent(event);
+          // Most buffered events are covered by the authoritative snapshot.
+          // Notifications are cards in that snapshot too, so replay only newer events.
+          for (const event of buffered.filter((event) => event.seq > snapshot.seq)) receiveEvent(event);
           buffered = [];
           attempt = 0;
           dispatch({ type: "connection", value: "live" });
@@ -243,9 +226,7 @@ export function useSessionStream(ref: SessionRef | undefined) {
   }, []);
   const discardOptimisticUser = useCallback((id: string) => { dispatch({ type: "discard-optimistic-user", id }); }, []);
   const replaceUserMessage = useCallback((messageId: string, id: string, text: string, images: import("../../shared/protocol").ImageAttachment[]) => { dispatch({ type: "replace-user", messageId, id, text, images }); }, []);
-  const dismissExtensionNotice = useCallback((id: string) => { setExtensionNotices((previous) => previous.filter((notice) => notice.id !== id)); }, []);
-
-  return { ...state, refresh, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, extensionNotices, dismissExtensionNotice, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
+  return { ...state, refresh, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
 }
 
 function extensionPanelsFromSnapshot(snapshot: ExtensionUiSnapshot | undefined): ExtensionPanelState {
@@ -262,13 +243,6 @@ function sideEffectFor(event: SessionEvent): PanelSideEffect | undefined {
   const request = isRecord(payload?.["request"]) ? payload["request"] : undefined;
   if (request === undefined) return undefined;
   const method = request["method"];
-  if (method === "notify") {
-    const id = request["id"];
-    const message = request["message"];
-    const tone = request["notifyType"];
-    if (typeof id !== "string" || typeof message !== "string" || (tone !== undefined && tone !== "info" && tone !== "warning" && tone !== "error")) return undefined;
-    return { kind: "notify", id, message, tone: tone ?? "info" };
-  }
   if (method === "setStatus") {
     const key = request["statusKey"];
     if (typeof key !== "string") return undefined;
@@ -301,9 +275,6 @@ function applySideEffects(previous: ExtensionPanelState, effects: PanelSideEffec
   let title: string | undefined;
   let editor: string | undefined;
   for (const effect of effects) {
-    if (effect.kind === "notify") {
-      continue;
-    }
     if (effect.kind === "status") {
       const statuses = { ...next.statuses };
       if (effect.text === undefined) delete statuses[effect.key];
@@ -340,6 +311,13 @@ function coalesceStreamEvents(events: SessionEvent[]): SessionEvent[] {
     const bashPayload = event.type === "bash.delta" && isRecord(event.payload) ? event.payload : undefined;
     if (previous !== undefined && previous.type === "bash.delta" && event.type === "bash.delta" && previous.runId === event.runId && typeof previousBash?.["delta"] === "string" && typeof bashPayload?.["delta"] === "string") {
       result[result.length - 1] = { ...event, payload: { delta: previousBash["delta"] + bashPayload["delta"] } };
+      continue;
+    }
+    const previousThinking = previous?.type === "thinking.delta" && isRecord(previous.payload) ? previous.payload : undefined;
+    const thinkingPayload = event.type === "thinking.delta" && isRecord(event.payload) ? event.payload : undefined;
+    const sameThinking = previousThinking?.["thinkingId"] === thinkingPayload?.["thinkingId"];
+    if (previous !== undefined && previous.type === "thinking.delta" && event.type === "thinking.delta" && sameThinking && typeof previousThinking?.["delta"] === "string" && typeof thinkingPayload?.["delta"] === "string") {
+      result[result.length - 1] = { ...event, payload: { thinkingId: thinkingPayload["thinkingId"], createdAt: thinkingPayload["createdAt"], delta: previousThinking["delta"] + thinkingPayload["delta"] } };
       continue;
     }
     result.push(event);
