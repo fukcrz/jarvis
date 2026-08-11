@@ -163,7 +163,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .thinking-state-icon { display: grid; color: var(--accent); }
 .thinking-item.completed .thinking-state-icon { color: var(--subtle); }
 .thinking-title { font-size: 11px; font-weight: 600; }
-.thinking-details { border-top: 1px solid rgb(255 255 255 / .07); padding: 7px 2px 8px 35px; }
+.thinking-details { border-top: 1px solid rgb(255 255 255 / .07); padding: 7px 2px 8px 0; }
 .thinking-details .message-content { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .tool-item { margin: 6px 0 18px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .command-item { border-color: #343943; background: #1b1d21; }
@@ -376,3 +376,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .extension-notification { display: flex; align-items: flex-start; width: min(760px, 100%); gap: 8px; margin: 10px 0 22px; border-left: 2px solid var(--accent); background: rgb(182 168 255 / .07); padding: 8px 10px; color: #d4cff1; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }.extension-notification.warning { border-left-color: var(--warm); background: rgb(244 190 112 / .07); color: #f2d8aa; }.extension-notification.error { border-left-color: var(--danger); background: rgb(239 143 147 / .08); color: #ffc7c9; }.extension-notification-icon { display: grid; flex: 0 0 auto; margin-top: 2px; color: var(--accent); }.extension-notification.warning .extension-notification-icon { color: var(--warm); }.extension-notification.error .extension-notification-icon { color: var(--danger); }
 .extension-panels { width: min(870px, 100%); margin: 0 auto 8px; padding-inline: clamp(20px, 5vw, 70px); }.extension-widget-track { display: grid; gap: 6px; min-width: 0; padding: 1px 0 5px; }.extension-widget { min-width: 0; padding: 2px 0 2px 9px; border-left: 2px solid var(--line); }.extension-widget-body { margin: 0; color: #bbb8c5; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
 @media (max-width: 760px) { .extension-operation { width: 100%; margin: 10px 0 20px; }.extension-notification { width: 100%; margin: 10px 0 20px; }.extension-operation-title { font-size: 14px; }.extension-select-list button { min-height: 44px; padding: 10px; }.extension-dialog-input { min-height: 44px; font-size: 16px; }.extension-dialog-input.multiline { min-height: 172px; }.extension-interaction-actions { justify-content: space-between; gap: 18px; }.extension-interaction-actions button { min-height: 44px; padding: 9px 0; font-size: 14px; }.extension-panels { margin-bottom: 6px; padding-inline: 12px; } }
+
+/* 触屏设备：可展开的思考/工具卡片不显示 hover 变色（触控点击会把 hover 状态粘住）。focus-visible 保留。 */
+@media (hover: none) {
+  .thinking-summary:hover { color: var(--muted); }
+  .activity-summary:hover { color: var(--subtle); }
+  .tool-summary:hover { color: var(--ink); }
+  .activity-items .tool-list-item .tool-summary:hover { color: var(--muted); }
+}
