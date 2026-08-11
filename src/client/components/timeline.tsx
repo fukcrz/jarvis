@@ -381,7 +381,7 @@ function ThinkingItem({ item }: { item: ThinkingTimelineItem }) {
   return (
     <article className={`thinking-item ${item.state}`}>
       <button className="thinking-summary" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-        <span className="thinking-state-icon">{item.state === "running" ? <LoaderCircle size={14} className="spin" /> : <Brain size={14} />}</span>
+        <span className="thinking-state-icon"><Brain size={14} /></span>
         <span className="thinking-title">{item.state === "running" ? "思考中…" : "思考过程"}</span>
       </button>
       {open ? <div className="thinking-details"><div className="message-content"><MarkdownMessage text={item.text} streaming={item.state === "running"} /></div></div> : null}

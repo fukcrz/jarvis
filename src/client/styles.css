@@ -158,12 +158,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .activity-items .tool-list-item .detail-input + div { margin-top: 1px; }
 .thinking-item { margin: 2px 0 0; overflow: hidden; }
 .thinking-item.running, .thinking-item.completed { border: 0; background: transparent; }
-.thinking-summary { display: flex; align-items: center; width: 100%; gap: 8px; border: 0; background: transparent; padding: 5px 2px 4px 7px; color: var(--muted); text-align: left; }
+.thinking-summary { display: flex; align-items: center; width: 100%; gap: 8px; border: 0; background: transparent; padding: 5px 2px 4px 15px; color: var(--muted); text-align: left; }
 .thinking-summary:hover, .thinking-summary:focus-visible { color: var(--ink); }
 .thinking-state-icon { display: grid; color: var(--accent); }
 .thinking-item.completed .thinking-state-icon { color: var(--subtle); }
 .thinking-title { font-size: 11px; font-weight: 600; }
-.thinking-details { border-top: 1px solid rgb(255 255 255 / .07); padding: 7px 2px 8px 26px; }
+.thinking-details { border-top: 1px solid rgb(255 255 255 / .07); padding: 7px 2px 8px 35px; }
 .thinking-details .message-content { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .tool-item { margin: 6px 0 18px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .command-item { border-color: #343943; background: #1b1d21; }
