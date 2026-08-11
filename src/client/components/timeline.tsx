@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Archive, ArrowDown, Check, ChevronDown, Clock3, GitBranch, LoaderCircle, RotateCcw, Terminal, XCircle } from "lucide-react";
-import type { ContextSummaryTimelineItem, MessageTimelineItem, SessionStatus, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
+import { Archive, ArrowDown, Check, ChevronDown, CircleAlert, Clock3, GitBranch, Info, LoaderCircle, Puzzle, RotateCcw, Terminal, XCircle } from "lucide-react";
+import type { ContextSummaryTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
 import { MarkdownMessage } from "./markdown-message";
@@ -15,9 +15,10 @@ interface TimelineProps {
   onLoadMore: () => Promise<void>;
   error?: string;
   status: SessionStatus;
+  onExtensionUiRespond?: (id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void;
 }
 
-export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, status }: TimelineProps) {
+export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, status, onExtensionUiRespond }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
   const feedback = getRunFeedback(status, items, streamingMessageId);
@@ -46,7 +47,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
       }}>
         <div className="timeline-inner">
           {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "正在加载历史记录…" : "加载更早记录"}</Button> : null}
-          {renderTimelineItems(items, streamingMessageId, status)}
+          {renderTimelineItems(items, streamingMessageId, status, onExtensionUiRespond)}
           {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
           {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
           {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
@@ -127,6 +128,92 @@ const MessageItem = memo(function MessageItem({ item, streaming }: { item: Extra
   );
 });
 
+function ExtensionUiCard({ item, onRespond }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"] }) {
+  const request = item.request;
+  if (request.method === "notify") {
+    const tone = request.notifyType ?? "info";
+    return (
+      <article className={`extension-notice ${tone}`}>
+        <span className="extension-notice-icon">{tone === "error" ? <XCircle size={13} /> : tone === "warning" ? <CircleAlert size={13} /> : <Info size={13} />}</span>
+        <span>{request.message}</span>
+      </article>
+    );
+  }
+  const pending = item.outcome === undefined;
+  const dialogRequest = request as Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
+  return (
+    <article className={`extension-card ${item.outcome ?? "pending"}`}>
+      <header className="extension-card-header">
+        <Puzzle size={13} />
+        <span>{dialogRequest.title}</span>
+        {pending ? null : <span className="extension-card-state">{extensionOutcomeLabel(item)}</span>}
+      </header>
+      <div className="extension-card-body">
+        {pending ? <ExtensionCardPrompt request={dialogRequest} onRespond={onRespond} /> : <ExtensionCardResult item={item} />}
+      </div>
+    </article>
+  );
+}
+
+function extensionOutcomeLabel(item: ExtensionUiTimelineItem): string {
+  if (item.outcome === "answered") {
+    if (item.request.method === "confirm") return item.confirmed === true ? "已允许" : "已拒绝";
+    if (item.request.method === "input" || item.request.method === "editor") return "已提交";
+    return "已选择";
+  }
+  if (item.outcome === "cancelled") return "已取消";
+  if (item.outcome === "timeout") return "已超时";
+  return "已关闭";
+}
+
+function ExtensionCardResult({ item }: { item: ExtensionUiTimelineItem }) {
+  if (item.outcome === "answered") {
+    if (item.request.method === "confirm") {
+      return <p className="extension-card-result">{item.confirmed === true ? "允许" : "拒绝"}</p>;
+    }
+    if (item.request.method === "select") {
+      const option = item.request.options.find((candidate) => candidate === item.value);
+      return <p className="extension-card-result">{option === undefined ? (item.value === undefined ? "（未选择）" : item.value) : option}</p>;
+    }
+    return <p className="extension-card-result">{item.value ?? "（空）"}</p>;
+  }
+  return <p className="extension-card-result muted">{extensionOutcomeLabel(item)}</p>;
+}
+
+function ExtensionCardPrompt({ request, onRespond }: { request: Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>; onRespond: TimelineProps["onExtensionUiRespond"] }) {
+  const [value, setValue] = useState(request.method === "editor" ? (request.prefill ?? "") : "");
+  const respond = (response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => { if (onRespond !== undefined) onRespond(request.id, response); };
+  if (request.method === "select") {
+    return <div className="extension-options">
+      {request.options.map((option) => (
+        <button key={option} type="button" className="extension-option" onClick={() => respond({ value: option })}>
+          <span>{option}</span>
+          <Check size={13} />
+        </button>
+      ))}
+    </div>;
+  }
+  if (request.method === "confirm") {
+    return <div className="extension-dialog">
+      {request.message === undefined ? null : <p className="extension-dialog-message">{request.message}</p>}
+      <div className="extension-dialog-actions">
+        <Button variant="ghost" size="sm" onClick={() => respond({ cancelled: true })}>取消</Button>
+        <Button variant="default" size="sm" onClick={() => respond({ confirmed: true })}>允许</Button>
+      </div>
+    </div>;
+  }
+  const multiline = request.method === "editor";
+  return <div className="extension-dialog">
+    {multiline
+      ? <textarea className="extension-input multiline" value={value} onChange={(event) => setValue(event.target.value)} rows={5} />
+      : <input className="extension-input" placeholder={request.placeholder} value={value} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); respond({ value }); } }} autoFocus />}
+    <div className="extension-dialog-actions">
+      <Button variant="ghost" size="sm" onClick={() => respond({ cancelled: true })}>取消</Button>
+      <Button variant="default" size="sm" disabled={value.trim() === ""} onClick={() => respond({ value })}>提交</Button>
+    </div>
+  </div>;
+}
+
 const ContextSummaryItem = memo(function ContextSummaryItem({ item }: { item: ContextSummaryTimelineItem }) {
   const [expanded, setExpanded] = useState(false);
   const isCompaction = item.summaryType === "compaction";
@@ -144,6 +231,7 @@ const ContextSummaryItem = memo(function ContextSummaryItem({ item }: { item: Co
 export type TimelineRenderItem =
   | { kind: "message"; item: MessageTimelineItem }
   | { kind: "context-summary"; item: ContextSummaryTimelineItem }
+  | { kind: "extension-ui"; item: ExtensionUiTimelineItem }
   | { kind: "activity"; items: ToolTimelineItem[] };
 
 export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] {
@@ -159,7 +247,9 @@ export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] 
       tools.push(item);
     } else {
       flushTools();
-      result.push(item.kind === "message" ? { kind: "message", item } : { kind: "context-summary", item });
+      if (item.kind === "message") result.push({ kind: "message", item });
+      else if (item.kind === "extension-ui") result.push({ kind: "extension-ui", item });
+      else result.push({ kind: "context-summary", item });
     }
   }
   flushTools();
@@ -170,7 +260,7 @@ function hasActiveActivity(items: TimelineItem[], status: SessionStatus): boolea
   return status.runState !== "idle" && items.at(-1)?.kind === "tool";
 }
 
-function renderTimelineItems(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus): ReactNode[] {
+function renderTimelineItems(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"]): ReactNode[] {
   const grouped = groupTimelineItems(items);
   const lastActivityIndex = grouped.reduce((lastIndex, entry, index) => entry.kind === "activity" ? index : lastIndex, -1);
   const activeActivityIndex = hasActiveActivity(items, status) ? lastActivityIndex : -1;
@@ -178,6 +268,7 @@ function renderTimelineItems(items: TimelineItem[], streamingMessageId: string |
   return grouped.map((entry, index) => {
     if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} />;
     if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} />;
+    if (entry.kind === "extension-ui") return <ExtensionUiCard key={entry.item.id} item={entry.item} onRespond={onExtensionUiRespond} />;
     return <ActivityGroup key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={index === activeActivityIndex} startedAt={status.activeRun?.startedAt} stopping={status.runState === "stopping"} />;
   });
 }

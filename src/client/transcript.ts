@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, type TimelinePage, type ToolTimelineItem } from "../shared/protocol";
+import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ExtensionUiRequest, type ExtensionUiTimelineItem, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, type TimelinePage, type ToolTimelineItem } from "../shared/protocol";
 import { isRecord } from "../shared/protocol";
 
 export interface TranscriptState {
@@ -122,6 +122,28 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const item = recordContextSummary(payload?.["item"]);
     return item === undefined ? next : { ...next, items: mergeTimeline(next.items, [item]) };
   }
+  if (event.type === "extension.uiRequest") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const request = recordExtensionUiRequest(payload?.["request"]);
+    if (request === undefined) return next;
+    const item: ExtensionUiTimelineItem = { kind: "extension-ui", id: `ext:${request.id}`, createdAt: event.emittedAt, request };
+    return { ...next, items: mergeTimeline(next.items, [item]) };
+  }
+  if (event.type === "extension.uiSettled") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const id = typeof payload?.["id"] === "string" ? `ext:${payload["id"]}` : undefined;
+    const outcome = payload?.["outcome"];
+    if (id === undefined || (outcome !== "answered" && outcome !== "cancelled" && outcome !== "timeout" && outcome !== "closed")) return next;
+    const existing = next.items.find((item): item is ExtensionUiTimelineItem => item.kind === "extension-ui" && item.id === id);
+    if (existing === undefined) return next;
+    const updated: ExtensionUiTimelineItem = {
+      ...existing,
+      outcome,
+      ...(outcome === "answered" && typeof payload?.["value"] === "string" ? { value: payload["value"] } : {}),
+      ...(outcome === "answered" && typeof payload?.["confirmed"] === "boolean" ? { confirmed: payload["confirmed"] } : {}),
+    };
+    return { ...next, items: mergeTimeline(next.items, [updated]) };
+  }
   if (event.type === "model.changed") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const model = recordModelSnapshot(payload?.["model"]);
@@ -200,6 +222,34 @@ function recordTool(value: unknown): ToolTimelineItem | undefined {
     ...(typeof value["output"] === "string" ? { output: value["output"] } : {}),
     ...(typeof value["error"] === "string" ? { error: value["error"] } : {}),
   };
+}
+
+function recordExtensionUiRequest(value: unknown): ExtensionUiRequest | undefined {
+  if (!isRecord(value) || typeof value["id"] !== "string" || typeof value["method"] !== "string") return undefined;
+  const method = value["method"];
+  if (method === "select") {
+    if (!Array.isArray(value["options"]) || !value["options"].every((option) => typeof option === "string") || typeof value["title"] !== "string") return undefined;
+    return { id: value["id"], method, title: value["title"], options: value["options"], ...(typeof value["timeout"] === "number" ? { timeout: value["timeout"] } : {}) };
+  }
+  if (method === "confirm") {
+    if (typeof value["title"] !== "string") return undefined;
+    return { id: value["id"], method, title: value["title"], ...(typeof value["message"] === "string" ? { message: value["message"] } : {}) };
+  }
+  if (method === "input") {
+    if (typeof value["title"] !== "string") return undefined;
+    return { id: value["id"], method, title: value["title"], ...(typeof value["placeholder"] === "string" ? { placeholder: value["placeholder"] } : {}) };
+  }
+  if (method === "editor") {
+    if (typeof value["title"] !== "string") return undefined;
+    return { id: value["id"], method, title: value["title"], ...(typeof value["prefill"] === "string" ? { prefill: value["prefill"] } : {}) };
+  }
+  if (method === "notify") {
+    if (typeof value["message"] !== "string") return undefined;
+    const notifyType = value["notifyType"];
+    if (notifyType !== undefined && notifyType !== "info" && notifyType !== "warning" && notifyType !== "error") return undefined;
+    return { id: value["id"], method, message: value["message"], notifyType };
+  }
+  return undefined;
 }
 
 function recordContextSummary(value: unknown): ContextSummaryTimelineItem | undefined {

@@ -164,7 +164,7 @@ export interface ContextSummaryTimelineItem {
   tokensBefore?: number;
 }
 
-export type TimelineItem = MessageTimelineItem | ToolTimelineItem | ContextSummaryTimelineItem;
+export type TimelineItem = MessageTimelineItem | ToolTimelineItem | ContextSummaryTimelineItem | ExtensionUiTimelineItem;
 
 export interface TimelinePage {
   items: TimelineItem[];
@@ -220,10 +220,37 @@ export type SessionEventType =
   | "timeline.upsert"
   | "bash.delta"
   | "bash.settled"
+  | "extension.uiRequest"
+  | "extension.uiSettled"
   | "model.changed"
   | "thinking.changed"
   | "context.updated"
   | "session.updated";
+
+export type ExtensionUiRequest =
+  | { id: string; method: "select"; title: string; options: string[]; timeout?: number }
+  | { id: string; method: "confirm"; title: string; message?: string; timeout?: number }
+  | { id: string; method: "input"; title: string; placeholder?: string; timeout?: number }
+  | { id: string; method: "editor"; title: string; prefill?: string; timeout?: number }
+  | { id: string; method: "notify"; message: string; notifyType?: "info" | "warning" | "error" }
+  | { id: string; method: "setStatus"; statusKey: string; statusText?: string }
+  | { id: string; method: "setWidget"; widgetKey: string; widgetLines?: string[]; widgetPlacement?: "aboveEditor" | "belowEditor" }
+  | { id: string; method: "setTitle"; title: string }
+  | { id: string; method: "set_editor_text"; text: string };
+
+export type ExtensionUiOutcome = "answered" | "cancelled" | "timeout" | "closed";
+
+export interface ExtensionUiTimelineItem {
+  kind: "extension-ui";
+  id: string;
+  createdAt: string;
+  request: ExtensionUiRequest;
+  /** undefined = 等待用户响应 */
+  outcome?: ExtensionUiOutcome;
+  /** 用户选择/输入的值（outcome 为 answered 时） */
+  value?: string;
+  confirmed?: boolean;
+}
 
 export interface SessionEvent {
   version: typeof PROTOCOL_VERSION;
@@ -271,6 +298,8 @@ export const sessionEventSchema = z.object({
     "timeline.upsert",
     "bash.delta",
     "bash.settled",
+    "extension.uiRequest",
+    "extension.uiSettled",
     "model.changed",
     "thinking.changed",
     "context.updated",

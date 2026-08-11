@@ -222,3 +222,71 @@ describe("transcript reducer", () => {
     expect(hydrated.items).toEqual([expect.objectContaining({ id: "bash:bash-run", output: "so far" })]);
   });
 });
+
+describe("extension UI events", () => {
+  const requestEvent: SessionEvent = {
+    version: 1, sessionId: "session", seq: 10, emittedAt: "2026-08-09T00:00:10.000Z",
+    type: "extension.uiRequest",
+    payload: { request: { id: "11111111-1111-4111-8111-111111111111", method: "select", title: "选择分支", options: ["main", "dev"] } },
+  };
+
+  it("adds a pending extension card from uiRequest", () => {
+    const next = applySessionEvents(emptyTranscript, [requestEvent]);
+    expect(next.items).toEqual([expect.objectContaining({
+      kind: "extension-ui",
+      id: "ext:11111111-1111-4111-8111-111111111111",
+      request: expect.objectContaining({ method: "select", title: "选择分支", options: ["main", "dev"] }),
+    })]);
+  });
+
+  it("keeps notify cards without interactive state", () => {
+    const next = applySessionEvents(emptyTranscript, [{
+      version: 1, sessionId: "session", seq: 11, emittedAt: "2026-08-09T00:00:11.000Z",
+      type: "extension.uiRequest",
+      payload: { request: { id: "22222222-2222-4222-8222-222222222222", method: "notify", message: "已暂存 3 个文件", notifyType: "info" } },
+    }]);
+    expect(next.items).toEqual([expect.objectContaining({ kind: "extension-ui", request: expect.objectContaining({ method: "notify", message: "已暂存 3 个文件" }) })]);
+  });
+
+  it("updates the card with the answered value on uiSettled", () => {
+    const pending = applySessionEvents(emptyTranscript, [requestEvent]);
+    const next = applySessionEvents(pending, [{
+      version: 1, sessionId: "session", seq: 12, emittedAt: "2026-08-09T00:00:12.000Z",
+      type: "extension.uiSettled",
+      payload: { id: "11111111-1111-4111-8111-111111111111", outcome: "answered", value: "dev" },
+    }]);
+    expect(next.items).toEqual([expect.objectContaining({ kind: "extension-ui", outcome: "answered", value: "dev" })]);
+  });
+
+  it("ignores uiSettled for unknown cards", () => {
+    const next = applySessionEvents(emptyTranscript, [{
+      version: 1, sessionId: "session", seq: 12, emittedAt: "2026-08-09T00:00:12.000Z",
+      type: "extension.uiSettled",
+      payload: { id: "33333333-3333-4333-8333-333333333333", outcome: "timeout" },
+    }]);
+    expect(next.items).toEqual([]);
+  });
+
+  it("marks confirm cards with confirmed outcome", () => {
+    const pending = applySessionEvents(emptyTranscript, [{
+      version: 1, sessionId: "session", seq: 13, emittedAt: "2026-08-09T00:00:13.000Z",
+      type: "extension.uiRequest",
+      payload: { request: { id: "44444444-4444-4444-8444-444444444444", method: "confirm", title: "允许？", message: "执行 rm -rf dist" } },
+    }]);
+    const next = applySessionEvents(pending, [{
+      version: 1, sessionId: "session", seq: 14, emittedAt: "2026-08-09T00:00:14.000Z",
+      type: "extension.uiSettled",
+      payload: { id: "44444444-4444-4444-8444-444444444444", outcome: "answered", confirmed: true },
+    }]);
+    expect(next.items).toEqual([expect.objectContaining({ kind: "extension-ui", outcome: "answered", confirmed: true })]);
+  });
+
+  it("rejects malformed requests", () => {
+    const next = applySessionEvents(emptyTranscript, [{
+      version: 1, sessionId: "session", seq: 15, emittedAt: "2026-08-09T00:00:15.000Z",
+      type: "extension.uiRequest",
+      payload: { request: { id: "55555555-5555-4555-8555-555555555555", method: "select", title: "x" } },
+    }]);
+    expect(next.items).toEqual([]);
+  });
+});

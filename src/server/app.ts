@@ -26,6 +26,12 @@ const promptInput = z.object({ text: z.string(), clientRequestId: z.string().uui
 const compactInput = z.object({ customInstructions: z.string().max(40_000).optional(), clientRequestId: z.string().uuid().optional() }).strict();
 const bashInput = z.object({ command: z.string().min(1).max(40_000), excludeFromContext: z.boolean().optional(), clientRequestId: z.string().uuid() }).strict();
 const abortInput = z.object({ runId: z.string().uuid().optional() }).strict();
+const extensionUiInput = z.object({
+  id: z.string().uuid(),
+  value: z.string().max(200_000).optional(),
+  confirmed: z.boolean().optional(),
+  cancelled: z.boolean().optional(),
+}).strict();
 const listQuery = z.object({ query: z.string().optional() });
 const timelineQuery = z.object({ before: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(500).optional() });
 
@@ -143,6 +149,12 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const body = abortInput.parse(request.body);
     await sessions.abort(ref, body.runId);
     return { aborted: true };
+  });
+  app.post("/api/workspaces/:workspaceId/sessions/:sessionId/extension-ui", async (request) => {
+    const ref = sessionRef(request.params);
+    const body = extensionUiInput.parse(request.body);
+    await sessions.resolveExtensionUi(ref, body.id, body);
+    return { resolved: true };
   });
 
   app.get("/api/workspaces/:workspaceId/events", { websocket: true }, (socket, request) => {

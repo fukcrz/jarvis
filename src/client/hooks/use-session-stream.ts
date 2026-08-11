@@ -9,6 +9,13 @@ interface StreamState {
   error?: string;
 }
 
+export interface ExtensionPanelState {
+  widgets: Record<string, { lines: string[]; placement: "aboveEditor" | "belowEditor" }>;
+  statuses: Record<string, string>;
+  /** 扩展 setEditorText 注入的草稿（nonce 用于触发 effect）。 */
+  editorText?: { text: string; nonce: number };
+}
+
 type Action =
   | { type: "reset" }
   | { type: "hydrate"; page: Awaited<ReturnType<typeof api.timeline>>; snapshot: Awaited<ReturnType<typeof api.runtime>> }
@@ -30,9 +37,16 @@ function reducer(state: StreamState, action: Action): StreamState {
   return { ...state, connection: action.value, ...(action.error === undefined ? {} : { error: action.error }) };
 }
 
+type PanelSideEffect =
+  | { kind: "status"; key: string; text: string | undefined }
+  | { kind: "widget"; key: string; lines: string[] | undefined; placement: "aboveEditor" | "belowEditor" }
+  | { kind: "title"; title: string }
+  | { kind: "editor"; text: string };
+
 export function useSessionStream(ref: SessionRef | undefined) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [extensionPanels, setExtensionPanels] = useState<ExtensionPanelState>({ widgets: {}, statuses: {} });
   const stateRef = useRef(state);
   const refKey = ref === undefined ? undefined : `${ref.workspaceId}:${ref.sessionId}`;
   const refKeyRef = useRef(refKey);
@@ -44,8 +58,24 @@ export function useSessionStream(ref: SessionRef | undefined) {
 
   const flushEvents = useCallback(() => {
     requestFrame.current = undefined;
-    const events = coalesceStreamEvents(queuedEvents.current.splice(0));
-    if (events.length > 0) dispatch({ type: "events", events });
+    const events = queuedEvents.current.splice(0);
+    const transcriptEvents: SessionEvent[] = [];
+    const sideEffects: PanelSideEffect[] = [];
+    for (const event of events) {
+      if (event.type === "extension.uiRequest") {
+        const effect = sideEffectFor(event);
+        if (effect !== undefined) sideEffects.push(effect);
+        else transcriptEvents.push(event);
+      } else {
+        transcriptEvents.push(event);
+      }
+    }
+    if (transcriptEvents.length > 0) {
+      dispatch({ type: "events", events: coalesceStreamEvents(transcriptEvents) });
+    }
+    if (sideEffects.length > 0) {
+      setExtensionPanels((previous) => applySideEffects(previous, sideEffects));
+    }
   }, []);
 
   const receiveEvent = useCallback((event: SessionEvent) => {
@@ -154,7 +184,75 @@ export function useSessionStream(ref: SessionRef | undefined) {
     }
   }, [refKey, loadingEarlier]);
 
-  return { ...state, loadEarlier, loadingEarlier, selectModel, setThinkingLevel };
+  const respondExtensionUi = useCallback(async (id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> => {
+    if (ref === undefined) return;
+    try {
+      await api.respondExtensionUi(ref, id, response);
+    } catch (error) {
+      // 请求已超时/关闭时服务端返回 404，卡片会收到 uiSettled 事件自行收敛。
+      console.warn("extension UI respond failed", error);
+    }
+  }, [refKey]);
+
+  return { ...state, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi };
+}
+
+function sideEffectFor(event: SessionEvent): PanelSideEffect | undefined {
+  const payload = isRecord(event.payload) ? event.payload : undefined;
+  const request = isRecord(payload?.["request"]) ? payload["request"] : undefined;
+  if (request === undefined) return undefined;
+  const method = request["method"];
+  if (method === "setStatus") {
+    const key = request["statusKey"];
+    if (typeof key !== "string") return undefined;
+    const text = request["statusText"];
+    return { kind: "status", key, text: typeof text === "string" ? text : undefined };
+  }
+  if (method === "setWidget") {
+    const key = request["widgetKey"];
+    if (typeof key !== "string") return undefined;
+    const lines = request["widgetLines"];
+    if (lines !== undefined && (!Array.isArray(lines) || !lines.every((line) => typeof line === "string"))) return undefined;
+    const placement = request["widgetPlacement"] === "belowEditor" ? "belowEditor" : "aboveEditor";
+    return { kind: "widget", key, lines: lines === undefined ? undefined : lines, placement };
+  }
+  if (method === "setTitle") {
+    const title = request["title"];
+    if (typeof title !== "string") return undefined;
+    return { kind: "title", title };
+  }
+  if (method === "set_editor_text") {
+    const text = request["text"];
+    if (typeof text !== "string") return undefined;
+    return { kind: "editor", text };
+  }
+  return undefined;
+}
+
+function applySideEffects(previous: ExtensionPanelState, effects: PanelSideEffect[]): ExtensionPanelState {
+  let next: ExtensionPanelState = previous;
+  let title: string | undefined;
+  let editor: string | undefined;
+  for (const effect of effects) {
+    if (effect.kind === "status") {
+      const statuses = { ...next.statuses };
+      if (effect.text === undefined) delete statuses[effect.key];
+      else statuses[effect.key] = effect.text;
+      next = { ...next, statuses };
+    } else if (effect.kind === "widget") {
+      const widgets = { ...next.widgets };
+      if (effect.lines === undefined) delete widgets[effect.key];
+      else widgets[effect.key] = { lines: effect.lines, placement: effect.placement };
+      next = { ...next, widgets };
+    } else if (effect.kind === "title") {
+      title = effect.title;
+    } else {
+      editor = effect.text;
+    }
+  }
+  if (title !== undefined) document.title = title;
+  if (editor !== undefined) next = { ...next, editorText: { text: editor, nonce: (next.editorText?.nonce ?? 0) + 1 } };
+  return next;
 }
 
 function coalesceStreamEvents(events: SessionEvent[]): SessionEvent[] {

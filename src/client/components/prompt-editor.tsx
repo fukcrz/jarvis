@@ -30,10 +30,12 @@ interface PromptEditorProps {
   onAttachmentError: (message: string) => void;
   /** Current model cannot see images; disables the attach affordances. */
   attachDisabled: boolean;
+  /** 扩展 setEditorText 注入的草稿（nonce 变化时替换编辑器内容）。 */
+  injectedText?: { text: string; nonce: number };
   controls?: ReactNode;
 }
 
-export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, controls }: PromptEditorProps) {
+export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, controls }: PromptEditorProps) {
   const initialValueRef = useRef(initialValue);
   const valueRef = useRef(initialValue);
   const viewRef = useRef<EditorView | undefined>(undefined);
@@ -53,6 +55,16 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
 
   useEffect(() => { busyRef.current = busy; }, [busy]);
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+
+  useEffect(() => {
+    if (injectedText === undefined) return;
+    const view = viewRef.current;
+    if (view === undefined) return;
+    const text = injectedText.text;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+    view.focus();
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+  }, [injectedText?.nonce]);
 
   useEffect(() => {
     completionItemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });

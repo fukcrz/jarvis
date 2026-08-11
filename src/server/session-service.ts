@@ -35,7 +35,7 @@ import type {
 } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
-import { isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, unsupportedExtensionUi } from "./extension-ui.js";
+import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
 import { projectModelSnapshot } from "./model-projection.js";
 import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, messageFromPi, projectHistory, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
@@ -63,6 +63,8 @@ interface ActiveSession {
   /** Retains a stop click that arrives before Pi installs its compaction abort controller. */
   compactionAbortRequested: boolean;
   extensionFailure?: { code: string; message: string };
+  /** 扩展 ctx.ui 请求桥（对话框待浏览器响应）。 */
+  extensionUi: ExtensionUiBridge;
   /** Error from the last assistant message; applied at agent_settled once Pi's retries/compaction finish. */
   pendingRunError?: { code: string; message: string };
   createdAt: string;
@@ -156,6 +158,7 @@ export class SessionService {
 
       if (active !== undefined) {
         active.unsubscribe();
+        active.extensionUi.closeAll();
         active.session.dispose();
         this.active.delete(key);
       }
@@ -460,6 +463,13 @@ export class SessionService {
     }
   }
 
+  async resolveExtensionUi(ref: SessionRef, id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> {
+    const active = await this.getActive(ref);
+    if (!active.extensionUi.respond({ id, ...response })) {
+      throw new AppError("UI_REQUEST_NOT_FOUND", "This extension UI request is no longer pending", 404);
+    }
+  }
+
   hasActiveWorkspace(workspaceId: string): boolean {
     return [...this.active.values()].some((active) => active.ref.workspaceId === workspaceId && active.state.runState !== "idle");
   }
@@ -468,6 +478,7 @@ export class SessionService {
     const sessions = [...this.active.values()].filter((active) => active.ref.workspaceId === workspaceId);
     for (const active of sessions) {
       active.unsubscribe();
+      active.extensionUi.closeAll();
       active.session.abortCompaction();
       active.session.abortRetry();
       active.session.abortBash();
@@ -480,6 +491,7 @@ export class SessionService {
   async dispose(): Promise<void> {
     for (const active of this.active.values()) {
       active.unsubscribe();
+      active.extensionUi.closeAll();
       active.session.abortCompaction();
       active.session.abortRetry();
       active.session.abortBash();
@@ -638,8 +650,21 @@ export class SessionService {
       if (extensionState.active === undefined) extensionState.startupFailure = failure;
       else extensionState.active.extensionFailure = failure;
     };
+    const publishExtensionUi = (message: ExtensionUiMessage) => {
+      const target = extensionState.active;
+      if (target === undefined) return;
+      if (message.type === "request") {
+        this.events.publishSession(target.ref, { type: "extension.uiRequest", payload: { request: message.request } });
+      } else {
+        this.events.publishSession(target.ref, {
+          type: "extension.uiSettled",
+          payload: { id: message.id, outcome: message.outcome, ...(message.value === undefined ? {} : { value: message.value }), ...(message.confirmed === undefined ? {} : { confirmed: message.confirmed }) },
+        });
+      }
+    };
+    const extensionUi = new ExtensionUiBridge(publishExtensionUi);
     try {
-      await session.bindExtensions({ mode: "rpc", uiContext: unsupportedExtensionUi, onError: onExtensionError });
+      await session.bindExtensions({ mode: "rpc", uiContext: extensionUi.context, onError: onExtensionError });
     } catch (error) {
       console.warn("Pi extension binding failed", error);
     }
@@ -658,6 +683,7 @@ export class SessionService {
       session,
       modelRuntime,
       modelSwitching: false,
+      extensionUi,
       unsubscribe: () => undefined,
       state: extensionState.startupFailure === undefined
         ? { sessionId: session.sessionId, runState: "idle" }

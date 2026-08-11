@@ -481,3 +481,31 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(busy.json()).toMatchObject({ error: { code: "SESSION_BUSY" } });
   });
 });
+
+describe("extension UI endpoint", () => {
+  it("resolves a pending extension UI request and rejects unknown ids", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "extension-ui-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const url = `/api/workspaces/${workspace.id}/sessions/${session.id}/extension-ui`;
+    const unknown = await server.inject({ method: "POST", url, payload: { id: randomUUID(), value: "x" } });
+    expect(unknown.statusCode).toBe(404);
+    expect(unknown.json()).toMatchObject({ error: { code: "UI_REQUEST_NOT_FOUND" } });
+
+    const invalid = await server.inject({ method: "POST", url, payload: { id: "not-a-uuid", value: "x" } });
+    expect(invalid.statusCode).toBe(400);
+  });
+
+  it("rejects responses for cancelled-while-confirming shapes", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "extension-ui-workspace-2");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const url = `/api/workspaces/${workspace.id}/sessions/${session.id}/extension-ui`;
+    const response = await server.inject({ method: "POST", url, payload: { id: randomUUID(), cancelled: true, value: "both" } });
+    expect(response.statusCode).toBe(404); // 未知 id（没有任何 pending 请求）
+  });
+});
