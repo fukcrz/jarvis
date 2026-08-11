@@ -1,7 +1,7 @@
-import { Folder, FolderPlus, MessageSquarePlus, Search, Settings2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Folder, FolderPlus, MessageSquarePlus, Search, Settings2 } from "lucide-react";
 import { useState, type PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { formatRelativeTime, matchesSessionQuery, sessionLabel } from "../lib/utils";
+import { formatRelativeTime, matchesSessionQuery, sessionLabel, sessionListWindow } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
@@ -23,7 +23,17 @@ interface SidebarProps {
 
 export function Sidebar(props: SidebarProps) {
   const [query, setQuery] = useState("");
+  /** 每个项目展开会话的步数（0 = 默认收起状态，每展开一次 +1）。 */
+  const [sessionExpands, setSessionExpands] = useState<Record<string, number>>({});
   const searching = query.trim() !== "";
+
+  function expandSessions(workspaceId: string): void {
+    setSessionExpands((prev) => ({ ...prev, [workspaceId]: (prev[workspaceId] ?? 0) + 1 }));
+  }
+
+  function collapseSessions(workspaceId: string): void {
+    setSessionExpands((prev) => ({ ...prev, [workspaceId]: 0 }));
+  }
   return (
     <aside className="sidebar">
       <div className="sidebar-toolbar">
@@ -40,6 +50,8 @@ export function Sidebar(props: SidebarProps) {
           const allSessions = props.sessionsByWorkspace[workspace.id] ?? [];
           const sessions = searching ? allSessions.filter((session) => matchesSessionQuery(session, query)) : allSessions;
           if (searching && sessions.length === 0) return null;
+          // 搜索时展示全部匹配结果；平时按窗口展示（执行中的会话始终显示，默认最多 5 个，可展开更多）。
+          const window = searching ? { sessions, hasMore: false, expanded: false } : sessionListWindow(sessions, sessionExpands[workspace.id] ?? 0);
           const expanded = searching || props.expandedWorkspaceIds[workspace.id] === true;
           const activeSession = sessions.find((session) => session.runState === "running" || session.runState === "stopping");
           const toggleLabel = `${expanded ? "收起" : "展开"}${workspace.label}的会话`;
@@ -59,7 +71,7 @@ export function Sidebar(props: SidebarProps) {
                 {expanded || activeSession === undefined ? null : <span className={`sidebar-activity ${activeSession.runState}`} role="status" aria-label={`${workspace.label} 有正在执行的会话`} />}
               </div>
               {expanded ? <div className="project-sessions" role="group">
-                {sessions.map((session) => <button key={session.id} type="button" data-session-id={session.id} className={`session-row ${workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "selected" : ""}`} aria-current={workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "page" : undefined} onClick={() => { if (!consumeLongPress()) props.onSelectSession(workspace.id, session.id); }} onPointerDown={(event) => startLongPress(event, () => props.onLongPressSession(workspace.id, session))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress} onContextMenu={(event) => {
+                {window.sessions.map((session) => <button key={session.id} type="button" data-session-id={session.id} className={`session-row ${workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "selected" : ""}`} aria-current={workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "page" : undefined} onClick={() => { if (!consumeLongPress()) props.onSelectSession(workspace.id, session.id); }} onPointerDown={(event) => startLongPress(event, () => props.onLongPressSession(workspace.id, session))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress} onContextMenu={(event) => {
                   event.preventDefault();
                   const bounds = event.currentTarget.getBoundingClientRect();
                   props.onOpenSessionMenu(workspace.id, session, {
@@ -70,6 +82,8 @@ export function Sidebar(props: SidebarProps) {
                   <span className="session-text"><strong>{sessionLabel(session.name, session.preview)}</strong><small>{formatRelativeTime(session.updatedAt)}</small></span>
                   {session.runState === "idle" ? null : <span className={`sidebar-activity ${session.runState}`} role="status" aria-label={`${session.runState === "stopping" ? "正在停止" : "正在执行"}的会话`} />}
                 </button>)}
+                {window.hasMore ? <button type="button" className="session-expand-more" onClick={() => expandSessions(workspace.id)} aria-label="展开更多会话"><ChevronDown size={13} />展开更多会话</button> : null}
+                {window.expanded ? <button type="button" className="session-collapse" onClick={() => collapseSessions(workspace.id)} aria-label="收起会话"><ChevronUp size={13} />收起会话</button> : null}
                 {sessions.length === 0 ? <div className="project-empty">暂无会话</div> : null}
               </div> : null}
             </section>

@@ -25,6 +25,46 @@ export function sessionLabel(name: string | null, preview: string | null): strin
   return name?.trim() || preview?.trim().replace(/\s+/g, " ").slice(0, 72) || "新会话";
 }
 
+/** 默认收起时最多显示的会话数量（执行中的会话超过该数量时以执行中的数量为准）。 */
+export const SESSIONS_COLLAPSED_LIMIT = 5;
+
+/** 点击一次“展开更多”追加显示的会话数量。 */
+export const SESSIONS_PAGE_SIZE = 5;
+
+/** 会话是否处于执行中（运行中或正在停止）。 */
+export function isSessionRunning(session: SessionSummary): boolean {
+  return session.runState === "running" || session.runState === "stopping";
+}
+
+export interface SessionListWindow {
+  /** 当前应展示的会话，执行中的会话始终在前、保证可见。 */
+  sessions: SessionSummary[];
+  /** 是否还有未展示的会话（应显示“展开更多”）。 */
+  hasMore: boolean;
+  /** 是否已展开过（应显示“收起”）。 */
+  expanded: boolean;
+}
+
+/**
+ * 计算侧边栏中某个项目下的会话展示窗口：
+ * - 执行中的会话（running/stopping）始终显示，且排在前面；
+ * - 默认最多显示 SESSIONS_COLLAPSED_LIMIT 个，除非执行中的会话超过该数量；
+ * - 每次展开多显示 SESSIONS_PAGE_SIZE 个，可以多次展开直到全部显示；
+ * - 收起（expandSteps 归零）后回到默认状态。
+ */
+export function sessionListWindow(sessions: SessionSummary[], expandSteps: number): SessionListWindow {
+  const running = sessions.filter((s) => isSessionRunning(s));
+  const idle = sessions.filter((s) => !isSessionRunning(s));
+  const ordered = [...running, ...idle];
+  const collapsedCount = Math.max(SESSIONS_COLLAPSED_LIMIT, running.length);
+  const visibleCount = collapsedCount + Math.max(0, expandSteps) * SESSIONS_PAGE_SIZE;
+  return {
+    sessions: ordered.slice(0, visibleCount),
+    hasMore: ordered.length > visibleCount,
+    expanded: expandSteps > 0,
+  };
+}
+
 export function normalizeSessionSearch(value: string): string {
   return value.normalize("NFKC").trim().toLocaleLowerCase();
 }
