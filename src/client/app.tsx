@@ -545,9 +545,10 @@ export function App() {
   // (a changing extensions array makes useCodeMirror reconfigure the editor).
   const reportAttachmentError = useCallback((message: string) => { setPageError(message); }, []);
 
-  const submitPrompt = async (text: string, attachments: ImageAttachment[]): Promise<boolean> => {
+  const submitPrompt = async (text: string, attachments: ImageAttachment[], behavior?: "steer" | "followUp"): Promise<boolean> => {
     if (selectedRef === undefined) return false;
-    // !cmd / !!cmd：直接执行命令而不是发给模型（与 Pi TUI 一致）。
+    // !cmd / !!cmd：直接执行命令而不是发给模型（与 Pi TUI 一致），
+    // busy 时也会走 bash 路径（会话忙则明确报错，不误排成消息）。
     if (attachments.length === 0) {
       const bash = parseBashCommand(text);
       if (bash !== undefined) return submitBash(bash.command, bash.excludeFromContext);
@@ -555,7 +556,14 @@ export function App() {
     const clientRequestId = randomUUID();
     stream.addOptimisticUser(clientRequestId, text, attachments);
     try {
-      await api.prompt(selectedRef, text, clientRequestId, attachments);
+      const result = await api.prompt(selectedRef, text, clientRequestId, attachments, behavior);
+      if (result.queued === true) {
+        // 会话忙：消息已进入排队（steering/follow-up），由 queue.updated
+        // 事件驱动排队条展示；乐观消息等投递后由 message.created 落定。
+        stream.discardOptimisticUser(clientRequestId);
+        setPageError(undefined);
+        return true;
+      }
       setSessionsByWorkspace((current) => ({
         ...current,
         [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
@@ -571,6 +579,34 @@ export function App() {
       return false;
     }
   };
+
+  /** 全部取回排队消息并合并进当前草稿（对齐 Pi TUI 的 Alt+Up）。 */
+  const dequeueAll = useCallback(async (): Promise<void> => {
+    if (selectedRef === undefined) return;
+    try {
+      const { steering, followUp } = await api.dequeueQueue(selectedRef);
+      const texts = [...steering, ...followUp].map((message) => message.text);
+      if (texts.length === 0) return;
+      updateSelectedDraft([texts.join("\n\n"), selectedDraft].filter((value) => value.trim() !== "").join("\n\n"));
+      setPageError(undefined);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "无法取回排队消息");
+    }
+  }, [selectedRef, selectedDraft, updateSelectedDraft]);
+
+  /** 单条排队消息：移除；restore=true 时文本合并回草稿（取回）。 */
+  const removeQueuedMessage = useCallback(async (messageId: string, restore: boolean): Promise<void> => {
+    if (selectedRef === undefined) return;
+    try {
+      const { removed } = await api.removeQueued(selectedRef, messageId);
+      if (restore && removed !== undefined) {
+        updateSelectedDraft([removed.text, selectedDraft].filter((value) => value.trim() !== "").join("\n\n"));
+      }
+      setPageError(undefined);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "无法移除该排队消息");
+    }
+  }, [selectedRef, selectedDraft, updateSelectedDraft]);
 
   const editUserMessage = async (message: Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>, text: string): Promise<boolean> => {
     if (selectedRef === undefined || stream.transcript.status.runState !== "idle") return false;
@@ -644,7 +680,13 @@ export function App() {
   const abort = async () => {
     if (selectedRef === undefined) return;
     try {
-      await api.abort(selectedRef, stream.transcript.status.activeRun?.id);
+      const result = await api.abort(selectedRef, stream.transcript.status.activeRun?.id);
+      // 停止时取回排队消息（对齐 Pi TUI 的 Escape 行为）。
+      const dequeued = result.dequeued;
+      if (dequeued !== undefined && (dequeued.steering.length > 0 || dequeued.followUp.length > 0)) {
+        const texts = [...dequeued.steering, ...dequeued.followUp].map((message) => message.text);
+        updateSelectedDraft([...texts, selectedDraft].filter((value) => value.trim() !== "").join("\n\n"));
+      }
     } catch (error) {
       if (await recoverSessionConflict(error)) return;
       setPageError(error instanceof Error ? error.message : "无法停止执行");
@@ -769,7 +811,7 @@ export function App() {
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? requestForkMessage : undefined} onExtensionUiRespond={stream.respondExtensionUi} />
       <ExtensionPanels panels={stream.extensionPanels} />
-      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} controls={selectedSession === undefined ? undefined : <>
+      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />

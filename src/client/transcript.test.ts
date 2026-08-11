@@ -1,6 +1,29 @@
 import { describe, expect, it } from "vitest";
-import type { SessionEvent } from "../shared/protocol";
+import { emptySessionQueue, type QueuedMessage, type SessionEvent, type SessionQueue, type SessionStreamSnapshot } from "../shared/protocol";
 import { addOptimisticUserMessage, applySessionEvents, emptyTranscript, hydrateTranscript } from "./transcript";
+
+function queued(id: string, kind: "steer" | "followUp", text: string): QueuedMessage {
+  return { id, kind, text, createdAt: "2026-01-01T00:00:00.000Z" };
+}
+
+function queueEvent(seq: number, queue: SessionQueue): SessionEvent {
+  return {
+    version: 1, sessionId: "session", seq, emittedAt: "2026-01-01T00:00:00.000Z",
+    type: "queue.updated", payload: queue,
+  };
+}
+
+function snapshotWithQueue(queue?: SessionQueue): SessionStreamSnapshot {
+  return {
+    seq: 0,
+    status: { sessionId: "session", runState: "idle" },
+    model: { available: [] },
+    thinking: { current: "off", available: ["off"] },
+    liveMessages: [],
+    activeTools: [],
+    ...(queue === undefined ? {} : { queue }),
+  };
+}
 
 describe("transcript reducer", () => {
   it("drops events at or below the snapshot watermark and merges a tool by id", () => {
@@ -437,5 +460,40 @@ describe("extension UI events", () => {
       payload: { request: { id: "55555555-5555-4555-8555-555555555555", method: "select", title: "x" } },
     }]);
     expect(next.items).toEqual([]);
+  });
+});
+
+describe("transcript queue", () => {
+  it("hydrates the queue from the runtime snapshot", () => {
+    const queue: SessionQueue = {
+      steering: [queued("s1", "steer", "Steer now")],
+      followUp: [queued("f1", "followUp", "Later note")],
+    };
+    const state = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, snapshotWithQueue(queue));
+    expect(state.queue).toEqual(queue);
+  });
+
+  it("applies queue.updated events and keeps invalid payloads untouched", () => {
+    const first = applySessionEvents(emptyTranscript, [
+      queueEvent(1, { steering: [queued("s1", "steer", "Steer now")], followUp: [] }),
+    ]);
+    expect(first.queue.steering).toHaveLength(1);
+    expect(first.queue.steering[0]).toMatchObject({ id: "s1", kind: "steer", text: "Steer now" });
+
+    // 投递后队列收缩。
+    const second = applySessionEvents(first, [
+      queueEvent(2, { steering: [], followUp: [queued("f1", "followUp", "Later note")] }),
+    ]);
+    expect(second.queue.steering).toEqual([]);
+    expect(second.queue.followUp).toMatchObject([{ id: "f1", kind: "followUp" }]);
+
+    // 无效 payload 保持原状态。
+    const invalid = applySessionEvents(second, [{ ...queueEvent(3, { steering: [], followUp: [] }), payload: { steering: "nope" } }]);
+    expect(invalid.queue).toEqual(second.queue);
+  });
+
+  it("defaults to an empty queue without a snapshot field", () => {
+    const state = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, snapshotWithQueue());
+    expect(state.queue).toEqual(emptySessionQueue);
   });
 });

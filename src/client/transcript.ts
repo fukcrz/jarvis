@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ExtensionUiRequest, type ExtensionUiTimelineItem, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem } from "../shared/protocol";
+import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ExtensionUiRequest, type ExtensionUiTimelineItem, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol";
 import { isRecord } from "../shared/protocol";
 
 export interface TranscriptState {
@@ -12,6 +12,8 @@ export interface TranscriptState {
   thinking: SessionThinkingSnapshot;
   contextUsage?: ContextUsage;
   streamingMessageId?: string;
+  /** 排队等待投递的用户消息。 */
+  queue: SessionQueue;
 }
 
 export const emptyTranscript: TranscriptState = {
@@ -23,6 +25,7 @@ export const emptyTranscript: TranscriptState = {
   status: { sessionId: "", runState: "idle" },
   model: { available: [] },
   thinking: { current: "off", available: ["off"] },
+  queue: emptySessionQueue,
 };
 
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
@@ -41,6 +44,7 @@ export function hydrateTranscript(previous: TranscriptState, page: TimelinePage,
     thinking: snapshot.thinking,
     ...(snapshot.contextUsage === undefined ? {} : { contextUsage: snapshot.contextUsage }),
     ...(snapshot.partial === undefined ? {} : { streamingMessageId: snapshot.partial.id }),
+    queue: snapshot.queue ?? emptySessionQueue,
   };
 }
 
@@ -78,6 +82,11 @@ export function applySessionEvents(state: TranscriptState, events: SessionEvent[
 export function applySessionEvent(state: TranscriptState, event: SessionEvent): TranscriptState {
   if (event.seq <= state.seq) return state;
   const next = { ...state, seq: event.seq };
+  if (event.type === "queue.updated") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const queue = recordSessionQueue(payload);
+    return queue === undefined ? next : { ...next, queue };
+  }
   if (event.type === "session.rewritten") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const items = Array.isArray(payload?.["items"]) ? payload["items"].flatMap(recordTimelineItem) : undefined;

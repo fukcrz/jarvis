@@ -687,3 +687,202 @@ describe("extension UI endpoint", () => {
     expect(response.statusCode).toBe(404); // 未知 id（没有任何 pending 请求）
   });
 });
+
+describe("message queue", () => {
+  it("queues a prompt as a steering message while the session is busy", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "queue-steer-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const sessionUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}`;
+
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    const steerSpy = vi.spyOn(AgentSession.prototype, "steer").mockResolvedValue(undefined);
+    const followUpSpy = vi.spyOn(AgentSession.prototype, "followUp").mockResolvedValue(undefined);
+    await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Keep running", clientRequestId: randomUUID() } });
+
+    const queued = await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Steer now", clientRequestId: randomUUID() } });
+    expect(queued.statusCode).toBe(200);
+    expect(queued.json()).toMatchObject({ accepted: true, queued: true, behavior: "steer" });
+    await vi.waitFor(() => expect(steerSpy).toHaveBeenCalledWith("Steer now", []));
+
+    const followUp = await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Later note", clientRequestId: randomUUID(), behavior: "followUp" } });
+    expect(followUp.statusCode).toBe(200);
+    expect(followUp.json()).toMatchObject({ accepted: true, queued: true, behavior: "followUp" });
+    await vi.waitFor(() => expect(followUpSpy).toHaveBeenCalledWith("Later note", []));
+    expect(steerSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes queue.updated from Pi queue_update events and mirrors it in runtime", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "queue-update-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    let listener: ((event: { type: string; [key: string]: unknown }) => void) | undefined;
+    vi.spyOn(AgentSession.prototype, "subscribe").mockImplementation((callback) => {
+      listener = callback as unknown as typeof listener;
+      return () => undefined;
+    });
+    const steering: string[] = [];
+    const followUp: string[] = [];
+    vi.spyOn(AgentSession.prototype, "getSteeringMessages").mockImplementation(() => steering);
+    vi.spyOn(AgentSession.prototype, "getFollowUpMessages").mockImplementation(() => followUp);
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const sessionUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}`;
+
+    steering.push("Steer now");
+    followUp.push("Later note");
+    listener?.({ type: "queue_update", steering: [...steering], followUp: [...followUp] });
+
+    await vi.waitFor(async () => {
+      const runtime = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ queue: { steering: Array<{ kind: string; text: string }>; followUp: Array<{ kind: string; text: string }> } }>();
+      expect(runtime.queue.steering).toHaveLength(1);
+      expect(runtime.queue.steering[0]).toMatchObject({ kind: "steer", text: "Steer now" });
+      expect(runtime.queue.followUp[0]).toMatchObject({ kind: "followUp", text: "Later note" });
+    });
+
+    // 投递后队列收缩：镜像同步更新。
+    steering.splice(0, 1);
+    listener?.({ type: "queue_update", steering: [], followUp: [...followUp] });
+    await vi.waitFor(async () => {
+      const runtime = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ queue: { steering: unknown[]; followUp: unknown[] } }>();
+      expect(runtime.queue.steering).toHaveLength(0);
+      expect(runtime.queue.followUp).toHaveLength(1);
+    });
+  });
+
+  it("keeps the run active while messages are queued and settles after delivery", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "queue-settle-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    let listener: ((event: { type: string; [key: string]: unknown }) => void) | undefined;
+    vi.spyOn(AgentSession.prototype, "subscribe").mockImplementation((callback) => {
+      listener = callback as unknown as typeof listener;
+      return () => undefined;
+    });
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    const steering: string[] = [];
+    vi.spyOn(AgentSession.prototype, "getSteeringMessages").mockImplementation(() => steering);
+    vi.spyOn(AgentSession.prototype, "getFollowUpMessages").mockImplementation(() => []);
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const sessionUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}`;
+
+    const accepted = (await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Continue", clientRequestId: randomUUID() } })).json<{ runId: string }>();
+    await vi.waitFor(() => expect(listener).toBeDefined());
+
+    // 排队消息未投递完：agent_settled 不应结束 run。
+    steering.push("Queued note");
+    listener?.({ type: "queue_update", steering: [...steering], followUp: [] });
+    listener?.({ type: "message_end", message: { role: "assistant", content: [], stopReason: "stop" } });
+    listener?.({ type: "agent_settled" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const stillRunning = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ status: { runState: string; activeRun?: { id: string } } }>();
+    expect(stillRunning.status).toMatchObject({ runState: "running", activeRun: { id: accepted.runId } });
+
+    // 投递完成（队列清空）后 agent_settled 结束 run。
+    steering.splice(0, 1);
+    listener?.({ type: "queue_update", steering: [], followUp: [] });
+    listener?.({ type: "agent_settled" });
+    await vi.waitFor(async () => {
+      const settled = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ status: { runState: string } }>();
+      expect(settled.status.runState).toBe("idle");
+    });
+  });
+
+  it("dequeues all queued messages and re-queues the remainder on single removal", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "queue-dequeue-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    let listener: ((event: { type: string; [key: string]: unknown }) => void) | undefined;
+    vi.spyOn(AgentSession.prototype, "subscribe").mockImplementation((callback) => {
+      listener = callback as unknown as typeof listener;
+      return () => undefined;
+    });
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    const steering: string[] = ["First note", "Second note"];
+    const followUp: string[] = ["Later note"];
+    const steerSpy = vi.spyOn(AgentSession.prototype, "steer").mockResolvedValue(undefined);
+    const followUpSpy = vi.spyOn(AgentSession.prototype, "followUp").mockResolvedValue(undefined);
+    vi.spyOn(AgentSession.prototype, "getSteeringMessages").mockImplementation(() => steering);
+    vi.spyOn(AgentSession.prototype, "getFollowUpMessages").mockImplementation(() => followUp);
+    const clearQueueSpy = vi.spyOn(AgentSession.prototype, "clearQueue").mockImplementation(() => {
+      const removed = { steering: [...steering], followUp: [...followUp] };
+      steering.splice(0, steering.length);
+      followUp.splice(0, followUp.length);
+      return removed as never;
+    });
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const sessionUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}`;
+    await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Continue", clientRequestId: randomUUID() } });
+    await vi.waitFor(() => expect(listener).toBeDefined());
+    listener?.({ type: "queue_update", steering: [...steering], followUp: [...followUp] });
+
+    // 单条删除：第一条 steering 被移除，其余按原顺序重入队。
+    const runtime = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ queue: { steering: Array<{ id: string }> } }>();
+    const removedId = runtime.queue.steering[0]?.id;
+    expect(removedId).toBeDefined();
+    const removal = await server.inject({ method: "DELETE", url: `${sessionUrl}/queue/${encodeURIComponent(removedId!)}` });
+    expect(removal.statusCode).toBe(200);
+    await vi.waitFor(() => expect(clearQueueSpy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(steerSpy).toHaveBeenCalledWith("Second note"));
+    expect(steerSpy).not.toHaveBeenCalledWith("First note");
+    expect(followUpSpy).toHaveBeenCalledWith("Later note");
+
+    // 全部取回。
+    steering.push("First note", "Second note");
+    followUp.push("Later note");
+    listener?.({ type: "queue_update", steering: [...steering], followUp: [...followUp] });
+    const dequeued = await server.inject({ method: "POST", url: `${sessionUrl}/queue/dequeue`, payload: {} });
+    expect(dequeued.statusCode).toBe(200);
+    expect(dequeued.json()).toMatchObject({ steering: [{ text: "First note" }, { text: "Second note" }], followUp: [{ text: "Later note" }] });
+    await vi.waitFor(() => expect(clearQueueSpy).toHaveBeenCalledTimes(2));
+    const empty = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ queue: { steering: unknown[]; followUp: unknown[] } }>();
+    expect(empty.queue.steering).toHaveLength(0);
+    expect(empty.queue.followUp).toHaveLength(0);
+  });
+});
+
+describe("abort with queued messages", () => {
+  it("dequeues queued messages on abort and returns them for editor restore", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "abort-queue-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    let listener: ((event: { type: string; [key: string]: unknown }) => void) | undefined;
+    vi.spyOn(AgentSession.prototype, "subscribe").mockImplementation((callback) => {
+      listener = callback as unknown as typeof listener;
+      return () => undefined;
+    });
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    const steering: string[] = ["Queued note"];
+    const followUp: string[] = ["Later note"];
+    const abortSpy = vi.spyOn(AgentSession.prototype, "abort").mockResolvedValue(undefined);
+    vi.spyOn(AgentSession.prototype, "getSteeringMessages").mockImplementation(() => steering);
+    vi.spyOn(AgentSession.prototype, "getFollowUpMessages").mockImplementation(() => followUp);
+    vi.spyOn(AgentSession.prototype, "clearQueue").mockImplementation(() => {
+      const removed = { steering: [...steering], followUp: [...followUp] };
+      steering.splice(0, steering.length);
+      followUp.splice(0, followUp.length);
+      return removed as never;
+    });
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const sessionUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}`;
+    const accepted = (await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Continue", clientRequestId: randomUUID() } })).json<{ runId: string }>();
+    await vi.waitFor(() => expect(listener).toBeDefined());
+    listener?.({ type: "queue_update", steering: [...steering], followUp: [...followUp] });
+
+    const aborted = await server.inject({ method: "POST", url: `${sessionUrl}/abort`, payload: { runId: accepted.runId } });
+    expect(aborted.statusCode).toBe(200);
+    expect(aborted.json()).toMatchObject({
+      aborted: true,
+      dequeued: { steering: [{ text: "Queued note" }], followUp: [{ text: "Later note" }] },
+    });
+    await vi.waitFor(() => expect(abortSpy).toHaveBeenCalledTimes(1));
+    const runtime = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ queue: { steering: unknown[]; followUp: unknown[] } }>();
+    expect(runtime.queue.steering).toHaveLength(0);
+    expect(runtime.queue.followUp).toHaveLength(0);
+  });
+});

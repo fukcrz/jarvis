@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdate, useCodeMirror } from "@uiw/react-codemirror";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { ArrowUp, Command, FileCode2, LoaderCircle, MessageSquare, Plus, Puzzle, Square, X, XCircle } from "lucide-react";
-import type { ComposerCommand, ImageAttachment, WorkspaceFile } from "../../shared/protocol";
+import { ArrowUp, Command, FileCode2, ListOrdered, LoaderCircle, MessageSquare, Plus, Puzzle, RotateCcw, Square, X, XCircle } from "lucide-react";
+import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionQueue, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
 import { useIsMobile } from "../hooks/use-is-mobile";
@@ -24,7 +24,7 @@ interface PromptEditorProps {
   commands: ComposerCommand[];
   searchFiles: (query: string) => Promise<WorkspaceFile[]>;
   onDraftChange: (value: string) => void;
-  onSubmit: (value: string, attachments: ImageAttachment[]) => boolean | Promise<boolean>;
+  onSubmit: (value: string, attachments: ImageAttachment[], behavior?: "steer" | "followUp") => boolean | Promise<boolean>;
   onStop: () => void;
   attachments: ImageAttachment[];
   onAttachmentsChange: (attachments: ImageAttachment[]) => void;
@@ -37,6 +37,12 @@ interface PromptEditorProps {
   draftInjection?: { text: string; nonce: number };
   /** Exits a historical-message edit and restores the previous composer draft. */
   onCancelEdit?: () => void;
+  /** 排队等待投递的用户消息（忙时发送进入该队列）。 */
+  queue: SessionQueue;
+  /** 全部取回排队消息到编辑器。 */
+  onDequeueAll: () => void;
+  /** 移除单条排队消息；restore=true 时把文本合并回编辑器草稿。 */
+  onRemoveQueued: (messageId: string, restore: boolean) => void;
   /** Lightweight extension status labels shown inside the composer chrome. */
   extensionStatuses?: Record<string, string>;
   controls?: ReactNode;
@@ -48,7 +54,7 @@ interface PromptEditorProps {
   focusRequestRef?: RefObject<(() => void) | undefined>;
 }
 
-export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, extensionStatuses = {}, controls, collapsed = false, onCollapsedClick, focusRequestRef }: PromptEditorProps) {
+export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, extensionStatuses = {}, controls, queue, onDequeueAll, onRemoveQueued, collapsed = false, onCollapsedClick, focusRequestRef }: PromptEditorProps) {
   const isMobile = useIsMobile();
   const initialValueRef = useRef(initialValue);
   const valueRef = useRef(initialValue);
@@ -224,12 +230,12 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
 
   const attachContainer = useCallback((element: HTMLDivElement | null) => setContainer(element), [setContainer]);
 
-  const submit = useCallback(async () => {
-    if (busyRef.current || submittingRef.current) return;
+  const submit = useCallback(async (behavior?: "steer" | "followUp") => {
+    if (submittingRef.current) return;
     if (valueRef.current.trim() === "" && attachmentsRef.current.length === 0) return;
     submittingRef.current = true;
     try {
-      const submitted = await onSubmit(valueRef.current, attachmentsRef.current);
+      const submitted = await onSubmit(valueRef.current, attachmentsRef.current, behavior);
       if (!submitted) return;
       closeCompletion();
       const view = viewRef.current;
@@ -311,12 +317,13 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
           }
           // Phone keyboards use Enter to insert a newline. On mobile, only an
           // explicit Ctrl/Cmd+Enter shortcut submits; the send button is primary.
+          // Busy 时 Enter 排队为 steering 消息（与 Pi TUI 一致）。
           const explicitSubmit = (event.ctrlKey || event.metaKey) && event.key === "Enter";
-          if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || busyRef.current || submittingRef.current || (isMobile && !explicitSubmit)) return;
+          if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || submittingRef.current || (isMobile && !explicitSubmit)) return;
           if (valueRef.current.trim() === "" && attachmentsRef.current.length === 0) return;
           event.preventDefault();
           event.stopPropagation();
-          void submit();
+          void submit(busyRef.current ? "steer" : undefined);
         }} />
         {completionItems.length === 0 ? null : <div className="composer-completions" role="listbox" aria-label={completionLabel}>
           {completionItems.map((item, index) => <button ref={(element) => { completionItemRefs.current[index] = element; }} key={item.kind === "command" ? item.command.name : item.file.path} className={`composer-completion ${index === selectedIndex ? "selected" : ""}`} type="button" role="option" aria-selected={index === selectedIndex} onMouseDown={(event) => { event.preventDefault(); applyCompletion(item); }}>
@@ -336,11 +343,16 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
           </div>}
           {onCancelEdit === undefined ? null : <Tooltip label="取消编辑"><Button variant="ghost" className="composer-cancel-edit" size="icon" aria-label="取消编辑" onClick={onCancelEdit}><X size={15} /></Button></Tooltip>}
           {busy ? (
-            <Tooltip label="停止当前执行"><Button className="composer-stop" size="icon" aria-label="停止当前执行" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
+            <>
+              <Tooltip label="排队为后续消息（完成后投递）"><Button className="composer-followup" size="icon" aria-label="排队为后续消息" disabled={!canSend} onClick={() => { void submit("followUp"); }}><ListOrdered size={17} /></Button></Tooltip>
+              <Tooltip label="排队发送（当前回合工具调用后投递）"><Button className="composer-send" size="icon" aria-label="排队发送消息" disabled={!canSend} onClick={() => { void submit("steer"); }}><ArrowUp size={17} /></Button></Tooltip>
+              <Tooltip label="停止当前执行"><Button className="composer-stop" size="icon" aria-label="停止当前执行" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
+            </>
           ) : (
             <Tooltip label="发送消息"><Button className="composer-send" size="icon" aria-label="发送消息" onClick={() => { void submit(); }} disabled={!canSend}><ArrowUp size={17} /></Button></Tooltip>
           )}
         </div>
+        <QueueBar queue={queue} onDequeueAll={onDequeueAll} onRemoveQueued={onRemoveQueued} />
       </div>
       <input ref={galleryRef} className="composer-file-input" type="file" accept="image/*" multiple onChange={(event) => { handleFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
       {preview === undefined ? null : <div className="image-lightbox" role="dialog" aria-label={`预览图片 ${previewIndex! + 1}`} onClick={() => setPreviewIndex(undefined)}>
@@ -348,5 +360,27 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
         <img src={imageDataUrl(preview)} alt={`图片 ${previewIndex! + 1}`} onClick={(event) => event.stopPropagation()} />
       </div>}
     </section>
+  );
+}
+
+function QueueBar({ queue, onDequeueAll, onRemoveQueued }: { queue: SessionQueue; onDequeueAll: () => void; onRemoveQueued: (messageId: string, restore: boolean) => void }) {
+  const messages = [...queue.steering, ...queue.followUp];
+  if (messages.length === 0) return null;
+  const preview = (message: QueuedMessage) => {
+    const singleLine = message.text.replace(/\s+/g, " ").trim();
+    return singleLine.length > 64 ? `${singleLine.slice(0, 64)}…` : singleLine;
+  };
+  return (
+    <div className="composer-queue" aria-label="排队消息">
+      <div className="composer-queue-list">
+        {messages.map((message) => <div className={`composer-queue-item ${message.kind === "followUp" ? "followup" : "steer"}`} key={message.id}>
+          <span className="composer-queue-kind">{message.kind === "followUp" ? "后续" : "插队"}</span>
+          <span className="composer-queue-text" title={message.text}>{preview(message)}</span>
+          <Tooltip label="取回此消息到编辑器"><button type="button" className="composer-queue-action" aria-label="取回此消息" onClick={() => { onRemoveQueued(message.id, true); }}><RotateCcw size={12} /></button></Tooltip>
+          <Tooltip label="删除此排队消息"><button type="button" className="composer-queue-action" aria-label="删除此消息" onClick={() => { onRemoveQueued(message.id, false); }}><X size={12} /></button></Tooltip>
+        </div>)}
+      </div>
+      <Tooltip label="全部取回到编辑器"><button type="button" className="composer-queue-restore" aria-label="全部取回" onClick={onDequeueAll}><RotateCcw size={13} />全部取回</button></Tooltip>
+    </div>
   );
 }

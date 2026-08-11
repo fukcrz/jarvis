@@ -35,3 +35,21 @@ Jarvis stores only its Workspace registry in `~/.jarvis/workspaces.json`. Pi JSO
 - Stop, refresh, WebSocket reconnect, and paged history
 
 Attachments, archive, terminal/files/Git panels, and extension dialogs are intentionally outside the MVP.
+
+## Message Queue
+
+While a session is running, Jarvis queues new prompts instead of rejecting them,
+matching the Pi TUI's steering/follow-up behavior:
+
+- **Send while busy** queues a *steering* message, delivered after the current
+  assistant turn finishes executing its tool calls
+- **Queue as follow-up** (button next to the send button while busy) queues a
+  *follow-up* message, delivered only after the agent finishes all work
+- Queued messages are shown as chips above the composer; each can be **restored
+  to the editor** or **deleted** individually, and **restore all** pulls every
+  queued message back into the editor
+- **Stop** cancels the run and returns queued messages to the editor (same as
+  Pi TUI Escape)
+
+Delivery mode follows Pi's `steeringMode` / `followUpMode` settings
+(`"one-at-a-time"` by default, or `"all"` to deliver everything at once).

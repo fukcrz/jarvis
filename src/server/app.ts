@@ -22,7 +22,7 @@ const sessionNameInput = z.object({ name: z.string().min(1).max(120) }).strict()
 const modelInput = z.object({ provider: z.string().min(1).max(160), modelId: z.string().min(1).max(320) }).strict();
 const thinkingInput = z.object({ level: z.enum(THINKING_LEVELS) }).strict();
 const imageInput = z.object({ mimeType: z.string().min(1).max(120), data: z.string().min(1) }).strict();
-const promptInput = z.object({ text: z.string(), clientRequestId: z.string().uuid(), images: z.array(imageInput).max(8).optional() }).strict();
+const promptInput = z.object({ text: z.string(), clientRequestId: z.string().uuid(), images: z.array(imageInput).max(8).optional(), behavior: z.enum(["steer", "followUp"]).optional() }).strict();
 const messageActionInput = z.object({ messageId: z.string().min(1).max(200) }).strict();
 const editAndResendInput = z.object({ messageId: z.string().min(1).max(200), text: z.string(), clientRequestId: z.string().uuid(), images: z.array(imageInput).max(8).optional() }).strict();
 const compactInput = z.object({ customInstructions: z.string().max(40_000).optional(), clientRequestId: z.string().uuid().optional() }).strict();
@@ -134,7 +134,17 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/prompt", async (request) => {
     const ref = sessionRef(request.params);
     const body = promptInput.parse(request.body);
-    return sessions.prompt(ref, body.text, body.clientRequestId, body.images);
+    return sessions.prompt(ref, body.text, body.clientRequestId, body.images, body.behavior);
+  });
+  app.post("/api/workspaces/:workspaceId/sessions/:sessionId/queue/dequeue", async (request) => {
+    const ref = sessionRef(request.params);
+    return sessions.dequeueQueue(ref);
+  });
+  app.delete("/api/workspaces/:workspaceId/sessions/:sessionId/queue/:messageId", async (request) => {
+    const ref = sessionRef(request.params);
+    const params = z.object({ messageId: z.string().min(1).max(300) }).parse(request.params);
+    const removed = await sessions.removeQueued(ref, params.messageId);
+    return { removed };
   });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/fork", async (request) => {
     const ref = sessionRef(request.params);
@@ -159,8 +169,7 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/abort", async (request) => {
     const ref = sessionRef(request.params);
     const body = abortInput.parse(request.body);
-    await sessions.abort(ref, body.runId);
-    return { aborted: true };
+    return sessions.abort(ref, body.runId);
   });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/extension-ui", async (request) => {
     const ref = sessionRef(request.params);

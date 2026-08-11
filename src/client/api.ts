@@ -6,6 +6,8 @@ import type {
   ImageAttachment,
   ModelDescriptor,
   PromptAccepted,
+  QueuedMessage,
+  QueuedPromptAccepted,
   SessionRef,
   SessionStreamSnapshot,
   SessionSummary,
@@ -104,14 +106,17 @@ export const api = {
   runtime: async (ref: SessionRef): Promise<SessionStreamSnapshot> => request(`${sessionPath(ref)}/runtime`),
   setModel: async (ref: SessionRef, model: Pick<ModelDescriptor, "provider" | "id">): Promise<ModelDescriptor> => (await request<{ model: ModelDescriptor }>(`${sessionPath(ref)}/model`, { method: "PUT", body: JSON.stringify({ provider: model.provider, modelId: model.id }) })).model,
   setThinkingLevel: async (ref: SessionRef, level: ThinkingLevel): Promise<SessionThinkingSnapshot> => (await request<{ thinking: SessionThinkingSnapshot }>(`${sessionPath(ref)}/thinking`, { method: "PUT", body: JSON.stringify({ level }) })).thinking,
-  prompt: async (ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[]): Promise<PromptAccepted> => request(`${sessionPath(ref)}/prompt`, {
+  prompt: async (ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[], behavior?: "steer" | "followUp"): Promise<PromptAccepted | QueuedPromptAccepted> => request(`${sessionPath(ref)}/prompt`, {
     method: "POST",
     body: JSON.stringify({
       text,
       clientRequestId,
       ...(images === undefined || images.length === 0 ? {} : { images }),
+      ...(behavior === undefined ? {} : { behavior }),
     }),
   }),
+  dequeueQueue: async (ref: SessionRef): Promise<{ steering: QueuedMessage[]; followUp: QueuedMessage[] }> => request(`${sessionPath(ref)}/queue/dequeue`, { method: "POST", body: "{}" }),
+  removeQueued: async (ref: SessionRef, messageId: string): Promise<{ removed?: QueuedMessage }> => request(`${sessionPath(ref)}/queue/${encodeURIComponent(messageId)}`, { method: "DELETE" }),
   editAndResend: async (ref: SessionRef, messageId: string, text: string, clientRequestId: string, images?: ImageAttachment[]): Promise<PromptAccepted> => request(`${sessionPath(ref)}/edit-and-resend`, {
     method: "POST",
     body: JSON.stringify({ messageId, text, clientRequestId, ...(images === undefined || images.length === 0 ? {} : { images }) }),
@@ -127,7 +132,7 @@ export const api = {
     method: "POST",
     body: JSON.stringify({ command, excludeFromContext, clientRequestId }),
   }),
-  abort: async (ref: SessionRef, runId?: string): Promise<void> => { await request(`${sessionPath(ref)}/abort`, { method: "POST", body: JSON.stringify(runId === undefined ? {} : { runId }) }); },
+  abort: async (ref: SessionRef, runId?: string): Promise<{ aborted: true; dequeued?: { steering: QueuedMessage[]; followUp: QueuedMessage[] } }> => request(`${sessionPath(ref)}/abort`, { method: "POST", body: JSON.stringify(runId === undefined ? {} : { runId }) }),
   respondExtensionUi: async (ref: SessionRef, id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> => {
     await request(`${sessionPath(ref)}/extension-ui`, { method: "POST", body: JSON.stringify({ id, ...response }) });
   },

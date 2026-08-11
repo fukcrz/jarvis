@@ -212,12 +212,38 @@ export interface SessionStreamSnapshot {
   contextUsage?: ContextUsage;
   /** Ephemeral extension UI state, retained across browser reconnects. */
   extensionUi?: ExtensionUiSnapshot;
+  /** 排队等待投递的用户消息（忙时发送/Alt 发送）。 */
+  queue?: SessionQueue;
 }
 
 export interface PromptAccepted {
   accepted: true;
   runId: string;
+  /** 消息未立即执行而是进入队列（会话忙时）。 */
+  queued?: false;
 }
+
+export interface QueuedPromptAccepted {
+  accepted: true;
+  queued: true;
+  /** 排队方式：steering 当前回合工具调用后投递；followUp 全部完成后投递。 */
+  behavior: "steer" | "followUp";
+}
+
+/** 一条已排队、等待投递的用户消息。 */
+export interface QueuedMessage {
+  id: string;
+  kind: "steer" | "followUp";
+  text: string;
+  createdAt: string;
+}
+
+export interface SessionQueue {
+  steering: QueuedMessage[];
+  followUp: QueuedMessage[];
+}
+
+export const emptySessionQueue: SessionQueue = { steering: [], followUp: [] };
 
 export interface BashAccepted {
   accepted: true;
@@ -253,6 +279,7 @@ export type SessionEventType =
   | "model.changed"
   | "thinking.changed"
   | "context.updated"
+  | "queue.updated"
   | "session.rewritten"
   | "session.updated";
 
@@ -334,6 +361,7 @@ export const sessionEventSchema = z.object({
     "model.changed",
     "thinking.changed",
     "context.updated",
+    "queue.updated",
     "session.rewritten",
     "session.updated",
   ]),
@@ -373,4 +401,24 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function recordQueuedMessage(value: unknown): QueuedMessage | undefined {
+  if (!isRecord(value) || typeof value["id"] !== "string" || typeof value["text"] !== "string" || typeof value["createdAt"] !== "string") return undefined;
+  if (value["kind"] !== "steer" && value["kind"] !== "followUp") return undefined;
+  return { id: value["id"], kind: value["kind"], text: value["text"], createdAt: value["createdAt"] };
+}
+
+export function recordSessionQueue(value: unknown): SessionQueue | undefined {
+  if (!isRecord(value)) return undefined;
+  const steering = Array.isArray(value["steering"]) ? value["steering"].flatMap((item) => {
+    const queued = recordQueuedMessage(item);
+    return queued === undefined ? [] : [queued];
+  }) : undefined;
+  const followUp = Array.isArray(value["followUp"]) ? value["followUp"].flatMap((item) => {
+    const queued = recordQueuedMessage(item);
+    return queued === undefined ? [] : [queued];
+  }) : undefined;
+  if (steering === undefined || followUp === undefined) return undefined;
+  return { steering, followUp };
 }

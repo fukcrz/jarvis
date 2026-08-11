@@ -23,7 +23,10 @@ import type {
   MessageTimelineItem,
   ModelDescriptor,
   PromptAccepted,
+  QueuedMessage,
+  QueuedPromptAccepted,
   RetryStatus,
+  SessionQueue,
   SessionRef,
   SessionStatus,
   SessionStreamSnapshot,
@@ -36,6 +39,7 @@ import type {
   ToolTimelineItem,
   Workspace,
 } from "../shared/protocol.js";
+import { emptySessionQueue } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
@@ -49,6 +53,9 @@ interface ActiveRun {
   kind: "llm" | "bash" | "compaction";
 }
 
+/** 所有运行类请求的幂等缓存值。 */
+type RunAccepted = { accepted: true; runId?: string; queued?: boolean; behavior?: "steer" | "followUp" };
+
 interface ActiveSession {
   ref: SessionRef;
   cwd: string;
@@ -57,11 +64,15 @@ interface ActiveSession {
   modelSwitching: boolean;
   unsubscribe: () => void;
   state: SessionStatus;
-  requestRuns: Map<string, PromptAccepted>;
+  requestRuns: Map<string, RunAccepted>;
   liveMessages: Map<string, MessageTimelineItem>;
   partial?: MessageTimelineItem;
   /** 当前 run 正在流式的思考块（message_end 定稿前）。 */
   partialThinking?: ThinkingTimelineItem;
+  /** 排队等待投递的用户消息镜像（来自 Pi 的 queue_update 事件）。 */
+  queue: SessionQueue;
+  /** clearQueue+重入队期间暂停镜像同步，避免发布中间态。 */
+  queueSyncSuspended: boolean;
   activeTools: Map<string, ToolTimelineItem>;
   /** 正在执行的用户 !cmd 命令（流式输出尚未落盘）。 */
   activeBash?: ToolTimelineItem;
@@ -167,7 +178,7 @@ export class SessionService {
       payload: { items: projectHistory(active.session.sessionManager.getBranch()), status: { sessionId: active.ref.sessionId, runState: "idle" } },
     });
     await this.reopenAtCurrentBranch(active);
-    return this.prompt(ref, text, clientRequestId, images);
+    return this.prompt(ref, text, clientRequestId, images) as Promise<PromptAccepted>;
   }
 
   async rename(ref: SessionRef, name: string): Promise<SessionSummary> {
@@ -295,6 +306,7 @@ export class SessionService {
       activeTools: [...active.activeTools.values()],
       ...(active.activeBash === undefined ? {} : { activeBash: active.activeBash }),
       ...(contextUsage === undefined ? {} : { contextUsage }),
+      queue: active.queue,
       extensionUi: active.extensionUi.snapshot(),
     };
   }
@@ -355,7 +367,7 @@ export class SessionService {
     return this.thinkingSnapshot(active);
   }
 
-  async prompt(ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[]): Promise<PromptAccepted> {
+  async prompt(ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[], behavior?: "steer" | "followUp"): Promise<PromptAccepted | QueuedPromptAccepted> {
     const prompt = text.trim();
     if (prompt === "" && (images === undefined || images.length === 0)) throw new AppError("PROMPT_EMPTY", "Prompt cannot be empty");
     if (prompt.length > MAX_PROMPT_LENGTH) throw new AppError("PROMPT_TOO_LARGE", `Prompt must be at most ${String(MAX_PROMPT_LENGTH)} characters`);
@@ -363,14 +375,22 @@ export class SessionService {
     const active = await this.getActive(ref);
     const requestKey = `prompt:${clientRequestId}`;
     const previous = active.requestRuns.get(requestKey);
-    if (previous !== undefined) return previous;
+    if (previous !== undefined) return previous as PromptAccepted | QueuedPromptAccepted;
     const compact = attachments.length === 0 ? this.jarvisCompactCommand(active, prompt) : undefined;
     if (compact !== undefined) {
       const accepted = this.startCompaction(active, compact.customInstructions);
       this.rememberRequest(active, requestKey, accepted);
       return accepted;
     }
-    if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) throw new AppError("SESSION_BUSY", "This session is already running", 409);
+    // 会话忙（流式/压缩/切模型）：不拒绝发送，改为排队。缺省排队为
+    // steering（当前回合工具调用完成后投递），与 Pi TUI 的 Enter 行为一致。
+    if (this.isBusy(active)) {
+      const kind = behavior ?? "steer";
+      await this.enqueuePrompt(active, kind, prompt, attachments);
+      const accepted: QueuedPromptAccepted = { accepted: true, queued: true, behavior: kind };
+      this.rememberRequest(active, requestKey, accepted);
+      return accepted;
+    }
 
     const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
     active.state = { sessionId: ref.sessionId, runState: "running", activeRun: run };
@@ -390,6 +410,76 @@ export class SessionService {
     return accepted;
   }
 
+  private isBusy(active: ActiveSession): boolean {
+    return active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming;
+  }
+
+  /** 把消息排入 Pi 的 steering/follow-up 队列；Pi 同步发出 queue_update 驱动镜像。 */
+  private async enqueuePrompt(active: ActiveSession, kind: "steer" | "followUp", text: string, images: ImageAttachment[]): Promise<void> {
+    const imageContent = images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType }));
+    if (kind === "followUp") {
+      await active.session.followUp(text, imageContent);
+    } else {
+      await active.session.steer(text, imageContent);
+    }
+  }
+
+  /** 全部取回排队消息（对齐 Pi TUI 的 Alt+Up / Escape 行为），返回给调用方恢复草稿。 */
+  async dequeueQueue(ref: SessionRef): Promise<{ steering: QueuedMessage[]; followUp: QueuedMessage[] }> {
+    const active = await this.getActive(ref);
+    const { steering, followUp } = active.session.clearQueue();
+    const removed = {
+      steering: steering.map((text) => queuedMessage("steer", text)),
+      followUp: followUp.map((text) => queuedMessage("followUp", text)),
+    };
+    this.syncQueue(active);
+    return removed;
+  }
+
+  /** 删除（或取回）一条排队消息；其余消息按原顺序重新入队。 */
+  async removeQueued(ref: SessionRef, messageId: string): Promise<QueuedMessage | undefined> {
+    const active = await this.getActive(ref);
+    const queue = active.queue;
+    const match = [...queue.steering, ...queue.followUp].find((item) => item.id === messageId);
+    if (match === undefined) return undefined;
+    // Pi 只提供全量 clearQueue；取出后把其余消息按原顺序重新入队。
+    // 重入期间 Pi 会同步 emit queue_update，先挂起镜像同步避免中间态闪烁。
+    const { steering, followUp } = active.session.clearQueue();
+    active.queueSyncSuspended = true;
+    try {
+      for (const [index, text] of steering.entries()) {
+        if (match.kind === "steer" && match.text === text && queue.steering[index]?.id === match.id) continue;
+        await active.session.steer(text);
+      }
+      for (const [index, text] of followUp.entries()) {
+        if (match.kind === "followUp" && match.text === text && queue.followUp[index]?.id === match.id) continue;
+        await active.session.followUp(text);
+      }
+    } finally {
+      active.queueSyncSuspended = false;
+      this.syncQueue(active);
+    }
+    return match;
+  }
+
+  /** 把 Pi 的 queue_update 载荷同步为镜像并发布给浏览器。 */
+  private publishQueue(active: ActiveSession): void {
+    this.events.publishSession(active.ref, {
+      type: "queue.updated",
+      ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
+      payload: { steering: active.queue.steering, followUp: active.queue.followUp },
+    });
+  }
+
+  private syncQueue(active: ActiveSession): void {
+    const previous = active.queue;
+    active.queue = {
+      steering: mergeQueuedMessages(previous.steering, active.session.getSteeringMessages(), "steer"),
+      followUp: mergeQueuedMessages(previous.followUp, active.session.getFollowUpMessages(), "followUp"),
+    };
+    this.publishQueue(active);
+  }
+
   /**
    * 执行用户输入框的 !cmd 命令（! 输出进上下文，!! 不进）。
    * 流式中禁用；执行期间会话进入 running 状态，停止按钮/ESC 会中止命令。
@@ -401,7 +491,7 @@ export class SessionService {
     const active = await this.getActive(ref);
     const requestKey = `bash:${clientRequestId}`;
     const previous = active.requestRuns.get(requestKey);
-    if (previous !== undefined) return previous;
+    if (previous !== undefined) return previous as BashAccepted;
     if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) {
       throw new AppError("SESSION_BUSY", "This session is already running", 409);
     }
@@ -457,7 +547,7 @@ export class SessionService {
 
     const requestKey = `compact:${clientRequestId}`;
     const previous = active.requestRuns.get(requestKey);
-    if (previous !== undefined) return previous;
+    if (previous !== undefined) return previous as CompactAccepted;
     const accepted = this.startCompaction(active, customInstructions);
     this.rememberRequest(active, requestKey, accepted);
     return accepted;
@@ -497,35 +587,44 @@ export class SessionService {
       || active.session.promptTemplates.some((template) => template.name === name);
   }
 
-  private rememberRequest(active: ActiveSession, clientRequestId: string, accepted: PromptAccepted): void {
+  private rememberRequest(active: ActiveSession, clientRequestId: string, accepted: RunAccepted): void {
     active.requestRuns.set(clientRequestId, accepted);
     if (active.requestRuns.size > 48) active.requestRuns.delete(active.requestRuns.keys().next().value as string);
   }
 
-  async abort(ref: SessionRef, runId?: string): Promise<void> {
+  async abort(ref: SessionRef, runId?: string): Promise<{ aborted: true; dequeued?: { steering: QueuedMessage[]; followUp: QueuedMessage[] } }> {
     const active = await this.getActive(ref);
     const activeRun = active.state.activeRun;
     if (activeRun === undefined && active.state.compacting === undefined) {
       throw new AppError("RUN_NOT_ACTIVE", "This session does not have an active run", 409);
     }
     if (runId !== undefined && activeRun?.id !== runId) throw new AppError("RUN_NOT_ACTIVE", "This run is no longer active", 409);
+    // 停止前取回排队消息（对齐 Pi TUI Escape：清队列并把消息恢复到编辑器），
+    // 避免 agent 空闲后 follow-up 自动触发新 run 继续执行。
+    const { steering, followUp } = active.session.clearQueue();
+    const dequeued: { steering: QueuedMessage[]; followUp: QueuedMessage[] } = {
+      steering: steering.map((text) => queuedMessage("steer", text)),
+      followUp: followUp.map((text) => queuedMessage("followUp", text)),
+    };
+    if (dequeued.steering.length > 0 || dequeued.followUp.length > 0) this.syncQueue(active);
     active.state = { ...active.state, runState: "stopping" };
     this.events.publishSession(active.ref, { type: "run.stopping", ...(activeRun === undefined ? {} : { runId: activeRun.id }), payload: { status: active.state } });
     this.publishSummary(active);
 
     if (active.state.compacting !== undefined) {
       this.cancelCompaction(active);
-      return;
+      return { aborted: true, ...(dequeued.steering.length > 0 || dequeued.followUp.length > 0 ? { dequeued } : {}) };
     }
     if (activeRun?.kind === "bash") {
       // executeBashRun 会在命令结束时自行 settle。
       active.session.abortBash();
-      return;
+      return { aborted: true, ...(dequeued.steering.length > 0 || dequeued.followUp.length > 0 ? { dequeued } : {}) };
     }
 
     try {
       await active.session.abort();
       if (activeRun !== undefined && active.state.activeRun?.id === activeRun.id) this.settleRun(active, activeRun.id);
+      return { aborted: true, ...(dequeued.steering.length > 0 || dequeued.followUp.length > 0 ? { dequeued } : {}) };
     } catch (error) {
       this.failRun(active, active.state.activeRun?.id, "PI_RUNTIME_ERROR", asMessage(error));
       throw error;
@@ -756,6 +855,8 @@ export class SessionService {
       liveMessages: new Map(),
       activeTools: new Map(),
       activeBash: undefined,
+      queue: emptySessionQueue,
+      queueSyncSuspended: false,
       compactionAbortRequested: false,
       pendingRunError: undefined,
       settlementTimer: undefined,
@@ -1070,6 +1171,10 @@ export class SessionService {
         this.publishSummary(active);
         return;
       }
+      case "queue_update":
+        if (active.queueSyncSuspended) return;
+        this.syncQueue(active);
+        return;
       case "agent_settled":
         this.deferAgentSettlement(active);
         return;
@@ -1108,6 +1213,11 @@ export class SessionService {
     active.pendingRunError = undefined;
     active.compactionHandoff = false;
     this.clearSettlementTimer(active);
+    // 队列在此刻应已为空（Pi 投递完才会 settle）；异常残留时强制清空展示。
+    if (active.queue.steering.length > 0 || active.queue.followUp.length > 0) {
+      active.queue = emptySessionQueue;
+      this.publishQueue(active);
+    }
     this.events.publishSession(active.ref, { type: "run.settled", runId, payload: { status: active.state } });
     this.publishSummary(active);
   }
@@ -1135,6 +1245,10 @@ export class SessionService {
     active.pendingRunError = undefined;
     active.compactionHandoff = false;
     this.clearSettlementTimer(active);
+    if (active.queue.steering.length > 0 || active.queue.followUp.length > 0) {
+      active.queue = emptySessionQueue;
+      this.publishQueue(active);
+    }
     this.events.publishSession(active.ref, { type: "run.failed", runId, payload: { status: active.state } });
     this.publishSummary(active);
   }
@@ -1158,7 +1272,9 @@ export class SessionService {
     this.clearSettlementTimer(active);
     active.settlementTimer = setTimeout(() => {
       active.settlementTimer = undefined;
-      if (active.state.activeRun === undefined || active.state.compacting !== undefined || active.session.isStreaming) return;
+      // 排队消息（steering/follow-up）尚未投递完：保持 running，等 Pi 后续
+      // 事件（agent_start 或最终 agent_settled）接管 run 生命周期。
+      if (active.state.activeRun === undefined || active.state.compacting !== undefined || active.session.isStreaming || active.queue.steering.length > 0 || active.queue.followUp.length > 0) return;
       if (active.pendingRunError !== undefined) {
         const failure = active.pendingRunError;
         active.pendingRunError = undefined;
@@ -1269,6 +1385,30 @@ function isCompactionCancellation(error: unknown): boolean {
 
 function sameThinkingLevels(left: readonly ThinkingLevel[], right: readonly ThinkingLevel[]): boolean {
   return left.length === right.length && left.every((level, index) => level === right[index]);
+}
+
+/** 稳定 id：同一文本重复排队也保持独立条目。 */
+function queuedMessage(kind: "steer" | "followUp", text: string): QueuedMessage {
+  let hash = 5381;
+  for (let index = 0; index < text.length; index += 1) hash = ((hash << 5) + hash + text.charCodeAt(index)) >>> 0;
+  const createdAt = new Date().toISOString();
+  return { id: `${kind}:${hash.toString(36)}:${createdAt}`, kind, text, createdAt };
+}
+
+/** 增量合并：按顺序复用已有条目（文本相同）以保持 id 稳定，新增/剩余条目补全新 id。 */
+function mergeQueuedMessages(previous: QueuedMessage[], current: readonly string[], kind: "steer" | "followUp"): QueuedMessage[] {
+  const result: QueuedMessage[] = [];
+  const used = new Set<number>();
+  for (const text of current) {
+    const matchIndex = previous.findIndex((item, index) => !used.has(index) && item.kind === kind && item.text === text);
+    if (matchIndex === -1) {
+      result.push(queuedMessage(kind, text));
+    } else {
+      used.add(matchIndex);
+      result.push(previous[matchIndex]!);
+    }
+  }
+  return result;
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
