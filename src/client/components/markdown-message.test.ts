@@ -16,4 +16,31 @@ describe("MarkdownMessage", () => {
     expect(markup).toContain("<li>First</li>");
     expect(markup).toContain('class="streaming-cursor"');
   });
+
+  it("highlights fenced code blocks with language label and copy button", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "```ts\nconst n: number = 1;\n```",
+    }));
+
+    expect(markup).toContain('class="code-block"');
+    expect(markup).toContain("code-block-lang");
+    expect(markup).toContain(">ts<");
+    expect(markup).toContain("code-block-copy");
+    expect(markup).toContain("复制");
+    // hljs token class 没有被 sanitize 剥掉，language class 也保留
+    expect(markup).toContain("hljs-keyword");
+    expect(markup).toContain("hljs-number");
+    expect(markup).toContain("language-ts");
+  });
+
+  it("keeps unlabeled code blocks plain but still copyable", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "```\nplain text\n```",
+    }));
+
+    expect(markup).toContain('class="code-block"');
+    expect(markup).toContain("code-block-copy");
+    expect(markup).toContain(">text<");
+    expect(markup).not.toContain("hljs-");
+  });
 });
