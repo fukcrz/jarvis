@@ -80,7 +80,7 @@ export function ModelSelector({ model, disabled, pending, onSelect }: ModelSelec
           </div>)}
           {hasOutOfScope ? <>
             <DropdownMenu.Separator className="menu-separator" />
-            <DropdownMenu.CheckboxItem checked={showAll} onCheckedChange={setShowAll} className="model-menu-item model-show-all">
+            <DropdownMenu.CheckboxItem checked={showAll} onCheckedChange={setShowAll} onSelect={(event) => event.preventDefault()} className="model-menu-item model-show-all">
               <span className="model-menu-check"><DropdownMenu.ItemIndicator><Check size={14} /></DropdownMenu.ItemIndicator></span>
               <span className="model-menu-label">显示全部模型</span>
             </DropdownMenu.CheckboxItem>
