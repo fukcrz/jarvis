@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, LoaderCircle } from "lucide-react";
 import type { SessionThinkingSnapshot, ThinkingLevel } from "../../shared/protocol";
@@ -10,16 +10,25 @@ interface ThinkingSelectorProps {
   thinking: SessionThinkingSnapshot;
   disabled: boolean;
   pending: boolean;
+  /** 快捷键循环切换的瞬时反馈序号；变化时触发按钮闪烁。 */
+  flashSeq?: number;
   onSelect: (level: ThinkingLevel) => void;
 }
 
-export function ThinkingSelector({ thinking, disabled, pending, onSelect }: ThinkingSelectorProps) {
+export function ThinkingSelector({ thinking, disabled, pending, flashSeq, onSelect }: ThinkingSelectorProps) {
   const selectable = thinking.available.length > 1;
   const isMobile = useIsMobile();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [flashed, setFlashed] = useState(false);
+  useEffect(() => {
+    if (flashSeq === undefined) return;
+    setFlashed(true);
+    const timer = setTimeout(() => setFlashed(false), 700);
+    return () => clearTimeout(timer);
+  }, [flashSeq]);
 
   const trigger = (
-    <Button variant="ghost" size="sm" className="thinking-selector-trigger" aria-label="Thinking level" title={`Thinking: ${thinking.current}`} disabled={disabled || pending || !selectable} onClick={isMobile ? () => setSheetOpen(true) : undefined}>
+    <Button variant="ghost" size="sm" className={`thinking-selector-trigger${flashed ? " selector-flash" : ""}`} aria-label="Thinking level" title={`Thinking: ${thinking.current}`} disabled={disabled || pending || !selectable} onClick={isMobile ? () => setSheetOpen(true) : undefined}>
       {pending ? <LoaderCircle className="spin" size={14} /> : null}
       <span>{thinking.current}</span>
     </Button>

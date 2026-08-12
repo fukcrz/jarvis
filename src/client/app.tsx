@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
-import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
+import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionModelSnapshot, SessionRef, SessionSummary, SessionThinkingSnapshot, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, isSessionConflict, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
@@ -20,6 +20,7 @@ import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
 import { randomUUID, parseBashCommand, sessionLabel } from "./lib/utils";
+import { cycleModelCandidate, cycleThinkingCandidate } from "./shortcuts";
 import { useSessionStream } from "./hooks/use-session-stream";
 
 /** Extract the entity ids carried by the current hash route. */
@@ -33,6 +34,19 @@ function pathParams(pathname: string): { workspaceId?: string; sessionId?: strin
 const COMMAND_RETRY_BASE_DELAY_MS = 750;
 const COMMAND_RETRY_MAX_DELAY_MS = 10_000;
 const EMPTY_COMPOSER_COMMANDS: ComposerCommand[] = [];
+// 弹层、菜单、补全打开时不拦截快捷键，让它们优先消费按键。
+const SHORTCUT_BLOCKED_SELECTOR = '[role="dialog"], [role="menu"], .extension-operation.pending, .composer-completions, .cm-tooltip-autocomplete, [data-radix-popper-content-wrapper]';
+
+interface ShortcutState {
+  connection: "connecting" | "live" | "reconnecting" | "offline";
+  model: SessionModelSnapshot;
+  thinking: SessionThinkingSnapshot;
+  compactionPending: boolean;
+  modelSwitchPending: boolean;
+  thinkingLevelPending: boolean;
+  cycleModel: (direction: 1 | -1) => void;
+  cycleThinking: () => void;
+}
 
 export function App() {
   const location = useLocation();
@@ -84,6 +98,13 @@ export function App() {
 
   const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const [thinkingLevelPending, setThinkingLevelPending] = useState(false);
+  // 快捷键循环切换的瞬时反馈：seq 递增保证连按时动画重新触发，700ms 后自动熄灭。
+  const [shortcutFlash, setShortcutFlash] = useState<{ kind: "model" | "thinking"; seq: number } | null>(null);
+  useEffect(() => {
+    if (shortcutFlash === null) return;
+    const timer = setTimeout(() => setShortcutFlash(null), 700);
+    return () => clearTimeout(timer);
+  }, [shortcutFlash]);
   const [compactionPending, setCompactionPending] = useState(false);
   const [compactionRequest, setCompactionRequest] = useState<{ runId: string; baselineSeq: number }>();
   const [drafts, setDrafts] = useState<Record<string, string>>(() => readDrafts());
@@ -743,11 +764,47 @@ export function App() {
   const statusRef = useRef(stream.transcript.status);
   useEffect(() => { abortRef.current = abort; });
   useEffect(() => { statusRef.current = stream.transcript.status; });
+  // Ctrl+P / Shift+Tab 全局快捷键（对齐 PI TUI 的 app.model.cycleForward /
+  // app.thinking.cycle）：捕获阶段拦截，避免浏览器默认行为（Ctrl+P 打印、
+  // Shift+Tab 移焦）；弹层/菜单/补全打开时放行；中文输入法组合中不触发。
+  const shortcutStateRef = useRef<ShortcutState | undefined>(undefined);
+  useEffect(() => {
+    shortcutStateRef.current = {
+      connection: stream.connection,
+      model: stream.transcript.model,
+      thinking: stream.transcript.thinking,
+      compactionPending,
+      modelSwitchPending,
+      thinkingLevelPending,
+      cycleModel,
+      cycleThinking,
+    };
+  });
+  useEffect(() => {
+    if (selectedRefKey === undefined) return;
+    const onKeyDownCapture = (event: KeyboardEvent) => {
+      if (event.isComposing) return;
+      const ctrlP = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "p";
+      const shiftTab = event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && event.key === "Tab";
+      if (!ctrlP && !shiftTab) return;
+      if (document.querySelector(SHORTCUT_BLOCKED_SELECTOR) !== null) return;
+      const state = shortcutStateRef.current;
+      if (state === undefined || state.connection !== "live" || state.compactionPending) return;
+      if (ctrlP && state.modelSwitchPending) return;
+      if (shiftTab && state.thinkingLevelPending) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (ctrlP) state.cycleModel(1);
+      else state.cycleThinking();
+    };
+    window.addEventListener("keydown", onKeyDownCapture, true);
+    return () => window.removeEventListener("keydown", onKeyDownCapture, true);
+  }, [selectedRefKey]);
   useEffect(() => {
     if (selectedRefKey === undefined) return;
     const onKeyDownCapture = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (document.querySelector('[role="dialog"], [role="menu"], .extension-operation.pending, .composer-completions, .cm-tooltip-autocomplete, [data-radix-popper-content-wrapper]') !== null) return;
+      if (document.querySelector(SHORTCUT_BLOCKED_SELECTOR) !== null) return;
       if (statusRef.current.runState === "idle") return;
       event.preventDefault();
       event.stopPropagation();
@@ -811,6 +868,21 @@ export function App() {
     }
   };
 
+  // 快捷键循环切换：只点选下一个启用的模型 / 思考等级，无事可循环时静默跳过。
+  const cycleModel = (direction: 1 | -1): void => {
+    const candidate = cycleModelCandidate(stream.transcript.model.available, stream.transcript.model.current, direction);
+    if (candidate === undefined) return;
+    setShortcutFlash((previous) => ({ kind: "model", seq: (previous?.seq ?? 0) + 1 }));
+    void selectModel(candidate);
+  };
+
+  const cycleThinking = (): void => {
+    const candidate = cycleThinkingCandidate(stream.transcript.thinking.available, stream.transcript.thinking.current);
+    if (candidate === undefined) return;
+    setShortcutFlash((previous) => ({ kind: "thinking", seq: (previous?.seq ?? 0) + 1 }));
+    void selectThinkingLevel(candidate);
+  };
+
   const chooseSession = (nextWorkspaceId: string, nextSessionId: string) => {
     setExpandedWorkspaceIds((current) => ({ ...current, [nextWorkspaceId]: true }));
     const target = `/chat/${nextWorkspaceId}/${nextSessionId}`;
@@ -855,8 +927,8 @@ export function App() {
       <Timeline key={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? requestForkMessage : undefined} onExtensionUiRespond={stream.respondExtensionUi} />
       <ExtensionPanels panels={stream.extensionPanels} />
       <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
-        <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
-        <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
+        <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} flashSeq={shortcutFlash?.kind === "model" ? shortcutFlash.seq : undefined} onSelect={(model) => { void selectModel(model); }} />
+        <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} flashSeq={shortcutFlash?.kind === "thinking" ? shortcutFlash.seq : undefined} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />
       </>} />
     </>}
