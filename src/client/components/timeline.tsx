@@ -35,14 +35,19 @@ const NEAR_BOTTOM_PX = 72;
  * scrollTop = scrollHeight in useLayoutEffect before the user can clear the
  * NEAR_BOTTOM_PX dead zone, so the first stretch of scrolling fights the auto-scroll.
  */
-function stopFollowingOnGesture(setFollowing: (value: boolean) => void, deltaY?: number) {
-  // Wheel: deltaY < 0 means scrolling up (away from the bottom); ignore downward scroll.
-  if (deltaY !== undefined && deltaY >= 0) return;
-  setFollowing(false);
+export function shouldStopFollowingOnGesture(element: Pick<HTMLElement, "clientHeight" | "scrollHeight" | "scrollTop">, deltaY: number): boolean {
+  // deltaY < 0 means scrolling up. Do not leave follow mode when there is no
+  // actual vertical range, or when the viewport cannot move farther upward.
+  return deltaY < 0 && element.scrollHeight > element.clientHeight && element.scrollTop > 0;
+}
+
+function stopFollowingOnGesture(element: HTMLDivElement, setFollowing: (value: boolean) => void, deltaY: number) {
+  if (shouldStopFollowingOnGesture(element, deltaY)) setFollowing(false);
 }
 
 export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const touchYRef = useRef<number | undefined>(undefined);
   const [following, setFollowing] = useState(true);
   const [editingMessageId, setEditingMessageId] = useState<string>();
   const feedback = getRunFeedback(status, items, streamingMessageId);
@@ -68,7 +73,16 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
       <div className="timeline" ref={scrollRef} onScroll={(event) => {
         const element = event.currentTarget;
         setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX);
-      }} onWheel={(event) => stopFollowingOnGesture(setFollowing, event.deltaY)} onTouchStart={() => stopFollowingOnGesture(setFollowing)} onPointerDown={() => stopFollowingOnGesture(setFollowing)}>
+      }} onWheel={(event) => {
+        stopFollowingOnGesture(event.currentTarget, setFollowing, event.deltaY);
+      }} onTouchStart={(event) => {
+        touchYRef.current = event.touches[0]?.clientY;
+      }} onTouchMove={(event) => {
+        const previousY = touchYRef.current;
+        const currentY = event.touches[0]?.clientY;
+        touchYRef.current = currentY;
+        if (previousY !== undefined && currentY !== undefined) stopFollowingOnGesture(event.currentTarget, setFollowing, currentY - previousY);
+      }}>
         <div className="timeline-inner">
           {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "正在加载历史记录…" : "加载更早记录"}</Button> : null}
           {renderTimelineItems(items, streamingMessageId, status, onExtensionUiRespond, onEditUserMessage, onForkMessage, editingMessageId, setEditingMessageId)}

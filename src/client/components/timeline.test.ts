@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { groupTimelineItems } from "./timeline";
+import { groupTimelineItems, shouldStopFollowingOnGesture } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -32,6 +32,21 @@ function thinking(id: string): TimelineItem {
     text: "thinking",
   };
 }
+
+describe("shouldStopFollowingOnGesture", () => {
+  it("keeps following when the timeline has no vertical scroll range", () => {
+    expect(shouldStopFollowingOnGesture({ scrollTop: 0, scrollHeight: 600, clientHeight: 600 }, -100)).toBe(false);
+  });
+
+  it("keeps following when scrolling down or already at the top", () => {
+    expect(shouldStopFollowingOnGesture({ scrollTop: 120, scrollHeight: 1_200, clientHeight: 600 }, 100)).toBe(false);
+    expect(shouldStopFollowingOnGesture({ scrollTop: 0, scrollHeight: 1_200, clientHeight: 600 }, -100)).toBe(false);
+  });
+
+  it("stops following when an upward gesture can move away from the latest messages", () => {
+    expect(shouldStopFollowingOnGesture({ scrollTop: 600, scrollHeight: 1_200, clientHeight: 600 }, -100)).toBe(true);
+  });
+});
 
 describe("groupTimelineItems", () => {
   it("groups only consecutive tool items", () => {
