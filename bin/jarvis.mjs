@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const distEntry = join(root, "dist", "server", "server", "index.js");
 
-const DEFAULT_PORT = "39126";
+const DEFAULT_PORT = "9528";
 
 function printHelp() {
   console.log(`jarvis — a local coding workspace for persistent Pi sessions

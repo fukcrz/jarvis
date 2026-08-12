@@ -23,7 +23,7 @@ or pin an exact commit:
 npx https://pkg.pr.new/fukcrz/jarvis/jarvis@<commit-sha>
 ```
 
-Once running, open `http://<machine-ip>:39126` from any reachable device. Use
+Once running, open `http://<machine-ip>:9528` from any reachable device. Use
 `jarvis --help` after install for options (`--port`, `--host`, `--open`).
 
 > **Security warning**: Jarvis has **no authentication** and can operate Pi

@@ -16,8 +16,8 @@ process.on("uncaughtException", (error) => {
 });
 
 // Development defaults to a fixed port (39130) so it never collides with the
-// production default (39126). Override either with PORT.
-const defaultPort = production ? 39126 : 39130;
+// production default (9528). Override either with PORT.
+const defaultPort = production ? 9528 : 39130;
 const port = Number(process.env["PORT"] ?? defaultPort);
 // Listen on all interfaces (LAN access) in every mode. Override with HOST if needed.
 const host = process.env["HOST"] ?? "0.0.0.0";
