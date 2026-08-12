@@ -1,0 +1,28 @@
+# Every commit and pull request gets an instant preview release via pkg.pr.new.
+# No npm publish is involved — users install from the pkg.pr.new registry URL.
+#
+#   npx https://pkg.pr.new/fukcrz/jarvis/jarvis@<sha>
+#
+# The @main tag resolves to the latest commit on main once pkg.pr.new has run
+# on it. Requires the pkg-pr-new GitHub App to be installed on this repo.
+name: Preview Release
+
+on:
+  push:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # pkg-pr-new packs the package with `npm pack`, which runs the `prepack`
+      # script and therefore builds dist/ automatically.
+      - run: npm exec pkg-pr-new publish -- --commentWithSha --bin --previewVersion

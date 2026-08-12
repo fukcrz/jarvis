@@ -7,6 +7,30 @@ Jarvis is a local, single-user coding workspace for persistent Pi sessions. It k
 - Node.js 24 or newer
 - A configured Pi profile, normally `~/.pi/agent`
 
+## Install & Run (preview builds)
+
+Every commit and pull request triggers an instant preview release via
+[pkg.pr.new](https://pkg.pr.new) — no npm publish involved. To install and run
+the latest commit on `main`:
+
+```bash
+npx https://pkg.pr.new/fukcrz/jarvis/jarvis@main
+```
+
+or pin an exact commit:
+
+```bash
+npx https://pkg.pr.new/fukcrz/jarvis/jarvis@<commit-sha>
+```
+
+Once running, open `http://<machine-ip>:39126` from any reachable device. Use
+`jarvis --help` after install for options (`--port`, `--host`, `--open`).
+
+> **Security warning**: Jarvis has **no authentication** and can operate Pi
+> sessions. Only run it on your local machine or a trusted LAN — never expose
+> it to the public internet. It binds to `0.0.0.0` by default; use
+> `--host 127.0.0.1` to restrict it to the local machine.
+
 ## Development
 
 ```bash
@@ -14,14 +38,17 @@ npm install
 npm run dev
 ```
 
-Open `http://<machine-ip>:28471` from any reachable device. In development, Vite listens on port `28471` and Fastify listens on port `39126`, both on all network interfaces.
+Open `http://<machine-ip>:28471` from any reachable device. In development, Vite listens on port `28471` and Fastify listens on port `39130`, both on all network interfaces.
 
-Jarvis has no authentication and can operate Pi sessions, so do not expose it to an untrusted network. Production builds also bind Fastify to `0.0.0.0` (override the bind address with `HOST`, the port with `PORT`) and can be run with:
+For a production build served by Fastify directly:
 
 ```bash
 npm run build
 NODE_ENV=production npm start
 ```
+
+The same build is what the preview packages ship (`npm pack` runs `prepack`,
+which builds `dist/` automatically).
 
 Jarvis stores only its Workspace registry in `~/.jarvis/workspaces.json`. Pi JSONL remains the authoritative conversation history. Do not write to the same Pi session concurrently from Jarvis and the Pi CLI.
 
