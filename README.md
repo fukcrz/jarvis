@@ -38,16 +38,18 @@ Attachments, archive, terminal/files/Git panels, and extension dialogs are inten
 
 ## Message Queue
 
-While a session is running, Jarvis queues new prompts instead of rejecting them,
-matching the Pi TUI's steering/follow-up behavior:
+While a session is running, Jarvis queues new prompts instead of rejecting them.
+Queued messages are shown **one per line above the input box** with ellipsis
+preview, each with three actions on the right: **restore to editor**, **toggle
+urgent (interrupt)**, and **delete**:
 
-- **Send while busy** queues a *steering* message, delivered after the current
-  assistant turn finishes executing its tool calls
-- **Queue as follow-up** (button next to the send button while busy) queues a
-  *follow-up* message, delivered only after the agent finishes all work
-- Queued messages are shown as chips above the composer; each can be **restored
-  to the editor** or **deleted** individually, and **restore all** pulls every
-  queued message back into the editor
+- **Send while busy** queues a *follow-up* message by default, delivered only
+  after the agent finishes all work
+- **Toggle urgent** switches a message to *steering*: delivered after the
+  current assistant turn finishes executing its tool calls (before the next
+  LLM call); toggle again to go back to follow-up
+- **Restore to editor** pulls one message back into the composer; **restore
+  all** pulls every queued message back
 - **Stop** cancels the run and returns queued messages to the editor (same as
   Pi TUI Escape)
 

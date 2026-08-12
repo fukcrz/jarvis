@@ -146,6 +146,14 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const removed = await sessions.removeQueued(ref, params.messageId);
     return { removed };
   });
+  const queuedKindInput = z.object({ kind: z.enum(["steer", "followUp"]) }).strict();
+  app.patch("/api/workspaces/:workspaceId/sessions/:sessionId/queue/:messageId", async (request) => {
+    const ref = sessionRef(request.params);
+    const params = z.object({ messageId: z.string().min(1).max(300) }).parse(request.params);
+    const body = queuedKindInput.parse(request.body);
+    const updated = await sessions.setQueuedKind(ref, params.messageId, body.kind);
+    return { updated };
+  });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/fork", async (request) => {
     const ref = sessionRef(request.params);
     const body = messageActionInput.parse(request.body);

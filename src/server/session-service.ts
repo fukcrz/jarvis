@@ -382,9 +382,10 @@ export class SessionService {
       return accepted;
     }
     // 会话忙（流式/压缩/切模型）：不拒绝发送，改为排队。缺省排队为
-    // steering（当前回合工具调用完成后投递），与 Pi TUI 的 Enter 行为一致。
+    // follow-up（agent 全部完成后投递），与用户默认“后续消息”预期一致；
+    // 需要插队时由客户端显式传 behavior="steer"。
     if (this.isBusy(active)) {
-      const kind = behavior ?? "steer";
+      const kind = behavior ?? "followUp";
       await this.enqueuePrompt(active, kind, prompt, attachments);
       const accepted: QueuedPromptAccepted = { accepted: true, queued: true, behavior: kind };
       this.rememberRequest(active, requestKey, accepted);
@@ -421,6 +422,34 @@ export class SessionService {
     } else {
       await active.session.steer(text, imageContent);
     }
+  }
+
+  /** 切换一条排队消息的投递方式（followUp ↔ steer）；其余消息按原顺序重入队。 */
+  async setQueuedKind(ref: SessionRef, messageId: string, kind: "steer" | "followUp"): Promise<QueuedMessage | undefined> {
+    const active = await this.getActive(ref);
+    const queue = active.queue;
+    const match = [...queue.steering, ...queue.followUp].find((item) => item.id === messageId);
+    if (match === undefined || match.kind === kind) return match;
+    const { steering, followUp } = active.session.clearQueue();
+    active.queueSyncSuspended = true;
+    try {
+      for (const [index, text] of steering.entries()) {
+        if (match.kind === "steer" && match.text === text && queue.steering[index]?.id === match.id) continue;
+        await active.session.steer(text);
+      }
+      for (const [index, text] of followUp.entries()) {
+        if (match.kind === "followUp" && match.text === text && queue.followUp[index]?.id === match.id) continue;
+        await active.session.followUp(text);
+      }
+      // 目标消息以新 kind 入队：steering 队列先于 followUp 投递，
+      // 所以从“后续”切到“插队”会插到所有后续消息之前。
+      if (kind === "steer") await active.session.steer(match.text);
+      else await active.session.followUp(match.text);
+    } finally {
+      active.queueSyncSuspended = false;
+      this.syncQueue(active);
+    }
+    return { ...match, kind };
   }
 
   /** 全部取回排队消息（对齐 Pi TUI 的 Alt+Up / Escape 行为），返回给调用方恢复草稿。 */

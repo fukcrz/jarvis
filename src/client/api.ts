@@ -117,6 +117,7 @@ export const api = {
   }),
   dequeueQueue: async (ref: SessionRef): Promise<{ steering: QueuedMessage[]; followUp: QueuedMessage[] }> => request(`${sessionPath(ref)}/queue/dequeue`, { method: "POST", body: "{}" }),
   removeQueued: async (ref: SessionRef, messageId: string): Promise<{ removed?: QueuedMessage }> => request(`${sessionPath(ref)}/queue/${encodeURIComponent(messageId)}`, { method: "DELETE" }),
+  setQueuedKind: async (ref: SessionRef, messageId: string, kind: "steer" | "followUp"): Promise<{ updated?: QueuedMessage }> => request(`${sessionPath(ref)}/queue/${encodeURIComponent(messageId)}`, { method: "PATCH", body: JSON.stringify({ kind }) }),
   editAndResend: async (ref: SessionRef, messageId: string, text: string, clientRequestId: string, images?: ImageAttachment[]): Promise<PromptAccepted> => request(`${sessionPath(ref)}/edit-and-resend`, {
     method: "POST",
     body: JSON.stringify({ messageId, text, clientRequestId, ...(images === undefined || images.length === 0 ? {} : { images }) }),

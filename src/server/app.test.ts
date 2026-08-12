@@ -725,7 +725,7 @@ describe("extension UI endpoint", () => {
 });
 
 describe("message queue", () => {
-  it("queues a prompt as a steering message while the session is busy", async () => {
+  it("queues prompts as follow-up by default and as steering when requested", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "queue-steer-workspace");
     await mkdir(workspacePath);
@@ -738,16 +738,73 @@ describe("message queue", () => {
     const followUpSpy = vi.spyOn(AgentSession.prototype, "followUp").mockResolvedValue(undefined);
     await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Keep running", clientRequestId: randomUUID() } });
 
-    const queued = await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Steer now", clientRequestId: randomUUID() } });
+    // 缺省：后续消息（全部完成后投递）。
+    const queued = await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Later note", clientRequestId: randomUUID() } });
     expect(queued.statusCode).toBe(200);
-    expect(queued.json()).toMatchObject({ accepted: true, queued: true, behavior: "steer" });
-    await vi.waitFor(() => expect(steerSpy).toHaveBeenCalledWith("Steer now", []));
-
-    const followUp = await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Later note", clientRequestId: randomUUID(), behavior: "followUp" } });
-    expect(followUp.statusCode).toBe(200);
-    expect(followUp.json()).toMatchObject({ accepted: true, queued: true, behavior: "followUp" });
+    expect(queued.json()).toMatchObject({ accepted: true, queued: true, behavior: "followUp" });
     await vi.waitFor(() => expect(followUpSpy).toHaveBeenCalledWith("Later note", []));
-    expect(steerSpy).toHaveBeenCalledTimes(1);
+
+    // 显式 behavior=steer：插队（当前回合工具调用后投递）。
+    const steering = await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Steer now", clientRequestId: randomUUID(), behavior: "steer" } });
+    expect(steering.statusCode).toBe(200);
+    expect(steering.json()).toMatchObject({ accepted: true, queued: true, behavior: "steer" });
+    await vi.waitFor(() => expect(steerSpy).toHaveBeenCalledWith("Steer now", []));
+    expect(followUpSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("switches a queued message between follow-up and steering", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "queue-toggle-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    let listener: ((event: { type: string; [key: string]: unknown }) => void) | undefined;
+    vi.spyOn(AgentSession.prototype, "subscribe").mockImplementation((callback) => {
+      listener = callback as unknown as typeof listener;
+      return () => undefined;
+    });
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    const steering: string[] = ["First steer"];
+    const followUp: string[] = ["Later note"];
+    const steerSpy = vi.spyOn(AgentSession.prototype, "steer").mockResolvedValue(undefined);
+    const followUpSpy = vi.spyOn(AgentSession.prototype, "followUp").mockResolvedValue(undefined);
+    vi.spyOn(AgentSession.prototype, "getSteeringMessages").mockImplementation(() => steering);
+    vi.spyOn(AgentSession.prototype, "getFollowUpMessages").mockImplementation(() => followUp);
+    vi.spyOn(AgentSession.prototype, "clearQueue").mockImplementation(() => {
+      const removed = { steering: [...steering], followUp: [...followUp] };
+      steering.splice(0, steering.length);
+      followUp.splice(0, followUp.length);
+      return removed as never;
+    });
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const sessionUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}`;
+    await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Continue", clientRequestId: randomUUID() } });
+    await vi.waitFor(() => expect(listener).toBeDefined());
+    listener?.({ type: "queue_update", steering: [...steering], followUp: [...followUp] });
+
+    let runtime = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ queue: { steering: Array<{ id: string; kind: string }>; followUp: Array<{ id: string; kind: string }> } }>();
+    const followUpId = runtime.queue.followUp[0]?.id;
+    expect(followUpId).toBeDefined();
+
+    // 后续 → 插队：其余消息按原顺序重入，目标以 steer 入队。
+    const switched = await server.inject({ method: "PATCH", url: `${sessionUrl}/queue/${encodeURIComponent(followUpId!)}`, payload: { kind: "steer" } });
+    expect(switched.statusCode).toBe(200);
+    expect(switched.json()).toMatchObject({ updated: { id: followUpId, kind: "steer", text: "Later note" } });
+    await vi.waitFor(() => expect(steerSpy).toHaveBeenCalledWith("First steer"));
+    await vi.waitFor(() => expect(steerSpy).toHaveBeenCalledWith("Later note"));
+    expect(followUpSpy).toHaveBeenCalledTimes(0);
+
+    // 插队 → 后续：目标以 followUp 重入。模拟真实重入后的队列状态。
+    steering.push("First steer", "Later note");
+    listener?.({ type: "queue_update", steering: [...steering], followUp: [] });
+    runtime = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ queue: { steering: Array<{ id: string; kind: string }>; followUp: Array<{ id: string; kind: string }> } }>();
+    const steerId = runtime.queue.steering[1]?.id;
+    expect(steerId).toBeDefined();
+    const back = await server.inject({ method: "PATCH", url: `${sessionUrl}/queue/${encodeURIComponent(steerId!)}`, payload: { kind: "followUp" } });
+    expect(back.statusCode).toBe(200);
+    await vi.waitFor(() => expect(followUpSpy).toHaveBeenCalledWith("Later note"));
+    const empty = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ queue: { steering: unknown[]; followUp: unknown[] } }>();
+    expect(empty.queue.steering).toHaveLength(0);
+    expect(empty.queue.followUp).toHaveLength(0);
   });
 
   it("publishes queue.updated from Pi queue_update events and mirrors it in runtime", async () => {
@@ -857,7 +914,7 @@ describe("message queue", () => {
     listener?.({ type: "queue_update", steering: [...steering], followUp: [...followUp] });
 
     // 单条删除：第一条 steering 被移除，其余按原顺序重入队。
-    const runtime = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ queue: { steering: Array<{ id: string }> } }>();
+    const runtime = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ queue: { steering: Array<{ id: string }>; followUp: unknown[] } }>();
     const removedId = runtime.queue.steering[0]?.id;
     expect(removedId).toBeDefined();
     const removal = await server.inject({ method: "DELETE", url: `${sessionUrl}/queue/${encodeURIComponent(removedId!)}` });

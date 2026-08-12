@@ -336,19 +336,21 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .composer-collapsed-button { display: flex; align-items: center; justify-content: center; width: min(280px, 100%); min-height: 46px; margin: 0 auto; gap: 7px; border: 1px solid #3d3a4e; border-radius: 23px; background: radial-gradient(120% 120% at 30% 20%, #2e2c3a 0%, #1d1b26 55%, #141318 100%); color: #cfc9e6; box-shadow: 0 6px 24px rgb(0 0 0 / .45), inset 0 1px 0 rgb(255 255 255 / .06); font-size: 13px; cursor: pointer; }
 .composer-collapsed-button:active { transform: scale(.97); }
 
-/* --- 排队消息条 --- */
-.composer-queue { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px 0; }
-.composer-queue-list { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; flex: 1 1 auto; }
-.composer-queue-item { display: flex; align-items: center; min-width: 0; gap: 5px; border: 1px solid #3d3a46; border-radius: 7px; background: #1d1c22; padding: 4px 6px; }
-.composer-queue-item.steer { border-color: rgb(110 140 255 / .38); background: rgb(110 140 255 / .07); }
+/* --- 排队消息条（编辑区上方，一行一条） --- */
+.composer-queue { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px 0; }
+.composer-queue-item { display: flex; align-items: center; min-width: 0; gap: 6px; border: 1px solid #3d3a46; border-radius: 7px; background: #1d1c22; padding: 4px 6px; }
+.composer-queue-item.steer { border-color: rgb(255 184 107 / .4); background: rgb(255 184 107 / .07); }
 .composer-queue-item.followup { border-color: rgb(176 141 247 / .38); background: rgb(176 141 247 / .07); }
 .composer-queue-kind { flex: 0 0 auto; border-radius: 4px; background: rgb(255 255 255 / .07); padding: 1px 5px; color: var(--muted); font-size: 10px; line-height: 1.4; }
-.composer-queue-item.steer .composer-queue-kind { color: #a8b8ff; }
+.composer-queue-item.steer .composer-queue-kind { color: #ffb86b; }
 .composer-queue-item.followup .composer-queue-kind { color: #c9aaff; }
-.composer-queue-text { min-width: 0; max-width: 300px; overflow: hidden; color: var(--ink); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
-.composer-queue-action { display: grid; flex: 0 0 auto; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 4px; background: transparent; color: var(--subtle); padding: 0; cursor: pointer; }
+.composer-queue-text { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--ink); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.composer-queue-actions { display: flex; flex: 0 0 auto; gap: 2px; }
+.composer-queue-action { display: grid; place-items: center; width: 19px; height: 19px; border: 0; border-radius: 4px; background: transparent; color: var(--subtle); padding: 0; cursor: pointer; }
 .composer-queue-action:hover { background: rgb(255 255 255 / .08); color: var(--ink); }
-.composer-queue-restore { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 4px; border: 0; border-radius: 5px; background: rgb(182 168 255 / .09); padding: 4px 8px; color: #bdb8ca; font-size: 11px; cursor: pointer; }
+.composer-queue-action.urgent { color: #ffb86b; }
+.composer-queue-action.urgent:hover { background: rgb(255 184 107 / .14); color: #ffd09b; }
+.composer-queue-restore { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: rgb(182 168 255 / .09); padding: 4px 8px; color: #bdb8ca; font-size: 11px; cursor: pointer; }
 .composer-queue-restore:hover { background: rgb(182 168 255 / .16); color: var(--accent-strong); }
 .composer-file-input { display: none; }
 
