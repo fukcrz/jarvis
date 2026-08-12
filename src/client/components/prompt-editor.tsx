@@ -54,10 +54,17 @@ interface PromptEditorProps {
   onCollapsedClick?: () => void;
   /** 暴露"聚焦编辑器"的方法，供折叠态点击恢复后调用。 */
   focusRequestRef?: RefObject<(() => void) | undefined>;
+  /** 桌面端：挂载后自动聚焦输入框（新建会话场景）。 */
+  autoFocus?: boolean;
+  /** 已消费 autoFocus（完成聚焦）后通知父组件，用于清除标记。 */
+  onAutoFocusConsumed?: () => void;
 }
 
-export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, extensionStatuses = {}, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, onCollapsedClick, focusRequestRef }: PromptEditorProps) {
+export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, extensionStatuses = {}, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, onCollapsedClick, focusRequestRef, autoFocus = false, onAutoFocusConsumed }: PromptEditorProps) {
   const isMobile = useIsMobile();
+  // 挂载时捕获 autoFocus：视图创建可能比挂载晚一个提交（容器 ref 回调触发
+  // 的二次渲染），而 App 可能在被动效果里已清除标记；用 ref 保存挂载快照。
+  const autoFocusOnMountRef = useRef(autoFocus);
   const initialValueRef = useRef(initialValue);
   const valueRef = useRef(initialValue);
   const viewRef = useRef<EditorView | undefined>(undefined);
@@ -162,7 +169,12 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
     applyInjectedText(view, injectedTextRef.current);
     applyInjectedText(view, draftInjectionRef.current);
     refreshCompletion(view);
-  }, [applyInjectedText, refreshCompletion]);
+    // 新建会话后自动聚焦（移动端聚焦会弹出键盘，忽略）。
+    if (autoFocusOnMountRef.current && !isMobile) {
+      view.focus();
+      onAutoFocusConsumed?.();
+    }
+  }, [applyInjectedText, refreshCompletion, isMobile, onAutoFocusConsumed]);
 
   // Command resources arrive asynchronously. Re-run completion against the
   // current document even when the user has not typed another character.

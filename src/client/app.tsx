@@ -39,6 +39,9 @@ export function App() {
   const navigate = useNavigate();
   const initialPath = pathParams(location.pathname);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  // 会话列表基准快照可能晚于会话事件返回：快照在途时创建/删除的会话以事件流
+  // 为准，应用快照时合并而非整体覆盖，避免新建的会话被陈旧快照抹掉。
+  const deletedSessionsRef = useRef<Record<string, Set<string>>>({});
   const [workspaceId, setWorkspaceId] = useState<string | undefined>(() => initialPath.workspaceId ?? window.localStorage.getItem("jarvis.workspace") ?? undefined);
   const [sessionsByWorkspace, setSessionsByWorkspace] = useState<Record<string, SessionSummary[]>>({});
   const [sessionId, setSessionId] = useState<string | undefined>(() => initialPath.sessionId ?? window.localStorage.getItem("jarvis.session") ?? undefined);
@@ -96,6 +99,8 @@ export function App() {
   // 移动端：非底部输入框聚焦时，输入栏折叠为紧凑按钮（见 PromptEditor）。
   const [composerCollapsed, setComposerCollapsed] = useState(false);
   const composerFocusRef = useRef<(() => void) | undefined>(undefined);
+  // 桌面端：新建会话（含复用空会话、创建分支）后自动聚焦输入框，PromptEditor 挂载时消费。
+  const [newSessionFocusId, setNewSessionFocusId] = useState<string | undefined>();
 
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId);
   const selectedSession = selectedWorkspace === undefined
@@ -208,6 +213,7 @@ export function App() {
     setForkPending(false);
     setSessionNotice(undefined);
     setComposerCollapsed(false);
+    setNewSessionFocusId(undefined);
   }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
 
   useEffect(() => {
@@ -265,7 +271,22 @@ export function App() {
     }
     let disposed = false;
     void loadProjectSessions(workspaces).then((sessions) => {
-      if (!disposed) setSessionsByWorkspace(sessions);
+      if (disposed) return;
+      setSessionsByWorkspace((current) => {
+        const next: Record<string, SessionSummary[]> = {};
+        for (const workspace of workspaces) {
+          const byId = new Map<string, SessionSummary>();
+          // 先保留当前列表（含事件流新增的会话，如刚创建的新会话）。
+          for (const session of current[workspace.id] ?? []) byId.set(session.id, session);
+          // 再补上快照里缺失的会话，但跳过事件流已删除的。
+          const deleted = deletedSessionsRef.current[workspace.id];
+          for (const session of sessions[workspace.id] ?? []) {
+            if (!byId.has(session.id) && deleted?.has(session.id) !== true) byId.set(session.id, session);
+          }
+          next[workspace.id] = [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        }
+        return next;
+      });
     }).catch((error: unknown) => {
       if (!disposed) setPageError(error instanceof Error ? error.message : "无法加载会话");
     });
@@ -366,6 +387,7 @@ export function App() {
             if (!parsed.success) return;
             const workspaceEvent = parsed.data;
             if (workspaceEvent.type === "session.deleted") {
+              (deletedSessionsRef.current[workspace.id] ??= new Set()).add(workspaceEvent.sessionId);
               setSessionsByWorkspace((current) => {
                 const sessions = current[workspace.id] ?? [];
                 const next = withoutSession(sessions, workspaceEvent.sessionId);
@@ -419,7 +441,13 @@ export function App() {
     // action. Reuse it instead of accumulating blank sessions on repeated clicks.
     const existingEmpty = (sessionsByWorkspace[targetWorkspaceId] ?? []).find((session) => session.preview === null);
     if (existingEmpty !== undefined) {
-      chooseSession(targetWorkspaceId, existingEmpty.id);
+      if (selectedRefKey === `${targetWorkspaceId}:${existingEmpty.id}`) {
+        // 已在该空会话上：无需导航，直接聚焦。
+        composerFocusRef.current?.();
+      } else {
+        setNewSessionFocusId(existingEmpty.id);
+        chooseSession(targetWorkspaceId, existingEmpty.id);
+      }
       return;
     }
 
@@ -429,6 +457,7 @@ export function App() {
       setSessionsByWorkspace((current) => ({ ...current, [targetWorkspaceId]: mergeSession(current[targetWorkspaceId] ?? [], session) }));
       setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
       setPageError(undefined);
+      setNewSessionFocusId(session.id);
       const target = `/chat/${targetWorkspaceId}/${session.id}`;
       if (!isMobile) {
         navigate(target, { replace: true });
@@ -659,6 +688,7 @@ export function App() {
       setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session) }));
       setForkTarget(undefined);
       setPageError(undefined);
+      setNewSessionFocusId(session.id);
       chooseSession(selectedRef.workspaceId, session.id);
     } catch (error) {
       if (!(await recoverSessionConflict(error))) setPageError(error instanceof Error ? error.message : "无法创建分支");
@@ -824,7 +854,7 @@ export function App() {
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? requestForkMessage : undefined} onExtensionUiRespond={stream.respondExtensionUi} />
       <ExtensionPanels panels={stream.extensionPanels} />
-      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} controls={selectedSession === undefined ? undefined : <>
+      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />
