@@ -198,12 +198,12 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   });
 
   if (options.serveStatic === true) {
-    await app.register(fastifyStatic, {
-      root: options.staticRoot ?? resolve(process.cwd(), "dist/client"),
-      prefix: "/",
-      // Register concrete asset routes so Jarvis can own the SPA fallback.
-      wildcard: false,
-    });
+    const staticRoot = options.staticRoot ?? resolve(process.cwd(), "dist/client");
+    // Keep sendFile rooted at the build directory for the SPA fallback.
+    await app.register(fastifyStatic, { root: staticRoot, serve: false });
+    // Vite puts hashed bundles in a nested assets directory. Serving this
+    // prefix separately prevents those requests from falling through to HTML.
+    await app.register(fastifyStatic, { root: join(staticRoot, "assets"), prefix: "/assets/", decorateReply: false });
     app.get("/*", async (request, reply) => {
       if (request.url === "/api" || request.url.startsWith("/api/")) {
         const response: ApiErrorBody = { error: { code: "NOT_FOUND", message: "Route not found", requestId: request.id } };

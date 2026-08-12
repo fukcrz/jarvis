@@ -414,6 +414,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
 
     const asset = await server.inject({ method: "GET", url: "/assets/app.js" });
     expect(asset.statusCode).toBe(200);
+    expect(asset.headers["content-type"]).toContain("application/javascript");
     expect(asset.body).toBe("window.jarvis = true;");
 
     const fallback = await server.inject({ method: "GET", url: "/sessions/example" });
