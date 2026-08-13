@@ -43,4 +43,30 @@ describe("MarkdownMessage", () => {
     expect(markup).toContain(">text<");
     expect(markup).not.toContain("hljs-");
   });
+
+  it("renders base64 data URI images so AI can embed pictures", () => {
+    const dataUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: `看这张图：\n\n![测试图](${dataUri})`,
+    }));
+
+    expect(markup).toContain(`<img src="${dataUri}" alt="测试图"/>`);
+  });
+
+  it("still strips javascript: URLs from image src", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "![x](javascript:alert(1))",
+    }));
+
+    expect(markup).not.toContain("javascript:");
+    expect(markup).not.toContain('src="javascript');
+  });
+
+  it("still allows normal http(s) image URLs", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "![网络图](https://example.com/pic.png)",
+    }));
+
+    expect(markup).toContain('<img src="https://example.com/pic.png" alt="网络图"/>');
+  });
 });
