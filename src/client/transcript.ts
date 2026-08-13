@@ -120,7 +120,8 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const message: MessageTimelineItem = existing === undefined
       ? { kind: "message", id: messageId, role: "assistant", createdAt: event.emittedAt, text: delta }
       : { ...existing, text: existing.text + delta };
-    return { ...next, items: mergeTimeline(next.items, [message]), streamingMessageId: messageId };
+    const items = next.items.map((item) => item.kind === "thinking" && item.state === "running" ? { ...item, state: "completed" as const } : item);
+    return { ...next, items: mergeTimeline(items, [message]), streamingMessageId: messageId };
   }
   if (event.type === "assistant.completed") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -226,13 +227,21 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const status = recordStatus(payload?.["status"]);
     if (status === undefined) return next;
     const updated = { ...next, status };
-    return event.type === "run.settled" || event.type === "run.failed" ? withoutStreamingMessage(updated) : updated;
+    if (event.type === "run.settled" || event.type === "run.failed" || event.type === "run.retrying") return withoutStreamingMessage(updated, event.type === "run.retrying", event.type === "run.retrying");
+    return updated;
   }
   return next;
 }
 
-function withoutStreamingMessage(state: TranscriptState): TranscriptState {
-  return { ...state, streamingMessageId: undefined };
+function withoutStreamingMessage(state: TranscriptState, completeThinking = false, removeStreamingMessage = false): TranscriptState {
+  const streamingMessageId = state.streamingMessageId;
+  return {
+    ...state,
+    streamingMessageId: undefined,
+    items: state.items
+      .filter((item) => !removeStreamingMessage || streamingMessageId === undefined || item.id !== streamingMessageId)
+      .map((item) => completeThinking && item.kind === "thinking" && item.state === "running" ? { ...item, state: "completed" as const } : item),
+  };
 }
 
 function mergeTimeline(...groups: TimelineItem[][]): TimelineItem[] {

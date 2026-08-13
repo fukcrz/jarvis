@@ -69,6 +69,8 @@ interface ActiveSession {
   liveMessages: Map<string, MessageTimelineItem>;
   /** Retry attempts which have not yet been reconciled with persisted history. */
   liveErrors: Map<string, ErrorTimelineItem>;
+  /** Stable identity shared by thinking/text/message_end for one assistant response. */
+  assistantStreamId?: string;
   partial?: MessageTimelineItem;
   /** 当前 run 正在流式的思考块（message_end 定稿前）。 */
   partialThinking?: ThinkingTimelineItem;
@@ -401,6 +403,7 @@ export class SessionService {
     active.updatedAt = run.startedAt;
     active.liveMessages.clear();
     active.liveErrors.clear();
+    active.assistantStreamId = undefined;
     active.partial = undefined;
     active.partialThinking = undefined;
     active.activeTools.clear();
@@ -546,6 +549,7 @@ export class SessionService {
     active.updatedAt = run.startedAt;
     active.liveMessages.clear();
     active.liveErrors.clear();
+    active.assistantStreamId = undefined;
     active.partial = undefined;
     active.partialThinking = undefined;
     active.activeTools.clear();
@@ -888,6 +892,7 @@ export class SessionService {
       requestRuns: new Map(),
       liveMessages: new Map(),
       liveErrors: new Map(),
+      assistantStreamId: undefined,
       activeTools: new Map(),
       activeBash: undefined,
       queue: emptySessionQueue,
@@ -956,6 +961,7 @@ export class SessionService {
         active.state = { sessionId: active.ref.sessionId, runState: "running", activeRun: run };
         active.liveMessages.clear();
         active.liveErrors.clear();
+        active.assistantStreamId = undefined;
         active.partial = undefined;
         active.partialThinking = undefined;
         active.activeTools.clear();
@@ -966,11 +972,13 @@ export class SessionService {
         return;
       }
       case "message_update": {
+        const runId = active.state.activeRun?.id;
+        if (runId === undefined) return;
+        const identity = messageFromPi(event.message, "assistant", "");
+        const assistantId = active.assistantStreamId ??= identity.id;
+
         if (event.assistantMessageEvent.type === "thinking_delta") {
-          const runId = active.state.activeRun?.id;
-          if (runId === undefined) return;
-          const identity = messageFromPi(event.message, "assistant", "");
-          const thinkingId = `${identity.id}:thinking`;
+          const thinkingId = `${assistantId}:thinking`;
           active.partialThinking ??= {
             kind: "thinking",
             id: thinkingId,
@@ -983,12 +991,14 @@ export class SessionService {
           return;
         }
         if (event.assistantMessageEvent.type !== "text_delta") return;
-        const runId = active.state.activeRun?.id;
-        if (runId === undefined) return;
-        const identity = messageFromPi(event.message, "assistant", "");
+        if (active.partialThinking !== undefined) {
+          const thinking = { ...active.partialThinking, state: "completed" as const };
+          active.partialThinking = undefined;
+          this.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: { thinkingId: thinking.id, createdAt: thinking.createdAt, text: thinking.text } });
+        }
         const partial = active.partial ?? {
           kind: "message" as const,
-          id: identity.id,
+          id: assistantId,
           role: "assistant" as const,
           createdAt: identity.createdAt,
           text: "",
@@ -1021,13 +1031,14 @@ export class SessionService {
         }
         if (!isAssistantMessage(event.message)) return;
         const identity = messageFromPi(event.message, "assistant", "", active.partial?.createdAt);
+        const assistantId = active.assistantStreamId ?? identity.id;
         // 思考块定稿：以最终 content 里的 thinking 部分为准（流式期间部分 provider
         // 只在 message_end 才返回思考内容），兜底用流式累积的文本。
         const thinkingText = thinkingTextFromContent(event.message.content);
         if (active.partialThinking !== undefined || thinkingText !== "") {
           const thinking: ThinkingTimelineItem = {
             kind: "thinking",
-            id: `${identity.id}:thinking`,
+            id: `${assistantId}:thinking`,
             createdAt: active.partialThinking?.createdAt ?? identity.createdAt,
             state: "completed",
             text: thinkingText !== "" ? thinkingText : (active.partialThinking?.text ?? ""),
@@ -1040,7 +1051,7 @@ export class SessionService {
           ? undefined
           : messageFromPi(event.message, "assistant", text, active.partial?.createdAt);
         if (completed !== undefined) {
-          const message = active.partial === undefined ? completed : { ...completed, id: active.partial.id, createdAt: active.partial.createdAt };
+          const message = active.partial === undefined ? { ...completed, id: assistantId } : { ...completed, id: active.partial.id, createdAt: active.partial.createdAt };
           active.liveMessages.set(message.id, message);
           active.partial = undefined;
           this.events.publishSession(active.ref, { type: "assistant.completed", runId, payload: { message } });
@@ -1056,7 +1067,7 @@ export class SessionService {
             active.liveErrors.set(settled.id, settled);
             this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: settled } });
           }
-          const error = { ...errorFromPi(event.message, identity.createdAt, identity.id), groupId: runId };
+          const error = { ...errorFromPi(event.message, identity.createdAt, assistantId), groupId: runId };
           active.liveErrors.set(error.id, error);
           this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: error } });
           active.pendingRunError = { code: error.code, message: error.message };
@@ -1070,6 +1081,7 @@ export class SessionService {
           }
           active.pendingRunError = undefined;
         }
+        active.assistantStreamId = undefined;
         return;
       }
       case "tool_execution_start": {
@@ -1204,6 +1216,12 @@ export class SessionService {
       case "auto_retry_start": {
         const runId = active.state.activeRun?.id;
         if (runId === undefined) return;
+        // The failed attempt must not remain visually live while Pi waits for
+        // the next attempt. The client receives run.retrying and removes the
+        // old partial/thinking presentation from its active stream state.
+        active.assistantStreamId = undefined;
+        active.partial = undefined;
+        active.partialThinking = undefined;
         const retrying = retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage);
         active.state = { ...active.state, retrying };
         const latestError = [...active.liveErrors.values()].at(-1);

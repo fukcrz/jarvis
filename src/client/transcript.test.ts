@@ -222,6 +222,34 @@ describe("transcript reducer", () => {
     expect(result.streamingMessageId).toBe("partial");
   });
 
+  it("completes thinking before text streaming so only the answer owns a cursor", () => {
+    const thinking = applySessionEvents(emptyTranscript, [{
+      version: 1, sessionId: "session", runId: "run", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z", type: "thinking.delta", payload: { thinkingId: "answer:thinking", createdAt: "2026-08-09T00:00:00.000Z", delta: "Planning" },
+    }]);
+    const text = applySessionEvents(thinking, [{
+      version: 1, sessionId: "session", runId: "run", seq: 2, emittedAt: "2026-08-09T00:00:01.000Z", type: "assistant.delta", payload: { messageId: "answer", delta: "Result" },
+    }]);
+
+    expect(text.items).toEqual([
+      expect.objectContaining({ kind: "thinking", id: "answer:thinking", state: "completed", text: "Planning" }),
+      expect.objectContaining({ kind: "message", id: "answer", text: "Result" }),
+    ]);
+    expect(text.streamingMessageId).toBe("answer");
+    expect(text.items.filter((item) => item.kind === "thinking" && item.state === "running")).toHaveLength(0);
+  });
+
+  it("removes the failed partial when automatic retry starts", () => {
+    const streaming = applySessionEvents(emptyTranscript, [{
+      version: 1, sessionId: "session", runId: "run", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z", type: "assistant.delta", payload: { messageId: "failed-partial", delta: "Incomplete" },
+    }]);
+    const retried = applySessionEvents(streaming, [{
+      version: 1, sessionId: "session", runId: "run", seq: 2, emittedAt: "2026-08-09T00:00:01.000Z", type: "run.retrying", payload: { status: { sessionId: "session", runState: "running", activeRun: { id: "run", startedAt: "2026-08-09T00:00:00.000Z" }, retrying: { attempt: 1, maxAttempts: 8, delayMs: 1000, retryAt: "2026-08-09T00:00:02.000Z", errorMessage: "temporary" } } },
+    }]);
+
+    expect(retried.streamingMessageId).toBeUndefined();
+    expect(retried.items).toEqual([]);
+  });
+
   it("marks only the active assistant message as streaming and clears it after completion", () => {
     const streaming = applySessionEvents(emptyTranscript, [{
       version: 1,
