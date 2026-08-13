@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, sessionPath, socketUrl } from "../api";
-import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, sessionEventSchema } from "../../shared/protocol";
+import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, sessionEventSchema } from "../../shared/protocol";
+import { notifyRunFinished, type RunNotificationInfo } from "../notifications";
 import { addOptimisticUserMessage, applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, removeOptimisticUserMessage, replaceUserMessageWithOptimistic, type TranscriptState } from "../transcript";
 
 interface StreamState {
@@ -49,11 +50,12 @@ type PanelSideEffect =
   | { kind: "title"; title: string }
   | { kind: "editor"; text: string };
 
-export function useSessionStream(ref: SessionRef | undefined, assistantName = document.title) {
+export function useSessionStream(ref: SessionRef | undefined, assistantName = document.title, sessionName?: string) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [extensionPanels, setExtensionPanels] = useState<ExtensionPanelState>({ widgets: {}, statuses: {} });
   const stateRef = useRef(state);
+  const sessionNameRef = useRef(sessionName);
   const refKey = ref === undefined ? undefined : `${ref.workspaceId}:${ref.sessionId}`;
   const refKeyRef = useRef(refKey);
   const requestFrame = useRef<number | undefined>(undefined);
@@ -61,6 +63,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   const defaultDocumentTitle = useRef(assistantName);
 
   useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => { sessionNameRef.current = sessionName; }, [sessionName]);
   useEffect(() => {
     const previous = defaultDocumentTitle.current;
     defaultDocumentTitle.current = assistantName;
@@ -75,6 +78,13 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     const sideEffects: PanelSideEffect[] = [];
     const historyRewritten = events.some((event) => event.type === "session.rewritten");
     for (const event of events) {
+      // 会话 run 结束（完成/失败）：页面在后台时弹浏览器通知。
+      if (event.type === "run.settled" || event.type === "run.failed") {
+        const notification = runNotificationFor(event, stateRef.current.transcript.items);
+        if (notification !== undefined) {
+          notifyRunFinished({ ...notification, sessionName: sessionNameRef.current });
+        }
+      }
       if (event.type === "extension.uiRequest") {
         const effect = sideEffectFor(event);
         if (effect !== undefined) sideEffects.push(effect);
@@ -232,6 +242,27 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   const discardOptimisticUser = useCallback((id: string) => { dispatch({ type: "discard-optimistic-user", id }); }, []);
   const replaceUserMessage = useCallback((messageId: string, id: string, text: string, images: import("../../shared/protocol").ImageAttachment[]) => { dispatch({ type: "replace-user", messageId, id, text, images }); }, []);
   return { ...state, refresh, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
+}
+
+function runNotificationFor(event: SessionEvent, items: TimelineItem[]): RunNotificationInfo | undefined {
+  if (event.runId === undefined || (event.type !== "run.settled" && event.type !== "run.failed")) return undefined;
+  const payload = isRecord(event.payload) ? event.payload : undefined;
+  const status = isRecord(payload?.["status"]) ? payload["status"] : undefined;
+  const lastError = isRecord(status?.["lastError"]) ? status["lastError"] : undefined;
+  return {
+    runId: event.runId,
+    failed: event.type === "run.failed",
+    text: lastAssistantText(items),
+    ...(typeof lastError?.["message"] === "string" ? { errorMessage: lastError["message"] } : {}),
+  };
+}
+
+function lastAssistantText(items: TimelineItem[]): string {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind === "message" && item.role === "assistant") return item.text;
+  }
+  return "";
 }
 
 function extensionPanelsFromSnapshot(snapshot: ExtensionUiSnapshot | undefined): ExtensionPanelState {

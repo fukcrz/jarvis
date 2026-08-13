@@ -63,6 +63,25 @@ Jarvis stores only its Workspace registry in `~/.jarvis/workspaces.json`. Pi JSO
 
 Attachments, archive, terminal/files/Git panels, and extension dialogs are intentionally outside the MVP.
 
+## Run-End Notifications
+
+When a session run finishes (or fails), Jarvis can pop a browser notification so you
+can leave the tab in the background and get pinged when work is done:
+
+- **Browser Notification API** — enable the *会话运行结束时弹出通知* toggle in
+  Settings → 常规. The browser asks for permission once (a user gesture is
+  required, so the toggle itself requests it).
+- **Background only** — notifications are shown only while the Jarvis tab is
+  hidden (`document.hidden`), so they never interrupt you while you are watching.
+- **Content** — the notification carries the session name plus a preview of the
+  last assistant message (or the failure reason). Clicking it focuses the tab.
+- **Multi-tab dedup** — open Jarvis tabs coordinate over `BroadcastChannel`; a
+  single run produces exactly one notification.
+
+Note that this requires the tab to stay open (background is fine) and the
+browser to keep running. It cannot fire when the tab or browser is closed.
+
+>>>>>>> 180f2ee (feat: 会话运行结束浏览器通知（页面在后台时弹出）)
 ## Message Queue
 
 While a session is running, Jarvis queues new prompts instead of rejecting them.

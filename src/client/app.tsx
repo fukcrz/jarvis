@@ -134,7 +134,7 @@ export function App() {
   const closeSessionMenu = useCallback(() => { setSessionMenu(undefined); }, []);
   const closeProjectMenu = useCallback(() => { setProjectMenu(undefined); }, []);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
-  const stream = useSessionStream(isSettingsPage ? undefined : selectedRef, assistantName);
+  const stream = useSessionStream(isSettingsPage ? undefined : selectedRef, assistantName, selectedSession?.name ?? undefined);
 
   const recoverSessionConflict = useCallback(async (error: unknown): Promise<boolean> => {
     if (!isSessionConflict(error)) return false;
