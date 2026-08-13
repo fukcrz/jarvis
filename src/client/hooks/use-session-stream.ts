@@ -49,7 +49,7 @@ type PanelSideEffect =
   | { kind: "title"; title: string }
   | { kind: "editor"; text: string };
 
-export function useSessionStream(ref: SessionRef | undefined) {
+export function useSessionStream(ref: SessionRef | undefined, assistantName = document.title) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [extensionPanels, setExtensionPanels] = useState<ExtensionPanelState>({ widgets: {}, statuses: {} });
@@ -58,9 +58,14 @@ export function useSessionStream(ref: SessionRef | undefined) {
   const refKeyRef = useRef(refKey);
   const requestFrame = useRef<number | undefined>(undefined);
   const queuedEvents = useRef<SessionEvent[]>([]);
-  const defaultDocumentTitle = useRef(document.title);
+  const defaultDocumentTitle = useRef(assistantName);
 
   useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => {
+    const previous = defaultDocumentTitle.current;
+    defaultDocumentTitle.current = assistantName;
+    if (ref === undefined || document.title === previous) document.title = assistantName;
+  }, [assistantName, refKey]);
   useEffect(() => { refKeyRef.current = refKey; }, [refKey]);
 
   const flushEvents = useCallback(() => {

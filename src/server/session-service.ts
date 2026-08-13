@@ -138,6 +138,28 @@ export class SessionService {
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  /** Shared Pi runtime used by the global settings surface. */
+  async globalModelRuntime(): Promise<ModelRuntime> {
+    return this.getModelRuntime(getAgentDir());
+  }
+
+  /** Rebuild global provider configuration and publish fresh model pickers. */
+  async refreshModelConfiguration(): Promise<void> {
+    const runtime = await this.getModelRuntime(getAgentDir());
+    const result = await runtime.refresh({ allowNetwork: false });
+    const firstError = result.errors.values().next().value as Error | undefined;
+    if (firstError !== undefined) throw firstError;
+    for (const active of this.active.values()) {
+      const settingsManager = SettingsManager.create(active.cwd, getAgentDir());
+      const enabledModels = settingsManager.getEnabledModels();
+      const { scopedModels } = enabledModels !== undefined && enabledModels.length > 0
+        ? await resolveModelScopeWithDiagnostics(enabledModels, runtime)
+        : { scopedModels: [] };
+      active.session.setScopedModels(scopedModels);
+      this.events.publishSession(active.ref, { type: "model.changed", payload: { model: this.modelSnapshot(active) } });
+    }
+  }
+
   async create(workspaceId: string): Promise<SessionSummary> {
     const workspace = this.workspaces.get(workspaceId);
     const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());

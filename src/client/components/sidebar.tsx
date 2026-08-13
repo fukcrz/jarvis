@@ -19,6 +19,8 @@ interface SidebarProps {
   onOpenSessionMenu: (workspaceId: string, session: SessionSummary, position: { x: number; y: number }) => void;
   onLongPressProject: (workspace: Workspace) => void;
   onLongPressSession: (workspaceId: string, session: SessionSummary) => void;
+  assistantName: string;
+  onOpenSettings: () => void;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -92,6 +94,7 @@ export function Sidebar(props: SidebarProps) {
         {props.workspaces.length === 0 ? <div className="session-list-empty"><Settings2 size={17} /><span>暂无项目</span></div> : null}
       {props.workspaces.length > 0 && searching && !props.workspaces.some((workspace) => (props.sessionsByWorkspace[workspace.id] ?? []).some((session) => matchesSessionQuery(session, query))) ? <div className="session-list-empty"><Search size={17} /><span>没有匹配的会话</span></div> : null}
       </nav>
+      <button type="button" className="sidebar-settings" onClick={props.onOpenSettings}><Settings2 size={15} /><span>{props.assistantName} 设置</span></button>
     </aside>
   );
 }

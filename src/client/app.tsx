@@ -13,6 +13,7 @@ import { ProjectContextMenu, type ProjectContextMenuTarget } from "./components/
 import { MobileActionSheet, type MobileActionTarget } from "./components/mobile-action-sheet";
 import { MobileSessionSwitcher } from "./components/mobile-navigation";
 import { Timeline } from "./components/timeline";
+import { SettingsPage } from "./components/settings-page";
 import type { ExtensionPanelState } from "./hooks/use-session-stream";
 import { ContextButton } from "./components/context-button";
 import { Button } from "./components/ui/button";
@@ -47,6 +48,7 @@ export function App() {
   const [sessionId, setSessionId] = useState<string | undefined>(() => initialPath.sessionId ?? window.localStorage.getItem("jarvis.session") ?? undefined);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Record<string, boolean>>(() => readExpandedWorkspaces());
   const [loading, setLoading] = useState(true);
+  const [assistantName, setAssistantName] = useState("Jarvis");
   const [pageError, setPageError] = useState<string | undefined>();
   const [sessionNotice, setSessionNotice] = useState<string | undefined>();
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
@@ -57,7 +59,8 @@ export function App() {
   const [projectRemoveTarget, setProjectRemoveTarget] = useState<Workspace | undefined>();
   const [projectRemovePending, setProjectRemovePending] = useState(false);
   // Mobile uses the global session list as its home: #/projects and #/chat/:workspaceId/:sessionId.
-  const mobilePage: "sessions" | "chat" = location.pathname.startsWith("/chat") ? "chat" : "sessions";
+  const isSettingsPage = location.pathname === "/settings";
+  const mobilePage: "sessions" | "chat" | "settings" = isSettingsPage ? "settings" : location.pathname.startsWith("/chat") ? "chat" : "sessions";
   // Prevent repeated clicks from creating several unused sessions in the same workspace.
   const creatingSessionWorkspacesRef = useRef(new Set<string>());
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
@@ -131,7 +134,7 @@ export function App() {
   const closeSessionMenu = useCallback(() => { setSessionMenu(undefined); }, []);
   const closeProjectMenu = useCallback(() => { setProjectMenu(undefined); }, []);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
-  const stream = useSessionStream(selectedRef);
+  const stream = useSessionStream(isSettingsPage ? undefined : selectedRef, assistantName);
 
   const recoverSessionConflict = useCallback(async (error: unknown): Promise<boolean> => {
     if (!isSessionConflict(error)) return false;
@@ -261,7 +264,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void loadWorkspaces().catch((error: unknown) => setPageError(error instanceof Error ? error.message : "无法加载项目")).finally(() => setLoading(false));
+    void Promise.all([loadWorkspaces(), api.settings().then((settings) => { setAssistantName(settings.assistantName); })]).catch((error: unknown) => setPageError(error instanceof Error ? error.message : "无法加载应用设置")).finally(() => setLoading(false));
   }, [loadWorkspaces]);
 
   useEffect(() => {
@@ -845,6 +848,8 @@ export function App() {
     onOpenSessionMenu={(targetWorkspaceId, session, position) => setSessionMenu({ workspaceId: targetWorkspaceId, session, ...position })}
     onLongPressProject={(workspace) => setMobileActionTarget({ kind: "project", workspace })}
     onLongPressSession={(targetWorkspaceId, session) => setMobileActionTarget({ kind: "session", workspaceId: targetWorkspaceId, session })}
+    assistantName={assistantName}
+    onOpenSettings={() => navigate("/settings")}
   />;
 
   if (loading) return <main className="app-loading">正在打开工作区…</main>;
@@ -865,18 +870,18 @@ export function App() {
   return (
     <main className="app-shell">
       <div className="desktop-sidebar">{sidebar}</div>
-      {!isMobile ? <section className="main-pane">
-        <header className="chat-header">
+      {!isMobile ? <section className={isSettingsPage ? "main-pane settings-main-pane" : "main-pane"}>
+        {isSettingsPage ? null : <header className="chat-header">
           <div className="chat-title-wrap">
             <div className="chat-title">
               <div><h1>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined || selectedWorkspace === undefined ? null : <Tooltip label="重命名会话"><Button variant="ghost" size="icon" aria-label="重命名会话" onClick={() => { setRenameTarget({ workspaceId: selectedWorkspace.id, session: selectedSession }); setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); }}><Pencil size={15} /></Button></Tooltip>}</div>
             </div>
           </div>
-        </header>
-        {renderChatContent()}
+        </header>}
+        {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} onBack={() => navigate("/projects", { replace: true })} /> : renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onAddProject={() => { setWorkspaceDialogOpen(true); }} /> : <section className="mobile-chat-page">
+        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
             <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate("/projects", { replace: true })}><ArrowLeft size={19} /></Button>
             <div className="mobile-chat-session">{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</div>

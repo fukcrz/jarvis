@@ -19,6 +19,55 @@ export interface Workspace {
   lastOpenedAt: string;
 }
 
+export interface AppSettings {
+  assistantName: string;
+}
+
+export interface ManagedModel {
+  id: string;
+  name?: string;
+  reasoning: boolean;
+  vision: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+export interface ManagedProvider {
+  id: string;
+  name?: string;
+  baseUrl: string;
+  api: "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
+  authHeader: boolean;
+  models: ManagedModel[];
+}
+
+export interface ProviderStatus {
+  id: string;
+  name: string;
+  authConfigured: boolean;
+  authSource?: string;
+  credentialType?: "api_key" | "oauth";
+  supportsApiKey: boolean;
+  supportsOAuth: boolean;
+  custom: boolean;
+  models: ManagedModel[];
+}
+
+export interface AuthLoginOperation {
+  id: string;
+  providerId: string;
+  type: "api_key" | "oauth";
+  state: "running" | "completed" | "failed" | "cancelled";
+  prompt?: {
+    type: "text" | "secret" | "select" | "manual_code";
+    message: string;
+    placeholder?: string;
+    options?: Array<{ id: string; label: string; description?: string }>;
+  };
+  event?: { type: "info" | "auth_url" | "device_code" | "progress"; message: string; url?: string; expiresInSeconds?: number };
+  error?: string;
+}
+
 export interface DirectoryEntry {
   name: string;
   path: string;

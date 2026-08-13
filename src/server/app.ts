@@ -13,6 +13,7 @@ import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { SessionService } from "./session-service.js";
 import { WorkspaceStore } from "./workspace-store.js";
+import { SettingsService } from "./settings-service.js";
 
 const workspaceInput = z.object({ cwd: z.string().min(1), label: z.string().max(96).optional() }).strict();
 const workspaceUpdateInput = z.object({ label: z.string().min(1).max(96) }).strict();
@@ -28,6 +29,11 @@ const editAndResendInput = z.object({ messageId: z.string().min(1).max(200), tex
 const compactInput = z.object({ customInstructions: z.string().max(40_000).optional(), clientRequestId: z.string().uuid().optional() }).strict();
 const bashInput = z.object({ command: z.string().min(1).max(40_000), excludeFromContext: z.boolean().optional(), clientRequestId: z.string().uuid() }).strict();
 const abortInput = z.object({ runId: z.string().uuid().optional() }).strict();
+const settingsInput = z.object({ assistantName: z.string().min(1).max(64) }).strict();
+const authLoginInput = z.object({ providerId: z.string().min(1).max(120), type: z.enum(["api_key", "oauth"]) }).strict();
+const authResponseInput = z.object({ value: z.string().max(200_000) }).strict();
+const managedModelInput = z.object({ id: z.string().min(1).max(320), name: z.string().max(160).optional(), reasoning: z.boolean(), vision: z.boolean(), contextWindow: z.number().int().positive().optional(), maxTokens: z.number().int().positive().optional() }).strict();
+const managedProviderInput = z.object({ id: z.string().min(1).max(120), name: z.string().max(160).optional(), baseUrl: z.string().min(1).max(2_000), api: z.enum(["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"]), authHeader: z.boolean(), models: z.array(managedModelInput).max(200) }).strict();
 const extensionUiInput = z.object({
   id: z.string().uuid(),
   value: z.string().max(200_000).optional(),
@@ -50,6 +56,8 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   await workspaces.initialize(process.cwd());
   const events = new EventHub();
   const sessions = new SessionService(workspaces, events);
+  const settings = new SettingsService(() => sessions.globalModelRuntime(), () => sessions.refreshModelConfiguration());
+  await settings.initialize();
   const services: JarvisServices = { workspaces, sessions, events };
 
   await app.register(cors, { origin: production ? [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] : true });
@@ -60,6 +68,29 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.addHook("onClose", async () => { await sessions.dispose(); });
 
   app.get("/api/health", async () => ({ ok: true, version: 1 }));
+  app.get("/api/settings", async () => ({ settings: settings.getSettings() }));
+  app.patch("/api/settings", async (request) => ({ settings: await settings.updateSettings(settingsInput.parse(request.body)) }));
+  app.get("/api/settings/providers", async () => ({ providers: await settings.providers() }));
+  app.get("/api/settings/custom-providers", async () => ({ providers: await settings.customProviders() }));
+  app.put("/api/settings/custom-providers/:providerId", async (request) => {
+    const params = z.object({ providerId: z.string().min(1).max(120) }).parse(request.params);
+    const body = managedProviderInput.omit({ id: true }).parse(request.body);
+    const provider = managedProviderInput.parse({ ...body, id: params.providerId });
+    return { provider: await settings.saveCustomProvider(provider) };
+  });
+  app.delete("/api/settings/custom-providers/:providerId", async (request) => {
+    const params = z.object({ providerId: z.string().min(1).max(120) }).parse(request.params);
+    await settings.removeCustomProvider(params.providerId);
+    return { removed: true };
+  });
+  app.post("/api/settings/auth/login", async (request) => {
+    const input = authLoginInput.parse(request.body);
+    return { operation: await settings.startLogin(input.providerId, input.type) };
+  });
+  app.get("/api/settings/auth/:operationId", async (request) => ({ operation: settings.loginStatus(z.object({ operationId: z.string().uuid() }).parse(request.params).operationId) }));
+  app.post("/api/settings/auth/:operationId/respond", async (request) => ({ operation: settings.respondToLogin(z.object({ operationId: z.string().uuid() }).parse(request.params).operationId, authResponseInput.parse(request.body).value) }));
+  app.post("/api/settings/auth/:operationId/cancel", async (request) => ({ operation: settings.cancelLogin(z.object({ operationId: z.string().uuid() }).parse(request.params).operationId) }));
+  app.post("/api/settings/auth/:providerId/logout", async (request) => { await settings.logout(z.object({ providerId: z.string().min(1).max(120) }).parse(request.params).providerId); return { loggedOut: true }; });
 
   app.get("/api/directories", async (request) => {
     const query = directoryQuery.parse(request.query);

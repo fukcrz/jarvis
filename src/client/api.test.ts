@@ -31,6 +31,30 @@ describe("API client", () => {
     expect(new Headers(init?.headers).has("content-type")).toBe(false);
   });
 
+  it("uses the provider id in the URL instead of duplicating it in the save body", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ provider: { id: "local" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = {
+      id: "local",
+      baseUrl: "http://localhost:11434/v1",
+      api: "openai-completions" as const,
+      authHeader: true,
+      models: [{ id: "model", reasoning: false, vision: false }],
+    };
+
+    await api.saveCustomProvider(provider);
+
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe("/api/settings/custom-providers/local");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      baseUrl: provider.baseUrl,
+      api: provider.api,
+      authHeader: true,
+      models: provider.models,
+    });
+  });
+
   it("sends a provider and model id to the session model endpoint", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ model: { provider: "provider", id: "model", name: "Model", reasoning: true } }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

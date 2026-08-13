@@ -16,6 +16,10 @@ import type {
   TimelinePage,
   WorkspaceFile,
   Workspace,
+  AppSettings,
+  AuthLoginOperation,
+  ManagedProvider,
+  ProviderStatus,
 } from "../shared/protocol";
 
 export class ApiError extends Error {
@@ -82,6 +86,17 @@ export const api = {
   renameWorkspace: async (workspaceId: string, label: string): Promise<Workspace> => (await request<{ workspace: Workspace }>(`/api/workspaces/${workspaceId}`, { method: "PATCH", body: JSON.stringify({ label }) })).workspace,
   openWorkspace: async (workspaceId: string): Promise<Workspace> => (await request<{ workspace: Workspace }>(`/api/workspaces/${workspaceId}/open`, { method: "POST", body: "{}" })).workspace,
   removeWorkspace: async (workspaceId: string): Promise<void> => { await request(`/api/workspaces/${workspaceId}`, { method: "DELETE" }); },
+  settings: async (): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings")).settings,
+  updateSettings: async (assistantName: string): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings", { method: "PATCH", body: JSON.stringify({ assistantName }) })).settings,
+  providers: async (): Promise<ProviderStatus[]> => (await request<{ providers: ProviderStatus[] }>("/api/settings/providers")).providers,
+  customProviders: async (): Promise<ManagedProvider[]> => (await request<{ providers: ManagedProvider[] }>("/api/settings/custom-providers")).providers,
+  saveCustomProvider: async ({ id, ...provider }: ManagedProvider): Promise<ManagedProvider> => (await request<{ provider: ManagedProvider }>(`/api/settings/custom-providers/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(provider) })).provider,
+  removeCustomProvider: async (providerId: string): Promise<void> => { await request(`/api/settings/custom-providers/${encodeURIComponent(providerId)}`, { method: "DELETE" }); },
+  startLogin: async (providerId: string, type: "api_key" | "oauth"): Promise<AuthLoginOperation> => (await request<{ operation: AuthLoginOperation }>("/api/settings/auth/login", { method: "POST", body: JSON.stringify({ providerId, type }) })).operation,
+  loginStatus: async (operationId: string): Promise<AuthLoginOperation> => (await request<{ operation: AuthLoginOperation }>(`/api/settings/auth/${operationId}`)).operation,
+  respondLogin: async (operationId: string, value: string): Promise<AuthLoginOperation> => (await request<{ operation: AuthLoginOperation }>(`/api/settings/auth/${operationId}/respond`, { method: "POST", body: JSON.stringify({ value }) })).operation,
+  cancelLogin: async (operationId: string): Promise<AuthLoginOperation> => (await request<{ operation: AuthLoginOperation }>(`/api/settings/auth/${operationId}/cancel`, { method: "POST", body: "{}" })).operation,
+  logoutProvider: async (providerId: string): Promise<void> => { await request(`/api/settings/auth/${encodeURIComponent(providerId)}/logout`, { method: "POST", body: "{}" }); },
   listSessions: async (workspaceId: string, query?: string): Promise<SessionSummary[]> => {
     const params = new URLSearchParams();
     if (query?.trim()) params.set("query", query.trim());
