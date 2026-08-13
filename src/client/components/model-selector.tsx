@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, LoaderCircle } from "lucide-react";
 import type { ModelDescriptor, SessionModelSnapshot } from "../../shared/protocol";
@@ -11,24 +11,15 @@ interface ModelSelectorProps {
   model: SessionModelSnapshot;
   disabled: boolean;
   pending: boolean;
-  /** 快捷键循环切换的瞬时反馈序号；变化时触发按钮闪烁。 */
-  flashSeq?: number;
   onSelect: (model: ModelDescriptor) => void;
 }
 
-export function ModelSelector({ model, disabled, pending, flashSeq, onSelect }: ModelSelectorProps) {
+export function ModelSelector({ model, disabled, pending, onSelect }: ModelSelectorProps) {
   const current = model.current;
   const currentKey = current === undefined ? undefined : modelKey(current);
   const isMobile = useIsMobile();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
-  const [flashed, setFlashed] = useState(false);
-  useEffect(() => {
-    if (flashSeq === undefined) return;
-    setFlashed(true);
-    const timer = setTimeout(() => setFlashed(false), 700);
-    return () => clearTimeout(timer);
-  }, [flashSeq]);
   const hasOutOfScope = model.available.some((candidate) => !candidate.inScope);
   // 默认只显示启用范围内的模型；当前模型即使不在范围内也保留可见。
   // 「显示全部模型」开关打开后展示所有可用模型，范围外的置灰标记。
@@ -39,7 +30,7 @@ export function ModelSelector({ model, disabled, pending, flashSeq, onSelect }: 
   const triggerLabel = current === undefined ? "选择模型" : displayModelName(current.name);
 
   const trigger = (
-    <Button variant="ghost" size="sm" className={`model-selector-trigger${flashed ? " selector-flash" : ""}`} aria-label="选择模型" title={triggerLabel} disabled={disabled || pending || model.available.length === 0} onClick={isMobile ? () => setSheetOpen(true) : undefined}>
+    <Button variant="ghost" size="sm" className="model-selector-trigger" aria-label="选择模型" title={triggerLabel} disabled={disabled || pending || model.available.length === 0} onClick={isMobile ? () => setSheetOpen(true) : undefined}>
       {pending ? <LoaderCircle className="spin" size={14} /> : null}
       <span>{triggerLabel}</span>
     </Button>

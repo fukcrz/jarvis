@@ -264,9 +264,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   .message-content table { max-width: 100%; overflow-x: auto; }
 }
 @media (prefers-reduced-motion: no-preference) { .spin { animation: spin 1s linear infinite; } .streaming-cursor { animation: stream-cursor .9s steps(1) infinite; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes stream-cursor { 50% { opacity: 0; } } }
-/* 快捷键循环切换模型 / 思考等级时的瞬时反馈。 */
-@keyframes selector-flash { from { background-color: var(--accent-soft); } }
-@media (prefers-reduced-motion: no-preference) { .selector-flash { animation: selector-flash .7s ease-out; } }
 @media (max-width: 760px) { .composer-completions { left: 0; width: 100%; } }
 
 /* Mobile project/session navigation. Desktop remains the persistent sidebar layout above. */

@@ -63,18 +63,6 @@ Jarvis stores only its Workspace registry in `~/.jarvis/workspaces.json`. Pi JSO
 
 Attachments, archive, terminal/files/Git panels, and extension dialogs are intentionally outside the MVP.
 
-## Keyboard Shortcuts
-
-- `Ctrl+P` — cycle to the next enabled model (skips disabled models, wraps around)
-- `Shift+Tab` — cycle thinking level (wraps around)
-
-Both mirror the Pi TUI bindings (`app.model.cycleForward`, `app.thinking.cycle`)
-and only act on the currently selected session. They are skipped while a dialog,
-menu, or autocomplete popup is open, during IME composition, and when the
-connection is not live or a model/thinking switch or compaction is in progress.
-`Ctrl+P` is intercepted before the browser print dialog; composer dedent stays
-available via `Ctrl+[` (CodeMirror default).
-
 ## Message Queue
 
 While a session is running, Jarvis queues new prompts instead of rejecting them.
