@@ -24,6 +24,8 @@ interface TimelineProps {
   onEditUserMessage?: (item: MessageTimelineItem, text: string) => Promise<boolean>;
   onForkMessage?: (item: MessageTimelineItem) => void;
   onExtensionUiRespond?: (id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void | Promise<void>;
+  /** 当前工作区根目录：渲染 AI 回复中的相对路径图片时作为基准。 */
+  workspaceCwd?: string;
 }
 
 /** Distance from the bottom (px) within which the list is considered "following" the latest content. */
@@ -45,7 +47,7 @@ function stopFollowingOnGesture(element: HTMLDivElement, setFollowing: (value: b
   if (shouldStopFollowingOnGesture(element, deltaY)) setFollowing(false);
 }
 
-export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond }: TimelineProps) {
+export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const touchYRef = useRef<number | undefined>(undefined);
   const [following, setFollowing] = useState(true);
@@ -87,7 +89,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
         <div className="timeline-inner">
           {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "正在加载历史记录…" : "加载更早记录"}</Button> : null}
           <div className="timeline-feed">
-            {renderTimelineItems(items, streamingMessageId, status, onExtensionUiRespond, onEditUserMessage, onForkMessage, editingMessageId, setEditingMessageId)}
+            {renderTimelineItems(items, streamingMessageId, status, onExtensionUiRespond, onEditUserMessage, onForkMessage, editingMessageId, setEditingMessageId, workspaceCwd)}
             {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
             {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
             {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
@@ -229,6 +231,9 @@ function errorSummary(message: string): string {
 }
 
 const MessageItem = memo(function MessageItem({ item, streaming, editing, onStartEdit, onCancelEdit, onEdit, onFork }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; editing: boolean; onStartEdit: () => void; onCancelEdit: () => void; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void }) {
+=======
+const MessageItem = memo(function MessageItem({ item, streaming, editing, onStartEdit, onCancelEdit, onEdit, onFork, baseDir }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; editing: boolean; onStartEdit: () => void; onCancelEdit: () => void; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string }) {
+>>>>>>> 4038008 (feat: 支持 AI 通过 md 语法引用本地图片（相对/绝对路径），/api/files 提供图片服务)
   const images = item.images ?? [];
   const [previewIndex, setPreviewIndex] = useState<number>();
   const [draft, setDraft] = useState(item.text);
@@ -249,7 +254,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, onStar
           {images.map((image, index) => <button key={`${image.mimeType}:${index}`} type="button" className="message-image-thumb" aria-label={`预览图片 ${index + 1}`} onClick={() => setPreviewIndex(index)}><img src={imageDataUrl(image)} alt={`图片 ${index + 1}`} loading="lazy" /></button>)}
         </div>}
         {editing ? <div className="message-inline-editor"><textarea autoFocus value={draft} disabled={submitting} aria-label="编辑消息" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancelEdit(); } if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitEdit(); } }} /><div className="message-inline-editor-actions"><button type="button" disabled={submitting} onClick={onCancelEdit}>取消</button><button type="button" className="accent" disabled={submitting || (draft.trim() === "" && images.length === 0)} onClick={() => { void submitEdit(); }}>{submitting ? "正在重新生成…" : "重新生成"}</button></div><small>发送后将从此消息重新生成后续回答 · Ctrl / Cmd + Enter 提交</small></div> : item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
-          <MarkdownMessage text={item.text} streaming={streaming} />
+          <MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} />
         </div>}
         {editing ? null : <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : onStartEdit} onFork={onFork} />}
         {preview === undefined ? null : <div className="image-lightbox" role="dialog" aria-label={`预览图片 ${previewIndex! + 1}`} onClick={() => setPreviewIndex(undefined)}>
@@ -367,7 +372,7 @@ function ExtensionTimeout({ timeout, createdAt }: { timeout?: number; createdAt:
   return <span className={`extension-operation-state ${seconds <= 30 ? "urgent" : ""}`}>{seconds === 0 ? "即将超时" : `${seconds}s`}</span>;
 }
 
-const ContextSummaryItem = memo(function ContextSummaryItem({ item }: { item: ContextSummaryTimelineItem }) {
+const ContextSummaryItem = memo(function ContextSummaryItem({ item, baseDir }: { item: ContextSummaryTimelineItem; baseDir?: string }) {
   const [expanded, setExpanded] = useState(false);
   const isCompaction = item.summaryType === "compaction";
   const label = isCompaction ? "上下文已压缩" : "分支上下文摘要";
@@ -376,7 +381,7 @@ const ContextSummaryItem = memo(function ContextSummaryItem({ item }: { item: Co
       <span className="context-summary-icon">{isCompaction ? <Archive size={15} /> : <GitBranch size={15} />}</span>
       <span className="context-summary-copy"><strong>{label}</strong>{item.tokensBefore === undefined ? null : <small>压缩前 {formatTokenCount(item.tokensBefore)} tokens</small>}</span>
     </button>
-    {expanded ? <div className="context-summary-details"><div className="message-content"><MarkdownMessage text={item.summary} streaming={false} /></div></div> : null}
+    {expanded ? <div className="context-summary-details"><div className="message-content"><MarkdownMessage text={item.summary} streaming={false} baseDir={baseDir} /></div></div> : null}
   </article>;
 });
 
@@ -422,22 +427,22 @@ function hasActiveActivity(items: TimelineItem[], status: SessionStatus): boolea
   return last?.kind === "tool" || (last?.kind === "thinking" && last.state === "running");
 }
 
-function renderTimelineItems(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], editingMessageId: string | undefined, setEditingMessageId: (id: string | undefined) => void): ReactNode[] {
+function renderTimelineItems(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], editingMessageId: string | undefined, setEditingMessageId: (id: string | undefined) => void, workspaceCwd: string | undefined): ReactNode[] {
   const grouped = groupTimelineItems(items);
   const lastActivityIndex = grouped.reduce((lastIndex, entry, index) => entry.kind === "activity" ? index : lastIndex, -1);
   const activeActivityIndex = hasActiveActivity(items, status) ? lastActivityIndex : -1;
 
   return grouped.map((entry, index) => {
-    if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} editing={entry.item.id === editingMessageId} onStartEdit={() => setEditingMessageId(entry.item.id)} onCancelEdit={() => setEditingMessageId(undefined)} onEdit={onEditUserMessage} onFork={entry.item.role === "user" ? onForkMessage : undefined} />;
+    if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} editing={entry.item.id === editingMessageId} onStartEdit={() => setEditingMessageId(entry.item.id)} onCancelEdit={() => setEditingMessageId(undefined)} onEdit={onEditUserMessage} onFork={entry.item.role === "user" ? onForkMessage : undefined} baseDir={workspaceCwd} />;
     if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
-    if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} />;
+    if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={workspaceCwd} />;
     if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={onExtensionUiRespond} />;
-    if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} />;
+    if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={workspaceCwd} />;
     return <ActivityGroup key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={index === activeActivityIndex} startedAt={status.activeRun?.startedAt} stopping={status.runState === "stopping"} />;
   });
 }
 
-function ThinkingItem({ item }: { item: ThinkingTimelineItem }) {
+function ThinkingItem({ item, baseDir }: { item: ThinkingTimelineItem; baseDir?: string }) {
   // 思考时默认展开看流式内容；思考结束后自动收起成一行标题。
   const [open, setOpen] = useState(() => item.state === "running");
   const wasRunning = useRef(item.state === "running");
@@ -455,7 +460,7 @@ function ThinkingItem({ item }: { item: ThinkingTimelineItem }) {
         <span className="thinking-state-icon">{item.state === "running" ? <LoaderCircle size={14} className="spin" /> : <Brain size={14} />}</span>
         <span className="thinking-title">{item.state === "running" ? "思考中" : "思考"}</span>
       </button>
-      {open ? <div className="thinking-details"><div className="message-content"><MarkdownMessage text={item.text} streaming={item.state === "running"} /></div></div> : null}
+      {open ? <div className="thinking-details"><div className="message-content"><MarkdownMessage text={item.text} streaming={item.state === "running"} baseDir={baseDir} /></div></div> : null}
     </article>
   );
 }

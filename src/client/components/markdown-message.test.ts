@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { MarkdownMessage } from "./markdown-message";
+import { MarkdownMessage, rewriteLocalImageUrls } from "./markdown-message";
 
 describe("MarkdownMessage", () => {
   it("renders Markdown while a message is still streaming", () => {
@@ -68,5 +68,36 @@ describe("MarkdownMessage", () => {
     }));
 
     expect(markup).toContain('<img src="https://example.com/pic.png" alt="网络图"/>');
+  });
+
+  it("rewrites workspace-relative local image paths to the /api/files endpoint", () => {
+    const rewritten = rewriteLocalImageUrls("截图：\n\n![成果](shot.png) 和 ![备份](backup/copy.png)", "/home/user/workspace");
+
+    expect(rewritten).toContain("![成果](/api/files?path=shot.png&cwd=%2Fhome%2Fuser%2Fworkspace)");
+    expect(rewritten).toContain("![备份](/api/files?path=backup%2Fcopy.png&cwd=%2Fhome%2Fuser%2Fworkspace)");
+  });
+
+  it("rewrites absolute and file:// paths without a cwd and leaves remote/data URLs alone", () => {
+    const rewritten = rewriteLocalImageUrls(
+      "![a](/tmp/图 片.png) ![b](file:///var/data/x.webp) ![c](https://example.com/y.png) ![d](data:image/png;base64,AAAA) ![e](/api/files?path=z.png)",
+      "/ws",
+    );
+
+    expect(rewritten).toContain("![a](/api/files?path=%2Ftmp%2F%E5%9B%BE%20%E7%89%87.png)");
+    expect(rewritten).toContain("![b](/api/files?path=%2Fvar%2Fdata%2Fx.webp)");
+    expect(rewritten).toContain("![c](https://example.com/y.png)");
+    expect(rewritten).toContain("![d](data:image/png;base64,AAAA)");
+    expect(rewritten).toContain("![e](/api/files?path=z.png)");
+  });
+
+  it("keeps markdown image titles when rewriting and renders local images with baseDir", () => {
+    const rewritten = rewriteLocalImageUrls('![图](shots/a.png "标题")', "/ws");
+    expect(rewritten).toBe('![图](/api/files?path=shots%2Fa.png&cwd=%2Fws "标题")');
+
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "![图](shots/a.png)",
+      baseDir: "/ws",
+    }));
+    expect(markup).toContain('<img src="/api/files?path=shots%2Fa.png&amp;cwd=%2Fws" alt="图"/>');
   });
 });

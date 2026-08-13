@@ -460,6 +460,43 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(missingApi.json()).toMatchObject({ error: { code: "NOT_FOUND", message: "Route not found" } });
   });
 
+  it("serves local image files referenced via absolute and workspace-relative Markdown paths", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
+    const absolutePath = join(jarvisHome, "demo.png");
+    const workspaceRoot = join(jarvisHome, "workspace");
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeFile(absolutePath, png);
+    await writeFile(join(workspaceRoot, "shot.png"), png);
+
+    // 绝对路径：/api/files?path=/abs/demo.png
+    const absolute = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(absolutePath)}` });
+    expect(absolute.statusCode).toBe(200);
+    expect(absolute.headers["content-type"]).toContain("image/png");
+    expect(absolute.rawPayload).toEqual(png);
+
+    // 相对路径 + cwd 基准：/api/files?path=shot.png&cwd=/workspace
+    const relative = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("shot.png")}&cwd=${encodeURIComponent(workspaceRoot)}` });
+    expect(relative.statusCode).toBe(200);
+    expect(relative.headers["content-type"]).toContain("image/png");
+    expect(relative.rawPayload).toEqual(png);
+
+    // 相对路径无 cwd 时回退到进程 cwd：找不到 → 404
+    const missing = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("nope.png")}` });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toMatchObject({ error: { code: "FILE_NOT_FOUND" } });
+
+    // 非图片扩展名拒绝，防止接口被当作任意文件下载通道
+    await writeFile(join(jarvisHome, "secret.txt"), "private");
+    const notImage = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(join(jarvisHome, "secret.txt"))}` });
+    expect(notImage.statusCode).toBe(400);
+    expect(notImage.json()).toMatchObject({ error: { code: "FILE_TYPE_UNSUPPORTED" } });
+
+    // 目录没有图片扩展名 → 400（扩展名白名单先行，避免接口探测）
+    const directory = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(workspaceRoot)}` });
+    expect(directory.statusCode).toBe(400);
+    expect(directory.json()).toMatchObject({ error: { code: "FILE_TYPE_UNSUPPORTED" } });
+  });
+
   it("deletes a session JSONL file and broadcasts a workspace event", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "delete-session-workspace");

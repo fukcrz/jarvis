@@ -1,6 +1,6 @@
-import { readdir, realpath, stat } from "node:fs/promises";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { platform } from "node:os";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
@@ -43,6 +43,20 @@ const extensionUiInput = z.object({
 }).strict();
 const listQuery = z.object({ query: z.string().optional() });
 const timelineQuery = z.object({ before: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(500).optional() });
+// /api/files：AI 通过 md 语法引用本地图片（相对路径以 cwd 为基准，绝对路径直接使用）。
+// 只放行常见位图格式，防止该无鉴权接口被当作任意文件下载通道。
+const fileQuery = z.object({ path: z.string().min(1).max(2000), cwd: z.string().min(1).max(2000).optional() }).strict();
+const FILE_MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".bmp": "image/bmp",
+  ".avif": "image/avif",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
+};
 
 export interface JarvisServices {
   workspaces: WorkspaceStore;
@@ -96,6 +110,30 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.get("/api/directories", async (request) => {
     const query = directoryQuery.parse(request.query);
     return { directory: query.roots === "true" ? await listRoots() : await listDirectory(query.path ?? process.cwd()) };
+  });
+
+  // 本地图片服务：AI 在回复里写 ![](path) 引用工作区内相对路径或机器绝对路径的图片，
+  // 前端重写为 /api/files?path=...&cwd=...，这里读取文件并返回图片内容。
+  app.get("/api/files", async (request, reply) => {
+    const query = fileQuery.parse(request.query);
+    const candidate = query.path.startsWith("/")
+      ? query.path
+      : resolve(query.cwd ?? process.cwd(), query.path);
+    const ext = extname(candidate).toLowerCase();
+    if (!(ext in FILE_MIME_TYPES)) throw new AppError("FILE_TYPE_UNSUPPORTED", "Only image files can be served", 400);
+    let resolved: string;
+    try {
+      resolved = await realpath(candidate);
+    } catch {
+      throw new AppError("FILE_NOT_FOUND", "File not found", 404);
+    }
+    const metadata = await stat(resolved).catch(() => undefined);
+    if (metadata === undefined || !metadata.isFile()) throw new AppError("FILE_NOT_FOUND", "File not found", 404);
+    const data = await readFile(resolved);
+    return reply
+      .type(FILE_MIME_TYPES[ext] ?? "application/octet-stream")
+      .header("cache-control", "private, max-age=3600")
+      .send(data);
   });
 
   app.get("/api/workspaces", async () => ({ workspaces: workspaces.list() }));

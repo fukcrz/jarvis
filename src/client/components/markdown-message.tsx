@@ -27,6 +27,29 @@ const urlTransform = (url: string): string =>
 interface MarkdownMessageProps {
   text: string;
   streaming?: boolean;
+  /** 工作区根目录：用于把 AI 回复里的相对路径图片解析为本地文件。 */
+  baseDir?: string;
+}
+
+/**
+ * 把 AI 回复里的本地图片引用重写为 Jarvis 的 /api/files 接口 URL。
+ * 与本地 md 文档一致：支持相对路径（以工作区 cwd 为基准）、绝对路径、file:// 形式；
+ * http(s)/data: 等已有 URL 与 /api/ 前缀保持原样。
+ */
+export function rewriteLocalImageUrls(markdown: string, cwd: string | undefined): string {
+  return markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (whole, alt: string, target: string) => {
+    const trimmed = target.trim();
+    if (/^(https?:\/\/|data:|blob:|mailto:)/i.test(trimmed)) return whole;
+    if (trimmed.startsWith("/api/")) return whole;
+    const withoutScheme = trimmed.startsWith("file://") ? trimmed.slice("file://".length) : trimmed;
+    // 路径与可选标题（"title" / 'title' / (title)）以空白+引号分隔；路径本身允许含空格。
+    const titleIndex = withoutScheme.search(/\s+["'(]/);
+    const path = titleIndex === -1 ? withoutScheme : withoutScheme.slice(0, titleIndex);
+    const rest = titleIndex === -1 ? "" : withoutScheme.slice(titleIndex);
+    if (path === "") return whole;
+    const query = `path=${encodeURIComponent(path)}${path.startsWith("/") || cwd === undefined || cwd === "" ? "" : `&cwd=${encodeURIComponent(cwd)}`}`;
+    return `![${alt}](/api/files?${query}${rest})`;
+  });
 }
 
 interface HastNode {
@@ -71,9 +94,10 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & { node?:
 
 const components = { pre: CodeBlock };
 
-export function MarkdownMessage({ text, streaming = false }: MarkdownMessageProps) {
+export function MarkdownMessage({ text, streaming = false, baseDir }: MarkdownMessageProps) {
+  const content = baseDir === undefined ? text : rewriteLocalImageUrls(text, baseDir);
   return <>
-    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={components}>{text}</ReactMarkdown>
+    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={components}>{content}</ReactMarkdown>
     {streaming ? <span className="streaming-cursor" aria-hidden="true" /> : null}
   </>;
 }
