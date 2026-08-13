@@ -230,10 +230,7 @@ function errorSummary(message: string): string {
   return `${firstLine.slice(0, 177)}…`;
 }
 
-const MessageItem = memo(function MessageItem({ item, streaming, editing, onStartEdit, onCancelEdit, onEdit, onFork }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; editing: boolean; onStartEdit: () => void; onCancelEdit: () => void; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void }) {
-=======
 const MessageItem = memo(function MessageItem({ item, streaming, editing, onStartEdit, onCancelEdit, onEdit, onFork, baseDir }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; editing: boolean; onStartEdit: () => void; onCancelEdit: () => void; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string }) {
->>>>>>> 4038008 (feat: 支持 AI 通过 md 语法引用本地图片（相对/绝对路径），/api/files 提供图片服务)
   const images = item.images ?? [];
   const [previewIndex, setPreviewIndex] = useState<number>();
   const [draft, setDraft] = useState(item.text);
