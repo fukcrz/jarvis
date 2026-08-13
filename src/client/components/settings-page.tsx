@@ -18,13 +18,13 @@ interface SettingsPageProps {
 }
 
 type SettingsTab = "general" | "accounts" | "providers" | "workspaces";
-  const [notificationsEnabled, setNotificationsEnabledState] = useState(() => isNotificationEnabled());
 const EMPTY_MODEL: ManagedModel = { id: "", reasoning: false, vision: false };
 const EMPTY_PROVIDER: ManagedProvider = { id: "", baseUrl: "", api: "openai-completions", authHeader: true, models: [{ ...EMPTY_MODEL }] };
 
 export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onAssistantNameChange, onBack }: SettingsPageProps) {
   const [tab, setTab] = useState<SettingsTab>("general");
   const [name, setName] = useState(assistantName);
+  const [notificationsEnabled, setNotificationsEnabledState] = useState(() => isNotificationEnabled());
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [customProviders, setCustomProviders] = useState<ManagedProvider[]>([]);
   const [provider, setProvider] = useState<ManagedProvider>({ ...EMPTY_PROVIDER, models: [{ ...EMPTY_MODEL }] });
@@ -86,18 +86,6 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
     finally { setBusy(undefined); }
   };
 
-  // 运行结束通知开关：开启时请求浏览器权限（须在用户手势内调用）。
-  const toggleNotifications = async (enabled: boolean) => {
-    if (enabled) {
-      const permission = await requestNotificationPermission();
-      if (permission !== "granted") return; // 未授权（拒绝/不支持）：保持关闭
-      setNotificationEnabled(true);
-      setNotificationsEnabledState(true);
-      return;
-    }
-    setNotificationEnabled(false);
-    setNotificationsEnabledState(false);
-  };
   const removeProvider = async (id: string) => {
     setBusy(id);
     try { await api.removeCustomProvider(id); setCustomProviders((current) => current.filter((item) => item.id !== id)); setMessage("供应商已删除"); await reload(); }
@@ -129,6 +117,18 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
 
   const operationPrompt = operation?.prompt;
   const operationEvent = operation?.event;
+  // 运行结束通知开关：开启时请求浏览器权限（须在用户手势内调用）。
+  const toggleNotifications = async (enabled: boolean) => {
+    if (enabled) {
+      const permission = await requestNotificationPermission();
+      if (permission !== "granted") return; // 未授权（拒绝/不支持）：保持关闭
+      setNotificationEnabled(true);
+      setNotificationsEnabledState(true);
+      return;
+    }
+    setNotificationEnabled(false);
+    setNotificationsEnabledState(false);
+  };
   return <section className="settings-page">
     <header className="settings-header"><Button variant="ghost" size="icon" aria-label="返回会话" title="返回会话" onClick={onBack}><X size={18} /></Button><h1>设置</h1></header>
     <div className="settings-layout">
