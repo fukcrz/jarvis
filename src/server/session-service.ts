@@ -104,7 +104,6 @@ interface ActiveSession {
  */
 const JARVIS_UI_NOTICE = [
   "You are running inside Jarvis, a local web UI for persistent Pi sessions, not the Pi TUI.",
-  "Users interact with you through a browser workbench: prompts are sent from a web composer, tool activity is shown in a live timeline, and sessions persist across reloads.",
   "You can send images to the user by embedding them in your reply with standard Markdown image syntax: ![](relative/path.png) resolves against the current workspace root, ![](/absolute/path.png) or ![](file:///absolute/path.png) resolves against the machine filesystem. Jarvis serves these files through its /api/files endpoint and renders them inline in the timeline, so the user sees the image directly.",
 ].join(" ");
 
