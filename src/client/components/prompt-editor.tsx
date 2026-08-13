@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdate, useCodeMirror } from "@uiw/react-codemirror";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { ArrowUp, Command, FileCode2, LoaderCircle, MessageSquare, Plus, Puzzle, RotateCcw, Square, X, XCircle, Zap } from "lucide-react";
-import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionQueue, WorkspaceFile } from "../../shared/protocol";
+import { ArrowUp, Command, FileCode2, History, LoaderCircle, MessageSquare, Plus, Puzzle, RotateCcw, Square, X, XCircle, Zap } from "lucide-react";
+import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionFileReference, SessionQueue, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
 import { useIsMobile } from "../hooks/use-is-mobile";
@@ -16,13 +16,15 @@ const editorExtensions: Extension[] = [CodeMirrorView.lineWrapping];
 
 type Completion =
   | { kind: "command"; command: ComposerCommand }
-  | { kind: "file"; file: WorkspaceFile };
+  | { kind: "file"; file: WorkspaceFile }
+  | { kind: "session"; session: SessionFileReference };
 
 interface PromptEditorProps {
   initialValue: string;
   busy: boolean;
   commands: ComposerCommand[];
   searchFiles: (query: string) => Promise<WorkspaceFile[]>;
+  searchSessionFiles: (query: string) => Promise<SessionFileReference[]>;
   onDraftChange: (value: string) => void;
   onSubmit: (value: string, attachments: ImageAttachment[], behavior?: "steer" | "followUp") => boolean | Promise<boolean>;
   onStop: () => void;
@@ -60,7 +62,7 @@ interface PromptEditorProps {
   onAutoFocusConsumed?: () => void;
 }
 
-export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, extensionStatuses = {}, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, onCollapsedClick, focusRequestRef, autoFocus = false, onAutoFocusConsumed }: PromptEditorProps) {
+export function PromptEditor({ initialValue, busy, commands, searchFiles, searchSessionFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, extensionStatuses = {}, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, onCollapsedClick, focusRequestRef, autoFocus = false, onAutoFocusConsumed }: PromptEditorProps) {
   const isMobile = useIsMobile();
   // 挂载时捕获 autoFocus：视图创建可能比挂载晚一个提交（容器 ref 回调触发
   // 的二次渲染），而 App 可能在被动效果里已清除标记；用 ref 保存挂载快照。
@@ -77,9 +79,10 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   const draftInjectionRef = useRef(draftInjection);
   const commandsRef = useRef(commands);
   const searchFilesRef = useRef(searchFiles);
+  const searchSessionFilesRef = useRef(searchSessionFiles);
   const preparingRef = useRef(0);
   const galleryRef = useRef<HTMLInputElement | null>(null);
-  const [completion, setCompletion] = useState<{ trigger: "/" | "@"; from: number; items: Completion[] } | undefined>();
+  const [completion, setCompletion] = useState<{ trigger: "/" | "@" | "@@"; from: number; items: Completion[] } | undefined>();
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [preparingCount, setPreparingCount] = useState(0);
   const [hasDraft, setHasDraft] = useState(() => initialValue.trim() !== "");
@@ -141,9 +144,12 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
       return;
     }
 
-    void searchFilesRef.current(context.query).then((files) => {
+    const search = context.trigger === "@@" ? searchSessionFilesRef.current(context.query) : searchFilesRef.current(context.query);
+    void search.then((results) => {
       if (request !== searchRequestRef.current) return;
-      const items = files.slice(0, MAX_COMPOSER_SUGGESTIONS).map((file) => ({ kind: "file" as const, file }));
+      const items = context.trigger === "@@"
+        ? (results as SessionFileReference[]).slice(0, MAX_COMPOSER_SUGGESTIONS).map((session) => ({ kind: "session" as const, session }))
+        : (results as WorkspaceFile[]).slice(0, MAX_COMPOSER_SUGGESTIONS).map((file) => ({ kind: "file" as const, file }));
       setCompletion(items.length === 0 ? undefined : { trigger: context.trigger, from: context.from, items });
       setSelectedIndex(0);
     }).catch(() => {
@@ -185,6 +191,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
   }, [commands, refreshCompletion]);
 
   useEffect(() => { searchFilesRef.current = searchFiles; }, [searchFiles]);
+  useEffect(() => { searchSessionFilesRef.current = searchSessionFiles; }, [searchSessionFiles]);
 
   const handleFiles = useCallback((files: File[]) => {
     if (files.length === 0) return;
@@ -271,19 +278,19 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
     if (view === undefined) return;
     const value = view.state.doc.toString();
     const context = completionContextFor(value, view.state.selection.main.head);
-    const trigger = item.kind === "command" ? "/" : "@";
+    const trigger = item.kind === "command" ? "/" : item.kind === "session" ? "@@" : "@";
     if (context === undefined || context.trigger !== trigger) {
       closeCompletion();
       return;
     }
-    const replacement = completionReplacement(value, context, item.kind === "command" ? `/${item.command.name}` : `@${item.file.path}`);
+    const replacement = completionReplacement(value, context, item.kind === "command" ? `/${item.command.name}` : item.kind === "session" ? `@${quoteFileReference(item.session.path)}` : `@${item.file.path}`);
     view.dispatch({ changes: { from: replacement.from, to: replacement.to, insert: replacement.insert }, selection: { anchor: replacement.cursor } });
     view.focus();
     closeCompletion();
   }, [closeCompletion]);
 
   const completionItems = completion?.items ?? [];
-  const completionLabel = useMemo(() => completion?.trigger === "/" ? "命令" : "文件", [completion?.trigger]);
+  const completionLabel = useMemo(() => completion?.trigger === "/" ? "命令" : completion?.trigger === "@@" ? "会话" : "文件", [completion?.trigger]);
   const canSend = hasDraft || attachments.length > 0;
   const openAttach = () => {
     if (attachDisabled) return;
@@ -341,9 +348,9 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
           void submit();
         }} />
         {completionItems.length === 0 ? null : <div className="composer-completions" role="listbox" aria-label={completionLabel}>
-          {completionItems.map((item, index) => <button ref={(element) => { completionItemRefs.current[index] = element; }} key={item.kind === "command" ? item.command.name : item.file.path} className={`composer-completion ${index === selectedIndex ? "selected" : ""}`} type="button" role="option" aria-selected={index === selectedIndex} onMouseDown={(event) => { event.preventDefault(); applyCompletion(item); }}>
-            {item.kind === "command" ? <Command size={15} /> : <FileCode2 size={15} />}
-            <span><strong>{item.kind === "command" ? `/${item.command.name}` : item.file.path}</strong>{item.kind === "command" && item.command.description !== undefined ? <small>{item.command.description}</small> : null}</span>
+          {completionItems.map((item, index) => <button ref={(element) => { completionItemRefs.current[index] = element; }} key={item.kind === "command" ? item.command.name : item.kind === "file" ? item.file.path : item.session.id} className={`composer-completion ${index === selectedIndex ? "selected" : ""}`} type="button" role="option" aria-selected={index === selectedIndex} onMouseDown={(event) => { event.preventDefault(); applyCompletion(item); }}>
+            {item.kind === "command" ? <Command size={15} /> : item.kind === "session" ? <History size={15} /> : <FileCode2 size={15} />}
+            <span><strong>{item.kind === "command" ? `/${item.command.name}` : item.kind === "session" ? item.session.name ?? item.session.preview ?? "新会话" : item.file.path}</strong>{item.kind === "command" && item.command.description !== undefined ? <small>{item.command.description}</small> : item.kind === "session" && item.session.preview !== null && item.session.preview !== item.session.name ? <small>{item.session.preview}</small> : null}</span>
           </button>)}
         </div>}
         <div className="composer-footer">
@@ -375,6 +382,10 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, onDraf
       </div>}
     </section>
   );
+}
+
+function quoteFileReference(path: string): string {
+  return /\s/.test(path) ? `"${path.replaceAll('"', '\\"')}"` : path;
 }
 
 function QueueBar({ queue, onDequeueAll, onRemoveQueued, onToggleKind }: { queue: SessionQueue; onDequeueAll: () => void; onRemoveQueued: (messageId: string, restore: boolean) => void; onToggleKind: (messageId: string) => void }) {

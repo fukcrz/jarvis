@@ -173,6 +173,28 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(JSON.stringify(allFiles.json())).not.toContain(".git");
   });
 
+  it("lists session JSONL files for composer session references", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "session-file-search-workspace");
+    await mkdir(workspacePath);
+    const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } });
+    const workspace = created.json() as { workspace: { id: string } };
+    const sessionId = randomUUID();
+    const timestamp = new Date().toISOString();
+    const sessionFile = join(sessionDir, `${timestamp.replace(/[:.]/g, "-")}_${sessionId}.jsonl`);
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(sessionFile, [
+      JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp, cwd: workspacePath }),
+      JSON.stringify({ type: "session_info", id: "aabbccdd", parentId: null, timestamp, name: "Auth refactor" }),
+      JSON.stringify({ type: "message", id: "11223344", parentId: "aabbccdd", timestamp, message: { role: "user", content: "Review authentication", timestamp: Date.parse(timestamp) } }),
+    ].join("\n") + "\n");
+
+    const searched = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/session-files` });
+
+    expect(searched.statusCode).toBe(200);
+    expect(searched.json()).toEqual({ sessions: [{ id: sessionId, name: "Auth refactor", preview: "Review authentication", path: sessionFile }] });
+  });
+
   it("lists a composer command that Jarvis can execute", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "commands-workspace");
@@ -390,8 +412,20 @@ describe("Jarvis HTTP and WebSocket API", () => {
     await mkdir(workspacePath);
     const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath, label: "Scratch" } });
     expect(created.statusCode).toBe(200);
-    const workspace = created.json() as { workspace: { id: string; cwd: string; label: string } };
-    expect(workspace.workspace).toMatchObject({ cwd: workspacePath, label: "Scratch" });
+    const workspace = created.json() as { workspace: { id: string; cwd: string; label: string; sortOrder: number } };
+    expect(workspace.workspace).toMatchObject({ cwd: workspacePath, label: "Scratch", sortOrder: expect.any(Number) });
+
+    const anotherPath = join(jarvisHome, "another-workspace");
+    await mkdir(anotherPath);
+    const another = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: anotherPath, label: "Another" } });
+    const anotherWorkspace = another.json() as { workspace: { id: string; sortOrder: number } };
+    const listedBeforeReorder = await server.inject({ method: "GET", url: "/api/workspaces" });
+    const allWorkspaceIds = (listedBeforeReorder.json() as { workspaces: Array<{ id: string }> }).workspaces.map((item) => item.id);
+    const reordered = await server.inject({ method: "PUT", url: "/api/workspaces/order", payload: { ids: [anotherWorkspace.workspace.id, workspace.workspace.id, ...allWorkspaceIds.filter((id) => id !== anotherWorkspace.workspace.id && id !== workspace.workspace.id)] } });
+    expect(reordered.statusCode).toBe(200);
+    const reorderedWorkspaces = (reordered.json() as { workspaces: Array<{ id: string; sortOrder: number }> }).workspaces;
+    expect(reorderedWorkspaces.find((item) => item.id === anotherWorkspace.workspace.id)).toMatchObject({ sortOrder: 0 });
+    expect(reorderedWorkspaces.find((item) => item.id === workspace.workspace.id)).toMatchObject({ sortOrder: 1 });
 
     const renamed = await server.inject({ method: "PATCH", url: `/api/workspaces/${workspace.workspace.id}`, payload: { label: "Renamed" } });
     expect(renamed.statusCode).toBe(200);

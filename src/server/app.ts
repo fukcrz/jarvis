@@ -17,6 +17,7 @@ import { SettingsService } from "./settings-service.js";
 
 const workspaceInput = z.object({ cwd: z.string().min(1), label: z.string().max(96).optional() }).strict();
 const workspaceUpdateInput = z.object({ label: z.string().min(1).max(96) }).strict();
+const workspaceOrderInput = z.object({ ids: z.array(z.string().uuid()).max(500) }).strict();
 const directoryQuery = z.object({ path: z.string().min(1).optional(), roots: z.enum(["true"]).optional() }).strict();
 const fileSearchQuery = z.object({ query: z.string().max(160).optional() }).strict();
 const sessionNameInput = z.object({ name: z.string().min(1).max(120) }).strict();
@@ -107,6 +108,7 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const body = workspaceUpdateInput.parse(request.body);
     return { workspace: await workspaces.updateLabel(params.workspaceId, body.label) };
   });
+  app.put("/api/workspaces/order", async (request) => ({ workspaces: await workspaces.reorder(workspaceOrderInput.parse(request.body).ids) }));
   app.post("/api/workspaces/:workspaceId/open", async (request) => {
     const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
     return { workspace: await workspaces.touch(params.workspaceId) };
@@ -136,6 +138,12 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.delete("/api/workspaces/:workspaceId/sessions/:sessionId", async (request) => {
     await sessions.remove(sessionRef(request.params));
     return { removed: true };
+  });
+
+  app.get("/api/workspaces/:workspaceId/session-files", async (request) => {
+    const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
+    const query = fileSearchQuery.parse(request.query);
+    return { sessions: await sessions.fileReferences(params.workspaceId, query.query ?? "") };
   });
 
   app.get("/api/workspaces/:workspaceId/files", async (request) => {

@@ -11,6 +11,8 @@ describe("composer completion", () => {
   it("derives token ranges from the current cursor", () => {
     expect(completionContextFor("/fi", 3)).toEqual({ trigger: "/", query: "fi", from: 0, to: 3 });
     expect(completionContextFor("Review @src/client", 18)).toEqual({ trigger: "@", query: "src/client", from: 7, to: 18 });
+    expect(completionContextFor("Review @@auth", 13)).toEqual({ trigger: "@@", query: "auth", from: 7, to: 13 });
+    expect(completionContextFor("@@", 2)).toEqual({ trigger: "@@", query: "", from: 0, to: 2 });
     expect(completionContextFor("/review later", 3)).toEqual({ trigger: "/", query: "re", from: 0, to: 7 });
     expect(completionContextFor("/review", 0)).toBeUndefined();
   });
@@ -22,6 +24,11 @@ describe("composer completion", () => {
   it("matches an already typed slash query after commands arrive", () => {
     expect(matchingComposerCommands([], "fi")).toEqual([]);
     expect(matchingComposerCommands(commands, "fi")).toEqual([commands[0]]);
+  });
+
+  it("recognizes a double-at token without changing ordinary at references", () => {
+    expect(completionContextFor("email@example.com", 13)).toBeUndefined();
+    expect(completionContextFor("@@auth next", 6)).toEqual({ trigger: "@@", query: "auth", from: 0, to: 6 });
   });
 
   it("preserves an existing argument delimiter when applying a completion", () => {

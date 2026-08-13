@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import {
   createAgentSession,
+  DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
   resolveModelScopeWithDiagnostics,
@@ -27,6 +28,7 @@ import type {
   QueuedMessage,
   QueuedPromptAccepted,
   RetryStatus,
+  SessionFileReference,
   SessionQueue,
   SessionRef,
   SessionStatus,
@@ -96,6 +98,16 @@ interface ActiveSession {
   updatedAt: string;
 }
 
+/**
+ * 通过 SDK 的 `appendSystemPrompt` 注入到系统提示词的 Jarvis UI 说明。
+ * 常驻基础提示词之后（`<project_context>` 之前），告知 AI 当前运行环境。
+ */
+const JARVIS_UI_NOTICE = [
+  "You are running inside Jarvis, a local web UI for persistent Pi sessions, not the Pi TUI.",
+  "Users interact with you through a browser workbench: prompts are sent from a web composer, tool activity is shown in a live timeline, and sessions persist across reloads.",
+  "Use the tools and respond exactly as usual; UI-level shortcuts (Ctrl+P model cycle, Shift+Tab thinking cycle) are handled by the interface itself.",
+].join(" ");
+
 const PAGE_LIMIT = 120;
 const MAX_PROMPT_LENGTH = 40_000;
 const MAX_ATTACHMENTS = 8;
@@ -136,6 +148,40 @@ export class SessionService {
     return summaries
       .filter((summary) => needle === undefined || needle === "" || `${summary.name ?? ""}\n${summary.preview ?? ""}`.toLocaleLowerCase().includes(needle))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async fileReferences(workspaceId: string, query?: string): Promise<SessionFileReference[]> {
+    const workspace = this.workspaces.get(workspaceId);
+    const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
+    const listed = sessionDir === undefined
+      ? await SessionManager.list(workspace.cwd)
+      : await SessionManager.list(workspace.cwd, sessionDir);
+    const activeById = new Map(
+      [...this.active.values()]
+        .filter((active) => active.ref.workspaceId === workspaceId)
+        .map((active) => [active.ref.sessionId, active]),
+    );
+    const needle = query?.trim().toLocaleLowerCase() ?? "";
+    return listed
+      .map((entry) => ({
+        id: entry.id,
+        name: entry.name ?? null,
+        preview: entry.firstMessage || null,
+        path: entry.path,
+        active: activeById.get(entry.id),
+      }))
+      .concat([...activeById.values()]
+        .filter((active) => !listed.some((entry) => entry.id === active.ref.sessionId) && active.session.sessionFile !== undefined)
+        .map((active) => ({
+          id: active.ref.sessionId,
+          name: active.session.sessionName ?? null,
+          preview: firstUserMessage(active.session.sessionManager.getBranch()),
+          path: active.session.sessionFile!,
+          active,
+        })))
+      .filter((entry) => needle === "" || `${entry.name ?? ""}\n${entry.preview ?? ""}`.toLocaleLowerCase().includes(needle))
+      .sort((left, right) => (right.active?.updatedAt ?? "").localeCompare(left.active?.updatedAt ?? ""))
+      .map(({ id, name, preview, path }) => ({ id, name, preview, path }));
   }
 
   /** Shared Pi runtime used by the global settings surface. */
@@ -877,12 +923,20 @@ export class SessionService {
       : { scopedModels: [], diagnostics: [] };
     for (const diagnostic of diagnostics) console.warn(`Model scope warning: ${diagnostic.message}`);
 
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: workspace.cwd,
+      agentDir,
+      settingsManager,
+      appendSystemPrompt: [JARVIS_UI_NOTICE],
+    });
+    await resourceLoader.reload();
     const { session } = await createAgentSession({
       cwd: workspace.cwd,
       agentDir,
       modelRuntime,
       sessionManager: manager,
       settingsManager,
+      resourceLoader,
       ...(scopedModels.length === 0 ? {} : { scopedModels }),
     });
     const publishExtensionUi = (message: ExtensionUiMessage) => {

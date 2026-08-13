@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
-import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
+import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, isSessionConflict, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
@@ -546,6 +546,26 @@ export function App() {
     }
   };
 
+  const removeWorkspaceFromSettings = async (target: Workspace) => {
+    await api.removeWorkspace(target.id);
+    const remaining = workspaces.filter((workspace) => workspace.id !== target.id);
+    setWorkspaces(remaining);
+    setSessionsByWorkspace((current) => {
+      const next = { ...current };
+      delete next[target.id];
+      return next;
+    });
+    setExpandedWorkspaceIds((current) => {
+      const next = { ...current };
+      delete next[target.id];
+      return next;
+    });
+    if (workspaceId === target.id) {
+      setWorkspaceId(remaining[0]?.id);
+      setSessionId(undefined);
+    }
+  };
+
   const deleteSession = async () => {
     const target = deleteTarget;
     if (target === undefined || deletePending) return;
@@ -571,6 +591,11 @@ export function App() {
   const searchWorkspaceFiles = useCallback(async (query: string): Promise<WorkspaceFile[]> => {
     if (selectedRef === undefined) return [];
     return api.searchFiles(selectedRef.workspaceId, query);
+  }, [selectedRef]);
+
+  const searchSessionFiles = useCallback(async (query: string): Promise<SessionFileReference[]> => {
+    if (selectedRef === undefined) return [];
+    return (await api.searchSessionFiles(selectedRef.workspaceId, query)).filter((session) => session.id !== selectedRef.sessionId);
   }, [selectedRef]);
 
   // Stable reference so PromptEditor's paste extension never changes identity
@@ -859,7 +884,7 @@ export function App() {
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline key={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? requestForkMessage : undefined} onExtensionUiRespond={stream.respondExtensionUi} />
       <ExtensionPanels panels={stream.extensionPanels} />
-      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
+      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />
@@ -878,10 +903,10 @@ export function App() {
             </div>
           </div>
         </header>}
-        {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} onBack={() => navigate("/projects", { replace: true })} /> : renderChatContent()}
+        {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} /> : <section className="mobile-chat-page">
+        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
             <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate("/projects", { replace: true })}><ArrowLeft size={19} /></Button>
             <div className="mobile-chat-session">{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</div>
@@ -990,10 +1015,10 @@ function mergeSession(current: SessionSummary[], next: SessionSummary): SessionS
 
 function mergeWorkspace(current: Workspace[], next: Workspace): Workspace[] {
   const existing = current.findIndex((workspace) => workspace.id === next.id);
-  if (existing === -1) return [...current, next].sort((a, b) => a.label.localeCompare(b.label));
+  if (existing === -1) return [...current, next].sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
   const copy = [...current];
   copy[existing] = next;
-  return copy.sort((a, b) => a.label.localeCompare(b.label));
+  return copy.sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
 }
 
 function readExpandedWorkspaces(): Record<string, boolean> {

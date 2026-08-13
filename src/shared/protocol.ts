@@ -14,6 +14,7 @@ export interface Workspace {
   id: string;
   cwd: string;
   label: string;
+  sortOrder: number;
   createdAt: string;
   updatedAt: string;
   lastOpenedAt: string;
@@ -94,6 +95,14 @@ export interface ComposerCommand {
 }
 
 export interface WorkspaceFile {
+  path: string;
+}
+
+/** A session exposed as a file reference for the composer. */
+export interface SessionFileReference {
+  id: string;
+  name: string | null;
+  preview: string | null;
   path: string;
 }
 

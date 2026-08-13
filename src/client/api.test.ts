@@ -31,6 +31,19 @@ describe("API client", () => {
     expect(new Headers(init?.headers).has("content-type")).toBe(false);
   });
 
+  it("sends workspace ids to the reorder endpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ workspaces: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ids = ["da69b38d-f132-4c84-8c4f-6174015e9c5e", "c2f73ddd-cfc6-464f-acb3-c8f425cea7f0"];
+
+    await api.reorderWorkspaces(ids);
+
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe("/api/workspaces/order");
+    expect(init?.method).toBe("PUT");
+    expect(init?.body).toBe(JSON.stringify({ ids }));
+  });
+
   it("uses the provider id in the URL instead of duplicating it in the save body", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ provider: { id: "local" } }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

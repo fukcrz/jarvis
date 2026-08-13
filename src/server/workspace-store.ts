@@ -25,18 +25,23 @@ export class WorkspaceStore {
     try {
       const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as PersistedWorkspaces;
       if (parsed.version !== 1 || !Array.isArray(parsed.workspaces)) throw new Error("Unsupported workspace registry format");
-      this.workspaces = parsed.workspaces.map((workspace) => ({ ...workspace, lastOpenedAt: workspace.lastOpenedAt ?? workspace.updatedAt ?? workspace.createdAt }));
+      const hadMissingOrder = parsed.workspaces.some((workspace) => typeof workspace.sortOrder !== "number");
+      this.workspaces = parsed.workspaces.map((workspace, index) => ({ ...workspace, sortOrder: workspace.sortOrder ?? index, lastOpenedAt: workspace.lastOpenedAt ?? workspace.updatedAt ?? workspace.createdAt }));
+      if (hadMissingOrder || this.workspaces.some((workspace, index) => workspace.sortOrder !== index)) {
+        this.normalizeSortOrder();
+        await this.persist();
+      }
     } catch (error) {
       if (!isMissingFile(error)) throw error;
       const cwd = await resolveDirectory(defaultCwd);
       const now = new Date().toISOString();
-      this.workspaces = [{ id: randomUUID(), cwd, label: defaultLabel(cwd), createdAt: now, updatedAt: now, lastOpenedAt: now }];
+      this.workspaces = [{ id: randomUUID(), cwd, label: defaultLabel(cwd), sortOrder: 0, createdAt: now, updatedAt: now, lastOpenedAt: now }];
       await this.persist();
     }
   }
 
   list(): Workspace[] {
-    return [...this.workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt) || a.label.localeCompare(b.label));
+    return [...this.workspaces].sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
   }
 
   get(id: string): Workspace {
@@ -55,6 +60,7 @@ export class WorkspaceStore {
       id: randomUUID(),
       cwd: resolved,
       label: normalizeLabel(label, resolved),
+      sortOrder: this.workspaces.length,
       createdAt: now,
       updatedAt: now,
       lastOpenedAt: now,
@@ -62,6 +68,20 @@ export class WorkspaceStore {
     this.workspaces.push(workspace);
     await this.persist();
     return workspace;
+  }
+
+  async reorder(ids: string[]): Promise<Workspace[]> {
+    if (ids.length !== this.workspaces.length || new Set(ids).size !== ids.length || ids.some((id) => !this.workspaces.some((workspace) => workspace.id === id))) {
+      throw new AppError("WORKSPACE_ORDER_INVALID", "Workspace order is invalid");
+    }
+    const byId = new Map(this.workspaces.map((workspace) => [workspace.id, workspace]));
+    this.workspaces = ids.map((id, sortOrder) => {
+      const workspace = byId.get(id);
+      if (workspace === undefined) throw new AppError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
+      return { ...workspace, sortOrder };
+    });
+    await this.persist();
+    return this.list();
   }
 
   async updateLabel(id: string, label: string): Promise<Workspace> {
@@ -87,9 +107,14 @@ export class WorkspaceStore {
 
   private async persist(): Promise<void> {
     const temporary = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+    this.normalizeSortOrder();
     const payload: PersistedWorkspaces = { version: 1, workspaces: this.workspaces };
     await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
     await rename(temporary, this.filePath);
+  }
+
+  private normalizeSortOrder(): void {
+    this.workspaces = [...this.workspaces].sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label)).map((workspace, sortOrder) => ({ ...workspace, sortOrder }));
   }
 }
 

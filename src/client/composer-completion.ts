@@ -3,7 +3,7 @@ import type { ComposerCommand } from "../shared/protocol";
 export const MAX_COMPOSER_SUGGESTIONS = 8;
 
 export interface ComposerCompletionContext {
-  trigger: "/" | "@";
+  trigger: "/" | "@" | "@@";
   query: string;
   from: number;
   to: number;
@@ -30,9 +30,11 @@ export function completionContextFor(value: string, cursor: number): ComposerCom
   let from = position;
   while (from > 0 && !/\s/.test(value[from - 1] ?? "")) from -= 1;
   if (value[from] !== "@") return undefined;
-  const to = tokenEnd(value, from + 1);
-  if (position <= from || position > to) return undefined;
-  return { trigger: "@", query: value.slice(from + 1, position), from, to };
+  const isSessionReference = value[from + 1] === "@";
+  const queryStart = from + (isSessionReference ? 2 : 1);
+  const to = tokenEnd(value, queryStart);
+  if (position < queryStart || position > to) return undefined;
+  return { trigger: isSessionReference ? "@@" : "@", query: value.slice(queryStart, position), from, to };
 }
 
 export function matchingComposerCommands(commands: readonly ComposerCommand[], query: string): ComposerCommand[] {

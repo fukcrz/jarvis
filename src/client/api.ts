@@ -8,6 +8,7 @@ import type {
   PromptAccepted,
   QueuedMessage,
   QueuedPromptAccepted,
+  SessionFileReference,
   SessionRef,
   SessionStreamSnapshot,
   SessionSummary,
@@ -86,6 +87,7 @@ export const api = {
   renameWorkspace: async (workspaceId: string, label: string): Promise<Workspace> => (await request<{ workspace: Workspace }>(`/api/workspaces/${workspaceId}`, { method: "PATCH", body: JSON.stringify({ label }) })).workspace,
   openWorkspace: async (workspaceId: string): Promise<Workspace> => (await request<{ workspace: Workspace }>(`/api/workspaces/${workspaceId}/open`, { method: "POST", body: "{}" })).workspace,
   removeWorkspace: async (workspaceId: string): Promise<void> => { await request(`/api/workspaces/${workspaceId}`, { method: "DELETE" }); },
+  reorderWorkspaces: async (ids: string[]): Promise<Workspace[]> => (await request<{ workspaces: Workspace[] }>("/api/workspaces/order", { method: "PUT", body: JSON.stringify({ ids }) })).workspaces,
   settings: async (): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings")).settings,
   updateSettings: async (assistantName: string): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings", { method: "PATCH", body: JSON.stringify({ assistantName }) })).settings,
   providers: async (): Promise<ProviderStatus[]> => (await request<{ providers: ProviderStatus[] }>("/api/settings/providers")).providers,
@@ -108,6 +110,12 @@ export const api = {
     if (query?.trim()) params.set("query", query.trim());
     const suffix = params.size === 0 ? "" : `?${params.toString()}`;
     return (await request<{ files: WorkspaceFile[] }>(`/api/workspaces/${workspaceId}/files${suffix}`)).files;
+  },
+  searchSessionFiles: async (workspaceId: string, query?: string): Promise<SessionFileReference[]> => {
+    const params = new URLSearchParams();
+    if (query?.trim()) params.set("query", query.trim());
+    const suffix = params.size === 0 ? "" : `?${params.toString()}`;
+    return (await request<{ sessions: SessionFileReference[] }>(`/api/workspaces/${workspaceId}/session-files${suffix}`)).sessions;
   },
   commands: async (ref: SessionRef): Promise<ComposerCommand[]> => (await request<{ commands: ComposerCommand[] }>(`${sessionPath(ref)}/commands`)).commands,
   createSession: async (workspaceId: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`/api/workspaces/${workspaceId}/sessions`, { method: "POST", body: "{}" })).session,
