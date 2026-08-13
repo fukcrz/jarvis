@@ -148,7 +148,9 @@ async function verifyStreamingMarkdown(page, name, sessionId) {
 async function verifyComposerShortcuts(page, editor, name, sessionId, desktop) {
   const editorSurface = page.locator(".composer-editor .cm-editor");
   const bounds = await editorSurface.boundingBox();
-  if (bounds === null || bounds.height < 76) {
+  // 桌面端 min-height 76px + padding；移动端有意压到 48px + padding（≈63px）。
+  // 阈值取 44：低于它说明编辑器塌成单行，多行编辑/点击测试无意义。
+  if (bounds === null || bounds.height < 44) {
     failures.push(`${name}: composer input area is not multi-line height`);
   } else {
     await editorSurface.click({ position: { x: 20, y: bounds.height - 8 } });
@@ -178,7 +180,7 @@ async function verifyComposerShortcuts(page, editor, name, sessionId, desktop) {
   if (JSON.stringify(lines) !== JSON.stringify(["First line", "Second line"])) failures.push(`${name}: Shift+Enter did not add a newline`);
   await page.keyboard.press("Enter");
   if (desktop) {
-    await page.waitForFunction(() => document.querySelector(".composer-editor .cm-placeholder") !== null, undefined, { timeout: 5_000 });
+    await page.waitForFunction(() => document.querySelector(".composer-editor .cm-content")?.textContent === "", undefined, { timeout: 5_000 });
     if (prompts.length !== 1 || prompts[0]?.text !== "First line\nSecond line") failures.push(`${name}: Enter did not send the editor value`);
     return;
   }
@@ -187,7 +189,7 @@ async function verifyComposerShortcuts(page, editor, name, sessionId, desktop) {
   const mobileLines = await page.locator(".composer-editor .cm-line").allTextContents();
   if (prompts.length !== 0 || JSON.stringify(mobileLines) !== JSON.stringify(["First line", "Second line", ""])) failures.push(`${name}: Enter sent instead of adding a newline`);
   await page.getByRole("button", { name: "发送消息" }).click();
-  await page.waitForFunction(() => document.querySelector(".composer-editor .cm-placeholder") !== null, undefined, { timeout: 5_000 });
+  await page.waitForFunction(() => document.querySelector(".composer-editor .cm-content")?.textContent === "", undefined, { timeout: 5_000 });
   if (prompts.length !== 1 || prompts[0]?.text !== "First line\nSecond line\n") failures.push(`${name}: send button did not submit the mobile editor value`);
 }
 
@@ -210,7 +212,7 @@ async function verifyDraftStability(page, editor, name, sessionId) {
   await page.keyboard.press("Control+A");
   await page.keyboard.press("Backspace");
   await page.waitForTimeout(260);
-  if (!await editor.locator(".cm-placeholder").isVisible()) failures.push(`${name}: cleared draft returned after session updates`);
+  if ((await editor.textContent()) !== "") failures.push(`${name}: cleared draft returned after session updates`);
 }
 
 async function verifyRunFeedback(page, name, sessionId, emit) {
