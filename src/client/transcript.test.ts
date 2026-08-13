@@ -139,6 +139,37 @@ describe("transcript reducer", () => {
     });
   });
 
+  it("rehydrates live error attempts and updates their lifecycle through timeline.upsert", () => {
+    const item = {
+      kind: "error" as const,
+      id: "error:attempt-1",
+      groupId: "run-1",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      code: "UPSTREAM_FAILURE",
+      message: "Temporary outage",
+      state: "retrying" as const,
+      attempt: 1,
+      maxAttempts: 3,
+      retryAt: "2026-08-09T00:00:10.000Z",
+      diagnostics: { requestId: "req-123" },
+    };
+    const hydrated = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, {
+      seq: 4,
+      status: { sessionId: "session", runState: "running" },
+      model: { available: [] },
+      thinking: { current: "off", available: ["off"] },
+      liveMessages: [],
+      liveErrors: [item],
+      activeTools: [],
+    });
+    const updated = applySessionEvents(hydrated, [{
+      version: 1, sessionId: "session", runId: "run-1", seq: 5, emittedAt: "2026-08-09T00:00:01.000Z", type: "timeline.upsert", payload: { item: { ...item, state: "recovered" } },
+    }]);
+
+    expect(hydrated.items).toEqual([expect.objectContaining({ id: "error:attempt-1", state: "retrying", diagnostics: { requestId: "req-123" } })]);
+    expect(updated.items).toEqual([expect.objectContaining({ id: "error:attempt-1", state: "recovered" })]);
+  });
+
   it("adds a live context summary only once by its persisted entry id", () => {
     const item = { kind: "context-summary" as const, id: "context-summary:compact", createdAt: "2026-08-09T00:00:00.000Z", summaryType: "compaction" as const, summary: "Summary", tokensBefore: 90_000 };
     const result = applySessionEvents(emptyTranscript, [

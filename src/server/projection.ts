@@ -1,10 +1,13 @@
-import type { ContextSummaryTimelineItem, ImageAttachment, MessageTimelineItem, ThinkingTimelineItem, TimelineItem, ToolState, ToolTimelineItem } from "../shared/protocol.js";
+import type { ContextSummaryTimelineItem, ErrorTimelineItem, ImageAttachment, MessageTimelineItem, ThinkingTimelineItem, TimelineItem, ToolState, ToolTimelineItem } from "../shared/protocol.js";
 
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
 
 export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
   const items: TimelineItem[] = [];
   const toolIndex = new Map<string, number>();
+  // A new user message starts a new operation. Until then, later successful
+  // assistant output means the retained error attempts were recovered by Pi.
+  let pendingErrorIndexes: number[] = [];
 
   for (const entry of entries) {
     const contextSummary = contextSummaryFromEntry(entry);
@@ -21,6 +24,7 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
     const role = stringValue(message["role"]);
 
     if (role === "user") {
+      pendingErrorIndexes = [];
       const { text, images } = userContentFromContent(message["content"]);
       if (text === "" && images.length === 0) continue;
       items.push({
@@ -47,8 +51,18 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
         }
       }
       if (stringValue(message["stopReason"]) === "error") {
-        const detail = stringValue(message["errorMessage"]) || "The model response failed.";
-        items.push({ kind: "message", id: `error:${entryId}`, role: "assistant", createdAt, text: `Error: ${detail}` });
+        const projected = errorFromPi(message, createdAt, entryId);
+        const error = { ...projected, groupId: stringValue(entry["parentId"]) || projected.groupId };
+        pendingErrorIndexes.push(items.length);
+        items.push(error);
+      } else if (stringValue(message["stopReason"]) !== "aborted") {
+        // Pi retains earlier failed attempts in history after a successful retry.
+        // Keep those diagnostics, but mark attempts from this user turn recovered.
+        for (const index of pendingErrorIndexes) {
+          const error = items[index];
+          if (error?.kind === "error") items[index] = { ...error, state: "recovered" };
+        }
+        pendingErrorIndexes = [];
       }
       continue;
     }
@@ -159,6 +173,12 @@ export function thinkingTextFromContent(content: unknown): string {
   return thinking.join("\n\n");
 }
 
+function stringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined;
+  const entries = Object.entries(value).flatMap(([key, entry]) => typeof entry === "string" && entry !== "" ? [[key, entry] as const] : []);
+  return entries.length === 0 ? undefined : Object.fromEntries(entries);
+}
+
 function legacyThinkingFromText(text: string): string {
   const matches = [...text.matchAll(/<thinking>([\s\S]*?)<\/thinking>/g)];
   return matches.map((match) => (match[1] ?? "").trim()).filter(Boolean).join("\n\n");
@@ -173,6 +193,29 @@ export function thinkingFromPi(message: unknown, text: string, createdAt: string
     createdAt: toIso(timestamp ?? createdAt),
     state: "completed",
     text,
+  };
+}
+
+export function errorFromPi(message: unknown, fallbackCreatedAt = new Date().toISOString(), fallbackId: string = crypto.randomUUID(), lifecycle: Partial<Pick<ErrorTimelineItem, "state" | "attempt" | "maxAttempts" | "retryAt">> = {}): ErrorTimelineItem {
+  const record = isRecord(message) ? message : {};
+  const timestamp = record["timestamp"];
+  const detail = stringValue(record["errorMessage"]) || "The model response failed.";
+  const code = stringValue(record["errorCode"]) || "PI_RUNTIME_ERROR";
+  const createdAt = toIso(timestamp ?? fallbackCreatedAt);
+  const diagnostics = stringRecord(record["errorDetails"]);
+  const sourceId = stringValue(record["id"]) || (typeof timestamp === "number" || typeof timestamp === "string" ? `assistant:${String(timestamp)}` : fallbackId);
+  return {
+    kind: "error",
+    id: `error:${sourceId}`,
+    createdAt,
+    groupId: stringValue(record["parentId"]) || sourceId,
+    code,
+    message: detail,
+    state: lifecycle.state ?? "failed",
+    ...(lifecycle.attempt === undefined ? {} : { attempt: lifecycle.attempt }),
+    ...(lifecycle.maxAttempts === undefined ? {} : { maxAttempts: lifecycle.maxAttempts }),
+    ...(lifecycle.retryAt === undefined ? {} : { retryAt: lifecycle.retryAt }),
+    ...(diagnostics === undefined ? {} : { diagnostics }),
   };
 }
 

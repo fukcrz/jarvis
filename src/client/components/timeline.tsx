@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { Archive, ArrowDown, Bell, Brain, Check, CircleAlert, Clock3, GitBranch, LoaderCircle, Pencil, RefreshCw, RotateCcw, X, XCircle } from "lucide-react";
-import type { ContextSummaryTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
+import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, ToolState } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
 import { MarkdownMessage } from "./markdown-message";
@@ -51,6 +51,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   const [following, setFollowing] = useState(true);
   const [editingMessageId, setEditingMessageId] = useState<string>();
   const feedback = getRunFeedback(status, items, streamingMessageId);
+  const hasMatchingTimelineFailure = status.lastError !== undefined && items.some((item) => item.kind === "error" && item.state === "failed" && item.code === status.lastError!.code && item.message === status.lastError!.message);
   const statusIndicatorKey = `${status.runState}:${status.compacting?.reason ?? ""}:${status.compacting?.retrying?.retryAt ?? ""}:${status.retrying?.retryAt ?? ""}:${status.lastError?.occurredAt ?? ""}:${error ?? ""}:${notice ?? ""}`;
 
   useLayoutEffect(() => {
@@ -85,13 +86,15 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
       }}>
         <div className="timeline-inner">
           {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "正在加载历史记录…" : "加载更早记录"}</Button> : null}
-          {renderTimelineItems(items, streamingMessageId, status, onExtensionUiRespond, onEditUserMessage, onForkMessage, editingMessageId, setEditingMessageId)}
-          {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
-          {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
-          {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
-          {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
-          {status.lastError === undefined ? null : <RunFailureCard failure={status.lastError} onRetryCompaction={onRetryCompaction} />}
-          {feedback === undefined || hasActiveActivity(items, status) ? null : <WorkingIndicator feedback={feedback} />}
+          <div className="timeline-feed">
+            {renderTimelineItems(items, streamingMessageId, status, onExtensionUiRespond, onEditUserMessage, onForkMessage, editingMessageId, setEditingMessageId)}
+            {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
+            {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
+            {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
+            {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
+            {status.lastError === undefined || hasMatchingTimelineFailure ? null : <RunFailureCard failure={status.lastError} onRetryCompaction={onRetryCompaction} />}
+            {feedback === undefined || hasActiveActivity(items, status) ? null : <WorkingIndicator feedback={feedback} />}
+          </div>
         </div>
       </div>
       {!following ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
@@ -193,6 +196,38 @@ function formatFailureTime(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(date);
 }
 
+function ErrorItem({ items }: { items: ErrorTimelineItem[] }) {
+  const [open, setOpen] = useState(false);
+  const latest = items.at(-1)!;
+  const stateLabel = latest.state === "retrying" ? "正在重试" : latest.state === "recovered" ? "已恢复" : "操作未完成";
+  const retryLabel = latest.attempt === undefined || latest.maxAttempts === undefined ? undefined : `第 ${String(latest.attempt)} / ${String(latest.maxAttempts)} 次尝试`;
+  const details = items.length > 1 || latest.diagnostics !== undefined;
+  return <article className={`timeline-error ${latest.state}`} role={latest.state === "failed" ? "alert" : "status"}>
+    <div className="timeline-error-header">
+      {latest.state === "recovered" ? <Check size={15} /> : latest.state === "retrying" ? <LoaderCircle className="spin" size={15} /> : <CircleAlert size={15} />}
+      <div className="timeline-error-copy"><strong>{stateLabel}</strong><span>{retryLabel === undefined ? errorSummary(latest.message) : `${retryLabel}：${errorSummary(latest.message)}`}</span></div>
+      {details ? <button type="button" className="timeline-error-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? "收起详情" : "查看详情"}</button> : null}
+    </div>
+    {!open ? null : <div className="timeline-error-details">{items.map((item, index) => <ErrorDetails key={item.id} item={item} showAttempt={items.length > 1} index={index} />)}</div>}
+  </article>;
+}
+
+function ErrorDetails({ item, showAttempt, index }: { item: ErrorTimelineItem; showAttempt: boolean; index: number }) {
+  const diagnostics = Object.entries(item.diagnostics ?? {});
+  return <section className="timeline-error-attempt">
+    {showAttempt ? <strong>尝试 {String(index + 1)} · {item.state === "retrying" ? "正在重试" : item.state === "recovered" ? "已恢复" : "失败"}</strong> : null}
+    <div><span>错误码</span><code>{item.code}</code></div>
+    {diagnostics.map(([key, value]) => <div key={key}><span>{key}</span><code>{value}</code></div>)}
+    <pre>{item.message}</pre>
+  </section>;
+}
+
+function errorSummary(message: string): string {
+  const firstLine = message.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  if (firstLine.length <= 180) return firstLine || "未提供错误详情。";
+  return `${firstLine.slice(0, 177)}…`;
+}
+
 const MessageItem = memo(function MessageItem({ item, streaming, editing, onStartEdit, onCancelEdit, onEdit, onFork }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; editing: boolean; onStartEdit: () => void; onCancelEdit: () => void; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void }) {
   const images = item.images ?? [];
   const [previewIndex, setPreviewIndex] = useState<number>();
@@ -227,9 +262,9 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, onStar
 });
 
 function MessageActions({ item, streaming, onEdit, onFork }: { item: MessageTimelineItem; streaming: boolean; onEdit?: () => void; onFork?: (item: MessageTimelineItem) => void }) {
-  if (streaming || (onEdit === undefined && onFork === undefined)) return null;
+  if (streaming || item.role !== "user" || (onEdit === undefined && onFork === undefined)) return null;
   return <div className="message-actions">
-    {item.role !== "user" || onEdit === undefined ? null : <Tooltip label="编辑并重新生成">
+    {onEdit === undefined ? null : <Tooltip label="编辑并重新生成">
       <button type="button" className="message-action-button" aria-label="编辑并重新生成" onClick={onEdit}><Pencil size={14} /></button>
     </Tooltip>}
     {onFork === undefined ? null : <Tooltip label="从此处分支">
@@ -347,6 +382,7 @@ const ContextSummaryItem = memo(function ContextSummaryItem({ item }: { item: Co
 
 export type TimelineRenderItem =
   | { kind: "message"; item: MessageTimelineItem }
+  | { kind: "error"; items: ErrorTimelineItem[] }
   | { kind: "context-summary"; item: ContextSummaryTimelineItem }
   | { kind: "extension-ui"; item: ExtensionUiTimelineItem }
   | { kind: "thinking"; item: ThinkingTimelineItem }
@@ -366,7 +402,12 @@ export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] 
     } else {
       flushTools();
       if (item.kind === "message") result.push({ kind: "message", item });
-      else if (item.kind === "extension-ui") result.push({ kind: "extension-ui", item });
+      else if (item.kind === "error") {
+        const previous = result.at(-1);
+        const groupId = item.groupId ?? item.id;
+        if (previous?.kind === "error" && (previous.items[0]?.groupId ?? previous.items[0]?.id) === groupId) previous.items.push(item);
+        else result.push({ kind: "error", items: [item] });
+      } else if (item.kind === "extension-ui") result.push({ kind: "extension-ui", item });
       else if (item.kind === "thinking") result.push({ kind: "thinking", item });
       else result.push({ kind: "context-summary", item });
     }
@@ -388,6 +429,7 @@ function renderTimelineItems(items: TimelineItem[], streamingMessageId: string |
 
   return grouped.map((entry, index) => {
     if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} editing={entry.item.id === editingMessageId} onStartEdit={() => setEditingMessageId(entry.item.id)} onCancelEdit={() => setEditingMessageId(undefined)} onEdit={onEditUserMessage} onFork={entry.item.role === "user" ? onForkMessage : undefined} />;
+    if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
     if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} />;
     if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={onExtensionUiRespond} />;
     if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} />;

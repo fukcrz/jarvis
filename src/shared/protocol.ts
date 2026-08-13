@@ -139,6 +139,24 @@ export interface MessageTimelineItem {
   images?: ImageAttachment[];
 }
 
+/** A failed operation kept in the session history, separate from chat content. */
+export interface ErrorTimelineItem {
+  kind: "error";
+  id: string;
+  createdAt: string;
+  /** Stable scope used to associate retries of one operation. */
+  groupId?: string;
+  code: string;
+  message: string;
+  /** A retry can recover a failed attempt without erasing its diagnostic history. */
+  state: "retrying" | "failed" | "recovered";
+  attempt?: number;
+  maxAttempts?: number;
+  retryAt?: string;
+  /** Producer-supplied diagnostics. Values are never inferred from error text. */
+  diagnostics?: Record<string, string>;
+}
+
 export interface ToolTimelineItem {
   kind: "tool";
   id: string;
@@ -176,7 +194,7 @@ export interface ContextSummaryTimelineItem {
   tokensBefore?: number;
 }
 
-export type TimelineItem = MessageTimelineItem | ToolTimelineItem | ThinkingTimelineItem | ContextSummaryTimelineItem | ExtensionUiTimelineItem;
+export type TimelineItem = MessageTimelineItem | ErrorTimelineItem | ToolTimelineItem | ThinkingTimelineItem | ContextSummaryTimelineItem | ExtensionUiTimelineItem;
 
 export interface TimelinePage {
   items: TimelineItem[];
@@ -204,6 +222,8 @@ export interface SessionStreamSnapshot {
   thinking: SessionThinkingSnapshot;
   /** Messages from the current run that may not yet have reached JSONL. */
   liveMessages: MessageTimelineItem[];
+  /** Failed attempts from the current run, retained across reconnects. */
+  liveErrors?: ErrorTimelineItem[];
   partial?: MessageTimelineItem;
   /** 当前 run 正在流式的思考块（尚未 message_end 定稿）。 */
   partialThinking?: ThinkingTimelineItem;

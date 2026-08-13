@@ -133,6 +133,55 @@ describe("projectHistory", () => {
     expect(items).toEqual([expect.objectContaining({ kind: "message", text: "Visible answer" })]);
   });
 
+  it("projects model errors as diagnostic items instead of assistant messages", () => {
+    const items = projectHistory([{
+      type: "message",
+      id: "failed-entry",
+      timestamp: "2026-08-09T00:00:05.000Z",
+      message: { role: "assistant", content: [], stopReason: "error", errorMessage: "HTTP 503: upstream unavailable" },
+    }]);
+
+    expect(items).toEqual([expect.objectContaining({ kind: "error", code: "PI_RUNTIME_ERROR", message: "HTTP 503: upstream unavailable", state: "failed" })]);
+    expect(items).not.toEqual([expect.objectContaining({ kind: "message" })]);
+  });
+
+  it("retains failed retry diagnostics but marks them recovered after a successful continuation", () => {
+    const items = projectHistory([
+      {
+        type: "message",
+        id: "failed-entry",
+        timestamp: "2026-08-09T00:00:05.000Z",
+        message: { id: "attempt-1", role: "assistant", content: [], stopReason: "error", errorMessage: "Temporary failure" },
+      },
+      {
+        type: "message",
+        id: "success-entry",
+        timestamp: "2026-08-09T00:00:06.000Z",
+        message: { role: "assistant", parentId: "attempt-1", content: [{ type: "text", text: "Recovered answer" }], stopReason: "stop" },
+      },
+    ]);
+
+    expect(items[0]).toMatchObject({ kind: "error", id: "error:attempt-1", groupId: "attempt-1", state: "recovered", message: "Temporary failure" });
+    expect(items[1]).toMatchObject({ kind: "message", text: "Recovered answer" });
+  });
+
+  it("preserves producer-supplied diagnostics without parsing error text", () => {
+    const items = projectHistory([{
+      type: "message",
+      id: "failed-entry",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "Gateway rejected request",
+        errorCode: "UPSTREAM_FAILURE",
+        errorDetails: { requestId: "req-123", route: "primary", ignored: 12 },
+      },
+    }]);
+
+    expect(items).toEqual([expect.objectContaining({ kind: "error", code: "UPSTREAM_FAILURE", diagnostics: { requestId: "req-123", route: "primary" } })]);
+  });
+
   it("projects image attachments from user messages", () => {
     const items = projectHistory([{
       type: "message",

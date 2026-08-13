@@ -23,6 +23,17 @@ function message(id: string): TimelineItem {
   };
 }
 
+function error(id: string): TimelineItem {
+  return {
+    kind: "error",
+    id,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    code: "PI_RUNTIME_ERROR",
+    message: "HTTP 503: upstream unavailable",
+    state: "failed",
+  };
+}
+
 function thinking(id: string): TimelineItem {
   return {
     kind: "thinking",
@@ -63,6 +74,17 @@ describe("groupTimelineItems", () => {
     expect(groupTimelineItems([message("a"), message("b")])).toEqual([
       { kind: "message", item: message("a") },
       { kind: "message", item: message("b") },
+    ]);
+  });
+
+  it("keeps errors as their own entries and splits tool runs around them", () => {
+    const result = groupTimelineItems([tool("a"), error("e"), message("m"), tool("c")]);
+
+    expect(result).toEqual([
+      { kind: "activity", items: [tool("a")] },
+      { kind: "error", items: [error("e")] },
+      { kind: "message", item: message("m") },
+      { kind: "activity", items: [tool("c")] },
     ]);
   });
 

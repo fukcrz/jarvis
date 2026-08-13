@@ -19,6 +19,7 @@ import type {
   CompactAccepted,
   ComposerCommand,
   ContextUsage,
+  ErrorTimelineItem,
   ImageAttachment,
   MessageTimelineItem,
   ModelDescriptor,
@@ -44,7 +45,7 @@ import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
 import { projectModelSnapshot } from "./model-projection.js";
-import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, messageFromPi, projectHistory, thinkingTextFromContent, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
+import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, errorFromPi, messageFromPi, projectHistory, thinkingTextFromContent, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
 
 interface ActiveRun {
@@ -66,6 +67,8 @@ interface ActiveSession {
   state: SessionStatus;
   requestRuns: Map<string, RunAccepted>;
   liveMessages: Map<string, MessageTimelineItem>;
+  /** Retry attempts which have not yet been reconciled with persisted history. */
+  liveErrors: Map<string, ErrorTimelineItem>;
   partial?: MessageTimelineItem;
   /** 当前 run 正在流式的思考块（message_end 定稿前）。 */
   partialThinking?: ThinkingTimelineItem;
@@ -301,6 +304,7 @@ export class SessionService {
       model: this.modelSnapshot(active),
       thinking: this.thinkingSnapshot(active),
       liveMessages: [...active.liveMessages.values()],
+      ...(active.liveErrors.size === 0 ? {} : { liveErrors: [...active.liveErrors.values()] }),
       ...(active.partial === undefined ? {} : { partial: active.partial }),
       ...(active.partialThinking === undefined ? {} : { partialThinking: active.partialThinking }),
       activeTools: [...active.activeTools.values()],
@@ -396,6 +400,7 @@ export class SessionService {
     active.state = { sessionId: ref.sessionId, runState: "running", activeRun: run };
     active.updatedAt = run.startedAt;
     active.liveMessages.clear();
+    active.liveErrors.clear();
     active.partial = undefined;
     active.partialThinking = undefined;
     active.activeTools.clear();
@@ -540,6 +545,7 @@ export class SessionService {
     active.state = { sessionId: ref.sessionId, runState: "running", activeRun: run };
     active.updatedAt = run.startedAt;
     active.liveMessages.clear();
+    active.liveErrors.clear();
     active.partial = undefined;
     active.partialThinking = undefined;
     active.activeTools.clear();
@@ -881,6 +887,7 @@ export class SessionService {
       state: { sessionId: session.sessionId, runState: "idle" },
       requestRuns: new Map(),
       liveMessages: new Map(),
+      liveErrors: new Map(),
       activeTools: new Map(),
       activeBash: undefined,
       queue: emptySessionQueue,
@@ -948,6 +955,7 @@ export class SessionService {
         const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
         active.state = { sessionId: active.ref.sessionId, runState: "running", activeRun: run };
         active.liveMessages.clear();
+        active.liveErrors.clear();
         active.partial = undefined;
         active.partialThinking = undefined;
         active.activeTools.clear();
@@ -1040,14 +1048,26 @@ export class SessionService {
         // Assistant usage is the source for Pi's context estimate; refresh it.
         this.publishContextUsage(active, runId);
         if (stringValue(event.message["stopReason"]) === "error") {
-          // Pi may auto-retry or compact after a failed message; defer the failure
-          // until agent_settled so jarvis stays in sync with the underlying agent.
-          active.pendingRunError = {
-            code: "PI_RUNTIME_ERROR",
-            message: stringValue(event.message["errorMessage"]) || "The model response failed.",
-          };
-        } else {
-          // A successful later message clears any earlier retried error.
+          // Pi may auto-retry or compact after a failed message. Retain a
+          // structured attempt now; auto_retry_start upgrades it to retrying.
+          for (const previous of active.liveErrors.values()) {
+            if (previous.state !== "retrying") continue;
+            const settled = { ...previous, state: "failed" as const };
+            active.liveErrors.set(settled.id, settled);
+            this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: settled } });
+          }
+          const error = { ...errorFromPi(event.message, identity.createdAt, identity.id), groupId: runId };
+          active.liveErrors.set(error.id, error);
+          this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: error } });
+          active.pendingRunError = { code: error.code, message: error.message };
+        } else if (stringValue(event.message["stopReason"]) !== "aborted") {
+          // A successful continuation recovers all earlier attempts in this run.
+          for (const error of active.liveErrors.values()) {
+            if (error.state === "recovered") continue;
+            const recovered = { ...error, state: "recovered" as const };
+            active.liveErrors.set(recovered.id, recovered);
+            this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: recovered } });
+          }
           active.pendingRunError = undefined;
         }
         return;
@@ -1184,10 +1204,14 @@ export class SessionService {
       case "auto_retry_start": {
         const runId = active.state.activeRun?.id;
         if (runId === undefined) return;
-        active.state = {
-          ...active.state,
-          retrying: retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage),
-        };
+        const retrying = retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage);
+        active.state = { ...active.state, retrying };
+        const latestError = [...active.liveErrors.values()].at(-1);
+        if (latestError !== undefined) {
+          const item = { ...latestError, state: "retrying" as const, attempt: retrying.attempt, maxAttempts: retrying.maxAttempts, retryAt: retrying.retryAt };
+          active.liveErrors.set(item.id, item);
+          this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item } });
+        }
         this.events.publishSession(active.ref, { type: "run.retrying", runId, payload: { status: active.state } });
         this.publishSummary(active);
         return;
@@ -1196,6 +1220,14 @@ export class SessionService {
         const runId = active.state.activeRun?.id;
         if (runId === undefined) return;
         active.state = { ...active.state, retrying: undefined };
+        if (!event.success) {
+          const latestError = [...active.liveErrors.values()].at(-1);
+          if (latestError?.state === "retrying") {
+            const item = { ...latestError, state: "failed" as const };
+            active.liveErrors.set(item.id, item);
+            this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item } });
+          }
+        }
         this.events.publishSession(active.ref, { type: "run.retryEnd", runId, payload: { status: active.state } });
         this.publishSummary(active);
         return;
@@ -1233,6 +1265,7 @@ export class SessionService {
       ...(lastError === undefined ? {} : { lastError }),
     };
     active.liveMessages.clear();
+    active.liveErrors.clear();
     active.partial = undefined;
     active.partialThinking = undefined;
     active.activeTools.clear();
@@ -1265,6 +1298,7 @@ export class SessionService {
       this.events.publishSession(active.ref, { type: "tool.upsert", runId, payload: { tool: cancelled } });
     }
     active.liveMessages.clear();
+    active.liveErrors.clear();
     active.partial = undefined;
     active.partialThinking = undefined;
     active.activeTools.clear();

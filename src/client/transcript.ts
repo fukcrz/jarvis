@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ExtensionUiRequest, type ExtensionUiTimelineItem, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol";
+import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol";
 import { isRecord } from "../shared/protocol";
 
 export interface TranscriptState {
@@ -30,7 +30,7 @@ export const emptyTranscript: TranscriptState = {
 
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
   const extensionItems: ExtensionUiTimelineItem[] = snapshot.extensionUi?.cards ?? (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }));
-  const live = [...snapshot.liveMessages, ...(snapshot.partialThinking === undefined ? [] : [snapshot.partialThinking]), ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial]), ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
+  const live = [...snapshot.liveMessages, ...(snapshot.liveErrors ?? []), ...(snapshot.partialThinking === undefined ? [] : [snapshot.partialThinking]), ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial]), ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
   return {
     // History and the snapshot are authoritative after a reconnect. Keeping an
     // old in-memory tail here can resurrect an already-settled partial/tool.
@@ -177,8 +177,8 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
   }
   if (event.type === "timeline.upsert") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
-    const item = recordContextSummary(payload?.["item"]);
-    return item === undefined ? next : { ...next, items: mergeTimeline(next.items, [item]) };
+    const items = recordTimelineItem(payload?.["item"]);
+    return items.length === 0 ? next : { ...next, items: mergeTimeline(next.items, items) };
   }
   if (event.type === "extension.uiRequest") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -266,6 +266,8 @@ function upsert(items: TimelineItem[], item: TimelineItem): void {
 function recordTimelineItem(value: unknown): TimelineItem[] {
   const message = recordMessage(value);
   if (message !== undefined) return [message];
+  const error = recordError(value);
+  if (error !== undefined) return [error];
   const tool = recordTool(value);
   if (tool !== undefined) return [tool];
   const thinking = recordThinkingItem(value);
@@ -288,6 +290,29 @@ function sameUserMessage(a: MessageTimelineItem, b: MessageTimelineItem): boolea
   const aImages = a.images ?? [];
   const bImages = b.images ?? [];
   return aImages.length === bImages.length && aImages.every((image, index) => image.mimeType === bImages[index]?.mimeType && image.data === bImages[index]?.data);
+}
+
+function recordError(value: unknown): ErrorTimelineItem | undefined {
+  if (!isRecord(value) || value["kind"] !== "error") return undefined;
+  if (typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["code"] !== "string" || typeof value["message"] !== "string") return undefined;
+  const state = value["state"];
+  if (state !== "retrying" && state !== "failed" && state !== "recovered") return undefined;
+  const diagnostics = isRecord(value["diagnostics"])
+    ? Object.entries(value["diagnostics"]).flatMap(([key, entry]) => typeof entry === "string" && entry !== "" ? [[key, entry] as const] : [])
+    : [];
+  return {
+    kind: "error",
+    id: value["id"],
+    createdAt: value["createdAt"],
+    ...(typeof value["groupId"] === "string" && value["groupId"] !== "" ? { groupId: value["groupId"] } : {}),
+    code: value["code"],
+    message: value["message"],
+    state,
+    ...(typeof value["attempt"] === "number" && Number.isFinite(value["attempt"]) ? { attempt: value["attempt"] } : {}),
+    ...(typeof value["maxAttempts"] === "number" && Number.isFinite(value["maxAttempts"]) ? { maxAttempts: value["maxAttempts"] } : {}),
+    ...(typeof value["retryAt"] === "string" ? { retryAt: value["retryAt"] } : {}),
+    ...(diagnostics.length === 0 ? {} : { diagnostics: Object.fromEntries(diagnostics) }),
+  };
 }
 
 function recordThinkingItem(value: unknown): ThinkingTimelineItem | undefined {
