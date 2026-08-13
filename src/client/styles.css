@@ -78,7 +78,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .session-text { display: flex; align-items: baseline; justify-content: space-between; min-width: 0; flex: 1; gap: 6px; }
 .session-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
 .session-text small { flex: 0 0 auto; color: var(--subtle); font-size: 10px; }
-.project-empty { padding: 5px 7px; color: var(--subtle); font-size: 11px; }
+.project-empty { padding: 5px 12px 5px 36px; color: var(--subtle); font-size: 11px; }
 .session-expand-more, .session-collapse { display: flex; align-items: center; gap: 4px; width: 100%; border: 0; border-radius: 999px; background: transparent; padding: 4px 12px 4px 36px; color: var(--subtle); font-size: 11px; font-weight: 500; text-align: left; }
 .session-expand-more:hover, .session-collapse:hover { background: #302d37; color: #c8c5ce; }
 .session-expand-more svg, .session-collapse svg { flex: 0 0 auto; }
