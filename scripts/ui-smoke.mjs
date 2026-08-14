@@ -307,8 +307,8 @@ async function verifyExtensionUi(page, name, session, emit) {
   await emit("extension.uiRequest", {
     request: { id: "c0ffee00-0000-4000-8000-000000000002", method: "notify", message: "扩展通知冒烟验证", notifyType: "info" },
   });
-  await page.getByText("扩展通知冒烟验证", { exact: true }).waitFor({ state: "visible", timeout: 5_000 });
-  if (await page.locator(".extension-notice").count() !== 0) failures.push(`${name}: extension notify leaked into timeline history`);
+  await page.getByLabel("扩展通知").getByText("扩展通知冒烟验证", { exact: true }).waitFor({ state: "visible", timeout: 5_000 });
+  if (await page.locator(".extension-notification").filter({ hasText: "扩展通知冒烟验证" }).count() !== 1) failures.push(`${name}: extension notify history record is missing`);
 }
 
 async function verifyDesktopControls(page, name, session) {
