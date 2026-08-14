@@ -15,6 +15,9 @@ import type {
   SessionThinkingSnapshot,
   ThinkingLevel,
   TimelinePage,
+  TunnelConfig,
+  TunnelMethod,
+  TunnelStatus,
   WorkspaceFile,
   Workspace,
   AppSettings,
@@ -99,6 +102,10 @@ export const api = {
   respondLogin: async (operationId: string, value: string): Promise<AuthLoginOperation> => (await request<{ operation: AuthLoginOperation }>(`/api/settings/auth/${operationId}/respond`, { method: "POST", body: JSON.stringify({ value }) })).operation,
   cancelLogin: async (operationId: string): Promise<AuthLoginOperation> => (await request<{ operation: AuthLoginOperation }>(`/api/settings/auth/${operationId}/cancel`, { method: "POST", body: "{}" })).operation,
   logoutProvider: async (providerId: string): Promise<void> => { await request(`/api/settings/auth/${encodeURIComponent(providerId)}/logout`, { method: "POST", body: "{}" }); },
+  tunnelStatus: async (): Promise<{ status: TunnelStatus; settings: TunnelConfig }> => request("/api/tunnel"),
+  tunnelStart: async (method: TunnelMethod, port?: number): Promise<TunnelStatus> => (await request<{ status: TunnelStatus }>("/api/tunnel/start", { method: "POST", body: JSON.stringify({ method, ...(port === undefined ? {} : { port }) }) })).status,
+  tunnelStop: async (): Promise<TunnelStatus> => (await request<{ status: TunnelStatus }>("/api/tunnel/stop", { method: "POST", body: "{}" })).status,
+  tunnelUpdateSettings: async (patch: Partial<TunnelConfig>): Promise<{ status: TunnelStatus; settings: TunnelConfig }> => request("/api/tunnel/settings", { method: "PUT", body: JSON.stringify(patch) }),
   listSessions: async (workspaceId: string, query?: string): Promise<SessionSummary[]> => {
     const params = new URLSearchParams();
     if (query?.trim()) params.set("query", query.trim());

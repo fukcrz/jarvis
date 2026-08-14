@@ -7,13 +7,14 @@ import helmet from "@fastify/helmet";
 import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
 import { z } from "zod";
-import { THINKING_LEVELS } from "../shared/protocol.js";
+import { THINKING_LEVELS, TUNNEL_METHODS } from "../shared/protocol.js";
 import type { ApiErrorBody, DirectoryListing, SessionRef, WorkspaceFile } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { SessionService } from "./session-service.js";
 import { WorkspaceStore } from "./workspace-store.js";
 import { SettingsService } from "./settings-service.js";
+import { TunnelService } from "./tunnel-service.js";
 
 const workspaceInput = z.object({ cwd: z.string().min(1), label: z.string().max(96).optional() }).strict();
 const workspaceUpdateInput = z.object({ label: z.string().min(1).max(96) }).strict();
@@ -62,6 +63,7 @@ export interface JarvisServices {
   workspaces: WorkspaceStore;
   sessions: SessionService;
   events: EventHub;
+  tunnel: TunnelService;
 }
 
 export async function buildApp(options: { serveStatic?: boolean; staticRoot?: string } = {}): Promise<FastifyInstance> {
@@ -73,16 +75,39 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   const sessions = new SessionService(workspaces, events);
   const settings = new SettingsService(() => sessions.globalModelRuntime(), () => sessions.refreshModelConfiguration());
   await settings.initialize();
-  const services: JarvisServices = { workspaces, sessions, events };
+  const services: JarvisServices = { workspaces, sessions, events, tunnel: new TunnelService((message) => app.log.info({ tunnel: message })) };
 
   await app.register(cors, { origin: production ? [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] : true });
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
 
   app.decorate("jarvis", services);
-  app.addHook("onClose", async () => { await sessions.dispose(); });
+  app.addHook("onClose", async () => { await sessions.dispose(); await services.tunnel.dispose(); });
 
   app.get("/api/health", async () => ({ ok: true, version: 1 }));
+
+  const tunnelMethodInput = z.enum(TUNNEL_METHODS);
+  const tunnelStartInput = z.object({ method: z.enum(TUNNEL_METHODS), port: z.number().int().min(1).max(65535).optional() }).strict();
+  const tunnelSishInput = z.object({ server: z.string().min(1).max(500), subdomain: z.string().max(200).optional(), sshPort: z.number().int().min(1).max(65535).optional() }).strict();
+  const tunnelFrpInput = z.object({ server: z.string().min(1).max(500), token: z.string().max(2_000).optional(), remotePort: z.number().int().min(1).max(65535).optional(), domain: z.string().max(300).optional() }).strict();
+  const tunnelSettingsInput = z.object({
+    enabled: z.boolean().optional(),
+    method: tunnelMethodInput.optional(),
+    port: z.number().int().min(1).max(65535).optional(),
+    sish: tunnelSishInput.optional(),
+    frp: tunnelFrpInput.optional(),
+  }).strict();
+  // 内网穿透：把本 UI 暴露到公网（无鉴权，地址泄露即人人可访问）。
+  app.get("/api/tunnel", async () => ({ status: services.tunnel.getStatus(), settings: services.tunnel.getConfig() }));
+  app.post("/api/tunnel/start", async (request) => {
+    const body = tunnelStartInput.parse(request.body);
+    return { status: await services.tunnel.start({ method: body.method, ...(body.port === undefined ? {} : { port: body.port }) }) };
+  });
+  app.post("/api/tunnel/stop", async () => ({ status: await services.tunnel.stop() }));
+  app.put("/api/tunnel/settings", async (request) => {
+    const body = tunnelSettingsInput.parse(request.body);
+    return { status: await services.tunnel.updateSettings(body), settings: services.tunnel.getConfig() };
+  });
   app.get("/api/settings", async () => ({ settings: settings.getSettings() }));
   app.patch("/api/settings", async (request) => ({ settings: await settings.updateSettings(settingsInput.parse(request.body)) }));
   app.get("/api/settings/providers", async () => ({ providers: await settings.providers() }));

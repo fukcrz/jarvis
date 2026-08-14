@@ -32,3 +32,7 @@ process.on("SIGINT", () => { void close("SIGINT"); });
 process.on("SIGTERM", () => { void close("SIGTERM"); });
 
 await app.listen({ port, host });
+const address = app.server.address();
+const actualPort = typeof address === "object" && address !== null && typeof address.port === "number" ? address.port : port;
+// 设置目标端口；若开启了自动穿透，这里会直接拉起隧道。
+await app.jarvis.tunnel.initialize(actualPort);

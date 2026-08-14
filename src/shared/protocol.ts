@@ -69,6 +69,60 @@ export interface AuthLoginOperation {
   error?: string;
 }
 
+export const TUNNEL_METHODS = ["cloudflared", "localtunnel", "ssh", "sish", "frp"] as const;
+export type TunnelMethod = typeof TUNNEL_METHODS[number];
+
+export type TunnelState = "idle" | "starting" | "running" | "stopping" | "error";
+
+export interface TunnelLogEntry {
+  /** epoch ms */
+  t: number;
+  line: string;
+}
+
+/** 自建 SSH (sish) 服务器配置 */
+export interface TunnelSishConfig {
+  /** 服务器地址，如 user@example.com 或 example.com */
+  server: string;
+  /** 子域名，留空则随机分配 */
+  subdomain?: string;
+  /** 服务器 SSH 端口，默认 22 */
+  sshPort?: number;
+}
+
+/** frp 服务器配置 */
+export interface TunnelFrpConfig {
+  /** frps 地址，如 host:7000 */
+  server: string;
+  token?: string;
+  /** 远程端口，默认等于本地端口 */
+  remotePort?: number;
+  /** 用于生成 Caddy HTTPS 配置的域名 */
+  domain?: string;
+}
+
+export interface TunnelConfig {
+  /** 是否自动穿透（服务启动时自动连接） */
+  enabled: boolean;
+  method: TunnelMethod;
+  /** 本机被穿透的端口，0 表示使用服务自身端口 */
+  port: number;
+  sish?: TunnelSishConfig;
+  frp?: TunnelFrpConfig;
+}
+
+export interface TunnelStatus {
+  state: TunnelState;
+  method?: TunnelMethod;
+  port?: number;
+  /** 公网地址（连接成功后） */
+  url?: string;
+  error?: string;
+  startedAt?: number;
+  pid?: number;
+  logs: TunnelLogEntry[];
+}
+
 export interface DirectoryEntry {
   name: string;
   path: string;
