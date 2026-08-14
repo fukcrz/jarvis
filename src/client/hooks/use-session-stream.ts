@@ -78,13 +78,6 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     const sideEffects: PanelSideEffect[] = [];
     const historyRewritten = events.some((event) => event.type === "session.rewritten");
     for (const event of events) {
-      // 会话 run 结束（完成/失败）：页面在后台时弹浏览器通知。
-      if (event.type === "run.settled" || event.type === "run.failed") {
-        const notification = runNotificationFor(event, stateRef.current.transcript.items);
-        if (notification !== undefined) {
-          notifyRunFinished({ ...notification, sessionName: sessionNameRef.current });
-        }
-      }
       if (event.type === "extension.uiRequest") {
         const effect = sideEffectFor(event);
         if (effect !== undefined) sideEffects.push(effect);
@@ -96,6 +89,19 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     if (transcriptEvents.length > 0) {
       dispatch({ type: "events", events: coalesceStreamEvents(transcriptEvents) });
     }
+    // 会话 run 结束（完成/失败）：页面在后台时弹浏览器通知。
+    // 同步冲刷时 React 的 stateRef 尚未更新（useEffect 异步），通知正文需基于
+    // “当前 transcript 应用本批事件后”的结果计算，否则会漏掉刚完成的最后一条助手消息。
+    const settledEvents = events.filter((event) => event.type === "run.settled" || event.type === "run.failed");
+    if (settledEvents.length > 0) {
+      const items = applySessionEvents(stateRef.current.transcript, coalesceStreamEvents(transcriptEvents)).items;
+      for (const event of settledEvents) {
+        const notification = runNotificationFor(event, items);
+        if (notification !== undefined) {
+          notifyRunFinished({ ...notification, sessionName: sessionNameRef.current });
+        }
+      }
+    }
     if (historyRewritten || sideEffects.length > 0) {
       setExtensionPanels((previous) => applySideEffects(historyRewritten ? { widgets: {}, statuses: {} } : previous, sideEffects));
       if (historyRewritten) document.title = defaultDocumentTitle.current;
@@ -104,6 +110,12 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
 
   const receiveEvent = useCallback((event: SessionEvent) => {
     queuedEvents.current.push(event);
+    if (event.type === "run.settled" || event.type === "run.failed") {
+      // 后台标签页中 rAF 被暂停、不会触发，而运行结束通知恰恰需要在后台弹出：
+      // 结算事件必须立即同步冲刷，否则通知永远不会出现。
+      flushEvents();
+      return;
+    }
     if (requestFrame.current === undefined) requestFrame.current = requestAnimationFrame(flushEvents);
   }, [flushEvents]);
 
