@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowLeft, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
+import { ArrowLeft, Bell, CircleAlert, FolderPlus, MoreVertical, Pencil, Plus, X } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, isSessionConflict, socketUrl } from "./api";
@@ -884,6 +884,7 @@ export function App() {
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline key={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? requestForkMessage : undefined} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} />
       <ExtensionPanels panels={stream.extensionPanels} />
+      <ExtensionToasts toasts={stream.extensionToasts} onDismiss={stream.dismissExtensionToast} />
       <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
@@ -1044,12 +1045,28 @@ function readDrafts(): Record<string, string> {
 
 function ExtensionPanels({ panels }: { panels: ExtensionPanelState }) {
   const widgets = Object.entries(panels.widgets);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   if (widgets.length === 0) return null;
   return <aside className="extension-panels" aria-label="扩展内容">
     <div className="extension-widget-track">
-      {widgets.map(([key, widget]) => <section key={`widget:${key}`} className="extension-widget" title={key}>
-        <pre className="extension-widget-body">{widget.lines.join("\n")}</pre>
+      {widgets.map(([key, widget]) => <section key={`widget:${key}`} className={`extension-widget ${collapsed[key] === true ? "collapsed" : ""}`} title={key}>
+        <button type="button" className="extension-widget-heading" onClick={() => setCollapsed((current) => ({ ...current, [key]: !current[key] }))} aria-expanded={collapsed[key] !== true}>
+          <span>{key}</span><small>{collapsed[key] === true ? "展开" : "收起"}</small>
+        </button>
+        {collapsed[key] === true ? null : <pre className="extension-widget-body">{widget.lines.join("\n")}</pre>}
       </section>)}
     </div>
   </aside>;
+}
+
+function ExtensionToasts({ toasts, onDismiss }: { toasts: Array<{ id: string; message: string; tone: "info" | "warning" | "error" }>; onDismiss: (id: string) => void }) {
+  if (toasts.length === 0) return null;
+  return <div className="extension-toast-stack" aria-label="扩展通知" aria-live="polite">
+    {toasts.map((toast) => {
+      const Icon = toast.tone === "info" ? Bell : CircleAlert;
+      return <div key={toast.id} className={`extension-toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}>
+        <Icon size={15} /><span>{toast.message}</span><button type="button" aria-label="关闭通知" onClick={() => onDismiss(toast.id)}><X size={14} /></button>
+      </div>;
+    })}
+  </div>;
 }

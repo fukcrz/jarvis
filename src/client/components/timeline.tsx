@@ -53,6 +53,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   const [following, setFollowing] = useState(true);
   const [editingMessageId, setEditingMessageId] = useState<string>();
   const feedback = getRunFeedback(status, items, streamingMessageId);
+  const pendingExtensions = items.filter((item): item is ExtensionUiTimelineItem => item.kind === "extension-ui" && item.outcome === undefined && item.request.method !== "notify");
   const hasMatchingTimelineFailure = status.lastError !== undefined && items.some((item) => item.kind === "error" && item.state === "failed" && item.code === status.lastError!.code && item.message === status.lastError!.message);
   const statusIndicatorKey = `${status.runState}:${status.compacting?.reason ?? ""}:${status.compacting?.retrying?.retryAt ?? ""}:${status.retrying?.retryAt ?? ""}:${status.lastError?.occurredAt ?? ""}:${error ?? ""}:${notice ?? ""}`;
 
@@ -100,6 +101,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
         </div>
       </div>
       {!following ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
+      {pendingExtensions.length === 0 ? null : <ExtensionInteractionDock items={pendingExtensions} onRespond={onExtensionUiRespond} />}
     </section>
   );
 }
@@ -278,8 +280,21 @@ function MessageActions({ item, streaming, onEdit, onFork }: { item: MessageTime
 type ExtensionDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
 type ExtensionResponse = { value?: string; confirmed?: boolean; cancelled?: boolean };
 
-function ExtensionUiOperation({ item, onRespond }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"] }) {
+function ExtensionInteractionDock({ items, onRespond }: { items: ExtensionUiTimelineItem[]; onRespond: TimelineProps["onExtensionUiRespond"] }) {
+  const item = items[0];
+  if (item === undefined) return null;
+  return <aside className="extension-interaction-dock" aria-label="待处理的扩展交互">
+    <div className="extension-dock-header"><span><CircleAlert size={14} />需要你的操作</span>{items.length > 1 ? <small>{items.length} 项待处理</small> : null}</div>
+    <ExtensionUiOperation item={item} onRespond={onRespond} docked />
+  </aside>;
+}
+
+function ExtensionUiOperation({ item, onRespond, docked = false }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"]; docked?: boolean }) {
   if (item.request.method === "notify") return <ExtensionNotification item={item} />;
+  return <ExtensionDialogOperation item={item} onRespond={onRespond} docked={docked} />;
+}
+
+function ExtensionDialogOperation({ item, onRespond, docked = false }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"]; docked?: boolean }) {
   const request = item.request as ExtensionDialogRequest;
   const [value, setValue] = useState(request.method === "editor" ? request.prefill ?? "" : "");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -310,7 +325,7 @@ function ExtensionUiOperation({ item, onRespond }: { item: ExtensionUiTimelineIt
   };
 
   if (item.outcome !== undefined) return <ExtensionResult item={item} expanded={showResult} onToggle={() => setShowResult((current) => !current)} />;
-  return <article className={`extension-operation pending ${request.method}`} aria-label={`扩展操作：${request.title}`} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); respond({ cancelled: true }); } }}>
+  return <article className={`extension-operation pending ${request.method} ${docked ? "docked" : ""}`} aria-label={`扩展操作：${request.title}`} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); respond({ cancelled: true }); } }}>
     <div className="extension-operation-heading"><Clock3 size={14} /><span>{extensionOperationPrompt(request.method)}</span><ExtensionTimeout timeout={request.timeout} createdAt={item.createdAt} /></div>
     <p className="extension-operation-title">{request.title}</p>
     {request.method === "confirm" && request.message !== undefined ? <p className="extension-operation-message">{request.message}</p> : null}
@@ -433,7 +448,7 @@ function renderTimelineItems(items: TimelineItem[], streamingMessageId: string |
     if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} editing={entry.item.id === editingMessageId} onStartEdit={() => setEditingMessageId(entry.item.id)} onCancelEdit={() => setEditingMessageId(undefined)} onEdit={onEditUserMessage} onFork={entry.item.role === "user" ? onForkMessage : undefined} baseDir={workspaceCwd} />;
     if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
     if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={workspaceCwd} />;
-    if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={onExtensionUiRespond} />;
+    if (entry.kind === "extension-ui") return entry.item.request.method !== "notify" && entry.item.outcome === undefined ? null : <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={onExtensionUiRespond} />;
     if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={workspaceCwd} />;
     return <ActivityGroup key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={index === activeActivityIndex} startedAt={status.activeRun?.startedAt} stopping={status.runState === "stopping"} />;
   });
