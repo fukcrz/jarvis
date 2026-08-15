@@ -1,24 +1,26 @@
 import { useState, type ComponentProps } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
-import { defaultSchema } from "hast-util-sanitize";
+import { defaultSchema, type Schema } from "hast-util-sanitize";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
+import type { PluggableList } from "unified";
 
-const remarkPlugins = [remarkGfm];
+const remarkPlugins: PluggableList = [remarkGfm];
 // 注意顺序：sanitize 先跑、highlight 后跑。
 // rehype-sanitize 的默认 schema 只允许 code 上的 language-* class（span 的 class 会被剥掉），
 // 先消毒再高亮，hljs 生成的 class 就不会被过滤。
 // 默认 schema 的 src 协议白名单只有 http/https，data URI（base64 内嵌图）会被剥掉，
 // 这里在默认基础上放开 data: 协议，让 AI 可以用 ![](data:image/...) 直接把图嵌进回复。
-const sanitizeSchema = {
+const defaultProtocols = defaultSchema.protocols ?? {};
+const sanitizeSchema: Schema = {
   ...defaultSchema,
   protocols: {
-    ...defaultSchema.protocols,
-    src: [...(defaultSchema.protocols.src ?? []), "data"],
+    ...defaultProtocols,
+    src: [...(defaultProtocols.src ?? []), "data"],
   },
 };
-const rehypePlugins = [[rehypeSanitize, sanitizeSchema], rehypeHighlight];
+const rehypePlugins: PluggableList = [[rehypeSanitize, sanitizeSchema], rehypeHighlight];
 // react-markdown 默认的 urlTransform 只放行 http/https 等协议，data URI 会被替换成空串；
 // 这里只放行 data:image/*（base64 内嵌图），其余 URL 行为保持默认（javascript: 等仍被拦截）。
 const urlTransform = (url: string): string =>

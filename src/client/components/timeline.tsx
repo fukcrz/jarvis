@@ -169,12 +169,11 @@ function RunFailureCard({ failure, onRetryCompaction }: { failure: NonNullable<S
     ? "压缩没有生成可用摘要，任务已停止。"
     : "任务已停止，可以查看诊断信息后继续操作。";
 
-  return <article className="run-failure" role="alert">
-    <header className="run-failure-header">
+  return <article className="timeline-event run-failure" role="alert">
+    <button className="timeline-event-summary run-failure-header" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
       <span className="run-failure-icon"><CircleAlert size={16} /></span>
       <span className="run-failure-copy"><strong>{title}</strong><span>{summary}</span></span>
-      <button type="button" className="run-failure-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? "收起诊断" : "查看诊断"}</button>
-    </header>
+    </button>
     {open ? <div className="run-failure-diagnostics">
       <dl>
         <div><dt>错误码</dt><dd><code>{failure.code}</code></dd></div>
@@ -200,18 +199,18 @@ function formatFailureTime(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(date);
 }
 
-function ErrorItem({ items }: { items: ErrorTimelineItem[] }) {
+function ErrorItem({ items, retrying }: { items: ErrorTimelineItem[]; retrying: boolean }) {
   const [open, setOpen] = useState(false);
   const latest = items.at(-1)!;
+  if (retrying && latest.state === "retrying") return null;
   const stateLabel = latest.state === "retrying" ? "正在重试" : latest.state === "recovered" ? "已恢复" : "操作未完成";
   const retryLabel = latest.attempt === undefined || latest.maxAttempts === undefined ? undefined : `第 ${String(latest.attempt)} / ${String(latest.maxAttempts)} 次尝试`;
   const details = items.length > 1 || latest.diagnostics !== undefined;
-  return <article className={`timeline-error ${latest.state}`} role={latest.state === "failed" ? "alert" : "status"}>
-    <div className="timeline-error-header">
+  return <article className={`timeline-event timeline-error ${latest.state}`} role={latest.state === "failed" ? "alert" : "status"}>
+    <button className="timeline-event-summary timeline-error-header" type="button" aria-expanded={open} onClick={() => setOpen((value) => details ? !value : value)}>
       {latest.state === "recovered" ? <Check size={15} /> : latest.state === "retrying" ? <LoaderCircle className="spin" size={15} /> : <CircleAlert size={15} />}
       <div className="timeline-error-copy"><strong>{stateLabel}</strong><span>{retryLabel === undefined ? errorSummary(latest.message) : `${retryLabel}：${errorSummary(latest.message)}`}</span></div>
-      {details ? <button type="button" className="timeline-error-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? "收起详情" : "查看详情"}</button> : null}
-    </div>
+    </button>
     {!open ? null : <div className="timeline-error-details">{items.map((item, index) => <ErrorDetails key={item.id} item={item} showAttempt={items.length > 1} index={index} />)}</div>}
   </article>;
 }
@@ -446,7 +445,7 @@ function renderTimelineItems(items: TimelineItem[], streamingMessageId: string |
 
   return grouped.map((entry, index) => {
     if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} editing={entry.item.id === editingMessageId} onStartEdit={() => setEditingMessageId(entry.item.id)} onCancelEdit={() => setEditingMessageId(undefined)} onEdit={onEditUserMessage} onFork={entry.item.role === "user" ? onForkMessage : undefined} baseDir={workspaceCwd} />;
-    if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
+    if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} retrying={status.retrying !== undefined} />;
     if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={workspaceCwd} />;
     if (entry.kind === "extension-ui") return entry.item.request.method !== "notify" && entry.item.outcome === undefined ? null : <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={onExtensionUiRespond} />;
     if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={workspaceCwd} />;
