@@ -455,7 +455,8 @@ export interface SessionEvent {
 export type WorkspaceEvent =
   | { version: typeof PROTOCOL_VERSION; type: "session.created"; workspaceId: string; session: SessionSummary }
   | { version: typeof PROTOCOL_VERSION; type: "session.updated"; workspaceId: string; session: SessionSummary }
-  | { version: typeof PROTOCOL_VERSION; type: "session.deleted"; workspaceId: string; sessionId: string };
+  | { version: typeof PROTOCOL_VERSION; type: "session.deleted"; workspaceId: string; sessionId: string }
+  | { version: typeof PROTOCOL_VERSION; type: "extension.notify"; workspaceId: string; notification: { id: string; message: string; notifyType?: "info" | "warning" | "error" } };
 
 export interface ApiErrorBody {
   error: {
@@ -530,6 +531,16 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
     type: z.literal("session.deleted"),
     workspaceId: z.string().min(1),
     sessionId: z.string().min(1),
+  }),
+  z.object({
+    version: z.literal(PROTOCOL_VERSION),
+    type: z.literal("extension.notify"),
+    workspaceId: z.string().min(1),
+    notification: z.object({
+      id: z.string().min(1),
+      message: z.string(),
+      notifyType: z.enum(["info", "warning", "error"]).optional(),
+    }),
   }),
 ]);
 

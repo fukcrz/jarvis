@@ -320,7 +320,7 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const frameworkStatus = errorStatusCode(error);
     const statusCode = appError?.statusCode ?? (error instanceof z.ZodError ? 400 : frameworkStatus ?? 500);
     const isClientError = statusCode >= 400 && statusCode < 500;
-    const message = appError?.message ?? (isClientError ? "Invalid request" : "Unexpected server error");
+    const message = appError?.message ?? (error instanceof z.ZodError ? formatValidationError(error) : isClientError ? "Invalid request" : "Unexpected server error");
     const code = appError?.code ?? (isClientError ? "INVALID_REQUEST" : "INTERNAL_ERROR");
     if (statusCode >= 500) request.log.error(error);
     const response: ApiErrorBody = { error: { code, message, requestId: request.id } };
@@ -433,6 +433,27 @@ async function pathExists(path: string): Promise<boolean> {
 function sessionRef(value: unknown): SessionRef {
   const parsed = z.object({ workspaceId: z.string().uuid(), sessionId: z.string().uuid() }).parse(value);
   return parsed;
+}
+
+function formatValidationError(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (issue === undefined) return "请求参数无效";
+  const path = issue.path.join(".");
+  const labels: Record<string, string> = {
+    "sish.server": "sish 服务器地址",
+    "sish.sshPort": "sish SSH 端口",
+    "sish.subdomain": "sish 子域名",
+    "frp.server": "frps 服务器地址",
+    "frp.remotePort": "frp 远程端口",
+    "frp.token": "frp token",
+    "frp.domain": "frp 域名",
+    port: "目标端口",
+  };
+  const label = labels[path];
+  if (issue.code === "too_small" && label !== undefined) return `${label}不能为空`;
+  if (issue.code === "invalid_type" && label !== undefined) return `请填写有效的${label}`;
+  if (issue.code === "invalid_type") return "请求参数类型无效";
+  return "Invalid request";
 }
 
 function safeSessionRef(value: unknown): SessionRef | undefined {

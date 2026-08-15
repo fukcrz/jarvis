@@ -75,9 +75,7 @@ export class ExtensionUiBridge {
       input: (title, placeholder, opts) => this.dialog({ method: "input", title, placeholder, timeout: opts?.timeout }, opts, undefined),
       editor: (title, prefill) => this.dialog({ method: "editor", title, prefill }, undefined, undefined),
       notify: (message, notifyType) => {
-        const request = { id: crypto.randomUUID(), method: "notify" as const, message, notifyType };
-        this.rememberCard({ kind: "extension-ui", id: `ext:${request.id}`, createdAt: new Date().toISOString(), request });
-        this.request(request);
+        this.request({ id: crypto.randomUUID(), method: "notify", message, notifyType });
       },
       setStatus: (statusKey, statusText) => {
         if (statusText === undefined) delete this.statuses[statusKey];

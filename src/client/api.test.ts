@@ -104,6 +104,20 @@ describe("API client", () => {
     await expect(api.compact(ref)).rejects.toMatchObject({ name: "ApiError", code: "SESSION_BUSY", status: 409, requestId: "req-409" });
   });
 
+  it("turns legacy tunnel validation JSON into a readable message", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { code: "INVALID_REQUEST", message: JSON.stringify([{ code: "too_small", path: ["sish", "server"] }]) } }), { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.tunnelUpdateSettings({ enabled: true, method: "sish", port: 9528, sish: { server: "" } })).rejects.toMatchObject({ name: "ApiError", message: "sish 服务器地址不能为空" });
+  });
+
+  it("keeps explicit tunnel errors actionable", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { code: "TUNNEL_SISH_SERVER", message: "请填写 sish 服务器地址" } }), { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.tunnelUpdateSettings({ enabled: true, method: "sish", port: 9528, sish: { server: "" } })).rejects.toMatchObject({ message: "请填写 sish 服务器地址，例如 user@tun.example.com" });
+  });
+
   it("recognizes legacy Fastify error bodies as recoverable session conflicts", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ statusCode: 409, code: "SESSION_BUSY", error: "Conflict", message: "This session is already running" }), { status: 409 }));
     vi.stubGlobal("fetch", fetchMock);

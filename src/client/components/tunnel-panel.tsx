@@ -25,7 +25,7 @@ function portNumber(value: string): number | undefined {
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : undefined;
 }
 
-export function TunnelPanel({ onMessage }: { onMessage: (message: string) => void }) {
+export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?: "success" | "error") => void }) {
   const [status, setStatus] = useState<TunnelStatus>({ state: "idle", logs: [] });
   const [settings, setSettings] = useState<TunnelConfig>({ enabled: false, method: "cloudflared", port: 9528 });
   const [method, setMethod] = useState<TunnelMethod>("cloudflared");
@@ -60,7 +60,7 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string) => voi
           return data.settings;
         });
       } catch (error) {
-        if (!disposed) onMessageRef.current(error instanceof Error ? error.message : "无法读取穿透状态");
+        if (!disposed) onMessageRef.current(error instanceof Error ? error.message : "无法读取穿透状态", "error");
       }
     };
     void load();
@@ -128,7 +128,7 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string) => voi
       setSettings(result.settings);
       onMessageRef.current(enabled ? "隧道已启动" : "隧道已停止");
     } catch (error) {
-      onMessageRef.current(error instanceof Error ? error.message : "操作失败");
+      onMessageRef.current(error instanceof Error ? error.message : "操作失败", "error");
     } finally {
       setBusy(false);
     }

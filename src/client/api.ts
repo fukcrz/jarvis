@@ -52,9 +52,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (!response.ok) {
     const body = await response.json().catch(() => undefined) as unknown;
     const error = apiErrorDetails(body);
+    const code = error.code ?? "REQUEST_FAILED";
+    const message = error.message ?? `Request failed (${String(response.status)})`;
     throw new ApiError(
-      error.code ?? "REQUEST_FAILED",
-      error.message ?? `Request failed (${String(response.status)})`,
+      code,
+      formatApiErrorMessage(code, message),
       response.status,
       error.requestId,
     );
@@ -75,6 +77,45 @@ function apiErrorDetails(body: unknown): { code?: string; message?: string; requ
     ...(typeof source["message"] === "string" ? { message: source["message"] } : {}),
     ...(typeof source["requestId"] === "string" ? { requestId: source["requestId"] } : {}),
   };
+}
+
+const tunnelFieldLabels: Record<string, string> = {
+  "sish.server": "sish 服务器地址",
+  "sish.sshPort": "sish SSH 端口",
+  "sish.subdomain": "sish 子域名",
+  "frp.server": "frps 服务器地址",
+  "frp.remotePort": "frp 远程端口",
+  "frp.token": "frp token",
+  "frp.domain": "frp 域名",
+  port: "目标端口",
+};
+
+/** Converts backend validation details into text suitable for a settings toast. */
+function formatApiErrorMessage(code: string, message: string): string {
+  if (code === "TUNNEL_SISH_SERVER") return "请填写 sish 服务器地址，例如 user@tun.example.com";
+  if (code === "TUNNEL_FRP_SERVER") return "请填写 frps 服务器地址，例如 1.2.3.4:7000";
+  if (code === "TUNNEL_INVALID_PORT") return "目标端口必须在 1-65535 之间";
+  if (code === "INVALID_REQUEST") {
+    const details = parseValidationDetails(message);
+    if (details !== undefined) return details;
+  }
+  return message;
+}
+
+function parseValidationDetails(message: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(message);
+    if (!Array.isArray(parsed)) return undefined;
+    const issue = parsed.find((item: unknown) => typeof item === "object" && item !== null && !Array.isArray(item)) as Record<string, unknown> | undefined;
+    if (issue === undefined) return undefined;
+    const path = Array.isArray(issue["path"]) ? issue["path"].filter((part): part is string | number => typeof part === "string" || typeof part === "number").join(".") : "";
+    const label = tunnelFieldLabels[path];
+    if (issue["code"] === "too_small" && label !== undefined) return `${label}不能为空`;
+    if (issue["code"] === "invalid_type" && label !== undefined) return `请填写有效的${label}`;
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export const api = {

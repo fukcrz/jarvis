@@ -939,6 +939,21 @@ export class SessionService {
       ...(scopedModels.length === 0 ? {} : { scopedModels }),
     });
     const publishExtensionUi = (message: ExtensionUiMessage) => {
+      // Notifications are application-level transient feedback. They use the
+      // workspace stream so they are independent of the selected session.
+      if (message.type === "request" && message.request.method === "notify") {
+        this.events.publishWorkspace(active.ref.workspaceId, {
+          version: 1,
+          type: "extension.notify",
+          workspaceId: active.ref.workspaceId,
+          notification: {
+            id: message.request.id,
+            message: message.request.message,
+            ...(message.request.notifyType === undefined ? {} : { notifyType: message.request.notifyType }),
+          },
+        });
+        return;
+      }
       // `bindExtensions` runs only after `active` is registered below, so startup
       // dialogs never disappear or deadlock.
       if (message.type === "request") {

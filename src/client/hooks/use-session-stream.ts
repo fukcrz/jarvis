@@ -54,14 +54,12 @@ type PanelSideEffect =
   | { kind: "status"; key: string; text: string | undefined }
   | { kind: "widget"; key: string; lines: string[] | undefined; placement: "aboveEditor" | "belowEditor" }
   | { kind: "title"; title: string }
-  | { kind: "editor"; text: string }
-  | { kind: "toast"; toast: ExtensionToast };
+  | { kind: "editor"; text: string };
 
 export function useSessionStream(ref: SessionRef | undefined, assistantName = document.title, sessionName?: string) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [extensionPanels, setExtensionPanels] = useState<ExtensionPanelState>({ widgets: {}, statuses: {} });
-  const [extensionToasts, setExtensionToasts] = useState<ExtensionToast[]>([]);
   const stateRef = useRef(state);
   const sessionNameRef = useRef(sessionName);
   const refKey = ref === undefined ? undefined : `${ref.workspaceId}:${ref.sessionId}`;
@@ -89,9 +87,8 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
       if (event.type === "extension.uiRequest") {
         const effect = sideEffectFor(event);
         if (effect !== undefined) sideEffects.push(effect);
-        // Notifications are both transient feedback and a lightweight history item.
-        // Other ambient UI methods stay out of the transcript.
-        if (effect === undefined || effect.kind === "toast") transcriptEvents.push(event);
+        // Ambient extension UI requests are not conversation history.
+        if (effect === undefined && !isNotifyRequest(event)) transcriptEvents.push(event);
       } else {
         transcriptEvents.push(event);
       }
@@ -111,10 +108,6 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
           notifyRunFinished({ ...notification, sessionName: sessionNameRef.current });
         }
       }
-    }
-    if (sideEffects.some((effect) => effect.kind === "toast")) {
-      const toasts = sideEffects.filter((effect): effect is Extract<PanelSideEffect, { kind: "toast" }> => effect.kind === "toast").map((effect) => effect.toast);
-      setExtensionToasts((previous) => [...previous, ...toasts].slice(-4));
     }
     if (historyRewritten || sideEffects.length > 0) {
       setExtensionPanels((previous) => applySideEffects(historyRewritten ? { widgets: {}, statuses: {} } : previous, sideEffects));
@@ -142,13 +135,11 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     if (ref === undefined) {
       dispatch({ type: "reset" });
       setExtensionPanels({ widgets: {}, statuses: {} });
-      setExtensionToasts([]);
       document.title = defaultDocumentTitle.current;
       return;
     }
     dispatch({ type: "reset" });
     setExtensionPanels({ widgets: {}, statuses: {} });
-    setExtensionToasts([]);
     document.title = defaultDocumentTitle.current;
     let disposed = false;
     let socket: WebSocket | undefined;
@@ -181,7 +172,6 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
           document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
           hydrated = true;
           // Most buffered events are covered by the authoritative snapshot.
-          // Notifications are cards in that snapshot too, so replay only newer events.
           for (const event of buffered.filter((event) => event.seq > snapshot.seq)) receiveEvent(event);
           buffered = [];
           attempt = 0;
@@ -217,14 +207,6 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   useEffect(() => () => {
     if (requestFrame.current !== undefined) cancelAnimationFrame(requestFrame.current);
   }, []);
-
-  useEffect(() => {
-    if (extensionToasts.length === 0) return;
-    const timers = extensionToasts.map((toast) => window.setTimeout(() => {
-      setExtensionToasts((current) => current.filter((candidate) => candidate.id !== toast.id));
-    }, toast.tone === "error" ? 10_000 : 5_000));
-    return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, [extensionToasts]);
 
   // Keep the displayed model responsive before the matching socket frame arrives.
   const selectModel = useCallback(async (model: ModelDescriptor): Promise<void> => {
@@ -262,10 +244,6 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     }
   }, [refKey, loadingEarlier]);
 
-  const dismissExtensionToast = useCallback((id: string) => {
-    setExtensionToasts((current) => current.filter((toast) => toast.id !== id));
-  }, []);
-
   const respondExtensionUi = useCallback(async (id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> => {
     if (ref === undefined) throw new Error("会话已关闭");
     try {
@@ -281,7 +259,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   }, []);
   const discardOptimisticUser = useCallback((id: string) => { dispatch({ type: "discard-optimistic-user", id }); }, []);
   const replaceUserMessage = useCallback((messageId: string, id: string, text: string, images: import("../../shared/protocol").ImageAttachment[]) => { dispatch({ type: "replace-user", messageId, id, text, images }); }, []);
-  return { ...state, refresh, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, extensionToasts, dismissExtensionToast, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
+  return { ...state, refresh, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
 }
 
 function runNotificationFor(event: SessionEvent, items: TimelineItem[]): RunNotificationInfo | undefined {
@@ -314,18 +292,18 @@ function extensionPanelsFromSnapshot(snapshot: ExtensionUiSnapshot | undefined):
   };
 }
 
+function isNotifyRequest(event: SessionEvent): boolean {
+  if (event.type !== "extension.uiRequest" || !isRecord(event.payload)) return false;
+  const request = event.payload["request"];
+  return isRecord(request) && request["method"] === "notify";
+}
+
 function sideEffectFor(event: SessionEvent): PanelSideEffect | undefined {
   const payload = isRecord(event.payload) ? event.payload : undefined;
   const request = isRecord(payload?.["request"]) ? payload["request"] : undefined;
   if (request === undefined) return undefined;
   const method = request["method"];
-  if (method === "notify") {
-    const id = typeof request["id"] === "string" ? request["id"] : undefined;
-    const message = request["message"];
-    if (id === undefined || typeof message !== "string") return undefined;
-    const notifyType = request["notifyType"];
-    return { kind: "toast", toast: { id, message, tone: notifyType === "warning" || notifyType === "error" ? notifyType : "info" } };
-  }
+  if (method === "notify") return undefined;
   if (method === "setStatus") {
     const key = request["statusKey"];
     if (typeof key !== "string") return undefined;

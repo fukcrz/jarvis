@@ -14,7 +14,7 @@ import { MobileActionSheet, type MobileActionTarget } from "./components/mobile-
 import { MobileSessionSwitcher } from "./components/mobile-navigation";
 import { Timeline } from "./components/timeline";
 import { SettingsPage } from "./components/settings-page";
-import type { ExtensionPanelState } from "./hooks/use-session-stream";
+import type { ExtensionPanelState, ExtensionToast } from "./hooks/use-session-stream";
 import { ContextButton } from "./components/context-button";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
@@ -50,6 +50,7 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [assistantName, setAssistantName] = useState("Jarvis");
   const [pageError, setPageError] = useState<string | undefined>();
+  const [globalExtensionToasts, setGlobalExtensionToasts] = useState<ExtensionToast[]>([]);
   const [sessionNotice, setSessionNotice] = useState<string | undefined>();
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ workspaceId: string; session: SessionSummary } | undefined>();
@@ -376,6 +377,14 @@ export function App() {
   }, [drafts]);
 
   useEffect(() => {
+    if (globalExtensionToasts.length === 0) return;
+    const timers = globalExtensionToasts.map((toast) => window.setTimeout(() => {
+      setGlobalExtensionToasts((current) => current.filter((candidate) => candidate.id !== toast.id));
+    }, toast.tone === "error" ? 10_000 : 5_000));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [globalExtensionToasts]);
+
+  useEffect(() => {
     let disposed = false;
     const cleanups = workspaces.map((workspace) => {
       let socket: WebSocket | undefined;
@@ -389,6 +398,12 @@ export function App() {
             const parsed = workspaceEventSchema.safeParse(JSON.parse(String(event.data)));
             if (!parsed.success) return;
             const workspaceEvent = parsed.data;
+            if (workspaceEvent.type === "extension.notify") {
+              const { notification } = workspaceEvent;
+              const tone: ExtensionToast["tone"] = notification.notifyType === "warning" || notification.notifyType === "error" ? notification.notifyType : "info";
+              setGlobalExtensionToasts((current) => [...current, { id: notification.id, message: notification.message, tone }].slice(-4));
+              return;
+            }
             if (workspaceEvent.type === "session.deleted") {
               (deletedSessionsRef.current[workspace.id] ??= new Set()).add(workspaceEvent.sessionId);
               setSessionsByWorkspace((current) => {
@@ -884,7 +899,6 @@ export function App() {
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline key={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? requestForkMessage : undefined} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} />
       <ExtensionPanels panels={stream.extensionPanels} />
-      <ExtensionToasts toasts={stream.extensionToasts} onDismiss={stream.dismissExtensionToast} />
       <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} extensionStatuses={stream.extensionPanels.statuses} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
@@ -895,6 +909,7 @@ export function App() {
 
   return (
     <main className="app-shell">
+      <ExtensionToasts toasts={globalExtensionToasts} onDismiss={(id) => setGlobalExtensionToasts((current) => current.filter((toast) => toast.id !== id))} />
       <div className="desktop-sidebar">{sidebar}</div>
       {!isMobile ? <section className={isSettingsPage ? "main-pane settings-main-pane" : "main-pane"}>
         {isSettingsPage ? null : <header className="chat-header">
