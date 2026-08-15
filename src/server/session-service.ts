@@ -88,6 +88,8 @@ interface ActiveSession {
   extensionFailure?: { code: string; message: string };
   /** 扩展 ctx.ui 请求桥（对话框待浏览器响应）。 */
   extensionUi: ExtensionUiBridge;
+  /** Extension startup must finish before callers can use or replace this session. */
+  extensionReady: Promise<void>;
   /** Error from the last assistant message; applied at agent_settled once Pi's retries/compaction finish. */
   pendingRunError?: { code: string; message: string };
   /** A deferred settle lets extension-triggered compaction claim the active run. */
@@ -123,6 +125,8 @@ export class SessionService {
   private readonly active = new Map<string, ActiveSession>();
   private readonly pendingOpens = new Map<string, Promise<ActiveSession>>();
   private readonly deleting = new Set<string>();
+  /** Serialize operations which replace or tear down an in-memory session. */
+  private readonly sessionTransitions = new Map<string, Promise<void>>();
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
 
   constructor(
@@ -236,21 +240,23 @@ export class SessionService {
   }
 
   async editAndResend(ref: SessionRef, messageId: string, text: string, clientRequestId: string, images?: ImageAttachment[]): Promise<PromptAccepted> {
-    const active = await this.getActive(ref);
-    this.assertSessionIdle(active, "Editing");
-    const entry = findUserMessageEntry(active.session.sessionManager.getBranch(), messageId);
-    if (entry === undefined) throw new AppError("MESSAGE_NOT_FOUND", "User message not found in this session", 404);
+    return this.withSessionTransition(ref, async () => {
+      const active = await this.getActive(ref, true, false);
+      this.assertSessionIdle(active, "Editing");
+      const entry = findUserMessageEntry(active.session.sessionManager.getBranch(), messageId);
+      if (entry === undefined) throw new AppError("MESSAGE_NOT_FOUND", "User message not found in this session", 404);
 
-    const parentId = stringValue(entry["parentId"]) || undefined;
-    if (parentId === undefined) active.session.sessionManager.resetLeaf();
-    else active.session.sessionManager.branch(parentId);
-    active.extensionUi.reset();
-    this.events.publishSession(active.ref, {
-      type: "session.rewritten",
-      payload: { items: projectHistory(active.session.sessionManager.getBranch()), status: { sessionId: active.ref.sessionId, runState: "idle" } },
+      const parentId = stringValue(entry["parentId"]) || undefined;
+      if (parentId === undefined) active.session.sessionManager.resetLeaf();
+      else active.session.sessionManager.branch(parentId);
+      active.extensionUi.reset();
+      this.events.publishSession(active.ref, {
+        type: "session.rewritten",
+        payload: { items: projectHistory(active.session.sessionManager.getBranch()), status: { sessionId: active.ref.sessionId, runState: "idle" } },
+      });
+      await this.reopenAtCurrentBranch(active);
+      return this.prompt(ref, text, clientRequestId, images, undefined, true) as Promise<PromptAccepted>;
     });
-    await this.reopenAtCurrentBranch(active);
-    return this.prompt(ref, text, clientRequestId, images) as Promise<PromptAccepted>;
   }
 
   async rename(ref: SessionRef, name: string): Promise<SessionSummary> {
@@ -265,52 +271,50 @@ export class SessionService {
   }
 
   async remove(ref: SessionRef): Promise<void> {
-    const key = activeKey(ref);
-    if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is already being deleted", 409);
-    this.deleting.add(key);
+    return this.withSessionTransition(ref, async () => {
+      const key = activeKey(ref);
+      if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is already being deleted", 409);
+      this.deleting.add(key);
 
-    try {
-      const workspace = this.workspaces.get(ref.workspaceId);
-      const pending = this.pendingOpens.get(key);
-      if (pending !== undefined) await pending.catch(() => undefined);
+      try {
+        const workspace = this.workspaces.get(ref.workspaceId);
+        const pending = this.pendingOpens.get(key);
+        if (pending !== undefined) await pending.catch(() => undefined);
 
-      const active = this.active.get(key);
-      if (active !== undefined && (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming)) {
-        throw new AppError("SESSION_BUSY", "Stop the current run before deleting this session", 409);
-      }
-
-      const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
-      const listed = sessionDir === undefined
-        ? await SessionManager.list(workspace.cwd)
-        : await SessionManager.list(workspace.cwd, sessionDir);
-      const match = listed.find((entry) => entry.id === ref.sessionId);
-      if (match === undefined && active === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
-
-      if (active !== undefined) {
-        this.clearSettlementTimer(active);
-        active.unsubscribe();
-        active.extensionUi.closeAll();
-        active.session.dispose();
-        this.active.delete(key);
-      }
-
-      if (match !== undefined) {
-        try {
-          await rm(match.path);
-        } catch (error) {
-          if (isMissingFile(error)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
-          throw new AppError("SESSION_DELETE_FAILED", "Unable to delete session history", 500);
+        const active = this.active.get(key);
+        if (active !== undefined && (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming)) {
+          throw new AppError("SESSION_BUSY", "Stop the current run before deleting this session", 409);
         }
-      }
 
-      this.events.publishWorkspace(ref.workspaceId, { version: 1, type: "session.deleted", workspaceId: ref.workspaceId, sessionId: ref.sessionId });
-    } finally {
-      this.deleting.delete(key);
-    }
+        const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
+        const listed = sessionDir === undefined
+          ? await SessionManager.list(workspace.cwd)
+          : await SessionManager.list(workspace.cwd, sessionDir);
+        const match = listed.find((entry) => entry.id === ref.sessionId);
+        if (match === undefined && active === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+
+        if (active !== undefined) {
+          await this.disposeActive(active, "quit");
+        }
+
+        if (match !== undefined) {
+          try {
+            await rm(match.path);
+          } catch (error) {
+            if (isMissingFile(error)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+            throw new AppError("SESSION_DELETE_FAILED", "Unable to delete session history", 500);
+          }
+        }
+
+        this.events.publishWorkspace(ref.workspaceId, { version: 1, type: "session.deleted", workspaceId: ref.workspaceId, sessionId: ref.sessionId });
+      } finally {
+        this.deleting.delete(key);
+      }
+    });
   }
 
   async timeline(ref: SessionRef, before?: number, limit = PAGE_LIMIT): Promise<TimelinePage> {
-    const active = await this.getActive(ref);
+    const active = await this.getActive(ref, false);
     const items = projectHistory(active.session.sessionManager.getBranch());
     const end = clamp(before ?? items.length, 0, items.length);
     const requestedStart = Math.max(0, end - clamp(limit, 1, 500));
@@ -331,12 +335,59 @@ export class SessionService {
 
   /** Recreate Pi's in-memory agent context after moving a session leaf. */
   private async reopenAtCurrentBranch(active: ActiveSession): Promise<void> {
-    const key = activeKey(active.ref);
-    active.unsubscribe();
+    const manager = active.session.sessionManager;
+    const targetSessionFile = active.session.sessionFile;
+    await this.disposeActive(active, "resume", targetSessionFile);
+    await this.createActive(active.ref, this.workspaces.get(active.ref.workspaceId), manager);
+  }
+
+  /**
+   * Serialize a session replacement/teardown without blocking unrelated sessions.
+   * The promise stored in the map never rejects; callers receive the operation's
+   * own error while the next operation can always proceed.
+   */
+  private async withSessionTransition<T>(ref: SessionRef, operation: () => Promise<T>): Promise<T> {
+    const key = activeKey(ref);
+    const previous = this.sessionTransitions.get(key);
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    this.sessionTransitions.set(key, current);
+    if (previous !== undefined) await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.sessionTransitions.get(key) === current) this.sessionTransitions.delete(key);
+    }
+  }
+
+  /**
+   * Follow Pi's replacement teardown order: abort work, let extensions clean up
+   * in session_shutdown, then invalidate the old extension context via dispose().
+   */
+  private async disposeActive(active: ActiveSession, reason: "quit" | "resume" | "fork", targetSessionFile?: string): Promise<void> {
+    this.clearSettlementTimer(active);
+    active.session.abortCompaction();
+    active.session.abortRetry();
+    active.session.abortBranchSummary();
+    active.session.abortBash();
+    await active.session.abort().catch(() => undefined);
+    // A startup extension dialog can keep bindExtensions() pending. Close the
+    // browser bridge first so session_start can unwind before session_shutdown;
+    // otherwise a late session_start could reactivate the stale runtime.
     active.extensionUi.closeAll();
+    await active.extensionReady.catch(() => undefined);
+    try {
+      if (active.session.extensionRunner.hasHandlers("session_shutdown")) {
+        await active.session.extensionRunner.emit({ type: "session_shutdown", reason, ...(targetSessionFile === undefined ? {} : { targetSessionFile }) });
+      }
+    } catch (error) {
+      console.warn("Pi extension shutdown failed", error);
+    }
+    active.unsubscribe();
     active.session.dispose();
-    this.active.delete(key);
-    await this.createActive(active.ref, this.workspaces.get(active.ref.workspaceId), active.session.sessionManager);
+    const key = activeKey(active.ref);
+    if (this.active.get(key) === active) this.active.delete(key);
   }
 
   private composerCommands(active: ActiveSession): ComposerCommand[] {
@@ -363,7 +414,7 @@ export class SessionService {
   }
 
   async runtime(ref: SessionRef): Promise<SessionStreamSnapshot> {
-    const active = await this.getActive(ref);
+    const active = await this.getActive(ref, false);
     const contextUsage = this.contextUsageSnapshot(active);
     return {
       // Read all fields without an await so this projection and its seq form
@@ -439,12 +490,12 @@ export class SessionService {
     return this.thinkingSnapshot(active);
   }
 
-  async prompt(ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[], behavior?: "steer" | "followUp"): Promise<PromptAccepted | QueuedPromptAccepted> {
+  async prompt(ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[], behavior?: "steer" | "followUp", skipTransitionWait = false): Promise<PromptAccepted | QueuedPromptAccepted> {
     const prompt = text.trim();
     if (prompt === "" && (images === undefined || images.length === 0)) throw new AppError("PROMPT_EMPTY", "Prompt cannot be empty");
     if (prompt.length > MAX_PROMPT_LENGTH) throw new AppError("PROMPT_TOO_LARGE", `Prompt must be at most ${String(MAX_PROMPT_LENGTH)} characters`);
     const attachments = this.validateAttachments(images);
-    const active = await this.getActive(ref);
+    const active = await this.getActive(ref, true, !skipTransitionWait);
     const requestKey = `prompt:${clientRequestId}`;
     const previous = active.requestRuns.get(requestKey);
     if (previous !== undefined) return previous as PromptAccepted | QueuedPromptAccepted;
@@ -737,7 +788,9 @@ export class SessionService {
   }
 
   async resolveExtensionUi(ref: SessionRef, id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> {
-    const active = await this.getActive(ref);
+    // This endpoint must not wait for bindExtensions(): a startup dialog is
+    // precisely what may be keeping that promise pending.
+    const active = await this.getActive(ref, false);
     if (!active.extensionUi.respond({ id, ...response })) {
       // A stale id and a malformed response deliberately share the same public
       // result: callers cannot probe another pending dialog's shape.
@@ -750,34 +803,29 @@ export class SessionService {
   }
 
   async disposeWorkspace(workspaceId: string): Promise<void> {
-    const sessions = [...this.active.values()].filter((active) => active.ref.workspaceId === workspaceId);
-    for (const active of sessions) {
-      this.clearSettlementTimer(active);
-      active.unsubscribe();
-      active.extensionUi.closeAll();
-      active.session.abortCompaction();
-      active.session.abortRetry();
-      active.session.abortBash();
-      await active.session.abort().catch(() => undefined);
-      active.session.dispose();
-      this.active.delete(activeKey(active.ref));
+    const refs = [...this.active.values()]
+      .filter((active) => active.ref.workspaceId === workspaceId)
+      .map((active) => active.ref);
+    for (const ref of refs) {
+      await this.withSessionTransition(ref, async () => {
+        const active = this.active.get(activeKey(ref));
+        if (active !== undefined && active.ref.workspaceId === workspaceId) await this.disposeActive(active, "quit");
+      });
     }
   }
 
   async dispose(): Promise<void> {
-    for (const active of this.active.values()) {
-      this.clearSettlementTimer(active);
-      active.unsubscribe();
-      active.extensionUi.closeAll();
-      active.session.abortCompaction();
-      active.session.abortRetry();
-      active.session.abortBash();
-      await active.session.abort().catch(() => undefined);
-      active.session.dispose();
+    const refs = [...this.active.values()].map((active) => active.ref);
+    for (const ref of refs) {
+      await this.withSessionTransition(ref, async () => {
+        const active = this.active.get(activeKey(ref));
+        if (active !== undefined) await this.disposeActive(active, "quit");
+      });
     }
     this.active.clear();
     this.pendingOpens.clear();
     this.deleting.clear();
+    this.sessionTransitions.clear();
   }
 
   private async executePrompt(active: ActiveSession, prompt: string, runId: string, images: ImageAttachment[] = []): Promise<void> {
@@ -884,17 +932,30 @@ export class SessionService {
     });
   }
 
-  private async getActive(ref: SessionRef): Promise<ActiveSession> {
+  private async getActive(ref: SessionRef, waitForExtensions = true, waitForTransition = true): Promise<ActiveSession> {
     const key = activeKey(ref);
+    if (waitForTransition) {
+      const transition = this.sessionTransitions.get(key);
+      if (transition !== undefined) await transition;
+    }
     if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is being deleted", 409);
     const existing = this.active.get(key);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      if (waitForExtensions) await existing.extensionReady;
+      return existing;
+    }
     const pending = this.pendingOpens.get(key);
-    if (pending !== undefined) return pending;
+    if (pending !== undefined) {
+      const active = await pending;
+      if (waitForExtensions) await active.extensionReady;
+      return active;
+    }
     const promise = this.openActive(ref);
     this.pendingOpens.set(key, promise);
     try {
-      return await promise;
+      const active = await promise;
+      if (waitForExtensions) await active.extensionReady;
+      return active;
     } finally {
       if (this.pendingOpens.get(key) === promise) this.pendingOpens.delete(key);
     }
@@ -977,6 +1038,7 @@ export class SessionService {
       modelRuntime,
       modelSwitching: false,
       extensionUi,
+      extensionReady: Promise.resolve(),
       unsubscribe: () => undefined,
       state: { sessionId: session.sessionId, runState: "idle" },
       requestRuns: new Map(),
@@ -1001,7 +1063,9 @@ export class SessionService {
       if (!isUnsupportedExtensionInteraction(error)) return;
       active.extensionFailure = { code: UNSUPPORTED_EXTENSION_INTERACTION, message: error.error };
     };
-    void session.bindExtensions({ mode: "rpc", uiContext: extensionUi.context, onError: onExtensionError }).catch((error: unknown) => {
+    // Register before binding so startup UI/events have a live ActiveSession,
+    // but make all callers await extensionReady before using this session.
+    active.extensionReady = session.bindExtensions({ mode: "rpc", uiContext: extensionUi.context, onError: onExtensionError }).catch((error: unknown) => {
       console.warn("Pi extension binding failed", error);
     });
     return active;

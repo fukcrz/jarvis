@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -608,6 +608,40 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const timeline = (await server.inject({ method: "GET", url: `${baseUrl}/timeline` })).json<{ items: Array<{ id: string }> }>();
     expect(timeline.items.map((item) => item.id)).toEqual([source.user1, source.assistant1]);
     socket.close();
+  });
+
+  it("serializes concurrent rewrites and runs extension shutdown before replacement", async () => {
+    const server = activeApp();
+    const extensionsPath = join(jarvisHome, "agent", "extensions");
+    await mkdir(extensionsPath, { recursive: true });
+    const logPath = join(jarvisHome, "extension-lifecycle.log");
+    await writeFile(join(extensionsPath, "lifecycle-log.ts"), `import { appendFileSync } from "node:fs";
+      const logPath = ${JSON.stringify(logPath)};
+      export default function (pi) {
+        pi.on("session_start", async (event) => { appendFileSync(logPath, "start:" + event.reason + "\\n"); });
+        pi.on("session_shutdown", async (event, ctx) => {
+          ctx.ui.setStatus("lifecycle", "closing");
+          appendFileSync(logPath, "shutdown:" + event.reason + "\\n");
+        });
+      }`);
+    const workspacePath = join(jarvisHome, "edit-lifecycle-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+    const baseUrl = `/api/workspaces/${workspace.id}/sessions/${source.id}`;
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+
+    const [first, second] = await Promise.all([
+      server.inject({ method: "POST", url: `${baseUrl}/edit-and-resend`, payload: { messageId: source.user2, text: "First edit", clientRequestId: randomUUID() } }),
+      server.inject({ method: "POST", url: `${baseUrl}/edit-and-resend`, payload: { messageId: source.user2, text: "Second edit", clientRequestId: randomUUID() } }),
+    ]);
+    expect([first.statusCode, second.statusCode].sort()).toEqual([200, 409]);
+    await vi.waitFor(async () => {
+      await expect(readFile(logPath, "utf8")).resolves.toContain("shutdown:resume\n");
+    });
+    const lifecycle = await readFile(logPath, "utf8");
+    expect(lifecycle.indexOf("shutdown:resume\n")).toBeGreaterThan(lifecycle.indexOf("start:"));
+    expect(lifecycle.match(/shutdown:resume\n/g)).toHaveLength(1);
   });
 
   it("keeps the originating run active through an extension compaction handoff and continuation", async () => {
