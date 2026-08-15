@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, Check, CircleAlert, CheckCircle2, ExternalLink, FolderPlus, Globe, KeyRound, LogOut, Plus, Save, Settings2, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, CircleAlert, CheckCircle2, ExternalLink, FolderPlus, Globe, KeyRound, LogOut, Plus, RotateCw, Save, Settings2, Trash2, X } from "lucide-react";
 import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderStatus, Workspace } from "../../shared/protocol";
 import { api } from "../api";
 import { isNotificationEnabled, requestNotificationPermission, setNotificationEnabled } from "../notifications";
@@ -40,6 +40,8 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [workspaceBusy, setWorkspaceBusy] = useState<string | undefined>();
   const [workspaceRemoveTarget, setWorkspaceRemoveTarget] = useState<Workspace | undefined>();
+  const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
+  const [restarting, setRestarting] = useState(false);
 
   const showMessage = (nextMessage: string, tone: SettingsMessageTone = "success") => {
     setMessageTone(tone);
@@ -76,6 +78,19 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
     try { const settings: AppSettings = await api.updateSettings(name); onAssistantNameChange(settings.assistantName); setName(settings.assistantName); showMessage("已保存"); }
     catch (error) { showMessage(error instanceof Error ? error.message : "名称保存失败", "error"); }
     finally { setBusy(undefined); }
+  };
+
+  const restart = async () => {
+    setRestartConfirmOpen(false);
+    setRestarting(true);
+    try {
+      await api.selfRestart();
+      // 202 已返回：服务即将重启，WebSocket 断开后由 app 层自动重连恢复。
+      showMessage("正在重启，连接将短暂中断…");
+    } catch (error) {
+      setRestarting(false);
+      showMessage(error instanceof Error ? error.message : "重启请求失败", "error");
+    }
   };
 
   const startLogin = async (target: ProviderStatus, type: "api_key" | "oauth") => {
@@ -155,7 +170,7 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
       </nav>
       <main className="settings-content">
         {message === undefined ? null : <div className={`settings-toast ${messageTone}`} role={messageTone === "error" ? "alert" : "status"}><span className="settings-toast-icon">{messageTone === "error" ? <CircleAlert size={15} /> : <CheckCircle2 size={15} />}</span><span>{message}</span><button type="button" aria-label="关闭提示" onClick={() => setMessage(undefined)}><X size={14} /></button></div>}
-        {tab === "general" ? <section className="settings-section"><h2>常规</h2><label className="settings-field"><span>助手名称</span><input value={name} maxLength={64} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void saveName(); }} /></label><Button onClick={() => { void saveName(); }} disabled={busy === "name" || name.trim() === ""}><Save size={15} />保存名称</Button><label className="settings-field settings-checkbox"><input type="checkbox" checked={notificationsEnabled} onChange={(event) => { void toggleNotifications(event.target.checked); }} /><span>会话运行结束时弹出通知（页面在后台时）</span></label></section> : null}
+        {tab === "general" ? <section className="settings-section"><h2>常规</h2><label className="settings-field"><span>助手名称</span><input value={name} maxLength={64} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void saveName(); }} /></label><Button onClick={() => { void saveName(); }} disabled={busy === "name" || name.trim() === ""}><Save size={15} />保存名称</Button><label className="settings-field settings-checkbox"><input type="checkbox" checked={notificationsEnabled} onChange={(event) => { void toggleNotifications(event.target.checked); }} /><span>会话运行结束时弹出通知（页面在后台时）</span></label><div className="settings-section-heading"><h2>服务</h2></div><p className="settings-muted">重启服务会短暂中断所有连接（自动重连恢复），仅加载现有构建，不会编译。</p><Button variant="danger" disabled={restarting} onClick={() => setRestartConfirmOpen(true)}><RotateCw size={15} />{restarting ? "正在重启…" : "重启服务"}</Button></section> : null}
         {tab === "accounts" ? <section className="settings-section"><div className="settings-section-heading"><h2>账号与登录</h2><Button variant="secondary" size="sm" onClick={() => setAccountPickerOpen((open) => !open)}><Plus size={14} />添加账号</Button></div>{loading ? <p className="settings-muted">正在读取供应商…</p> : <>{accountPickerOpen ? <div className="account-picker"><strong>选择供应商</strong>{providers.filter((item) => !item.authConfigured).map((item) => <div className="account-picker-row" key={item.id}><div className="provider-main"><strong>{item.name}</strong><small>{item.id}</small></div><div className="provider-status">{item.supportsApiKey ? <Button variant="secondary" size="sm" disabled={busy === item.id} onClick={() => { void startLogin(item, "api_key"); }}><KeyRound size={13} />API Key</Button> : null}{item.supportsOAuth ? <Button variant="secondary" size="sm" disabled={busy === item.id} onClick={() => { void startLogin(item, "oauth"); }}><ExternalLink size={13} />登录</Button> : null}</div></div>)}{providers.every((item) => item.authConfigured) ? <span className="settings-muted">没有可添加的供应商</span> : null}</div> : null}<div className="provider-list">{providers.filter((item) => item.authConfigured).map((item) => <article className="provider-row" key={item.id}><div className="provider-main"><strong>{item.name}</strong><small>{item.id} · {item.models.length} 个模型</small></div><div className="provider-status"><span className="status-ready"><Check size={14} />{item.authSource ?? "已配置"}</span><Button variant="ghost" size="icon" aria-label={`退出 ${item.name}`} title={`退出 ${item.name}`} disabled={busy === item.id} onClick={() => { void logout(item); }}><LogOut size={15} /></Button></div></article>)}{providers.every((item) => !item.authConfigured) && !accountPickerOpen ? <span className="settings-muted">暂无已登录账号</span> : null}</div></>}</section> : null}
         {tab === "providers" ? <section className="settings-section"><div className="settings-section-heading"><h2>供应商配置</h2><Button size="sm" onClick={() => { setProvider({ ...EMPTY_PROVIDER, models: [{ ...EMPTY_MODEL }] }); setEditing(true); }}><Plus size={14} />添加供应商</Button></div>{editing ? <ProviderEditor provider={provider} onChange={setProvider} onCancel={() => setEditing(false)} onSave={() => { void saveProvider(); }} busy={busy === "provider"} /> : <div className="provider-list">{customProviders.length === 0 ? <p className="settings-muted">暂无自定义供应商</p> : customProviders.map((item) => <article className="provider-row" key={item.id}><div className="provider-main"><strong>{item.name ?? item.id}</strong><small>{item.id} · {item.baseUrl} · {item.models.length} 个模型</small></div><div className="provider-status"><Button variant="secondary" size="sm" onClick={() => { setProvider(item); setEditing(true); }}>编辑</Button><Button variant="ghost" size="icon" aria-label={`删除 ${item.id}`} title="删除供应商" disabled={busy === item.id} onClick={() => { void removeProvider(item.id); }}><Trash2 size={15} /></Button></div></article>)}</div>}</section> : null}
         {tab === "workspaces" ? <section className="settings-section"><div className="settings-section-heading"><h2>工作区</h2><Button size="sm" onClick={() => setWorkspaceDialogOpen(true)}><FolderPlus size={14} />添加工作区</Button></div>{workspaces.length === 0 ? <p className="settings-muted">暂无工作区</p> : <div className="provider-list">{workspaces.map((workspace, index) => <article className="provider-row workspace-settings-row" key={workspace.id}><div className="provider-main"><strong>{workspace.label}</strong><small>{workspace.cwd}</small></div><div className="provider-status workspace-settings-actions"><Button variant="ghost" size="icon" aria-label="上移工作区" title="上移" disabled={index === 0 || workspaceBusy !== undefined} onClick={() => { void moveWorkspace(index, -1); }}><ArrowUp size={15} /></Button><Button variant="ghost" size="icon" aria-label="下移工作区" title="下移" disabled={index === workspaces.length - 1 || workspaceBusy !== undefined} onClick={() => { void moveWorkspace(index, 1); }}><ArrowDown size={15} /></Button><Button variant="ghost" size="icon" aria-label={`删除工作区 ${workspace.label}`} title="删除工作区" disabled={workspaceBusy !== undefined} onClick={() => setWorkspaceRemoveTarget(workspace)}><Trash2 size={15} /></Button></div></article>)}</div>}</section> : null}
@@ -165,6 +180,7 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
     {operation === undefined ? null : <AuthOperation operation={operation} prompt={operationPrompt} event={operationEvent} onRespond={(value) => { void api.respondLogin(operation.id, value).then(setOperation); }} onCancel={() => { void api.cancelLogin(operation.id).then(setOperation); }} onClose={() => setOperation(undefined)} />}
     <WorkspaceDialog open={workspaceDialogOpen} onOpenChange={setWorkspaceDialogOpen} onAdd={onAddWorkspace} />
     <Dialog open={workspaceRemoveTarget !== undefined} onOpenChange={(open) => { if (!open && workspaceBusy === undefined) setWorkspaceRemoveTarget(undefined); }}><DialogContent title="删除工作区"><p className="delete-session-message"><strong>{workspaceRemoveTarget?.label ?? ""}</strong>及其会话历史将保留在磁盘上。</p><div className="dialog-actions"><Button variant="secondary" onClick={() => setWorkspaceRemoveTarget(undefined)} disabled={workspaceBusy !== undefined}>取消</Button><Button variant="danger" onClick={() => { void removeWorkspace(); }} disabled={workspaceBusy !== undefined}>删除</Button></div></DialogContent></Dialog>
+    <Dialog open={restartConfirmOpen} onOpenChange={(open) => { if (!open && !restarting) setRestartConfirmOpen(false); }}><DialogContent title="重启服务"><p className="delete-session-message">所有会话将断开数秒，随后自动重连恢复。重启仅加载现有构建，不会编译。</p><div className="dialog-actions"><Button variant="secondary" onClick={() => setRestartConfirmOpen(false)} disabled={restarting}>取消</Button><Button variant="danger" onClick={() => { void restart(); }} disabled={restarting}>重启</Button></div></DialogContent></Dialog>
   </section>;
 }
 

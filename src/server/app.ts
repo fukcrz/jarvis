@@ -12,6 +12,7 @@ import type { ApiErrorBody, DirectoryListing, SessionRef, WorkspaceFile } from "
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { SessionService } from "./session-service.js";
+import { registerSelfRestart } from "./self-restart.js";
 import { WorkspaceStore } from "./workspace-store.js";
 import { SettingsService } from "./settings-service.js";
 import { TunnelService } from "./tunnel-service.js";
@@ -85,6 +86,8 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.addHook("onClose", async () => { await sessions.dispose(); await services.tunnel.dispose(); });
 
   app.get("/api/health", async () => ({ ok: true, version: 1 }));
+
+  registerSelfRestart(app, events);
 
   const tunnelMethodInput = z.enum(TUNNEL_METHODS);
   const tunnelStartInput = z.object({ method: z.enum(TUNNEL_METHODS), port: z.number().int().min(1).max(65535).optional() }).strict();

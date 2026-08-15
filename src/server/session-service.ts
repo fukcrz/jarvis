@@ -42,7 +42,7 @@ import type {
   ToolTimelineItem,
   Workspace,
 } from "../shared/protocol.js";
-import { emptySessionQueue } from "../shared/protocol.js";
+import { emptySessionQueue, PROTOCOL_VERSION } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
@@ -53,7 +53,7 @@ import { WorkspaceStore } from "./workspace-store.js";
 interface ActiveRun {
   id: string;
   startedAt: string;
-  kind: "llm" | "bash" | "compaction";
+  kind: "llm" | "bash" | "compaction" | "reload";
 }
 
 /** 所有运行类请求的幂等缓存值。 */
@@ -118,6 +118,13 @@ const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "i
 const JARVIS_COMPACT_COMMAND: ComposerCommand = {
   name: "compact",
   description: "压缩当前会话上下文",
+  source: "jarvis",
+};
+
+/** 重载 AGENTS.md / 插件 / 技能 / 提示词等资源（对齐 Pi TUI 的 /reload）。 */
+const JARVIS_RELOAD_COMMAND: ComposerCommand = {
+  name: "reload",
+  description: "重新加载 AGENTS.md / 插件 / 技能 / 提示词",
   source: "jarvis",
 };
 
@@ -408,9 +415,12 @@ export class SessionService {
         source: "skill" as const,
       })),
     ];
-    return commands.some((command) => command.name === JARVIS_COMPACT_COMMAND.name)
+    const withCompact = commands.some((command) => command.name === JARVIS_COMPACT_COMMAND.name)
       ? commands
       : [JARVIS_COMPACT_COMMAND, ...commands];
+    return withCompact.some((command) => command.name === JARVIS_RELOAD_COMMAND.name)
+      ? withCompact
+      : [JARVIS_RELOAD_COMMAND, ...withCompact];
   }
 
   async runtime(ref: SessionRef): Promise<SessionStreamSnapshot> {
@@ -502,6 +512,12 @@ export class SessionService {
     const compact = attachments.length === 0 ? this.jarvisCompactCommand(active, prompt) : undefined;
     if (compact !== undefined) {
       const accepted = this.startCompaction(active, compact.customInstructions);
+      this.rememberRequest(active, requestKey, accepted);
+      return accepted;
+    }
+    const reload = attachments.length === 0 && this.jarvisReloadCommand(active, prompt);
+    if (reload) {
+      const accepted = this.startReload(active);
       this.rememberRequest(active, requestKey, accepted);
       return accepted;
     }
@@ -736,6 +752,56 @@ export class SessionService {
     if (match === null) return undefined;
     const customInstructions = match[1]?.trim();
     return customInstructions === undefined || customInstructions === "" ? {} : { customInstructions };
+  }
+
+  /** 命中 /reload 且 Pi 未注册同名命令时返回 true（拦截并交给 startReload）。 */
+  private jarvisReloadCommand(active: ActiveSession, prompt: string): boolean {
+    if (this.hasPiCommand(active, JARVIS_RELOAD_COMMAND.name)) return false;
+    return /^\/reload\s*$/.test(prompt);
+  }
+
+  private startReload(active: ActiveSession): PromptAccepted {
+    if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) {
+      throw new AppError("SESSION_BUSY", "Stop the current run before reloading resources", 409);
+    }
+
+    const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "reload" };
+    active.state = {
+      sessionId: active.ref.sessionId,
+      runState: "running",
+      activeRun: run,
+    };
+    active.updatedAt = run.startedAt;
+    active.extensionFailure = undefined;
+    active.pendingRunError = undefined;
+    this.events.publishSession(active.ref, { type: "run.started", runId: run.id, payload: { status: active.state } });
+    this.publishSummary(active);
+    void this.executeReload(active, run.id);
+    return { accepted: true, runId: run.id };
+  }
+
+  private async executeReload(active: ActiveSession, runId: string): Promise<void> {
+    try {
+      await active.session.reload();
+      if (active.state.activeRun?.id !== runId) return;
+      this.events.publishWorkspace(active.ref.workspaceId, {
+        version: PROTOCOL_VERSION,
+        type: "extension.notify",
+        workspaceId: active.ref.workspaceId,
+        notification: { id: randomUUID(), message: "已重新加载 AGENTS.md / 插件 / 技能 / 提示词" },
+      });
+      this.settleRun(active, runId);
+    } catch (error) {
+      if (active.state.activeRun?.id !== runId) return;
+      const message = asMessage(error);
+      this.events.publishWorkspace(active.ref.workspaceId, {
+        version: PROTOCOL_VERSION,
+        type: "extension.notify",
+        workspaceId: active.ref.workspaceId,
+        notification: { id: randomUUID(), message: `重新加载失败：${message}`, notifyType: "error" },
+      });
+      this.failRun(active, runId, "RESOURCE_RELOAD_FAILED", message);
+    }
   }
 
   private hasPiCommand(active: ActiveSession, name: string): boolean {

@@ -1,4 +1,5 @@
 import type { SessionEvent, SessionRef, WorkspaceEvent } from "../shared/protocol.js";
+import { PROTOCOL_VERSION } from "../shared/protocol.js";
 
 interface SocketLike {
   readyState: number;
@@ -41,6 +42,28 @@ export class EventHub {
 
   publishWorkspace(workspaceId: string, event: WorkspaceEvent): void {
     this.send(this.workspaceSockets.get(workspaceId), event);
+  }
+
+  /** 向所有工作区连接广播同一通知（用于重启等全局状态）。 */
+  broadcastWorkspace(event: { version: typeof PROTOCOL_VERSION; type: "extension.notify"; notification: { id: string; message: string; notifyType?: "info" | "warning" | "error" } }): void {
+    for (const workspaceId of this.workspaceSockets.keys()) {
+      this.send(this.workspaceSockets.get(workspaceId), { ...event, workspaceId });
+    }
+  }
+
+  /** 断开全部连接（优雅停机/自重启前调用，避免 ws 阻止 Fastify close）。 */
+  terminateAll(): void {
+    for (const sockets of [...this.sessionSockets.values(), ...this.workspaceSockets.values()]) {
+      for (const socket of sockets) {
+        try {
+          socket.terminate?.();
+        } catch {
+          // 断开失败不影响其余 socket。
+        }
+      }
+    }
+    this.sessionSockets.clear();
+    this.workspaceSockets.clear();
   }
 
   private add(collection: Map<string, Set<SocketLike>>, key: string, socket: SocketLike): void {

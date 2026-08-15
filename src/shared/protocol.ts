@@ -3,7 +3,7 @@ import { z } from "zod";
 export const PROTOCOL_VERSION = 1 as const;
 
 export type RunState = "idle" | "running" | "stopping";
-export type RunKind = "llm" | "bash" | "compaction";
+export type RunKind = "llm" | "bash" | "compaction" | "reload";
 export type ToolState = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type ThinkingState = "running" | "completed";
 export type CompactionReason = "manual" | "threshold" | "overflow";

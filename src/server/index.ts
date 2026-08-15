@@ -1,4 +1,5 @@
 import { buildApp } from "./app.js";
+import type { FastifyInstance } from "fastify";
 
 const production = process.env["NODE_ENV"] === "production";
 const app = await buildApp({ serveStatic: production });
@@ -31,8 +32,29 @@ const close = async (signal: string) => {
 process.on("SIGINT", () => { void close("SIGINT"); });
 process.on("SIGTERM", () => { void close("SIGTERM"); });
 
-await app.listen({ port, host });
+await listenWithRetry(app, port, host, process.env["JARVIS_SELF_RESTART"] === "1");
 const address = app.server.address();
 const actualPort = typeof address === "object" && address !== null && typeof address.port === "number" ? address.port : port;
 // 设置目标端口；若开启了自动穿透，这里会直接拉起隧道。
 await app.jarvis.tunnel.initialize(actualPort);
+
+/**
+ * 自重启（JARVIS_SELF_RESTART=1）时新进程可能与旧进程短暂争抢端口：
+ * 遇 EADDRINUSE 轮询重试，等旧进程释放后接管；普通启动不做重试，端口被占直接报错。
+ */
+async function listenWithRetry(app: FastifyInstance, port: number, host: string, retryOnEaddrinuse: boolean): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    try {
+      await app.listen({ port, host });
+      return;
+    } catch (error) {
+      if (!retryOnEaddrinuse || !isEaddrinuse(error) || Date.now() > deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+}
+
+function isEaddrinuse(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown })["code"] === "EADDRINUSE";
+}

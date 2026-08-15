@@ -208,6 +208,7 @@ export const api = {
   respondExtensionUi: async (ref: SessionRef, id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> => {
     await request(`${sessionPath(ref)}/extension-ui`, { method: "POST", body: JSON.stringify({ id, ...response }) });
   },
+  selfRestart: async (): Promise<{ restarting: boolean }> => request("/api/self/restart", { method: "POST" }),
 };
 
 export function sessionPath(ref: SessionRef): string {
