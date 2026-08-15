@@ -353,7 +353,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
             <span><strong>{item.kind === "command" ? `/${item.command.name}` : item.kind === "session" ? item.session.name ?? item.session.preview ?? "新会话" : item.file.path}</strong>{item.kind === "command" && item.command.description !== undefined ? <small>{item.command.description}</small> : item.kind === "session" && item.session.preview !== null && item.session.preview !== item.session.name ? <small>{item.session.preview}</small> : null}</span>
           </button>)}
         </div>}
-        <div className="composer-footer">
+        <div className={`composer-footer${Object.entries(extensionStatuses).length === 0 ? "" : " has-extension-statuses"}`}>
           <div className="composer-options">
             <Tooltip label={attachDisabled ? "当前模型不支持图片" : "添加图片（支持 Ctrl+V 粘贴）"}>
               <Button variant="ghost" className="composer-attach" size="icon" aria-label="添加图片" disabled={attachDisabled} onClick={openAttach}><Plus size={16} /></Button>
@@ -363,16 +363,18 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
           {Object.entries(extensionStatuses).length === 0 ? null : <div className="composer-extension-statuses" aria-label="扩展状态">
             {Object.entries(extensionStatuses).map(([key, text]) => <span className="composer-extension-status" key={key} title={key}><Puzzle size={11} /><span>{text}</span></span>)}
           </div>}
-          {onCancelEdit === undefined ? null : <Tooltip label="取消编辑"><Button variant="ghost" className="composer-cancel-edit" size="icon" aria-label="取消编辑" onClick={onCancelEdit}><X size={15} /></Button></Tooltip>}
-          {canSend ? (
-            <Tooltip label={busy ? "排队为后续消息（全部完成后投递）" : "发送消息"}>
-              <Button className="composer-send" size="icon" aria-label={busy ? "排队为后续消息" : "发送消息"} onClick={() => { void submit(); }}><ArrowUp size={17} /></Button>
-            </Tooltip>
-          ) : busy ? (
-            <Tooltip label="停止当前执行"><Button className="composer-stop" size="icon" aria-label="停止当前执行" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
-          ) : (
-            <Tooltip label="发送消息"><Button className="composer-send" size="icon" aria-label="发送消息" disabled><ArrowUp size={17} /></Button></Tooltip>
-          )}
+          <div className="composer-actions">
+            {onCancelEdit === undefined ? null : <Tooltip label="取消编辑"><Button variant="ghost" className="composer-cancel-edit" size="icon" aria-label="取消编辑" onClick={onCancelEdit}><X size={15} /></Button></Tooltip>}
+            {canSend ? (
+              <Tooltip label={busy ? "排队为后续消息（全部完成后投递）" : "发送消息"}>
+                <Button className="composer-send" size="icon" aria-label={busy ? "排队为后续消息" : "发送消息"} onClick={() => { void submit(); }}><ArrowUp size={17} /></Button>
+              </Tooltip>
+            ) : busy ? (
+              <Tooltip label="停止当前执行"><Button className="composer-stop" size="icon" aria-label="停止当前执行" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
+            ) : (
+              <Tooltip label="发送消息"><Button className="composer-send" size="icon" aria-label="发送消息" disabled><ArrowUp size={17} /></Button></Tooltip>
+            )}
+          </div>
         </div>
       </div>
       <input ref={galleryRef} className="composer-file-input" type="file" accept="image/*" multiple onChange={(event) => { handleFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />

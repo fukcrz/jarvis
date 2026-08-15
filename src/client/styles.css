@@ -294,6 +294,31 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   .message-content table { max-width: 100%; overflow-x: auto; }
 }
 @media (prefers-reduced-motion: no-preference) { .spin { animation: spin 1s linear infinite; } .streaming-cursor { animation: stream-cursor .9s steps(1) infinite; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes stream-cursor { 50% { opacity: 0; } } }
+@media (max-width: 760px) {
+  /* 状态独占一行，模型/思考等级可滚动，发送按钮始终保留固定空间。 */
+  .composer-footer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "options actions";
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 2px;
+  }
+  .composer-footer.has-extension-statuses {
+    grid-template-areas: "options actions" "statuses statuses";
+  }
+  .composer-options { grid-area: options; width: 100%; overflow-x: auto; }
+  .composer-actions { grid-area: actions; flex: 0 0 auto; }
+  .composer-extension-statuses {
+    grid-area: statuses;
+    width: 100%;
+    max-width: none;
+    padding-top: 1px;
+  }
+  .composer-extension-status { padding-block: 4px; }
+  .button.composer-send, .button.composer-stop { flex: 0 0 32px; }
+}
+
 @media (max-width: 760px) { .composer-completions { left: 0; width: 100%; } }
 
 /* Mobile project/session navigation. Desktop remains the persistent sidebar layout above. */
@@ -373,7 +398,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   .composer-options::-webkit-scrollbar { display: none; }
   .composer-options > * { flex: 0 0 auto; }
   .composer-actions { flex: 0 0 auto; }
-  .composer-extension-statuses { flex: 0 1 auto; max-width: 42%; }
+  .composer-extension-statuses { flex: 0 1 auto; max-width: none; }
   .action-sheet { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
 }
 
