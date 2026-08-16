@@ -297,13 +297,15 @@ function ExtensionUiOperation({ item, onRespond, docked = false }: { item: Exten
 function ExtensionDialogOperation({ item, onRespond, docked = false }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"]; docked?: boolean }) {
   const request = item.request as ExtensionDialogRequest;
   const [value, setValue] = useState(request.method === "editor" ? request.prefill ?? "" : "");
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [submitting, setSubmitting] = useState(false);
   const [showResult, setShowResult] = useState(false);
 
   useEffect(() => {
     setValue(request.method === "editor" ? request.prefill ?? "" : "");
-    setSelectedIndex(0);
+    setActiveIndex(0);
+    optionRefs.current = [];
     setSubmitting(false);
     setShowResult(false);
   }, [request]);
@@ -317,26 +319,30 @@ function ExtensionDialogOperation({ item, onRespond, docked = false }: { item: E
     if (request.method !== "select") return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      setSelectedIndex((current) => (event.key === "ArrowDown" ? (current + 1) % request.options.length : (current - 1 + request.options.length) % request.options.length));
+      const nextIndex = event.key === "ArrowDown"
+        ? (activeIndex + 1) % request.options.length
+        : (activeIndex - 1 + request.options.length) % request.options.length;
+      setActiveIndex(nextIndex);
+      requestAnimationFrame(() => optionRefs.current[nextIndex]?.focus());
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      respond({ value: request.options[selectedIndex] });
+      respond({ value: request.options[activeIndex] });
     }
   };
 
   if (item.outcome !== undefined) return <ExtensionResult item={item} expanded={showResult} onToggle={() => setShowResult((current) => !current)} />;
   return <article className={`extension-operation pending ${request.method} ${docked ? "docked" : ""}`} aria-label={`扩展操作：${request.title}`} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); respond({ cancelled: true }); } }}>
     <div className="extension-operation-heading"><Clock3 size={14} /><span>{extensionOperationPrompt(request.method)}</span><ExtensionTimeout timeout={request.timeout} createdAt={item.createdAt} /></div>
-    <p className="extension-operation-title">{request.title}</p>
+    {request.method === "select" ? <div className="extension-operation-title-row"><p className="extension-operation-title">{request.title}</p><button type="button" className="extension-dock-close" aria-label="取消选择" disabled={submitting} onClick={() => respond({ cancelled: true })}><X size={16} /></button></div> : <p className="extension-operation-title">{request.title}</p>}
     {request.method === "confirm" && request.message !== undefined ? <p className="extension-operation-message">{request.message}</p> : null}
     {request.method === "select" ? <div className="extension-select-list" role="listbox" aria-label={request.title} tabIndex={0} onKeyDown={onSelectKeyDown}>
-      {request.options.map((option, index) => <button key={option} type="button" role="option" aria-selected={selectedIndex === index} className={selectedIndex === index ? "selected" : ""} disabled={submitting} onMouseEnter={() => setSelectedIndex(index)} onFocus={() => setSelectedIndex(index)} onClick={() => respond({ value: option })}>{option}</button>)}
+      {request.options.map((option, index) => <button ref={(element) => { optionRefs.current[index] = element; }} key={option} type="button" role="option" aria-selected={false} disabled={submitting} onFocus={() => setActiveIndex(index)} onClick={() => respond({ value: option })}>{option}</button>)}
     </div> : null}
     {request.method === "input" ? <input autoFocus className="extension-dialog-input" placeholder={request.placeholder} value={value} disabled={submitting} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); respond({ value }); } }} /> : null}
     {request.method === "editor" ? <textarea autoFocus className="extension-dialog-input multiline" value={value} disabled={submitting} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); respond({ value }); } }} rows={8} /> : null}
-    <div className="extension-interaction-actions">
-      {request.method === "confirm" ? <><button type="button" disabled={submitting} onClick={() => respond({ confirmed: false })}>拒绝</button><button type="button" className="accent" disabled={submitting} onClick={() => respond({ confirmed: true })}>{submitting ? "正在提交…" : "允许"}</button></> : <><button type="button" disabled={submitting} onClick={() => respond({ cancelled: true })}>取消</button><button type="button" className="accent" disabled={submitting} onClick={() => respond({ value })}>{submitting ? "正在提交…" : request.method === "editor" ? "提交修改" : "提交"}</button></>}
-    </div>
+    {request.method === "select" ? null : <div className="extension-interaction-actions">
+      {request.method === "confirm" ? <><button type="button" disabled={submitting} onClick={() => respond({ confirmed: false })}>拒绝</button><button type="button" className="accent" disabled={submitting} onClick={() => respond({ confirmed: true })}>{submitting ? "正在处理…" : "允许"}</button></> : <><button type="button" disabled={submitting} onClick={() => respond({ cancelled: true })}>取消</button><button type="button" className="accent" disabled={submitting} onClick={() => respond({ value })}>{submitting ? "正在提交…" : request.method === "editor" ? "提交修改" : "提交"}</button></>}
+    </div>}
     {request.method === "editor" ? <small className="extension-interaction-hint">按 Ctrl / Cmd + Enter 提交</small> : null}
   </article>;
 }
