@@ -3,6 +3,8 @@ import { z } from "zod";
 export const PROTOCOL_VERSION = 1 as const;
 
 export type RunState = "idle" | "running" | "stopping";
+/** User-facing task state for a session, independent from the live run lifecycle. */
+export type SessionAttentionState = "idle" | "running" | "completed_unread" | "failed" | "waiting_interaction";
 export type RunKind = "llm" | "bash" | "compaction" | "reload";
 export type ToolState = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type ThinkingState = "running" | "completed";
@@ -233,6 +235,8 @@ export interface SessionSummary {
   createdAt: string;
   updatedAt: string;
   runState: RunState;
+  /** Omitted only by older servers; clients should treat it as idle. */
+  attentionState?: SessionAttentionState;
 }
 
 export interface ImageAttachment {
@@ -511,6 +515,7 @@ const sessionSummarySchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   runState: z.enum(["idle", "running", "stopping"]),
+  attentionState: z.enum(["idle", "running", "completed_unread", "failed", "waiting_interaction"]).default("idle"),
 });
 
 export const workspaceEventSchema = z.discriminatedUnion("type", [

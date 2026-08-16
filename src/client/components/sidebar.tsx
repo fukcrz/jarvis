@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, Folder, FolderPlus, MessageSquarePlus, Search, Settings2 } from "lucide-react";
 import { useState, type PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { formatRelativeTime, matchesSessionQuery, sessionLabel, sessionListWindow } from "../lib/utils";
+import { formatRelativeTime, matchesSessionQuery, sessionAttentionLabel, sessionAttentionRank, sessionLabel, sessionListWindow } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
@@ -55,7 +55,7 @@ export function Sidebar(props: SidebarProps) {
           // 搜索时展示全部匹配结果；平时按窗口展示（执行中的会话始终显示，默认最多 5 个，可展开更多）。
           const window = searching ? { sessions, hasMore: false, expanded: false } : sessionListWindow(sessions, sessionExpands[workspace.id] ?? 0);
           const expanded = searching || props.expandedWorkspaceIds[workspace.id] === true;
-          const activeSession = sessions.find((session) => session.runState === "running" || session.runState === "stopping");
+          const activeSession = [...sessions].sort((a, b) => sessionAttentionRank(a) - sessionAttentionRank(b))[0];
           const toggleLabel = `${expanded ? "收起" : "展开"}${workspace.label}的会话`;
 
           return (
@@ -70,7 +70,7 @@ export function Sidebar(props: SidebarProps) {
                   <span>{workspace.label}</span>
                 </button>
                 <Tooltip label={`在 ${workspace.label} 中新建会话`}><Button variant="ghost" size="icon" className="project-new-session" aria-label={`在 ${workspace.label} 中新建会话`} onClick={(event) => { event.stopPropagation(); props.onCreateSession(workspace.id); }}><MessageSquarePlus size={15} /></Button></Tooltip>
-                {expanded || activeSession === undefined ? null : <span className={`sidebar-activity ${activeSession.runState}`} role="status" aria-label={`${workspace.label} 有正在执行的会话`} />}
+                {expanded || activeSession === undefined || sessionAttentionLabel(activeSession) === undefined ? null : <span className={`sidebar-activity attention-${activeSession.attentionState ?? "idle"} ${activeSession.runState}`} role="status" aria-label={`${workspace.label} 有${sessionAttentionLabel(activeSession)}`} />}
               </div>
               {expanded ? <div className="project-sessions" role="group">
                 {window.sessions.map((session) => <button key={session.id} type="button" data-session-id={session.id} className={`session-row ${workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "selected" : ""}`} aria-current={workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "page" : undefined} onClick={() => { if (!consumeLongPress()) props.onSelectSession(workspace.id, session.id); }} onPointerDown={(event) => startLongPress(event, () => props.onLongPressSession(workspace.id, session))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress} onContextMenu={(event) => {
@@ -82,7 +82,7 @@ export function Sidebar(props: SidebarProps) {
                   });
                 }}>
                   <span className="session-text"><strong>{sessionLabel(session.name, session.preview)}</strong><small>{formatRelativeTime(session.updatedAt)}</small></span>
-                  {session.runState === "idle" ? null : <span className={`sidebar-activity ${session.runState}`} role="status" aria-label={`${session.runState === "stopping" ? "正在停止" : "正在执行"}的会话`} />}
+                  {sessionAttentionLabel(session) === undefined ? null : <span className={`sidebar-activity attention-${session.attentionState ?? "idle"} ${session.runState}`} role="status" aria-label={`${sessionAttentionLabel(session)}的会话`} />}
                 </button>)}
                 {window.hasMore ? <button type="button" className="session-expand-more" onClick={() => expandSessions(workspace.id)} aria-label="展开更多会话"><ChevronDown size={13} />展开更多会话</button> : null}
                 {window.expanded ? <button type="button" className="session-collapse" onClick={() => collapseSessions(workspace.id)} aria-label="收起会话"><ChevronUp size={13} />收起会话</button> : null}

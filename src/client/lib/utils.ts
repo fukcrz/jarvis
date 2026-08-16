@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { SessionSummary } from "../../shared/protocol";
+import type { SessionAttentionState, SessionSummary } from "../../shared/protocol";
 
 export function cn(...values: ClassValue[]): string {
   return twMerge(clsx(values));
@@ -48,8 +48,32 @@ export function isSessionRunning(session: SessionSummary): boolean {
   return session.runState === "running" || session.runState === "stopping";
 }
 
+export function sessionAttentionState(session: SessionSummary): SessionAttentionState {
+  if (isSessionRunning(session)) return session.runState === "stopping" ? "running" : (session.attentionState === "waiting_interaction" ? "waiting_interaction" : "running");
+  return session.attentionState ?? "idle";
+}
+
+export function sessionAttentionLabel(session: SessionSummary): string | undefined {
+  const state = sessionAttentionState(session);
+  if (state === "running") return session.runState === "stopping" ? "正在停止" : "执行中";
+  if (state === "completed_unread") return "任务完成未查看";
+  if (state === "failed") return "出错失败";
+  if (state === "waiting_interaction") return "待交互";
+  return undefined;
+}
+
+/** Higher-priority attention states are kept visible before ordinary sessions. */
+export function sessionAttentionRank(session: SessionSummary): number {
+  const state = sessionAttentionState(session);
+  if (state === "waiting_interaction") return 0;
+  if (state === "running") return 1;
+  if (state === "failed") return 2;
+  if (state === "completed_unread") return 3;
+  return 4;
+}
+
 export interface SessionListWindow {
-  /** 当前应展示的会话，执行中的会话始终在前、保证可见。 */
+  /** 当前应展示的会话，需要关注的会话始终在前、保证可见。 */
   sessions: SessionSummary[];
   /** 是否还有未展示的会话（应显示“展开更多”）。 */
   hasMore: boolean;
@@ -59,16 +83,15 @@ export interface SessionListWindow {
 
 /**
  * 计算侧边栏中某个项目下的会话展示窗口：
- * - 执行中的会话（running/stopping）始终显示，且排在前面；
- * - 默认最多显示 SESSIONS_COLLAPSED_LIMIT 个，除非执行中的会话超过该数量；
+ * - 需要关注的会话（待交互/执行中/失败/完成未查看）始终显示，且排在前面；
+ * - 默认最多显示 SESSIONS_COLLAPSED_LIMIT 个，除非需要关注的会话超过该数量；
  * - 每次展开多显示 SESSIONS_PAGE_SIZE 个，可以多次展开直到全部显示；
  * - 收起（expandSteps 归零）后回到默认状态。
  */
 export function sessionListWindow(sessions: SessionSummary[], expandSteps: number): SessionListWindow {
-  const running = sessions.filter((s) => isSessionRunning(s));
-  const idle = sessions.filter((s) => !isSessionRunning(s));
-  const ordered = [...running, ...idle];
-  const collapsedCount = Math.max(SESSIONS_COLLAPSED_LIMIT, running.length);
+  const ordered = [...sessions].sort((a, b) => sessionAttentionRank(a) - sessionAttentionRank(b));
+  const attentionCount = sessions.filter((s) => sessionAttentionRank(s) < 4).length;
+  const collapsedCount = Math.max(SESSIONS_COLLAPSED_LIMIT, attentionCount);
   const visibleCount = collapsedCount + Math.max(0, expandSteps) * SESSIONS_PAGE_SIZE;
   return {
     sessions: ordered.slice(0, visibleCount),

@@ -14,7 +14,7 @@ import { MobileActionSheet, type MobileActionTarget } from "./components/mobile-
 import { MobileSessionSwitcher } from "./components/mobile-navigation";
 import { Timeline } from "./components/timeline";
 import { SettingsPage } from "./components/settings-page";
-import type { ExtensionPanelState, ExtensionToast } from "./hooks/use-session-stream";
+import type { ExtensionPanelState } from "./hooks/use-session-stream";
 import { ContextButton } from "./components/context-button";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
@@ -50,7 +50,7 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [assistantName, setAssistantName] = useState("Jarvis");
   const [pageError, setPageError] = useState<string | undefined>();
-  const [globalExtensionToasts, setGlobalExtensionToasts] = useState<ExtensionToast[]>([]);
+  const [globalExtensionToasts, setGlobalExtensionToasts] = useState<Array<{ id: string; message: string; tone: "info" | "warning" | "error" }>>([]);
   const [sessionNotice, setSessionNotice] = useState<string | undefined>();
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ workspaceId: string; session: SessionSummary } | undefined>();
@@ -400,7 +400,7 @@ export function App() {
             const workspaceEvent = parsed.data;
             if (workspaceEvent.type === "extension.notify") {
               const { notification } = workspaceEvent;
-              const tone: ExtensionToast["tone"] = notification.notifyType === "warning" || notification.notifyType === "error" ? notification.notifyType : "info";
+              const tone: "info" | "warning" | "error" = notification.notifyType === "warning" || notification.notifyType === "error" ? notification.notifyType : "info";
               setGlobalExtensionToasts((current) => [...current, { id: notification.id, message: notification.message, tone }].slice(-4));
               return;
             }
@@ -438,6 +438,13 @@ export function App() {
   }, [workspaces]);
 
   useEffect(() => {
+    if (selectedRef === undefined) return;
+    void api.markSessionViewed(selectedRef).then((session) => {
+      setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session) }));
+    }).catch(() => undefined);
+  }, [selectedRefKey]);
+
+  useEffect(() => {
     const status = stream.transcript.status;
     if (status.sessionId === "" || selectedRef === undefined) return;
     setSessionsByWorkspace((current) => {
@@ -450,6 +457,11 @@ export function App() {
       next[index] = { ...session, runState: status.runState };
       return { ...current, [selectedRef.workspaceId]: next };
     });
+    if (status.runState === "idle") {
+      void api.markSessionViewed(selectedRef).then((session) => {
+        setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session) }));
+      }).catch(() => undefined);
+    }
   }, [stream.transcript.status, selectedRef]);
 
   const createSession = async (targetWorkspaceId = workspaceId) => {
@@ -639,7 +651,7 @@ export function App() {
       setSessionsByWorkspace((current) => ({
         ...current,
         [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
-          ? { ...session, runState: "running", updatedAt: new Date().toISOString() }
+          ? { ...session, runState: "running", attentionState: "running", updatedAt: new Date().toISOString() }
           : session) ?? [],
       }));
       setPageError(undefined);
@@ -703,7 +715,7 @@ export function App() {
       setSessionsByWorkspace((current) => ({
         ...current,
         [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
-          ? { ...session, runState: "running", updatedAt: new Date().toISOString() }
+          ? { ...session, runState: "running", attentionState: "running", updatedAt: new Date().toISOString() }
           : session) ?? [],
       }));
       setPageError(undefined);
@@ -751,7 +763,7 @@ export function App() {
       setSessionsByWorkspace((current) => ({
         ...current,
         [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
-          ? { ...session, runState: "running", updatedAt: new Date().toISOString() }
+          ? { ...session, runState: "running", attentionState: "running", updatedAt: new Date().toISOString() }
           : session) ?? [],
       }));
       setPageError(undefined);
@@ -856,6 +868,9 @@ export function App() {
 
   const chooseSession = (nextWorkspaceId: string, nextSessionId: string) => {
     setExpandedWorkspaceIds((current) => ({ ...current, [nextWorkspaceId]: true }));
+    void api.markSessionViewed({ workspaceId: nextWorkspaceId, sessionId: nextSessionId }).then((session) => {
+      setSessionsByWorkspace((current) => ({ ...current, [nextWorkspaceId]: mergeSession(current[nextWorkspaceId] ?? [], session) }));
+    }).catch(() => undefined);
     const target = `/chat/${nextWorkspaceId}/${nextSessionId}`;
     if (!isMobile) {
       // Desktop: session selection never enters the history.

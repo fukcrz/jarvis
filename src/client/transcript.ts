@@ -29,7 +29,7 @@ export const emptyTranscript: TranscriptState = {
 };
 
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
-  const extensionItems: ExtensionUiTimelineItem[] = (snapshot.extensionUi?.cards ?? (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }))).filter((item) => item.request.method !== "notify");
+  const extensionItems: ExtensionUiTimelineItem[] = snapshot.extensionUi?.cards ?? (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }));
   const live = [...snapshot.liveMessages, ...(snapshot.liveErrors ?? []), ...(snapshot.partialThinking === undefined ? [] : [snapshot.partialThinking]), ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial]), ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
   return {
     // History and the snapshot are authoritative after a reconnect. Keeping an
@@ -184,7 +184,7 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
   if (event.type === "extension.uiRequest") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const request = recordExtensionUiRequest(payload?.["request"]);
-    if (request === undefined || request.method === "notify") return next;
+    if (request === undefined) return next;
     const item: ExtensionUiTimelineItem = { kind: "extension-ui", id: `ext:${request.id}`, createdAt: event.emittedAt, request };
     return { ...next, items: mergeTimeline(next.items, [item]) };
   }

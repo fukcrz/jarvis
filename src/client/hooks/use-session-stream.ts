@@ -17,12 +17,6 @@ export interface ExtensionPanelState {
   editorText?: { text: string; nonce: number };
 }
 
-export interface ExtensionToast {
-  id: string;
-  message: string;
-  tone: "info" | "warning" | "error";
-}
-
 type Action =
   | { type: "reset" }
   | { type: "hydrate"; page: Awaited<ReturnType<typeof api.timeline>>; snapshot: Awaited<ReturnType<typeof api.runtime>> }
@@ -87,8 +81,8 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
       if (event.type === "extension.uiRequest") {
         const effect = sideEffectFor(event);
         if (effect !== undefined) sideEffects.push(effect);
-        // Ambient extension UI requests are not conversation history.
-        if (effect === undefined && !isNotifyRequest(event)) transcriptEvents.push(event);
+        // Stateful panels are ambient; interactions and notifications belong to the session timeline.
+        if (effect === undefined) transcriptEvents.push(event);
       } else {
         transcriptEvents.push(event);
       }
@@ -290,12 +284,6 @@ function extensionPanelsFromSnapshot(snapshot: ExtensionUiSnapshot | undefined):
     widgets: Object.fromEntries(Object.entries(snapshot.widgets).map(([key, widget]) => [key, { lines: [...widget.lines], placement: widget.placement }])),
     ...(snapshot.editorText === undefined ? {} : { editorText: { text: snapshot.editorText.text, nonce: snapshot.editorText.revision } }),
   };
-}
-
-function isNotifyRequest(event: SessionEvent): boolean {
-  if (event.type !== "extension.uiRequest" || !isRecord(event.payload)) return false;
-  const request = event.payload["request"];
-  return isRecord(request) && request["method"] === "notify";
 }
 
 function sideEffectFor(event: SessionEvent): PanelSideEffect | undefined {

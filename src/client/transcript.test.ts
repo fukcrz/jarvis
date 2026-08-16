@@ -344,6 +344,32 @@ describe("transcript reducer", () => {
     expect(hydrated.items).toEqual([expect.objectContaining({ kind: "extension-ui", id: "ext:a", request: expect.objectContaining({ method: "confirm", timeout: 5_000 }) })]);
   });
 
+  it("rehydrates session notifications from the runtime snapshot", () => {
+    const hydrated = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, {
+      seq: 12,
+      status: { sessionId: "session", runState: "idle" },
+      model: { available: [] },
+      thinking: { current: "off", available: ["off"] },
+      liveMessages: [],
+      activeTools: [],
+      extensionUi: {
+        dialogs: [],
+        cards: [{
+          kind: "extension-ui",
+          id: "ext:notify-1",
+          createdAt: "2026-08-09T00:00:01.000Z",
+          request: { id: "notify-1", method: "notify", message: "已暂存 3 个文件", notifyType: "info" },
+        }],
+        statuses: {}, widgets: {},
+      },
+    });
+    expect(hydrated.items).toEqual([expect.objectContaining({
+      kind: "extension-ui",
+      id: "ext:notify-1",
+      request: expect.objectContaining({ method: "notify", message: "已暂存 3 个文件" }),
+    })]);
+  });
+
   it("rehydrates extension cards at their original chronological position", () => {
     const hydrated = hydrateTranscript(emptyTranscript, {
       items: [
@@ -456,13 +482,17 @@ describe("extension UI events", () => {
     })]);
   });
 
-  it("ignores notify requests in the session timeline", () => {
+  it("adds notify requests to the session timeline", () => {
     const next = applySessionEvents(emptyTranscript, [{
       version: 1, sessionId: "session", seq: 11, emittedAt: "2026-08-09T00:00:11.000Z",
       type: "extension.uiRequest",
       payload: { request: { id: "22222222-2222-4222-8222-222222222222", method: "notify", message: "已暂存 3 个文件", notifyType: "info" } },
     }]);
-    expect(next.items).toEqual([]);
+    expect(next.items).toEqual([expect.objectContaining({
+      kind: "extension-ui",
+      id: "ext:22222222-2222-4222-8222-222222222222",
+      request: expect.objectContaining({ method: "notify", message: "已暂存 3 个文件", notifyType: "info" }),
+    })]);
   });
 
   it("updates the card with the answered value on uiSettled", () => {

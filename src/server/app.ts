@@ -201,6 +201,7 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const body = sessionNameInput.parse(request.body);
     return { session: await sessions.rename(ref, body.name) };
   });
+  app.post("/api/workspaces/:workspaceId/sessions/:sessionId/viewed", async (request) => ({ session: await sessions.markViewed(sessionRef(request.params)) }));
   app.delete("/api/workspaces/:workspaceId/sessions/:sessionId", async (request) => {
     await sessions.remove(sessionRef(request.params));
     return { removed: true };

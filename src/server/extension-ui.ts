@@ -68,6 +68,10 @@ export class ExtensionUiBridge {
 
   private static readonly DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
+  get hasPendingDialogs(): boolean {
+    return this.pending.size > 0;
+  }
+
   get context(): ExtensionUIContext {
     return {
       select: (title, options, opts) => this.dialog({ method: "select", title, options, timeout: opts?.timeout }, opts, undefined),

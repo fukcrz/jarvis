@@ -29,6 +29,7 @@ import type {
   QueuedPromptAccepted,
   RetryStatus,
   SessionFileReference,
+  SessionAttentionState,
   SessionQueue,
   SessionRef,
   SessionStatus,
@@ -49,6 +50,7 @@ import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTEN
 import { projectModelSnapshot } from "./model-projection.js";
 import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, errorFromPi, messageFromPi, projectHistory, thinkingTextFromContent, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
+import { SessionAttentionStore } from "./session-attention-store.js";
 
 interface ActiveRun {
   id: string;
@@ -67,6 +69,7 @@ interface ActiveSession {
   modelSwitching: boolean;
   unsubscribe: () => void;
   state: SessionStatus;
+  attentionState: SessionAttentionState;
   requestRuns: Map<string, RunAccepted>;
   liveMessages: Map<string, MessageTimelineItem>;
   /** Retry attempts which have not yet been reconciled with persisted history. */
@@ -135,6 +138,7 @@ export class SessionService {
   /** Serialize operations which replace or tear down an in-memory session. */
   private readonly sessionTransitions = new Map<string, Promise<void>>();
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
+  private readonly attention = new SessionAttentionStore(getAgentDir());
 
   constructor(
     private readonly workspaces: WorkspaceStore,
@@ -147,7 +151,8 @@ export class SessionService {
     const listed = sessionDir === undefined
       ? await SessionManager.list(workspace.cwd)
       : await SessionManager.list(workspace.cwd, sessionDir);
-    const summaries = listed.map((entry) => this.summaryFromList(workspace, entry));
+    const attention = await this.attention.list(workspaceId);
+    const summaries = listed.map((entry) => this.summaryFromList(workspace, entry, attention.get(entry.id)));
 
     for (const active of this.active.values()) {
       if (active.ref.workspaceId !== workspaceId || summaries.some((summary) => summary.id === active.ref.sessionId)) continue;
@@ -158,6 +163,15 @@ export class SessionService {
     return summaries
       .filter((summary) => needle === undefined || needle === "" || `${summary.name ?? ""}\n${summary.preview ?? ""}`.toLocaleLowerCase().includes(needle))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async markViewed(ref: SessionRef): Promise<SessionSummary> {
+    const active = await this.getActive(ref, false);
+    if (active.state.runState === "idle" && !active.extensionUi.hasPendingDialogs) {
+      this.setAttention(active, "idle");
+      this.publishSummary(active);
+    }
+    return this.summaryFromActive(active);
   }
 
   async fileReferences(workspaceId: string, query?: string): Promise<SessionFileReference[]> {
@@ -313,6 +327,7 @@ export class SessionService {
           }
         }
 
+        await this.attention.remove(ref);
         this.events.publishWorkspace(ref.workspaceId, { version: 1, type: "session.deleted", workspaceId: ref.workspaceId, sessionId: ref.sessionId });
       } finally {
         this.deleting.delete(key);
@@ -534,6 +549,7 @@ export class SessionService {
 
     const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
     active.state = { sessionId: ref.sessionId, runState: "running", activeRun: run };
+    this.setAttention(active, "running");
     active.updatedAt = run.startedAt;
     active.liveMessages.clear();
     active.liveErrors.clear();
@@ -680,6 +696,7 @@ export class SessionService {
       output: "",
     };
     active.state = { sessionId: ref.sessionId, runState: "running", activeRun: run };
+    this.setAttention(active, "running");
     active.updatedAt = run.startedAt;
     active.liveMessages.clear();
     active.liveErrors.clear();
@@ -737,6 +754,7 @@ export class SessionService {
       activeRun: run,
       compacting: { reason: "manual", startedAt: run.startedAt },
     };
+    this.setAttention(active, "running");
     active.updatedAt = run.startedAt;
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
@@ -771,6 +789,7 @@ export class SessionService {
       runState: "running",
       activeRun: run,
     };
+    this.setAttention(active, "running");
     active.updatedAt = run.startedAt;
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
@@ -892,6 +911,7 @@ export class SessionService {
     this.pendingOpens.clear();
     this.deleting.clear();
     this.sessionTransitions.clear();
+    await this.attention.flush();
   }
 
   private async executePrompt(active: ActiveSession, prompt: string, runId: string, images: ImageAttachment[] = []): Promise<void> {
@@ -1084,12 +1104,20 @@ export class SessionService {
       // `bindExtensions` runs only after `active` is registered below, so startup
       // dialogs never disappear or deadlock.
       if (message.type === "request") {
+        if (message.request.method === "select" || message.request.method === "confirm" || message.request.method === "input" || message.request.method === "editor") {
+          this.setAttention(active, "waiting_interaction");
+          this.publishSummary(active);
+        }
         this.events.publishSession(active.ref, { type: "extension.uiRequest", payload: { request: message.request } });
       } else {
         this.events.publishSession(active.ref, {
           type: "extension.uiSettled",
           payload: { id: message.id, outcome: message.outcome, ...(message.value === undefined ? {} : { value: message.value }), ...(message.confirmed === undefined ? {} : { confirmed: message.confirmed }) },
         });
+        if (!active.extensionUi.hasPendingDialogs) {
+          this.setAttention(active, active.state.runState === "idle" ? "idle" : "running");
+          this.publishSummary(active);
+        }
       }
     };
     const extensionUi = new ExtensionUiBridge(publishExtensionUi);
@@ -1107,6 +1135,7 @@ export class SessionService {
       extensionReady: Promise.resolve(),
       unsubscribe: () => undefined,
       state: { sessionId: session.sessionId, runState: "idle" },
+      attentionState: await this.attention.get(actualRef),
       requestRuns: new Map(),
       liveMessages: new Map(),
       liveErrors: new Map(),
@@ -1179,6 +1208,7 @@ export class SessionService {
         if (active.state.runState !== "idle") return;
         const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
         active.state = { sessionId: active.ref.sessionId, runState: "running", activeRun: run };
+        this.setAttention(active, "running");
         active.liveMessages.clear();
         active.liveErrors.clear();
         active.assistantStreamId = undefined;
@@ -1502,6 +1532,7 @@ export class SessionService {
       runState: "idle",
       ...(lastError === undefined ? {} : { lastError }),
     };
+    this.setAttention(active, "completed_unread");
     active.liveMessages.clear();
     active.liveErrors.clear();
     active.partial = undefined;
@@ -1529,6 +1560,7 @@ export class SessionService {
       runState: "idle",
       lastError: { code, message, occurredAt: new Date().toISOString() },
     };
+    this.setAttention(active, "failed");
     for (const tool of active.activeTools.values()) {
       if (tool.state !== "queued" && tool.state !== "running") continue;
       const cancelled = { ...tool, state: "cancelled" as const };
@@ -1594,13 +1626,19 @@ export class SessionService {
     active.settlementTimer = undefined;
   }
 
+  private setAttention(active: ActiveSession, state: SessionAttentionState): void {
+    if (active.attentionState === state) return;
+    active.attentionState = state;
+    void this.attention.set(active.ref, state).catch((error: unknown) => console.warn("Could not persist session attention state", error));
+  }
+
   private publishSummary(active: ActiveSession, supplied?: SessionSummary): void {
     const summary = supplied ?? this.summaryFromActive(active);
     this.events.publishSession(active.ref, { type: "session.updated", payload: { status: active.state, session: summary } });
     this.events.publishWorkspace(active.ref.workspaceId, { version: 1, type: "session.updated", workspaceId: active.ref.workspaceId, session: summary });
   }
 
-  private summaryFromList(workspace: Workspace, entry: { id: string; name?: string; firstMessage: string; created: Date; modified: Date }): SessionSummary {
+  private summaryFromList(workspace: Workspace, entry: { id: string; name?: string; firstMessage: string; created: Date; modified: Date }, persistedAttention?: SessionAttentionState): SessionSummary {
     const active = this.active.get(activeKey({ workspaceId: workspace.id, sessionId: entry.id }));
     return {
       id: entry.id,
@@ -1610,6 +1648,7 @@ export class SessionService {
       createdAt: entry.created.toISOString(),
       updatedAt: entry.modified.toISOString(),
       runState: active?.state.runState ?? "idle",
+      attentionState: active?.attentionState ?? persistedAttention ?? "idle",
     };
   }
 
@@ -1622,6 +1661,7 @@ export class SessionService {
       createdAt: active.createdAt,
       updatedAt: active.updatedAt,
       runState: active.state.runState,
+      attentionState: active.attentionState,
     };
   }
 }

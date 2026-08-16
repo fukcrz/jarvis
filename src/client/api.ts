@@ -170,6 +170,7 @@ export const api = {
   forkSession: async (ref: SessionRef, messageId: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`${sessionPath(ref)}/fork`, { method: "POST", body: JSON.stringify({ messageId }) })).session,
   removeSession: async (ref: SessionRef): Promise<void> => { await request(sessionPath(ref), { method: "DELETE" }); },
   renameSession: async (ref: SessionRef, name: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(sessionPath(ref), { method: "PATCH", body: JSON.stringify({ name }) })).session,
+  markSessionViewed: async (ref: SessionRef): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`${sessionPath(ref)}/viewed`, { method: "POST", body: "{}" })).session,
   timeline: async (ref: SessionRef, before?: number): Promise<TimelinePage> => {
     const query = before === undefined ? "" : `?before=${String(before)}`;
     return request(`${sessionPath(ref)}/timeline${query}`);

@@ -67,6 +67,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .project-row:hover .project-new-session, .project-new-session:focus-visible { opacity: 1; }
 .sidebar-activity { width: 12px; height: 12px; flex: 0 0 auto; margin-right: 10px; border: 2px solid rgb(182 168 255 / .32); border-top-color: var(--accent-strong); border-radius: 50%; animation: spin .85s linear infinite; }
 .sidebar-activity.stopping { border-color: rgb(244 190 112 / .28); border-top-color: var(--warm); animation-duration: 1.2s; }
+.sidebar-activity.attention-completed_unread, .sidebar-activity.attention-failed, .sidebar-activity.attention-waiting_interaction { width: 8px; height: 8px; margin-right: 12px; border: 0; animation: none; }
+.sidebar-activity.attention-completed_unread { background: var(--success); box-shadow: 0 0 0 3px rgb(111 207 151 / .13); }
+.sidebar-activity.attention-failed { background: var(--danger); box-shadow: 0 0 0 3px rgb(255 107 112 / .13); }
+.sidebar-activity.attention-waiting_interaction { background: var(--warm); box-shadow: 0 0 0 3px rgb(244 190 112 / .14); }
+.mobile-session-status.attention-completed_unread { color: var(--success); }
+.mobile-session-status.attention-failed { color: var(--danger); }
+.mobile-session-status.attention-waiting_interaction { color: var(--warm); }
 .project-sessions { display: grid; gap: 4px; margin: 4px 0 0; border: 0; padding: 0; }
 .session-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; width: 100%; min-width: 0; margin-left: 0; border: 0; border-radius: 999px; background: transparent; padding: 4px 12px 4px 36px; color: #c8c5ce; text-align: left; }
 .session-row:hover { background: #302d37; color: #f0edf4; }
