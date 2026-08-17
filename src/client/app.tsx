@@ -64,6 +64,7 @@ export function App() {
   const mobilePage: "sessions" | "chat" | "settings" = isSettingsPage ? "settings" : location.pathname.startsWith("/chat") ? "chat" : "sessions";
   // Prevent repeated clicks from creating several unused sessions in the same workspace.
   const creatingSessionWorkspacesRef = useRef(new Set<string>());
+  const previousSessionStatusRef = useRef<{ key?: string; runState?: string }>({});
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
   // The URL is the source of truth for the selected workspace/session.
   useEffect(() => {
@@ -438,15 +439,21 @@ export function App() {
   }, [workspaces]);
 
   useEffect(() => {
-    if (selectedRef === undefined) return;
+    if (selectedRef === undefined || selectedRefKey === undefined) return;
+    let disposed = false;
     void api.markSessionViewed(selectedRef).then((session) => {
+      if (disposed) return;
       setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session) }));
     }).catch(() => undefined);
+    return () => { disposed = true; };
   }, [selectedRefKey]);
 
   useEffect(() => {
     const status = stream.transcript.status;
-    if (status.sessionId === "" || selectedRef === undefined) return;
+    const key = selectedRefKey;
+    const previous = previousSessionStatusRef.current;
+    previousSessionStatusRef.current = key === undefined ? {} : { key, runState: status.runState };
+    if (status.sessionId === "" || selectedRef === undefined || key === undefined) return;
     setSessionsByWorkspace((current) => {
       const sessions = current[selectedRef.workspaceId] ?? [];
       const index = sessions.findIndex((session) => session.id === status.sessionId);
@@ -457,12 +464,17 @@ export function App() {
       next[index] = { ...session, runState: status.runState };
       return { ...current, [selectedRef.workspaceId]: next };
     });
-    if (status.runState === "idle") {
-      void api.markSessionViewed(selectedRef).then((session) => {
-        setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session) }));
-      }).catch(() => undefined);
-    }
-  }, [stream.transcript.status, selectedRef]);
+    // Only clear completed/unread attention on an actual transition to idle.
+    // session.updated itself changes the status object and must not re-enter this loop.
+    if (status.runState !== "idle" || previous.key !== key || previous.runState === undefined || previous.runState === "idle") return;
+    const ref = selectedRef;
+    let disposed = false;
+    void api.markSessionViewed(ref).then((session) => {
+      if (disposed) return;
+      setSessionsByWorkspace((current) => ({ ...current, [ref.workspaceId]: mergeSession(current[ref.workspaceId] ?? [], session) }));
+    }).catch(() => undefined);
+    return () => { disposed = true; };
+  }, [stream.transcript.status, selectedRef, selectedRefKey]);
 
   const createSession = async (targetWorkspaceId = workspaceId) => {
     if (targetWorkspaceId === undefined || creatingSessionWorkspacesRef.current.has(targetWorkspaceId)) return;
@@ -868,9 +880,6 @@ export function App() {
 
   const chooseSession = (nextWorkspaceId: string, nextSessionId: string) => {
     setExpandedWorkspaceIds((current) => ({ ...current, [nextWorkspaceId]: true }));
-    void api.markSessionViewed({ workspaceId: nextWorkspaceId, sessionId: nextSessionId }).then((session) => {
-      setSessionsByWorkspace((current) => ({ ...current, [nextWorkspaceId]: mergeSession(current[nextWorkspaceId] ?? [], session) }));
-    }).catch(() => undefined);
     const target = `/chat/${nextWorkspaceId}/${nextSessionId}`;
     if (!isMobile) {
       // Desktop: session selection never enters the history.
