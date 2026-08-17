@@ -117,6 +117,9 @@ const MAX_PROMPT_LENGTH = 40_000;
 const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_DATA_LENGTH = 14_000_000; // ≈ 10 MiB decoded
 const MAX_BASH_OUTPUT_CHARS = 100_000; // 流式气泡的最大输出长度，落盘结果由 Pi 自行截断
+const PI_ABORT_TIMEOUT_MS = 8_000;
+const SETTLEMENT_RETRY_INTERVAL_MS = 100;
+const SETTLEMENT_MAX_WAIT_MS = 10_000;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/heic", "image/heif"]);
 const JARVIS_COMPACT_COMMAND: ComposerCommand = {
   name: "compact",
@@ -133,6 +136,7 @@ const JARVIS_RELOAD_COMMAND: ComposerCommand = {
 
 export class SessionService {
   private readonly active = new Map<string, ActiveSession>();
+  private readonly ownerBoundSessions = new WeakSet<AgentSession>();
   private readonly pendingOpens = new Map<string, Promise<ActiveSession>>();
   private readonly deleting = new Set<string>();
   /** Serialize operations which replace or tear down an in-memory session. */
@@ -393,7 +397,7 @@ export class SessionService {
     active.session.abortRetry();
     active.session.abortBranchSummary();
     active.session.abortBash();
-    await active.session.abort().catch(() => undefined);
+    await this.abortPiWithTimeout(active.session).catch(() => false);
     // A startup extension dialog can keep bindExtensions() pending. Close the
     // browser bridge first so session_start can unwind before session_shutdown;
     // otherwise a late session_start could reactivate the stale runtime.
@@ -802,6 +806,7 @@ export class SessionService {
   private async executeReload(active: ActiveSession, runId: string): Promise<void> {
     try {
       await active.session.reload();
+      this.bindOwnerSessionId(active.session);
       if (active.state.activeRun?.id !== runId) return;
       this.events.publishWorkspace(active.ref.workspaceId, {
         version: PROTOCOL_VERSION,
@@ -854,16 +859,18 @@ export class SessionService {
 
     if (active.state.compacting !== undefined) {
       this.cancelCompaction(active);
+      this.scheduleStopFallback(active, activeRun?.id);
       return { aborted: true, ...(dequeued.steering.length > 0 || dequeued.followUp.length > 0 ? { dequeued } : {}) };
     }
     if (activeRun?.kind === "bash") {
-      // executeBashRun 会在命令结束时自行 settle。
+      // executeBashRun 会在命令结束时自行 settle；异常情况下由超时兜底收敛。
       active.session.abortBash();
+      this.scheduleStopFallback(active, activeRun.id);
       return { aborted: true, ...(dequeued.steering.length > 0 || dequeued.followUp.length > 0 ? { dequeued } : {}) };
     }
 
     try {
-      await active.session.abort();
+      await this.abortPiWithTimeout(active.session);
       if (activeRun !== undefined && active.state.activeRun?.id === activeRun.id) this.settleRun(active, activeRun.id);
       return { aborted: true, ...(dequeued.steering.length > 0 || dequeued.followUp.length > 0 ? { dequeued } : {}) };
     } catch (error) {
@@ -1085,6 +1092,7 @@ export class SessionService {
       resourceLoader,
       ...(scopedModels.length === 0 ? {} : { scopedModels }),
     });
+    this.bindOwnerSessionId(session);
     const publishExtensionUi = (message: ExtensionUiMessage) => {
       // Notifications are application-level transient feedback. They use the
       // workspace stream so they are independent of the selected session.
@@ -1164,6 +1172,22 @@ export class SessionService {
       console.warn("Pi extension binding failed", error);
     });
     return active;
+  }
+
+  /**
+   * Keep every provider request tied to this AgentSession. Pi's compaction
+   * intentionally substitutes a random sessionId for isolated summary requests,
+   * so model-group routing needs a separate stable owner identifier.
+   */
+  private bindOwnerSessionId(session: AgentSession): void {
+    if (this.ownerBoundSessions.has(session)) return;
+    this.ownerBoundSessions.add(session);
+    const ownerSessionId = session.sessionId;
+    const stream = session.agent.streamFunction;
+    session.agent.streamFunction = (model, context, options) => stream(model, context, {
+      ...options,
+      ownerSessionId,
+    });
   }
 
   private modelSnapshot(active: ActiveSession) {
@@ -1603,21 +1627,55 @@ export class SessionService {
    */
   private deferAgentSettlement(active: ActiveSession): void {
     this.clearSettlementTimer(active);
+    const deadline = Date.now() + SETTLEMENT_MAX_WAIT_MS;
+    const attempt = () => {
+      active.settlementTimer = setTimeout(() => {
+        active.settlementTimer = undefined;
+        if (active.state.activeRun === undefined || active.state.compacting !== undefined) return;
+        const blocked = active.session.isStreaming || active.queue.steering.length > 0 || active.queue.followUp.length > 0;
+        if (blocked && Date.now() < deadline) {
+          attempt();
+          return;
+        }
+        // A missing agent_settled/queue_update must not leave the external run
+        // alive forever. At the deadline, settle and clear stale queued UI state.
+        if (active.pendingRunError !== undefined) {
+          const failure = active.pendingRunError;
+          active.pendingRunError = undefined;
+          this.failRun(active, active.state.activeRun.id, failure.code, failure.message);
+        } else if (active.extensionFailure !== undefined) {
+          this.failRun(active, active.state.activeRun.id, active.extensionFailure.code, active.extensionFailure.message);
+        } else {
+          this.settleRun(active, active.state.activeRun.id);
+        }
+      }, blockedDelay(active, deadline));
+    };
+    const blockedDelay = (_current: ActiveSession, target: number) => Math.max(0, Math.min(SETTLEMENT_RETRY_INTERVAL_MS, target - Date.now()));
+    attempt();
+  }
+
+  private scheduleStopFallback(active: ActiveSession, runId: string | undefined): void {
+    if (runId === undefined) return;
+    this.clearSettlementTimer(active);
     active.settlementTimer = setTimeout(() => {
       active.settlementTimer = undefined;
-      // 排队消息（steering/follow-up）尚未投递完：保持 running，等 Pi 后续
-      // 事件（agent_start 或最终 agent_settled）接管 run 生命周期。
-      if (active.state.activeRun === undefined || active.state.compacting !== undefined || active.session.isStreaming || active.queue.steering.length > 0 || active.queue.followUp.length > 0) return;
-      if (active.pendingRunError !== undefined) {
-        const failure = active.pendingRunError;
-        active.pendingRunError = undefined;
-        this.failRun(active, active.state.activeRun.id, failure.code, failure.message);
-      } else if (active.extensionFailure !== undefined) {
-        this.failRun(active, active.state.activeRun.id, active.extensionFailure.code, active.extensionFailure.message);
-      } else {
-        this.settleRun(active, active.state.activeRun.id);
-      }
-    }, 0);
+      if (active.state.runState === "stopping" && active.state.activeRun?.id === runId) this.settleRun(active, runId);
+    }, PI_ABORT_TIMEOUT_MS);
+  }
+
+  private async abortPiWithTimeout(session: AgentSession): Promise<boolean> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const abort = session.abort();
+    try {
+      return await Promise.race([
+        abort.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timeout = setTimeout(() => resolve(false), PI_ABORT_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
   }
 
   private clearSettlementTimer(active: ActiveSession): void {

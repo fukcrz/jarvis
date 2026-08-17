@@ -681,6 +681,29 @@ describe("Jarvis HTTP and WebSocket API", () => {
     });
   });
 
+  it("settles a stopped run when Pi abort never resolves", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "abort-timeout-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    vi.spyOn(AgentSession.prototype, "abort").mockImplementation(() => new Promise(() => undefined) as never);
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const sessionUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}`;
+    const accepted = (await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Keep running", clientRequestId: randomUUID() } })).json<{ runId: string }>();
+
+    vi.useFakeTimers();
+    const stopping = server.inject({ method: "POST", url: `${sessionUrl}/abort`, payload: { runId: accepted.runId } });
+    await vi.advanceTimersByTimeAsync(8_000);
+    const response = await stopping;
+    expect(response.statusCode).toBe(200);
+    const runtime = (await server.inject({ method: "GET", url: `${sessionUrl}/runtime` })).json<{ status: { runState: string; activeRun?: unknown } }>();
+    expect(runtime.status).toMatchObject({ runState: "idle" });
+    expect(runtime.status.activeRun).toBeUndefined();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("rejects Fork and edit while the session is running", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "message-action-busy-workspace");
