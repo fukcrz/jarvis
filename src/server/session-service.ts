@@ -1105,6 +1105,7 @@ export class SessionService {
             id: message.request.id,
             message: message.request.message,
             ...(message.request.notifyType === undefined ? {} : { notifyType: message.request.notifyType }),
+            sessionId: active.ref.sessionId,
           },
         });
         return;

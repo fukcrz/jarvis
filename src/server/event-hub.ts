@@ -45,7 +45,7 @@ export class EventHub {
   }
 
   /** 向所有工作区连接广播同一通知（用于重启等全局状态）。 */
-  broadcastWorkspace(event: { version: typeof PROTOCOL_VERSION; type: "extension.notify"; notification: { id: string; message: string; notifyType?: "info" | "warning" | "error" } }): void {
+  broadcastWorkspace(event: { version: typeof PROTOCOL_VERSION; type: "extension.notify"; notification: { id: string; message: string; notifyType?: "info" | "warning" | "error"; sessionId?: string } }): void {
     for (const workspaceId of this.workspaceSockets.keys()) {
       this.send(this.workspaceSockets.get(workspaceId), { ...event, workspaceId });
     }

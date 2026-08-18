@@ -460,7 +460,7 @@ export type WorkspaceEvent =
   | { version: typeof PROTOCOL_VERSION; type: "session.created"; workspaceId: string; session: SessionSummary }
   | { version: typeof PROTOCOL_VERSION; type: "session.updated"; workspaceId: string; session: SessionSummary }
   | { version: typeof PROTOCOL_VERSION; type: "session.deleted"; workspaceId: string; sessionId: string }
-  | { version: typeof PROTOCOL_VERSION; type: "extension.notify"; workspaceId: string; notification: { id: string; message: string; notifyType?: "info" | "warning" | "error" } };
+  | { version: typeof PROTOCOL_VERSION; type: "extension.notify"; workspaceId: string; notification: { id: string; message: string; notifyType?: "info" | "warning" | "error"; sessionId?: string } };
 
 export interface ApiErrorBody {
   error: {
@@ -545,6 +545,7 @@ export const workspaceEventSchema = z.discriminatedUnion("type", [
       id: z.string().min(1),
       message: z.string(),
       notifyType: z.enum(["info", "warning", "error"]).optional(),
+      sessionId: z.string().min(1).optional(),
     }),
   }),
 ]);

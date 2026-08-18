@@ -34,6 +34,13 @@ function pathParams(pathname: string): { workspaceId?: string; sessionId?: strin
 const COMMAND_RETRY_BASE_DELAY_MS = 750;
 const COMMAND_RETRY_MAX_DELAY_MS = 10_000;
 const EMPTY_COMPOSER_COMMANDS: ComposerCommand[] = [];
+type ExtensionToast = {
+  id: string;
+  workspaceId: string;
+  sessionId?: string;
+  message: string;
+  tone: "info" | "warning" | "error";
+};
 
 export function App() {
   const location = useLocation();
@@ -50,7 +57,7 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [assistantName, setAssistantName] = useState("Jarvis");
   const [pageError, setPageError] = useState<string | undefined>();
-  const [globalExtensionToasts, setGlobalExtensionToasts] = useState<Array<{ id: string; message: string; tone: "info" | "warning" | "error" }>>([]);
+  const [globalExtensionToasts, setGlobalExtensionToasts] = useState<ExtensionToast[]>([]);
   const [sessionNotice, setSessionNotice] = useState<string | undefined>();
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ workspaceId: string; session: SessionSummary } | undefined>();
@@ -402,7 +409,7 @@ export function App() {
             if (workspaceEvent.type === "extension.notify") {
               const { notification } = workspaceEvent;
               const tone: "info" | "warning" | "error" = notification.notifyType === "warning" || notification.notifyType === "error" ? notification.notifyType : "info";
-              setGlobalExtensionToasts((current) => [...current, { id: notification.id, message: notification.message, tone }].slice(-4));
+              setGlobalExtensionToasts((current) => [...current, { id: notification.id, workspaceId: workspaceEvent.workspaceId, sessionId: notification.sessionId, message: notification.message, tone }].slice(-4));
               return;
             }
             if (workspaceEvent.type === "session.deleted") {
@@ -933,7 +940,7 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <ExtensionToasts toasts={globalExtensionToasts} onDismiss={(id) => setGlobalExtensionToasts((current) => current.filter((toast) => toast.id !== id))} />
+      <ExtensionToasts toasts={globalExtensionToasts} sessionsByWorkspace={sessionsByWorkspace} onOpenSession={(workspaceId, sessionId) => navigate(`/chat/${workspaceId}/${sessionId}`)} onDismiss={(id) => setGlobalExtensionToasts((current) => current.filter((toast) => toast.id !== id))} />
       <div className="desktop-sidebar">{sidebar}</div>
       {!isMobile ? <section className={isSettingsPage ? "main-pane settings-main-pane" : "main-pane"}>
         {isSettingsPage ? null : <header className="chat-header">
@@ -1098,13 +1105,15 @@ function ExtensionPanels({ panels }: { panels: ExtensionPanelState }) {
   </aside>;
 }
 
-function ExtensionToasts({ toasts, onDismiss }: { toasts: Array<{ id: string; message: string; tone: "info" | "warning" | "error" }>; onDismiss: (id: string) => void }) {
+function ExtensionToasts({ toasts, sessionsByWorkspace, onOpenSession, onDismiss }: { toasts: ExtensionToast[]; sessionsByWorkspace: Record<string, SessionSummary[]>; onOpenSession: (workspaceId: string, sessionId: string) => void; onDismiss: (id: string) => void }) {
   if (toasts.length === 0) return null;
   return <div className="extension-toast-stack" aria-label="扩展通知" aria-live="polite">
     {toasts.map((toast) => {
       const Icon = toast.tone === "info" ? Bell : CircleAlert;
+      const session = toast.sessionId === undefined ? undefined : sessionsByWorkspace[toast.workspaceId]?.find((candidate) => candidate.id === toast.sessionId);
+      const label = session === undefined ? undefined : sessionLabel(session.name, session.preview);
       return <div key={toast.id} className={`extension-toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}>
-        <Icon size={15} /><span>{toast.message}</span><button type="button" aria-label="关闭通知" onClick={() => onDismiss(toast.id)}><X size={14} /></button>
+        <Icon size={15} /><div className="extension-toast-copy">{toast.sessionId === undefined ? null : <button type="button" className="extension-toast-source" onClick={() => onOpenSession(toast.workspaceId, toast.sessionId!)}>{label ?? "打开来源会话"}</button>}<span>{toast.message}</span></div><button type="button" aria-label="关闭通知" onClick={() => onDismiss(toast.id)}><X size={14} /></button>
       </div>;
     })}
   </div>;
