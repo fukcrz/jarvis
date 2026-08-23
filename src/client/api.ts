@@ -9,6 +9,8 @@ import type {
   QueuedMessage,
   QueuedPromptAccepted,
   SessionFileReference,
+  WorkspaceDirectoryListing,
+  WorkspaceFileContent,
   SessionRef,
   SessionStreamSnapshot,
   SessionSummary,
@@ -164,6 +166,16 @@ export const api = {
     if (query?.trim()) params.set("query", query.trim());
     const suffix = params.size === 0 ? "" : `?${params.toString()}`;
     return (await request<{ sessions: SessionFileReference[] }>(`/api/workspaces/${workspaceId}/session-files${suffix}`)).sessions;
+  },
+  workspaceDirectory: async (workspaceId: string, path?: string): Promise<WorkspaceDirectoryListing> => {
+    const params = new URLSearchParams();
+    if (path !== undefined && path.trim() !== "") params.set("path", path);
+    const suffix = params.size === 0 ? "" : `?${params.toString()}`;
+    return (await request<{ directory: WorkspaceDirectoryListing }>(`/api/workspaces/${workspaceId}/directory${suffix}`)).directory;
+  },
+  workspaceFile: async (workspaceId: string, path: string): Promise<WorkspaceFileContent> => {
+    const params = new URLSearchParams({ path });
+    return (await request<{ file: WorkspaceFileContent }>(`/api/workspaces/${workspaceId}/file?${params.toString()}`)).file;
   },
   commands: async (ref: SessionRef): Promise<ComposerCommand[]> => (await request<{ commands: ComposerCommand[] }>(`${sessionPath(ref)}/commands`)).commands,
   createSession: async (workspaceId: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`/api/workspaces/${workspaceId}/sessions`, { method: "POST", body: "{}" })).session,

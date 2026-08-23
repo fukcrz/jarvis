@@ -154,6 +154,28 @@ export interface WorkspaceFile {
   path: string;
 }
 
+export interface WorkspaceBrowserEntry {
+  name: string;
+  path: string;
+  kind: "directory" | "file";
+}
+
+export interface WorkspaceDirectoryListing {
+  path: string;
+  name: string;
+  parent?: string;
+  entries: WorkspaceBrowserEntry[];
+  isGitRepository: boolean;
+}
+
+export interface WorkspaceFileContent {
+  path: string;
+  name: string;
+  content: string;
+  size: number;
+  truncated: boolean;
+}
+
 /** A session exposed as a file reference for the composer. */
 export interface SessionFileReference {
   id: string;

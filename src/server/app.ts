@@ -1,6 +1,6 @@
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { platform } from "node:os";
-import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
@@ -8,7 +8,7 @@ import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
 import { z } from "zod";
 import { THINKING_LEVELS, TUNNEL_METHODS } from "../shared/protocol.js";
-import type { ApiErrorBody, DirectoryListing, SessionRef, WorkspaceFile } from "../shared/protocol.js";
+import type { ApiErrorBody, DirectoryListing, SessionRef, WorkspaceDirectoryListing, WorkspaceFile, WorkspaceFileContent } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { SessionService } from "./session-service.js";
@@ -22,6 +22,7 @@ const workspaceUpdateInput = z.object({ label: z.string().min(1).max(96) }).stri
 const workspaceOrderInput = z.object({ ids: z.array(z.string().uuid()).max(500) }).strict();
 const directoryQuery = z.object({ path: z.string().min(1).optional(), roots: z.enum(["true"]).optional() }).strict();
 const fileSearchQuery = z.object({ query: z.string().max(160).optional() }).strict();
+const workspacePathQuery = z.object({ path: z.string().max(2000).optional() }).strict();
 const sessionNameInput = z.object({ name: z.string().min(1).max(120) }).strict();
 const modelInput = z.object({ provider: z.string().min(1).max(160), modelId: z.string().min(1).max(320) }).strict();
 const thinkingInput = z.object({ level: z.enum(THINKING_LEVELS) }).strict();
@@ -219,6 +220,18 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const workspace = workspaces.get(params.workspaceId);
     return { files: await searchWorkspaceFiles(workspace.cwd, query.query ?? "") };
   });
+  app.get("/api/workspaces/:workspaceId/directory", async (request) => {
+    const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
+    const query = workspacePathQuery.parse(request.query);
+    const workspace = workspaces.get(params.workspaceId);
+    return { directory: await listWorkspaceDirectory(workspace.cwd, query.path ?? "") };
+  });
+  app.get("/api/workspaces/:workspaceId/file", async (request) => {
+    const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
+    const query = z.object({ path: z.string().min(1).max(2000) }).strict().parse(request.query);
+    const workspace = workspaces.get(params.workspaceId);
+    return { file: await readWorkspaceFile(workspace.cwd, query.path) };
+  });
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/commands", async (request) => ({ commands: await sessions.commands(sessionRef(request.params)) }));
 
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/timeline", async (request) => {
@@ -382,6 +395,46 @@ async function listDirectory(value: string): Promise<DirectoryListing> {
 const IGNORED_SEARCH_DIRECTORIES = new Set([".git", "node_modules", "dist", "coverage", ".next"]);
 const MAX_FILE_SEARCH_RESULTS = 80;
 const MAX_FILE_SEARCH_DEPTH = 14;
+const MAX_BROWSER_FILE_BYTES = 512 * 1024;
+
+async function listWorkspaceDirectory(cwd: string, requestedPath: string): Promise<WorkspaceDirectoryListing> {
+  const root = await realpath(cwd).catch(() => { throw new AppError("WORKSPACE_UNAVAILABLE", "Workspace is unavailable", 404); });
+  const directory = await resolveWorkspacePath(root, requestedPath, "DIRECTORY_UNAVAILABLE");
+  const metadata = await stat(directory).catch(() => undefined);
+  if (metadata === undefined || !metadata.isDirectory()) throw new AppError("DIRECTORY_INVALID", "Path must be a directory", 400);
+  const entries = await readdir(directory, { withFileTypes: true });
+  const visible = entries
+    .filter((entry) => !(entry.isDirectory() && IGNORED_SEARCH_DIRECTORIES.has(entry.name)))
+    .filter((entry) => entry.isDirectory() || entry.isFile())
+    .map((entry) => ({ name: entry.name, path: relative(root, join(directory, entry.name)).replaceAll("\\", "/"), kind: entry.isDirectory() ? "directory" as const : "file" as const }))
+    .sort((left, right) => Number(right.kind === "directory") - Number(left.kind === "directory") || left.name.localeCompare(right.name));
+  const relativePath = relative(root, directory).replaceAll("\\", "/");
+  const parent = relativePath === "" ? undefined : relative(root, dirname(directory)).replaceAll("\\", "/");
+  return { path: relativePath, name: basename(directory) || root, ...(parent === undefined ? {} : { parent }), entries: visible, isGitRepository: await pathExists(join(directory, ".git")) };
+}
+
+async function readWorkspaceFile(cwd: string, requestedPath: string): Promise<WorkspaceFileContent> {
+  const root = await realpath(cwd).catch(() => { throw new AppError("WORKSPACE_UNAVAILABLE", "Workspace is unavailable", 404); });
+  const filePath = await resolveWorkspacePath(root, requestedPath, "FILE_NOT_FOUND");
+  const metadata = await stat(filePath).catch(() => undefined);
+  if (metadata === undefined || !metadata.isFile()) throw new AppError("FILE_NOT_FOUND", "File not found", 404);
+  if (metadata.size > MAX_BROWSER_FILE_BYTES * 8) throw new AppError("FILE_TOO_LARGE", "File is too large to preview", 413);
+  const data = await readFile(filePath);
+  if (data.includes(0)) throw new AppError("FILE_BINARY", "Binary files cannot be previewed", 415);
+  const truncated = data.byteLength > MAX_BROWSER_FILE_BYTES;
+  const content = data.subarray(0, MAX_BROWSER_FILE_BYTES).toString("utf8");
+  return { path: relative(root, filePath).replaceAll("\\", "/"), name: basename(filePath), content, size: metadata.size, truncated };
+}
+
+async function resolveWorkspacePath(root: string, requestedPath: string, errorCode: string): Promise<string> {
+  const normalized = requestedPath.replaceAll("\\", "/");
+  if (normalized.startsWith("/") || normalized.split("/").some((part) => part === "..")) throw new AppError(errorCode, "Path is outside the workspace", 400);
+  const candidate = join(root, normalized);
+  const resolved = await realpath(candidate).catch(() => { throw new AppError(errorCode, "Path not found", 404); });
+  const relativePath = relative(root, resolved);
+  if (relativePath === ".." || relativePath.startsWith(`..${String.fromCharCode(47)}`) || isAbsolute(relativePath)) throw new AppError(errorCode, "Path is outside the workspace", 400);
+  return resolved;
+}
 
 async function searchWorkspaceFiles(cwd: string, query: string): Promise<WorkspaceFile[]> {
   const normalizedQuery = query.trim().replaceAll("\\", "/").toLocaleLowerCase();

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Folder, FolderPlus, MessageSquarePlus, Search, Settings2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Files, Folder, FolderPlus, MessageSquarePlus, Search, Settings2 } from "lucide-react";
 import { useState, type PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { formatRelativeTime, matchesSessionQuery, sessionAttentionLabel, sessionAttentionRank, sessionLabel, sessionListWindow } from "../lib/utils";
@@ -21,6 +21,7 @@ interface SidebarProps {
   onLongPressSession: (workspaceId: string, session: SessionSummary) => void;
   assistantName: string;
   onOpenSettings: () => void;
+  onOpenFiles: () => void;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -40,7 +41,7 @@ export function Sidebar(props: SidebarProps) {
     <aside className="sidebar">
       <div className="sidebar-toolbar">
         <span>项目</span>
-        <Tooltip label="添加项目"><Button variant="ghost" size="icon" aria-label="添加项目" onClick={props.onOpenWorkspaceDialog}><FolderPlus size={16} /></Button></Tooltip>
+        <div className="sidebar-toolbar-actions"><Tooltip label="查看文件"><Button variant="ghost" size="icon" aria-label="查看文件" onClick={props.onOpenFiles}><Files size={16} /></Button></Tooltip><Tooltip label="添加项目"><Button variant="ghost" size="icon" aria-label="添加项目" onClick={props.onOpenWorkspaceDialog}><FolderPlus size={16} /></Button></Tooltip></div>
       </div>
       <label className="sidebar-search">
         <Search size={14} />
