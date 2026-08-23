@@ -81,7 +81,6 @@ can leave the tab in the background and get pinged when work is done:
 Note that this requires the tab to stay open (background is fine) and the
 browser to keep running. It cannot fire when the tab or browser is closed.
 
->>>>>>> 180f2ee (feat: 会话运行结束浏览器通知（页面在后台时弹出）)
 ## Message Queue
 
 While a session is running, Jarvis queues new prompts instead of rejecting them.
