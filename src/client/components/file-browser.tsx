@@ -48,7 +48,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
       if (workspaceRef.current !== targetWorkspaceId) return next;
       loadedDirectoryPathsRef.current.add(targetPath);
       setEntriesByPath((current) => {
-        const stalePaths = [...loadedDirectoryPathsRef.current].filter((path) => directoryPath(path) === targetPath && next.entries.every((entry) => entry.path !== path || entry.kind !== "directory"));
+        const stalePaths = [...loadedDirectoryPathsRef.current].filter((path) => path !== "" && directoryPath(path) === targetPath && next.entries.every((entry) => entry.path !== path || entry.kind !== "directory"));
         if (stalePaths.length === 0 && sameDirectoryListing(current[targetPath], next)) return current;
         const updated = { ...current, [targetPath]: next };
         for (const stalePath of stalePaths) {
