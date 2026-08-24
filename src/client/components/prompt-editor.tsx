@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdate, useCodeMirror } from "@uiw/react-codemirror";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { ArrowUp, Command, FileCode2, History, LoaderCircle, MessageSquare, Plus, Puzzle, RotateCcw, Square, X, XCircle, Zap } from "lucide-react";
+import { ArrowUp, Command, FileCode2, History, LoaderCircle, MessageSquare, Plus, RotateCcw, Square, X, XCircle, Zap } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionFileReference, SessionQueue, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
@@ -47,8 +47,6 @@ interface PromptEditorProps {
   onRemoveQueued: (messageId: string, restore: boolean) => void;
   /** 切换单条排队消息的投递方式（后续 ↔ 紧急插队）。 */
   onToggleKind: (messageId: string) => void;
-  /** Lightweight extension status labels shown inside the composer chrome. */
-  extensionStatuses?: Record<string, string>;
   controls?: ReactNode;
   /** 移动端：其他输入框聚焦时折叠为紧凑的"发消息"按钮（编辑器保持挂载，草稿不丢）。 */
   collapsed?: boolean;
@@ -62,7 +60,7 @@ interface PromptEditorProps {
   onAutoFocusConsumed?: () => void;
 }
 
-export function PromptEditor({ initialValue, busy, commands, searchFiles, searchSessionFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, extensionStatuses = {}, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, onCollapsedClick, focusRequestRef, autoFocus = false, onAutoFocusConsumed }: PromptEditorProps) {
+export function PromptEditor({ initialValue, busy, commands, searchFiles, searchSessionFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, onCollapsedClick, focusRequestRef, autoFocus = false, onAutoFocusConsumed }: PromptEditorProps) {
   const isMobile = useIsMobile();
   // 挂载时捕获 autoFocus：视图创建可能比挂载晚一个提交（容器 ref 回调触发
   // 的二次渲染），而 App 可能在被动效果里已清除标记；用 ref 保存挂载快照。
@@ -353,16 +351,13 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
             <span><strong>{item.kind === "command" ? `/${item.command.name}` : item.kind === "session" ? item.session.name ?? item.session.preview ?? "新会话" : item.file.path}</strong>{item.kind === "command" && item.command.description !== undefined ? <small>{item.command.description}</small> : item.kind === "session" && item.session.preview !== null && item.session.preview !== item.session.name ? <small>{item.session.preview}</small> : null}</span>
           </button>)}
         </div>}
-        <div className={`composer-footer${Object.entries(extensionStatuses).length === 0 ? "" : " has-extension-statuses"}`}>
+        <div className="composer-footer">
           <div className="composer-options">
             <Tooltip label={attachDisabled ? "当前模型不支持图片" : "添加图片（支持 Ctrl+V 粘贴）"}>
               <Button variant="ghost" className="composer-attach" size="icon" aria-label="添加图片" disabled={attachDisabled} onClick={openAttach}><Plus size={16} /></Button>
             </Tooltip>
             {controls}
           </div>
-          {Object.entries(extensionStatuses).length === 0 ? null : <div className="composer-extension-statuses" aria-label="扩展状态">
-            {Object.entries(extensionStatuses).map(([key, text]) => <span className="composer-extension-status" key={key} title={key}><Puzzle size={11} /><span>{text}</span></span>)}
-          </div>}
           <div className="composer-actions">
             {onCancelEdit === undefined ? null : <Tooltip label="取消编辑"><Button variant="ghost" className="composer-cancel-edit" size="icon" aria-label="取消编辑" onClick={onCancelEdit}><X size={15} /></Button></Tooltip>}
             {canSend ? (
