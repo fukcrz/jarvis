@@ -5,13 +5,26 @@ interface SocketLike {
   readyState: number;
   send(payload: string): void;
   terminate?: () => void;
-  on(event: "close", listener: () => void): unknown;
+  ping?: () => void;
+  on(event: "close" | "pong", listener: () => void): unknown;
 }
 
 export class EventHub {
   private readonly sessionSockets = new Map<string, Set<SocketLike>>();
   private readonly workspaceSockets = new Map<string, Set<SocketLike>>();
   private readonly seqBySession = new Map<string, number>();
+  /** 上一轮心跳 ping 后尚未收到 pong 的连接；下一轮仍无回应则断开。 */
+  private readonly pendingPong = new WeakSet<SocketLike>();
+  private heartbeatTimer: NodeJS.Timeout | undefined;
+
+  constructor(heartbeatMs = 30_000) {
+    // 移动端浏览器切后台后连接常被系统静默掐断且不再触发 close（半开连接）。
+    // 心跳让服务端主动发现死连接并断开，客户端收到 close 后自动重连。
+    // 浏览器对服务端 ping 的 pong 应答由协议层自动发出，无需客户端配合。
+    this.heartbeatTimer = setInterval(() => this.sweep(), heartbeatMs);
+    // 不阻止进程退出（自重启等场景）。
+    this.heartbeatTimer.unref?.();
+  }
 
   addSession(ref: SessionRef, socket: SocketLike): void {
     this.add(this.sessionSockets, sessionKey(ref), socket);
@@ -53,6 +66,7 @@ export class EventHub {
 
   /** 断开全部连接（优雅停机/自重启前调用，避免 ws 阻止 Fastify close）。 */
   terminateAll(): void {
+    this.stopHeartbeat();
     for (const sockets of [...this.sessionSockets.values(), ...this.workspaceSockets.values()]) {
       for (const socket of sockets) {
         try {
@@ -74,6 +88,39 @@ export class EventHub {
       sockets.delete(socket);
       if (sockets.size === 0) collection.delete(key);
     });
+    socket.on("pong", () => {
+      this.pendingPong.delete(socket);
+    });
+  }
+
+  /** 心跳巡检：对无 pong 回应的连接调用 terminate，触发客户端 close → 自动重连。 */
+  private sweep(): void {
+    for (const sockets of [...this.sessionSockets.values(), ...this.workspaceSockets.values()]) {
+      for (const socket of sockets) {
+        if (this.pendingPong.has(socket)) {
+          // 上一轮 ping 无回应：判定为死连接，主动断开。
+          this.pendingPong.delete(socket);
+          try {
+            socket.terminate?.();
+          } catch {
+            // 断开失败不影响其余 socket。
+          }
+          continue;
+        }
+        this.pendingPong.add(socket);
+        try {
+          socket.ping?.();
+        } catch {
+          // ping 失败视同无回应，下一轮 sweep 会断开该连接。
+        }
+      }
+    }
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer === undefined) return;
+    clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
   }
 
   private send(sockets: Set<SocketLike> | undefined, value: SessionEvent | WorkspaceEvent): void {

@@ -120,6 +120,16 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     if (requestFrame.current === undefined) requestFrame.current = requestAnimationFrame(flushEvents);
   }, [flushEvents]);
 
+  const refresh = useCallback(async () => {
+    if (ref === undefined) return;
+    const selectedKey = refKey;
+    const [page, snapshot] = await Promise.all([api.timeline(ref), api.runtime(ref)]);
+    if (refKeyRef.current !== selectedKey) return;
+    dispatch({ type: "hydrate", page, snapshot });
+    setExtensionPanels(extensionPanelsFromSnapshot(snapshot.extensionUi));
+    document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
+  }, [refKey]);
+
   useEffect(() => {
     queuedEvents.current = [];
     if (requestFrame.current !== undefined) {
@@ -191,12 +201,57 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     };
 
     connect();
+
+    // 移动端浏览器切后台后，WebSocket 常被系统静默掐断且不再触发 close（半开连接），
+    // 仅靠 close 重连会永远卡在陈旧状态。回到前台/网络恢复时主动检查并强制同步：
+    // - 连接已死 → 立即重建（不等退避计时器）；
+    // - 连接看似存活（可能是僵尸）→ 重拉权威快照，保证状态即最新。
+    const resync = () => {
+      if (disposed) return;
+      if (socket === undefined || socket.readyState === WebSocket.CLOSED) {
+        if (reconnectTimer !== undefined) {
+          window.clearTimeout(reconnectTimer);
+          reconnectTimer = undefined;
+        }
+        const stale = socket;
+        socket = undefined;
+        if (stale !== undefined) {
+          try {
+            stale.close();
+          } catch {
+            // CONNECTING 状态下 close 会抛 InvalidStateError，直接弃用旧连接。
+          }
+        }
+        attempt = 0;
+        hydrated = false;
+        buffered = [];
+        connect();
+      } else if (socket.readyState === WebSocket.OPEN) {
+        void refresh();
+      }
+      // CONNECTING/CLOSING：重连或关闭流程已在途中，交给既有路径。
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") resync();
+    };
+    const onOnline = () => {
+      resync();
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) resync();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("pageshow", onPageShow);
     return () => {
       disposed = true;
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       socket?.close();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("pageshow", onPageShow);
     };
-  }, [refKey, receiveEvent]);
+  }, [refKey, receiveEvent, refresh]);
 
   useEffect(() => () => {
     if (requestFrame.current !== undefined) cancelAnimationFrame(requestFrame.current);
@@ -215,16 +270,6 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     const selectedKey = refKey;
     const thinking = await api.setThinkingLevel(ref, level);
     if (refKeyRef.current === selectedKey) dispatch({ type: "thinking", thinking });
-  }, [refKey]);
-
-  const refresh = useCallback(async () => {
-    if (ref === undefined) return;
-    const selectedKey = refKey;
-    const [page, snapshot] = await Promise.all([api.timeline(ref), api.runtime(ref)]);
-    if (refKeyRef.current !== selectedKey) return;
-    dispatch({ type: "hydrate", page, snapshot });
-    setExtensionPanels(extensionPanelsFromSnapshot(snapshot.extensionUi));
-    document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
   }, [refKey]);
 
   const loadEarlier = useCallback(async () => {
