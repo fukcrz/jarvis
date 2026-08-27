@@ -76,4 +76,26 @@ await replaceOnce(
   "const child = spawn(fdPath, args, { stdio: [\"ignore\", \"pipe\", \"pipe\"], windowsHide: true });",
 );
 
+// SDK 会话初始化路径也会触发控制台子进程（无控制台的 node 服务端下会闪窗）：
+// - 会话加载时查 git 分支（resource-loader -> footer-data-provider）
+// - grep/find 工具激活时检查命令版本（tools-manager）
+// - Unix 分支的 which 检查（Windows 走 where，顺带修掉）
+await replaceOnce(
+  join(codingAgentDist, "../core/footer-data-provider.js"),
+  "    const result = spawnSync(\"git\", [\"--no-optional-locks\", \"symbolic-ref\", \"--quiet\", \"--short\", \"HEAD\"], {\n        cwd: repoDir,\n        encoding: \"utf8\",\n        stdio: [\"ignore\", \"pipe\", \"ignore\"],\n    });",
+  "    const result = spawnSync(\"git\", [\"--no-optional-locks\", \"symbolic-ref\", \"--quiet\", \"--short\", \"HEAD\"], {\n        cwd: repoDir,\n        encoding: \"utf8\",\n        stdio: [\"ignore\", \"pipe\", \"ignore\"],\n        windowsHide: true,\n    });",
+);
+
+await replaceOnce(
+  join(codingAgentRoot, "dist/utils/tools-manager.js"),
+  "        const result = spawnSync(cmd, [\"--version\"], { stdio: \"pipe\" });",
+  "        const result = spawnSync(cmd, [\"--version\"], { stdio: \"pipe\", windowsHide: true });",
+);
+
+await replaceOnce(
+  join(codingAgentRoot, "dist/utils/shell.js"),
+  "        const result = spawnSync(\"which\", [executable], { encoding: \"utf-8\", timeout: 5000 });",
+  "        const result = spawnSync(\"which\", [executable], { encoding: \"utf-8\", timeout: 5000, windowsHide: true });",
+);
+
 console.log("Applied Pi ownerSessionId and Windows hidden-process patches");
