@@ -6,6 +6,18 @@ afterEach(() => {
 });
 
 describe("API client", () => {
+  it("sends a UI-mode-only settings patch", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ settings: { assistantName: "Jarvis", uiMode: "beautiful" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.updateSettings({ uiMode: "beautiful" })).resolves.toEqual({ assistantName: "Jarvis", uiMode: "beautiful" });
+
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe("/api/settings");
+    expect(init?.method).toBe("PATCH");
+    expect(init?.body).toBe(JSON.stringify({ uiMode: "beautiful" }));
+  });
+
   it("does not send a JSON content type for a request without a body", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ removed: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

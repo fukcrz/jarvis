@@ -33,7 +33,9 @@ const editAndResendInput = z.object({ messageId: z.string().min(1).max(200), tex
 const compactInput = z.object({ customInstructions: z.string().max(40_000).optional(), clientRequestId: z.string().uuid().optional() }).strict();
 const bashInput = z.object({ command: z.string().min(1).max(40_000), excludeFromContext: z.boolean().optional(), clientRequestId: z.string().uuid() }).strict();
 const abortInput = z.object({ runId: z.string().uuid().optional() }).strict();
-const settingsInput = z.object({ assistantName: z.string().min(1).max(64) }).strict();
+const settingsInput = z.object({ assistantName: z.string().min(1).max(64).optional(), uiMode: z.enum(["legacy", "beautiful"]).optional() })
+  .strict()
+  .refine((value) => value.assistantName !== undefined || value.uiMode !== undefined, "At least one settings field is required");
 const authLoginInput = z.object({ providerId: z.string().min(1).max(120), type: z.enum(["api_key", "oauth"]) }).strict();
 const authResponseInput = z.object({ value: z.string().max(200_000) }).strict();
 const managedModelInput = z.object({ id: z.string().min(1).max(320), name: z.string().max(160).optional(), reasoning: z.boolean(), vision: z.boolean(), contextWindow: z.number().int().positive().optional(), maxTokens: z.number().int().positive().optional() }).strict();

@@ -24,6 +24,8 @@ export interface Workspace {
 
 export interface AppSettings {
   assistantName: string;
+  /** Chat presentation only; workspaces, files, and settings keep their current UI. */
+  uiMode: "legacy" | "beautiful";
 }
 
 export interface ManagedModel {

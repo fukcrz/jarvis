@@ -7,7 +7,7 @@ import type { AuthEvent, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
 import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderStatus } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 
-interface StoredSettings { version: 1; assistantName: string; }
+interface StoredSettings { version: 1; assistantName: string; uiMode: AppSettings["uiMode"]; }
 type ModelConfig = Record<string, unknown> & { providers: Record<string, Record<string, unknown>> };
 interface LoginOperation {
   id: string;
@@ -31,7 +31,7 @@ const CUSTOM_API_KEY_PLACEHOLDER = "jarvis-managed-provider-key";
 export class SettingsService {
   private readonly settingsPath: string;
   private readonly modelsPath: string;
-  private settings: StoredSettings = { version: 1, assistantName: DEFAULT_ASSISTANT_NAME };
+  private settings: StoredSettings = { version: 1, assistantName: DEFAULT_ASSISTANT_NAME, uiMode: "legacy" };
   private readonly operations = new Map<string, LoginOperation>();
 
   constructor(
@@ -48,17 +48,23 @@ export class SettingsService {
     try {
       const parsed = JSON.parse(await readFile(this.settingsPath, "utf8")) as Partial<StoredSettings>;
       if (parsed.version !== 1 || typeof parsed.assistantName !== "string") throw new Error("Unsupported settings format");
-      this.settings = { version: 1, assistantName: normalizeAssistantName(parsed.assistantName) };
+      this.settings = {
+        version: 1,
+        assistantName: normalizeAssistantName(parsed.assistantName),
+        // Settings written before the chat redesign did not include a UI mode.
+        uiMode: parsed.uiMode === "beautiful" ? "beautiful" : "legacy",
+      };
     } catch (error) {
       if (!isMissingFile(error)) throw error;
       await this.persistSettings();
     }
   }
 
-  getSettings(): AppSettings { return { assistantName: this.settings.assistantName }; }
+  getSettings(): AppSettings { return { assistantName: this.settings.assistantName, uiMode: this.settings.uiMode }; }
 
-  async updateSettings(input: { assistantName: string }): Promise<AppSettings> {
-    this.settings.assistantName = normalizeAssistantName(input.assistantName);
+  async updateSettings(input: Partial<Pick<AppSettings, "assistantName" | "uiMode">>): Promise<AppSettings> {
+    if (input.assistantName !== undefined) this.settings.assistantName = normalizeAssistantName(input.assistantName);
+    if (input.uiMode !== undefined) this.settings.uiMode = input.uiMode;
     await this.persistSettings();
     return this.getSettings();
   }

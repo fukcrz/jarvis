@@ -10,7 +10,9 @@ import { TunnelPanel } from "./tunnel-panel";
 
 interface SettingsPageProps {
   assistantName: string;
+  uiMode: AppSettings["uiMode"];
   onAssistantNameChange: (name: string) => void;
+  onUiModeChange: (mode: AppSettings["uiMode"]) => void;
   workspaces: Workspace[];
   onWorkspacesChange: (workspaces: Workspace[]) => void;
   onAddWorkspace: (path: string, label?: string) => Promise<void>;
@@ -30,7 +32,7 @@ const API_OPTIONS: Array<{ id: ManagedProvider["api"]; label: string; descriptio
   { id: "google-generative-ai", label: "Google Generative AI", description: "使用 Google Generative AI 接口" },
 ];
 
-export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onAssistantNameChange, onBack }: SettingsPageProps) {
+export function SettingsPage({ assistantName, uiMode, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onAssistantNameChange, onUiModeChange, onBack }: SettingsPageProps) {
   const [tab, setTab] = useState<SettingsTab>("general");
   const [name, setName] = useState(assistantName);
   const [notificationsEnabled, setNotificationsEnabledState] = useState(() => isNotificationEnabled());
@@ -79,8 +81,18 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
 
   const saveName = async () => {
     setBusy("name");
-    try { const settings: AppSettings = await api.updateSettings(name); onAssistantNameChange(settings.assistantName); setName(settings.assistantName); showMessage("已保存"); }
+    try { const settings: AppSettings = await api.updateSettings({ assistantName: name }); onAssistantNameChange(settings.assistantName); setName(settings.assistantName); showMessage("已保存"); }
     catch (error) { showMessage(error instanceof Error ? error.message : "名称保存失败", "error"); }
+    finally { setBusy(undefined); }
+  };
+  const saveUiMode = async (mode: AppSettings["uiMode"]) => {
+    if (mode === uiMode || busy !== undefined) return;
+    setBusy("ui-mode");
+    try {
+      const settings = await api.updateSettings({ uiMode: mode });
+      onUiModeChange(settings.uiMode);
+      showMessage(mode === "beautiful" ? "已切换到新版聊天界面" : "已切换到经典聊天界面");
+    } catch (error) { showMessage(error instanceof Error ? error.message : "界面切换失败", "error"); }
     finally { setBusy(undefined); }
   };
   const restart = async () => {
@@ -155,7 +167,7 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
       </nav>
       <main className="settings-content">
         {message === undefined ? null : <div className={`settings-toast ${messageTone}`} role={messageTone === "error" ? "alert" : "status"}><span className="settings-toast-icon">{messageTone === "error" ? <CircleAlert size={15} /> : <CheckCircle2 size={15} />}</span><span>{message}</span><button type="button" aria-label="关闭提示" onClick={() => setMessage(undefined)}><X size={14} /></button></div>}
-        {tab === "general" ? <section className="settings-section"><h2>常规</h2><label className="settings-field"><span>助手名称</span><input value={name} maxLength={64} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void saveName(); }} /></label><Button onClick={() => { void saveName(); }} disabled={busy === "name" || name.trim() === ""}><Save size={15} />保存名称</Button><label className="settings-field settings-checkbox"><input type="checkbox" checked={notificationsEnabled} onChange={(event) => { void toggleNotifications(event.target.checked); }} /><span>会话运行结束时弹出通知（页面在后台时）</span></label><div className="settings-section-heading"><h2>服务</h2></div><p className="settings-muted">重启服务会短暂中断所有连接（自动重连恢复），仅加载现有构建，不会编译。</p><Button variant="danger" disabled={restarting} onClick={() => setRestartConfirmOpen(true)}><RotateCw size={15} />{restarting ? "正在重启…" : "重启服务"}</Button></section> : null}
+        {tab === "general" ? <section className="settings-section"><h2>常规</h2><label className="settings-field"><span>助手名称</span><input value={name} maxLength={64} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void saveName(); }} /></label><Button onClick={() => { void saveName(); }} disabled={busy === "name" || name.trim() === ""}><Save size={15} />保存名称</Button><div className="ui-mode-setting"><div><strong>聊天界面</strong><p>新版仅调整聊天页，保留会话、工具和输入行为。</p></div><div className="ui-mode-picker" role="radiogroup" aria-label="聊天界面版本"><button type="button" role="radio" aria-checked={uiMode === "legacy"} className={uiMode === "legacy" ? "selected" : ""} disabled={busy === "ui-mode"} onClick={() => { void saveUiMode("legacy"); }}>经典</button><button type="button" role="radio" aria-checked={uiMode === "beautiful"} className={uiMode === "beautiful" ? "selected" : ""} disabled={busy === "ui-mode"} onClick={() => { void saveUiMode("beautiful"); }}>新版</button></div></div><label className="settings-field settings-checkbox"><input type="checkbox" checked={notificationsEnabled} onChange={(event) => { void toggleNotifications(event.target.checked); }} /><span>会话运行结束时弹出通知（页面在后台时）</span></label><div className="settings-section-heading"><h2>服务</h2></div><p className="settings-muted">重启服务会短暂中断所有连接（自动重连恢复），仅加载现有构建，不会编译。</p><Button variant="danger" disabled={restarting} onClick={() => setRestartConfirmOpen(true)}><RotateCw size={15} />{restarting ? "正在重启…" : "重启服务"}</Button></section> : null}
         {tab === "providers" ? <section className="settings-section"><div className="settings-section-heading"><div><h2>供应商与账号</h2><p className="settings-muted">统一管理连接凭据、供应商接口和可用模型。</p></div><Button size="sm" onClick={openNewProvider}><Plus size={14} />添加供应商</Button></div>{loading ? <p className="settings-muted">正在读取供应商…</p> : <div className="provider-list">{providers.length === 0 && customProviders.length === 0 ? <p className="settings-muted">暂无供应商配置</p> : providers.map((item) => <ProviderRow key={item.id} status={item} custom={customById.get(item.id)} busy={busy} onLogin={startLogin} onLogout={logout} onEdit={openEditProvider} onRemove={removeProvider} />)}{customProviders.filter((item) => !providers.some((status) => status.id === item.id)).map((item) => <article className="provider-row" key={item.id}><div className="provider-main"><strong>{item.name ?? item.id}</strong><small>{item.id} · {item.models.length} 个模型 · 未加载</small></div><div className="provider-status"><Button variant="secondary" size="sm" onClick={() => openEditProvider(item)}>编辑</Button><Button variant="ghost" size="icon" aria-label={`删除 ${item.id}`} title="删除供应商" disabled={busy === item.id} onClick={() => { void removeProvider(item.id); }}><Trash2 size={15} /></Button></div></article>)}</div>}</section> : null}
         {tab === "workspaces" ? <section className="settings-section"><div className="settings-section-heading"><h2>工作区</h2><Button size="sm" onClick={() => setWorkspaceDialogOpen(true)}><FolderPlus size={14} />添加工作区</Button></div>{workspaces.length === 0 ? <p className="settings-muted">暂无工作区</p> : <div className="provider-list">{workspaces.map((workspace, index) => <article className="provider-row workspace-settings-row" key={workspace.id}><div className="provider-main"><strong>{workspace.label}</strong><small>{workspace.cwd}</small></div><div className="provider-status workspace-settings-actions"><Button variant="ghost" size="icon" aria-label="上移工作区" title="上移" disabled={index === 0 || workspaceBusy !== undefined} onClick={() => { void moveWorkspace(index, -1); }}><ArrowUp size={15} /></Button><Button variant="ghost" size="icon" aria-label="下移工作区" title="下移" disabled={index === workspaces.length - 1 || workspaceBusy !== undefined} onClick={() => { void moveWorkspace(index, 1); }}><ArrowDown size={15} /></Button><Button variant="ghost" size="icon" aria-label={`删除工作区 ${workspace.label}`} title="删除工作区" disabled={workspaceBusy !== undefined} onClick={() => setWorkspaceRemoveTarget(workspace)}><Trash2 size={15} /></Button></div></article>)}</div>}</section> : null}
         {tab === "tunnel" ? <TunnelPanel onMessage={(nextMessage, tone) => showMessage(nextMessage, tone)} /> : null}

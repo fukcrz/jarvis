@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { Archive, ArrowDown, Bell, Brain, Check, CircleAlert, Clock3, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
-import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
+import type { AppSettings, ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
 import { MarkdownMessage } from "./markdown-message";
@@ -10,6 +10,7 @@ import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
 interface TimelineProps {
+  variant?: AppSettings["uiMode"];
   items: TimelineItem[];
   streamingMessageId?: string;
   hasMore: boolean;
@@ -48,7 +49,7 @@ function stopFollowingOnGesture(element: HTMLDivElement, setFollowing: (value: b
   if (shouldStopFollowingOnGesture(element, deltaY)) setFollowing(false);
 }
 
-export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd }: TimelineProps) {
+export function Timeline({ variant = "legacy", items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const touchYRef = useRef<number | undefined>(undefined);
   const [following, setFollowing] = useState(true);
@@ -73,7 +74,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   };
 
   return (
-    <section className="timeline-shell">
+    <section className={`timeline-shell${variant === "beautiful" ? " timeline-shell-beautiful" : ""}`}>
       <div className="timeline" ref={scrollRef} onScroll={(event) => {
         const element = event.currentTarget;
         setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX);
@@ -169,7 +170,7 @@ function RunFailureCard({ failure, onRetryCompaction }: { failure: NonNullable<S
     : "任务已停止，可以查看诊断信息后继续操作。";
 
   return <article className="timeline-event run-failure" role="alert">
-    <button className="timeline-event-summary run-failure-header" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+    <button className="timeline-event-summary run-failure-header" type="button" aria-label={open ? "收起诊断" : "查看诊断"} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
       <span className="run-failure-icon"><CircleAlert size={16} /></span>
       <span className="run-failure-copy"><strong>{title}</strong><span>{summary}</span></span>
     </button>
@@ -339,7 +340,7 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
 function ExtensionNotification({ item }: { item: ExtensionUiTimelineItem }) {
   const tone = item.request.method === "notify" ? item.request.notifyType ?? "info" : "info";
   const Icon = tone === "error" ? CircleAlert : tone === "warning" ? CircleAlert : Bell;
-  return <article className={`extension-notification ${tone}`} role={tone === "error" ? "alert" : "status"}>
+  return <article className={`extension-notification ${tone}`} role={tone === "error" ? "alert" : "status"} aria-label="扩展通知">
     <span className="extension-notification-icon"><Icon size={15} /></span>
     <span>{item.request.method === "notify" ? item.request.message : ""}</span>
   </article>;
