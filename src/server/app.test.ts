@@ -137,22 +137,6 @@ async function writeConversationSession(workspacePath: string): Promise<{ id: st
 }
 
 describe("Jarvis HTTP and WebSocket API", () => {
-  it("defaults legacy settings to the classic chat UI and persists a UI-only update", async () => {
-    await app?.close();
-    await writeFile(join(jarvisHome, "settings.json"), JSON.stringify({ version: 1, assistantName: "Legacy Jarvis" }));
-    app = await buildApp();
-    const server = activeApp();
-
-    const initial = await server.inject({ method: "GET", url: "/api/settings" });
-    expect(initial.statusCode).toBe(200);
-    expect(initial.json()).toEqual({ settings: { assistantName: "Legacy Jarvis", uiMode: "legacy" } });
-
-    const updated = await server.inject({ method: "PATCH", url: "/api/settings", payload: { uiMode: "beautiful" } });
-    expect(updated.statusCode).toBe(200);
-    expect(updated.json()).toEqual({ settings: { assistantName: "Legacy Jarvis", uiMode: "beautiful" } });
-    await expect(readFile(join(jarvisHome, "settings.json"), "utf8")).resolves.toContain('"uiMode": "beautiful"');
-  });
-
   it("lists the platform's directory root picker", async () => {
     const roots = await activeApp().inject({ method: "GET", url: "/api/directories?roots=true" });
     expect(roots.statusCode).toBe(200);

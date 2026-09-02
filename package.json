@@ -11,8 +11,7 @@
     "bin",
     "dist",
     "README.md",
-    "LICENSE",
-    "THIRD_PARTY_NOTICES.md"
+    "LICENSE"
   ],
   "repository": {
     "type": "git",
