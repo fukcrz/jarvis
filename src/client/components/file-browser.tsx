@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { ArrowLeft, Check, ChevronDown, ChevronRight, Clipboard, FileCode2, FileText, Folder, FolderOpen } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, ChevronRight, Clipboard, Download, ExternalLink, FileCode2, FileQuestion, FileText, Folder, FolderOpen } from "lucide-react";
 import type { Workspace, WorkspaceDirectoryListing, WorkspaceFileContent } from "../../shared/protocol";
-import { api } from "../api";
+import { api, ApiError, workspaceFileUrl } from "../api";
+import { MAX_TABLE_ROWS, parseDelimited, previewKindForPath, type PreviewKind } from "../lib/file-preview";
+import { MarkdownMessage } from "./markdown-message";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 
@@ -18,17 +20,26 @@ const MIN_SIDEBAR_WIDTH = 280;
 const MAX_SIDEBAR_WIDTH = 540;
 const SIDEBAR_WIDTH_KEY = "jarvis.files.sidebarWidth";
 
+/** 当前打开的预览：文本类带内容，媒体/不支持类型经 /api/files 渲染。 */
+interface FilePreviewState {
+  path: string;
+  name: string;
+  kind: PreviewKind;
+  content?: WorkspaceFileContent;
+}
+
 export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack }: FileBrowserProps) {
   const [entriesByPath, setEntriesByPath] = useState<Record<string, WorkspaceDirectoryListing>>({});
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({ "": true });
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({});
-  const [selectedFilePath, setSelectedFilePath] = useState<string>();
-  const [selectedFile, setSelectedFile] = useState<WorkspaceFileContent>();
+  const [preview, setPreview] = useState<FilePreviewState>();
   const [error, setError] = useState<string>();
   const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
   const [focusedPath, setFocusedPath] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth());
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const treeRef = useRef<HTMLDivElement>(null);
+  const treeScrollRef = useRef(0);
   const loadedDirectoryPathsRef = useRef(new Set<string>());
   const loadingDirectoryPathsRef = useRef(new Set<string>());
   const workspaceRef = useRef(workspaceId);
@@ -82,8 +93,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     setLoadingPaths({});
     loadedDirectoryPathsRef.current.clear();
     loadingDirectoryPathsRef.current.clear();
-    setSelectedFilePath(undefined);
-    setSelectedFile(undefined);
+    setPreview(undefined);
     setError(undefined);
     setFocusedPath("");
     setWorkspacePickerOpen(false);
@@ -135,20 +145,44 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     };
   }, [sidebarWidth]);
 
+  const closePreview = () => {
+    setPreview(undefined);
+    setError(undefined);
+    requestAnimationFrame(() => {
+      const element = treeRef.current;
+      if (element !== null) element.scrollTop = treeScrollRef.current;
+    });
+  };
+
   const openFile = async (path: string) => {
     const targetWorkspaceId = workspaceRef.current;
     if (targetWorkspaceId === undefined) return;
-    if (selectedFilePath === path && selectedFile !== undefined) return;
+    treeScrollRef.current = treeRef.current?.scrollTop ?? 0;
+    const name = path.split("/").pop() ?? path;
+    const kind = previewKindForPath(path);
+    // 媒体类与不支持类型不需要正文内容，直接用 /api/files 渲染或下载。
+    if (kind !== "text" && kind !== "markdown" && kind !== "table") {
+      if (preview?.path === path && preview.kind === kind) return;
+      setPreview({ path, name, kind });
+      setFocusedPath(directoryPath(path));
+      setError(undefined);
+      return;
+    }
+    if (preview?.path === path && preview.content !== undefined) return;
     setLoadingPaths((current) => ({ ...current, [path]: true }));
     setError(undefined);
     try {
       const file = await api.workspaceFile(targetWorkspaceId, path);
       if (workspaceRef.current !== targetWorkspaceId) return;
-      setSelectedFilePath(path);
-      setSelectedFile(file);
+      setPreview({ path, name, kind, content: file });
       setFocusedPath(directoryPath(path));
     } catch (reason: unknown) {
-      if (workspaceRef.current === targetWorkspaceId) setError(reason instanceof Error ? reason.message : "无法预览文件");
+      if (workspaceRef.current !== targetWorkspaceId) return;
+      if (reason instanceof ApiError && reason.code === "FILE_BINARY") {
+        setPreview({ path, name, kind: "unsupported" });
+        return;
+      }
+      setError(reason instanceof Error ? reason.message : "无法预览文件");
     } finally {
       if (workspaceRef.current === targetWorkspaceId) {
         setLoadingPaths((current) => {
@@ -190,7 +224,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
 
   if (workspace === undefined) return <section className="file-browser-page"><div className="file-browser-empty"><FolderOpen size={28} /><h2>暂无工作区</h2><Button onClick={onBack}>返回会话</Button></div></section>;
 
-  return <section className="file-browser-page" style={{ "--file-browser-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
+  return <section className={`file-browser-page${preview !== undefined ? " file-browser-previewing" : ""}`} style={{ "--file-browser-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
     <header className="file-browser-header">
       <Button variant="ghost" size="icon" aria-label="返回会话" title="返回会话" onClick={onBack}><ArrowLeft size={18} /></Button>
       <div className="file-browser-heading"><h1>文件</h1></div>
@@ -206,8 +240,8 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
           </div>
           {error === undefined ? null : <div className="file-browser-error" role="alert">{error}</div>}
         </div>
-        <div className="file-browser-tree" aria-label="文件树">
-          {rootListing === undefined ? <p className="file-browser-status">正在读取…</p> : treeEntries.map((entry) => renderTreeNode(entry, 0, { entriesByPath, expandedPaths, focusedPath, loadingPaths, selectedFilePath, onToggleDirectory: (path) => { void toggleDirectory(path); }, onOpenFile: (path) => { void openFile(path); } }))}
+        <div className="file-browser-tree" ref={treeRef} aria-label="文件树">
+          {rootListing === undefined ? <p className="file-browser-status">正在读取…</p> : treeEntries.map((entry) => renderTreeNode(entry, 0, { entriesByPath, expandedPaths, focusedPath, loadingPaths, selectedFilePath: preview?.path, onToggleDirectory: (path) => { void toggleDirectory(path); }, onOpenFile: (path) => { void openFile(path); } }))}
           {rootListing !== undefined && treeEntries.length === 0 ? <p className="file-browser-status">此项目没有文件</p> : null}
         </div>
       </aside>
@@ -218,7 +252,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
         document.body.classList.add("file-browser-resizing");
       }} />
       <main className="file-browser-main">
-        {selectedFile !== undefined ? <FilePreview file={selectedFile} onBack={() => { setSelectedFilePath(undefined); setSelectedFile(undefined); setError(undefined); }} onCopy={(value, message) => { void copy(value, message); }} /> : <div className="file-browser-empty file-browser-preview-empty"><FileCode2 size={30} /><h2>选择一个文件</h2><p>左侧目录中的文件会在这里预览。</p></div>}
+        {preview !== undefined ? <FilePreview state={preview} cwd={workspace.cwd} onBack={closePreview} onCopy={(value, message) => { void copy(value, message); }} /> : <div className="file-browser-empty file-browser-preview-empty"><FileCode2 size={30} /><h2>选择一个文件</h2><p>左侧目录中的文件会在这里预览。</p></div>}
       </main>
     </div>
     <Dialog open={workspacePickerOpen} onOpenChange={setWorkspacePickerOpen}>
@@ -269,13 +303,68 @@ function renderTreeNode(
   </div>;
 }
 
-function FilePreview({ file, onBack, onCopy }: { file: WorkspaceFileContent; onBack: () => void; onCopy: (value: string, message: string) => void }) {
-  const lines = file.content.split("\n");
-  return <article className="file-preview">
-    <header className="file-preview-header"><Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft size={15} />返回目录</Button><div className="file-preview-title"><FileCode2 size={16} /><strong>{file.name}</strong><small>{formatBytes(file.size)}{file.truncated ? " · 已截断" : ""}</small></div><Button variant="secondary" size="sm" onClick={() => onCopy(file.content, "已复制文件内容")}><Clipboard size={14} />复制</Button></header>
-    {file.truncated ? <div className="file-preview-notice">文件较大，仅显示前 512 KB。</div> : null}
-    <pre className="file-preview-code" aria-label={`文件内容 ${file.path}`}><code>{lines.map((line, index) => <span className="file-preview-line" key={index}><span className="file-preview-line-number">{index + 1}</span><span>{line || " "}</span>{index === lines.length - 1 ? null : "\n"}</span>)}</code></pre>
+function FilePreview({ state, cwd, onBack, onCopy }: { state: FilePreviewState; cwd: string; onBack: () => void; onCopy: (value: string, message: string) => void }) {
+  const url = workspaceFileUrl(cwd, state.path);
+  const downloadUrl = workspaceFileUrl(cwd, state.path, { download: true });
+  const copyable = state.content !== undefined && (state.kind === "text" || state.kind === "markdown" || state.kind === "table");
+  return <article className={`file-preview file-preview-${state.kind}`}>
+    <header className="file-preview-header"><Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft size={15} />返回目录</Button><div className="file-preview-title"><FileCode2 size={16} /><strong>{state.name}</strong><small>{state.content === undefined ? kindLabel(state.kind) : `${formatBytes(state.content.size)}${state.content.truncated ? " · 已截断" : ""}`}</small></div><div className="file-preview-actions">{copyable ? <Button variant="secondary" size="sm" onClick={() => onCopy(state.content!.content, "已复制文件内容")}><Clipboard size={14} />复制</Button> : null}<a className="button button-secondary button-sm" href={url} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开</a><a className="button button-secondary button-sm" href={downloadUrl} download><Download size={14} />下载</a></div></header>
+    {state.content?.truncated === true ? <div className="file-preview-notice">文件较大，仅显示前 512 KB。</div> : null}
+    <div className="file-preview-body"><FilePreviewBody state={state} cwd={cwd} url={url} /></div>
   </article>;
+}
+
+function FilePreviewBody({ state, cwd, url }: { state: FilePreviewState; cwd: string; url: string }) {
+  switch (state.kind) {
+    case "image":
+      return <div className="file-preview-media"><img src={url} alt={state.name} /></div>;
+    case "pdf":
+      return <div className="file-preview-media"><iframe src={url} title={state.name} /></div>;
+    case "audio":
+      return <div className="file-preview-media file-preview-audio"><audio controls src={url} /></div>;
+    case "video":
+      return <div className="file-preview-media"><video controls playsInline src={url} /></div>;
+    case "markdown":
+      return <div className="message-content file-preview-markdown"><MarkdownMessage text={state.content?.content ?? ""} baseDir={cwd} /></div>;
+    case "table":
+      return <TablePreview text={state.content?.content ?? ""} name={state.name} />;
+    case "unsupported":
+      return <div className="file-browser-empty file-preview-unsupported"><FileQuestion size={30} /><h2>暂不支持预览</h2><p>该文件类型无法在浏览器中直接展示，可以下载后使用本机应用打开。</p></div>;
+    default:
+      return <TextPreview text={state.content?.content ?? ""} />;
+  }
+}
+
+function TextPreview({ text }: { text: string }) {
+  const lines = text.split("\n");
+  return <pre className="file-preview-code" aria-label="文件内容"><code>{lines.map((line, index) => <span className="file-preview-line" key={index}><span className="file-preview-line-number">{index + 1}</span><span>{line || " "}</span>{index === lines.length - 1 ? null : "\n"}</span>)}</code></pre>;
+}
+
+function TablePreview({ text, name }: { text: string; name: string }) {
+  const rows = useMemo(() => parseDelimited(text, name.toLowerCase().endsWith(".tsv") ? "\t" : ","), [text, name]);
+  const visible = rows.slice(0, MAX_TABLE_ROWS);
+  const header = rows.length > 1 ? rows[0] : undefined;
+  const columnCount = visible.reduce((max, row) => Math.max(max, row.length), 0);
+  return <div className="file-preview-table-wrap">
+    <table className="file-preview-table" aria-label={`表格内容 ${name}`}>
+      {header === undefined ? null : <thead><tr>{header.map((cell, index) => <th key={index} scope="col">{cell}</th>)}</tr></thead>}
+      <tbody>{visible.slice(header === undefined ? 0 : 1).map((row, rowIndex) => <tr key={rowIndex}>{Array.from({ length: columnCount }, (_, columnIndex) => <td key={columnIndex}>{row[columnIndex] ?? ""}</td>)}</tr>)}</tbody>
+    </table>
+    {rows.length > MAX_TABLE_ROWS ? <p className="file-preview-table-notice">表格较大，仅显示前 {MAX_TABLE_ROWS} 行（共 {rows.length} 行）。</p> : null}
+  </div>;
+}
+
+function kindLabel(kind: PreviewKind): string {
+  switch (kind) {
+    case "image": return "图片";
+    case "pdf": return "PDF";
+    case "audio": return "音频";
+    case "video": return "视频";
+    case "markdown": return "Markdown";
+    case "table": return "表格";
+    case "unsupported": return "文件";
+    default: return "文本";
+  }
 }
 
 function sameDirectoryListing(current: WorkspaceDirectoryListing | undefined, next: WorkspaceDirectoryListing): boolean {

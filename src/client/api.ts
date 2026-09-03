@@ -24,6 +24,8 @@ import type {
   Workspace,
   AppSettings,
   AuthLoginOperation,
+  EnabledModelRef,
+  EnabledModelsStatus,
   ManagedProvider,
   ProviderStatus,
 } from "../shared/protocol";
@@ -137,6 +139,8 @@ export const api = {
   settings: async (): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings")).settings,
   updateSettings: async (assistantName: string): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings", { method: "PATCH", body: JSON.stringify({ assistantName }) })).settings,
   providers: async (): Promise<ProviderStatus[]> => (await request<{ providers: ProviderStatus[] }>("/api/settings/providers")).providers,
+  enabledModels: async (): Promise<EnabledModelsStatus> => (await request<{ enabledModels: EnabledModelsStatus }>("/api/settings/enabled-models")).enabledModels,
+  updateEnabledModels: async (models: EnabledModelRef[]): Promise<EnabledModelsStatus> => (await request<{ enabledModels: EnabledModelsStatus }>("/api/settings/enabled-models", { method: "PUT", body: JSON.stringify({ models }) })).enabledModels,
   customProviders: async (): Promise<ManagedProvider[]> => (await request<{ providers: ManagedProvider[] }>("/api/settings/custom-providers")).providers,
   saveCustomProvider: async ({ id, ...provider }: ManagedProvider): Promise<ManagedProvider> => (await request<{ provider: ManagedProvider }>(`/api/settings/custom-providers/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(provider) })).provider,
   removeCustomProvider: async (providerId: string): Promise<void> => { await request(`/api/settings/custom-providers/${encodeURIComponent(providerId)}`, { method: "DELETE" }); },
@@ -226,6 +230,14 @@ export const api = {
 
 export function sessionPath(ref: SessionRef): string {
   return `/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}`;
+}
+
+/** 构造 /api/files 的 URL：内联预览或下载工作区内的文件（相对路径以 cwd 为基准）。 */
+export function workspaceFileUrl(cwd: string, path: string, options: { download?: boolean } = {}): string {
+  const params = new URLSearchParams({ path });
+  if (cwd !== "") params.set("cwd", cwd);
+  if (options.download === true) params.set("download", "1");
+  return `/api/files?${params.toString()}`;
 }
 
 export function socketUrl(path: string): string {

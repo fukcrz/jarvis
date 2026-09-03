@@ -1,4 +1,4 @@
-import { useState, type ComponentProps } from "react";
+import { createContext, useContext, useState, type ComponentProps } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { defaultSchema, type Schema } from "hast-util-sanitize";
 import rehypeHighlight from "rehype-highlight";
@@ -18,6 +18,11 @@ const sanitizeSchema: Schema = {
   protocols: {
     ...defaultProtocols,
     src: [...(defaultProtocols.src ?? []), "data"],
+  },
+  attributes: {
+    ...defaultSchema.attributes,
+    // 本地文件链接重写后以新标签打开（target/rel 不随默认 schema 放行，需明确允许）。
+    a: [...(defaultSchema.attributes?.["a"] ?? []), "target", "rel"],
   },
 };
 const rehypePlugins: PluggableList = [[rehypeSanitize, sanitizeSchema], rehypeHighlight];
@@ -52,6 +57,30 @@ export function rewriteLocalImageUrls(markdown: string, cwd: string | undefined)
     const query = `path=${encodeURIComponent(path)}${path.startsWith("/") || cwd === undefined || cwd === "" ? "" : `&cwd=${encodeURIComponent(cwd)}`}`;
     return `![${alt}](/api/files?${query}${rest})`;
   });
+}
+
+/**
+ * 把 AI 回复里的本地路径链接重写为 Jarvis 的 /api/files 接口 URL。
+ * 与图片一致：相对路径以 cwd 为基准，绝对路径与 file:// 直接使用；
+ * http(s)/data:/mailto:/# 等已有链接与 /api/ 前缀保持原样。
+ */
+export function rewriteLocalLinkHref(href: string | undefined, cwd: string | undefined): string | undefined {
+  if (href === undefined || href === "") return href;
+  if (/^(https?:\/\/|data:|blob:|mailto:|#)/i.test(href)) return href;
+  if (href.startsWith("/api/")) return href;
+  const withoutScheme = href.startsWith("file://") ? href.slice("file://".length) : href;
+  const query = `path=${encodeURIComponent(withoutScheme)}${withoutScheme.startsWith("/") || cwd === undefined || cwd === "" ? "" : `&cwd=${encodeURIComponent(cwd)}`}`;
+  return `/api/files?${query}`;
+}
+
+const LocalFileCwdContext = createContext<string | undefined>(undefined);
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- node 是 react-markdown 注入的 hast 节点，需从 DOM 属性中剥离。
+function LocalLink({ node: _node, href, children, ...rest }: ComponentProps<"a"> & { node?: HastNode }) {
+  const cwd = useContext(LocalFileCwdContext);
+  const resolved = rewriteLocalLinkHref(href, cwd);
+  if (resolved === href) return <a href={href} {...rest}>{children}</a>;
+  return <a href={resolved} target="_blank" rel="noreferrer" {...rest}>{children}</a>;
 }
 
 interface HastNode {
@@ -94,12 +123,12 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & { node?:
   );
 }
 
-const components = { pre: CodeBlock };
+const components = { pre: CodeBlock, a: LocalLink };
 
 export function MarkdownMessage({ text, streaming = false, baseDir }: MarkdownMessageProps) {
   const content = baseDir === undefined ? text : rewriteLocalImageUrls(text, baseDir);
-  return <>
+  return <LocalFileCwdContext.Provider value={baseDir}>
     <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={components}>{content}</ReactMarkdown>
     {streaming ? <span className="streaming-cursor" aria-hidden="true" /> : null}
-  </>;
+  </LocalFileCwdContext.Provider>;
 }

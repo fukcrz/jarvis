@@ -100,4 +100,26 @@ describe("MarkdownMessage", () => {
     }));
     expect(markup).toContain('<img src="/api/files?path=shots%2Fa.png&amp;cwd=%2Fws" alt="图"/>');
   });
+
+  it("rewrites local file links to the /api/files endpoint and opens them in a new tab", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "下载 [设计稿](docs/design.pdf) 和 [打包件](/tmp/archive.zip)",
+      baseDir: "/ws",
+    }));
+
+    expect(markup).toContain('<a href="/api/files?path=docs%2Fdesign.pdf&amp;cwd=%2Fws" target="_blank" rel="noreferrer">设计稿</a>');
+    expect(markup).toContain('<a href="/api/files?path=%2Ftmp%2Farchive.zip" target="_blank" rel="noreferrer">打包件</a>');
+  });
+
+  it("leaves remote, anchor, mailto, and existing /api/ links untouched", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "[官网](https://example.com) [锚点](#section) [邮件](mailto:a@b.c) [已服务](/api/files?path=z.png)",
+      baseDir: "/ws",
+    }));
+
+    expect(markup).toContain('<a href="https://example.com">官网</a>');
+    expect(markup).toContain('<a href="#section">锚点</a>');
+    expect(markup).toContain('<a href="mailto:a@b.c">邮件</a>');
+    expect(markup).toContain('<a href="/api/files?path=z.png">已服务</a>');
+  });
 });

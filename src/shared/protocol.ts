@@ -56,6 +56,19 @@ export interface ProviderStatus {
   models: ManagedModel[];
 }
 
+/** 一个被启用的模型引用（provider + model id）。 */
+export interface EnabledModelRef {
+  provider: string;
+  id: string;
+}
+
+/** 「启用模型」设置：patterns 为 Pi enabledModels 原始 pattern（空 = 不限制，全部可用）。 */
+export interface EnabledModelsStatus {
+  patterns: string[];
+  /** patterns 解析出的当前启用模型列表。 */
+  resolved: EnabledModelRef[];
+}
+
 export interface AuthLoginOperation {
   id: string;
   providerId: string;

@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { getAgentDir, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, resolveModelScopeWithDiagnostics, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthEvent, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
-import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderStatus } from "../shared/protocol.js";
+import type { AppSettings, AuthLoginOperation, EnabledModelRef, EnabledModelsStatus, ManagedModel, ManagedProvider, ProviderStatus } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 
 interface StoredSettings { version: 1; assistantName: string; }
@@ -139,6 +139,40 @@ export class SettingsService {
     delete config.providers[providerId];
     await this.writeModelsConfig(config);
     await this.refreshRuntime();
+  }
+
+  /** 当前「启用模型」设置：patterns 与它们解析出的模型列表。 */
+  async enabledModels(): Promise<EnabledModelsStatus> {
+    const [runtime, patterns] = await Promise.all([this.modelRuntime(), this.readEnabledModelPatterns()]);
+    return { patterns, resolved: patterns.length === 0 ? [] : await this.resolveEnabledModels(runtime, patterns) };
+  }
+
+  /** 用完整启用集合（空 = 不限制）替换「启用模型」设置并刷新所有会话。 */
+  async updateEnabledModels(models: EnabledModelRef[]): Promise<EnabledModelsStatus> {
+    const runtime = await this.modelRuntime();
+    const unique = new Map<string, EnabledModelRef>();
+    for (const ref of models) unique.set(`${ref.provider}\u0000${ref.id}`, ref);
+    const selected = [...unique.values()];
+    const known = runtime.getModels();
+    const knownKeys = new Set(known.map((model) => `${model.provider}\u0000${model.id}`));
+    const unknown = selected.find((ref) => !knownKeys.has(`${ref.provider}\u0000${ref.id}`));
+    if (unknown !== undefined) throw new AppError("MODEL_NOT_FOUND", `Model "${unknown.provider}/${unknown.id}" is not available`, 400);
+    const patterns = enabledModelPatterns(selected, known);
+    const { diagnostics } = await resolveModelScopeWithDiagnostics(patterns, runtime);
+    const noMatch = diagnostics.find((diagnostic) => diagnostic.code === "no-match");
+    if (noMatch !== undefined) throw new AppError("MODEL_CONFIGURATION_INVALID", `Model pattern "${noMatch.pattern}" does not match any model`, 400);
+    SettingsManager.create(process.cwd(), getAgentDir()).setEnabledModels(patterns.length === 0 ? undefined : patterns);
+    await this.refreshSessions();
+    return { patterns, resolved: patterns.length === 0 ? [] : await this.resolveEnabledModels(runtime, patterns) };
+  }
+
+  private readEnabledModelPatterns(): string[] {
+    return SettingsManager.create(process.cwd(), getAgentDir()).getEnabledModels() ?? [];
+  }
+
+  private async resolveEnabledModels(runtime: ModelRuntime, patterns: string[]): Promise<EnabledModelRef[]> {
+    const { scopedModels } = await resolveModelScopeWithDiagnostics(patterns, runtime);
+    return scopedModels.map(({ model }) => ({ provider: model.provider, id: model.id }));
   }
 
   async startLogin(providerId: string, type: AuthType): Promise<AuthLoginOperation> {
@@ -313,7 +347,7 @@ function validateManagedProvider(value: ManagedProvider): ManagedProvider {
       ...(validPositiveInt(model.maxTokens) ? { maxTokens: model.maxTokens } : {}),
     };
   });
-  if (models.length === 0) throw new AppError("PROVIDER_MODELS_REQUIRED", "At least one model is required", 400);
+  // 模型统一在「模型管理」里配置，允许先保存供应商再添加模型。
   return { id: value.id, ...(value.name?.trim() ? { name: value.name.trim() } : {}), baseUrl, api: value.api, authHeader: value.authHeader === true, models };
 }
 
@@ -345,6 +379,30 @@ function isApi(value: string): value is ManagedProvider["api"] {
   return value === "openai-completions" || value === "openai-responses" || value === "anthropic-messages" || value === "google-generative-ai";
 }
 function validPositiveInt(value: number | undefined): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
+
+/**
+ * 把选中的模型集合转换为 Pi enabledModels patterns：
+ * 供应商全选折叠为 `<provider>/**`，部分选择用精确 `<provider>/<modelId>`。
+ */
+function enabledModelPatterns(selected: EnabledModelRef[], known: readonly { provider: string; id: string }[]): string[] {
+  const knownPerProvider = new Map<string, number>();
+  for (const model of known) knownPerProvider.set(model.provider, (knownPerProvider.get(model.provider) ?? 0) + 1);
+  const selectedPerProvider = new Map<string, EnabledModelRef[]>();
+  for (const ref of selected) {
+    const group = selectedPerProvider.get(ref.provider) ?? [];
+    group.push(ref);
+    selectedPerProvider.set(ref.provider, group);
+  }
+  const patterns: string[] = [];
+  for (const [providerId, refs] of selectedPerProvider) {
+    if (refs.length === knownPerProvider.get(providerId)) {
+      patterns.push(`${providerId}/**`);
+    } else {
+      for (const ref of refs) patterns.push(`${ref.provider}/${ref.id}`);
+    }
+  }
+  return patterns.sort();
+}
 
 function parseJsonc(value: string): string {
   let result = "";

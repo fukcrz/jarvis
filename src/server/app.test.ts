@@ -246,6 +246,62 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(after.json()).toMatchObject({ model: { current: { provider: "test-b", id: "beta", inScope: false } } });
   });
 
+  it("reads and updates the enabled models scope via the settings API", async () => {
+    const agentDir = join(jarvisHome, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, "models.json"), JSON.stringify({
+      providers: {
+        "test-a": { baseUrl: "http://localhost:1/v1", api: "openai-completions", apiKey: "test-key", models: [{ id: "alpha" }, { id: "gamma" }] },
+        "test-b": { baseUrl: "http://localhost:1/v1", api: "openai-completions", apiKey: "test-key", models: [{ id: "beta" }] },
+      },
+    }));
+
+    const server = activeApp();
+
+    // 未设置 pattern → 不限制（全部启用）
+    const initial = await server.inject({ method: "GET", url: "/api/settings/enabled-models" });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json()).toEqual({ enabledModels: { patterns: [], resolved: [] } });
+
+    // 保存部分选择 → 写入精确 patterns，resolved 返回解析结果
+    const partial = await server.inject({ method: "PUT", url: "/api/settings/enabled-models", payload: { models: [{ provider: "test-a", id: "alpha" }, { provider: "test-b", id: "beta" }] } });
+    expect(partial.statusCode).toBe(200);
+    const body = partial.json<{ enabledModels: { patterns: string[]; resolved: Array<{ provider: string; id: string }> } }>().enabledModels;
+    expect(body.patterns).toEqual(["test-a/alpha", "test-b/**"]);
+    expect(body.resolved).toEqual(expect.arrayContaining([
+      { provider: "test-a", id: "alpha" },
+      { provider: "test-b", id: "beta" },
+    ]));
+
+    const persisted = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")) as { enabledModels?: string[] };
+    expect(persisted.enabledModels).toEqual(["test-a/alpha", "test-b/**"]);
+
+    // 会话模型选择器按新范围过滤
+    const workspacePath = join(jarvisHome, "enabled-models-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const runtime = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${session.id}/runtime` });
+    const available = runtime.json<{ model: { available: Array<{ provider: string; id: string; inScope: boolean }> } }>().model.available;
+    expect(available.find((model) => model.provider === "test-a" && model.id === "gamma")).toMatchObject({ inScope: false });
+    expect(available.find((model) => model.provider === "test-a" && model.id === "alpha")).toMatchObject({ inScope: true });
+
+    // 全选 → 折叠为 provider/** patterns
+    const all = await server.inject({ method: "PUT", url: "/api/settings/enabled-models", payload: { models: [{ provider: "test-a", id: "alpha" }, { provider: "test-a", id: "gamma" }, { provider: "test-b", id: "beta" }] } });
+    expect(all.statusCode).toBe(200);
+    expect(all.json<{ enabledModels: { patterns: string[] } }>().enabledModels.patterns).toEqual(["test-a/**", "test-b/**"]);
+
+    // 清空选择 → 不限制
+    const cleared = await server.inject({ method: "PUT", url: "/api/settings/enabled-models", payload: { models: [] } });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json()).toEqual({ enabledModels: { patterns: [], resolved: [] } });
+
+    // 未知模型 → 400
+    const unknown = await server.inject({ method: "PUT", url: "/api/settings/enabled-models", payload: { models: [{ provider: "test-a", id: "nope" }] } });
+    expect(unknown.statusCode).toBe(400);
+    expect(unknown.json()).toMatchObject({ error: { code: "MODEL_NOT_FOUND" } });
+  });
+
   it("starts a manual compaction once for a repeated direct request", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "manual-compact-workspace");
@@ -460,13 +516,15 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(missingApi.json()).toMatchObject({ error: { code: "NOT_FOUND", message: "Route not found" } });
   });
 
-  it("serves local image files referenced via absolute and workspace-relative Markdown paths", async () => {
+  it("serves local files via absolute and workspace-relative paths, with download support", async () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
     const absolutePath = join(jarvisHome, "demo.png");
     const workspaceRoot = join(jarvisHome, "workspace");
     await mkdir(workspaceRoot, { recursive: true });
     await writeFile(absolutePath, png);
     await writeFile(join(workspaceRoot, "shot.png"), png);
+    await writeFile(join(workspaceRoot, "notes.pdf"), "%PDF-1.4");
+    await writeFile(join(workspaceRoot, "secret.txt"), "private");
 
     // 绝对路径：/api/files?path=/abs/demo.png
     const absolute = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(absolutePath)}` });
@@ -485,16 +543,33 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(missing.statusCode).toBe(404);
     expect(missing.json()).toMatchObject({ error: { code: "FILE_NOT_FOUND" } });
 
-    // 非图片扩展名拒绝，防止接口被当作任意文件下载通道
-    await writeFile(join(jarvisHome, "secret.txt"), "private");
-    const notImage = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(join(jarvisHome, "secret.txt"))}` });
-    expect(notImage.statusCode).toBe(400);
-    expect(notImage.json()).toMatchObject({ error: { code: "FILE_TYPE_UNSUPPORTED" } });
+    // 非图片扩展名不再拒绝：文本文件按 text/plain 返回
+    const textFile = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("secret.txt")}&cwd=${encodeURIComponent(workspaceRoot)}` });
+    expect(textFile.statusCode).toBe(200);
+    expect(textFile.headers["content-type"]).toContain("text/plain");
+    expect(textFile.rawPayload.toString()).toBe("private");
 
-    // 目录没有图片扩展名 → 400（扩展名白名单先行，避免接口探测）
+    // PDF 按 application/pdf 返回
+    const pdf = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("notes.pdf")}&cwd=${encodeURIComponent(workspaceRoot)}` });
+    expect(pdf.statusCode).toBe(200);
+    expect(pdf.headers["content-type"]).toContain("application/pdf");
+
+    // download=1 附加附件分发头
+    const download = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("notes.pdf")}&cwd=${encodeURIComponent(workspaceRoot)}&download=1` });
+    expect(download.statusCode).toBe(200);
+    expect(download.headers["content-disposition"]).toContain("attachment;");
+    expect(download.headers["content-disposition"]).toContain("notes.pdf");
+
+    // 未知扩展名回退到 octet-stream
+    await writeFile(join(jarvisHome, "blob.unknownext"), "data");
+    const unknown = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(join(jarvisHome, "blob.unknownext"))}` });
+    expect(unknown.statusCode).toBe(200);
+    expect(unknown.headers["content-type"]).toContain("application/octet-stream");
+
+    // 目录 → 404
     const directory = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(workspaceRoot)}` });
-    expect(directory.statusCode).toBe(400);
-    expect(directory.json()).toMatchObject({ error: { code: "FILE_TYPE_UNSUPPORTED" } });
+    expect(directory.statusCode).toBe(404);
+    expect(directory.json()).toMatchObject({ error: { code: "FILE_NOT_FOUND" } });
   });
 
   it("deletes a session JSONL file and broadcasts a workspace event", async () => {

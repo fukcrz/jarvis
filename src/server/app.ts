@@ -36,6 +36,8 @@ const abortInput = z.object({ runId: z.string().uuid().optional() }).strict();
 const settingsInput = z.object({ assistantName: z.string().min(1).max(64) }).strict();
 const authLoginInput = z.object({ providerId: z.string().min(1).max(120), type: z.enum(["api_key", "oauth"]) }).strict();
 const authResponseInput = z.object({ value: z.string().max(200_000) }).strict();
+const enabledModelRefInput = z.object({ provider: z.string().min(1).max(120), id: z.string().min(1).max(320) }).strict();
+const enabledModelsInput = z.object({ models: z.array(enabledModelRefInput).max(5_000) }).strict();
 const managedModelInput = z.object({ id: z.string().min(1).max(320), name: z.string().max(160).optional(), reasoning: z.boolean(), vision: z.boolean(), contextWindow: z.number().int().positive().optional(), maxTokens: z.number().int().positive().optional() }).strict();
 const managedProviderInput = z.object({ id: z.string().min(1).max(120), name: z.string().max(160).optional(), baseUrl: z.string().min(1).max(2_000), api: z.enum(["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"]), authHeader: z.boolean(), models: z.array(managedModelInput).max(200) }).strict();
 const extensionUiInput = z.object({
@@ -46,10 +48,12 @@ const extensionUiInput = z.object({
 }).strict();
 const listQuery = z.object({ query: z.string().optional() });
 const timelineQuery = z.object({ before: z.coerce.number().int().nonnegative().optional(), limit: z.coerce.number().int().positive().max(500).optional() });
-// /api/files：AI 通过 md 语法引用本地图片（相对路径以 cwd 为基准，绝对路径直接使用）。
-// 只放行常见位图格式，防止该无鉴权接口被当作任意文件下载通道。
-const fileQuery = z.object({ path: z.string().min(1).max(2000), cwd: z.string().min(1).max(2000).optional() }).strict();
+// /api/files：通用本地文件接口。
+// AI 通过 md 语法引用本地图片（相对路径以 cwd 为基准，绝对路径直接使用），
+// 文件浏览器用它内联预览图片/PDF/音视频，并带 download=1 下载任意文件。
+const fileQuery = z.object({ path: z.string().min(1).max(2000), cwd: z.string().min(1).max(2000).optional(), download: z.enum(["1", "true"]).optional() }).strict();
 const FILE_MIME_TYPES: Record<string, string> = {
+  // 图片
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -59,6 +63,69 @@ const FILE_MIME_TYPES: Record<string, string> = {
   ".avif": "image/avif",
   ".heic": "image/heic",
   ".heif": "image/heif",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  // 文档
+  ".pdf": "application/pdf",
+  // 文本
+  ".txt": "text/plain; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".markdown": "text/markdown; charset=utf-8",
+  ".csv": "text/csv; charset=utf-8",
+  ".tsv": "text/tab-separated-values; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".jsonl": "application/x-ndjson; charset=utf-8",
+  ".xml": "application/xml; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".yaml": "text/yaml; charset=utf-8",
+  ".yml": "text/yaml; charset=utf-8",
+  ".toml": "text/toml; charset=utf-8",
+  ".log": "text/plain; charset=utf-8",
+  // 音频
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".oga": "audio/ogg",
+  ".m4a": "audio/mp4",
+  ".aac": "audio/aac",
+  ".flac": "audio/flac",
+  ".opus": "audio/ogg",
+  // 视频
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
+  ".m4v": "video/x-m4v",
+  ".ogv": "video/ogg",
+  ".avi": "video/x-msvideo",
+  ".mkv": "video/x-matroska",
+  // 字体
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
+  ".eot": "application/vnd.ms-fontobject",
+  // 压缩包
+  ".zip": "application/zip",
+  ".tar": "application/x-tar",
+  ".gz": "application/gzip",
+  ".tgz": "application/gzip",
+  ".bz2": "application/x-bzip2",
+  ".xz": "application/x-xz",
+  ".7z": "application/x-7z-compressed",
+  ".rar": "application/vnd.rar",
+  // Office
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".odt": "application/vnd.oasis.opendocument.text",
+  ".ods": "application/vnd.oasis.opendocument.spreadsheet",
 };
 
 export interface JarvisServices {
@@ -115,6 +182,8 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.get("/api/settings", async () => ({ settings: settings.getSettings() }));
   app.patch("/api/settings", async (request) => ({ settings: await settings.updateSettings(settingsInput.parse(request.body)) }));
   app.get("/api/settings/providers", async () => ({ providers: await settings.providers() }));
+  app.get("/api/settings/enabled-models", async () => ({ enabledModels: await settings.enabledModels() }));
+  app.put("/api/settings/enabled-models", async (request) => ({ enabledModels: await settings.updateEnabledModels(enabledModelsInput.parse(request.body).models) }));
   app.get("/api/settings/custom-providers", async () => ({ providers: await settings.customProviders() }));
   app.put("/api/settings/custom-providers/:providerId", async (request) => {
     const params = z.object({ providerId: z.string().min(1).max(120) }).parse(request.params);
@@ -141,15 +210,13 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     return { directory: query.roots === "true" ? await listRoots() : await listDirectory(query.path ?? process.cwd()) };
   });
 
-  // 本地图片服务：AI 在回复里写 ![](path) 引用工作区内相对路径或机器绝对路径的图片，
-  // 前端重写为 /api/files?path=...&cwd=...，这里读取文件并返回图片内容。
+  // 通用文件服务：AI 在回复里写 ![](path) 引用本地图片（相对路径以 cwd 为基准），
+  // 前端重写为 /api/files?path=...&cwd=...；文件浏览器也用它预览媒体与下载文件。
   app.get("/api/files", async (request, reply) => {
     const query = fileQuery.parse(request.query);
     const candidate = query.path.startsWith("/")
       ? query.path
       : resolve(query.cwd ?? process.cwd(), query.path);
-    const ext = extname(candidate).toLowerCase();
-    if (!(ext in FILE_MIME_TYPES)) throw new AppError("FILE_TYPE_UNSUPPORTED", "Only image files can be served", 400);
     let resolved: string;
     try {
       resolved = await realpath(candidate);
@@ -158,6 +225,12 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     }
     const metadata = await stat(resolved).catch(() => undefined);
     if (metadata === undefined || !metadata.isFile()) throw new AppError("FILE_NOT_FOUND", "File not found", 404);
+    const ext = extname(resolved).toLowerCase();
+    if (query.download !== undefined) {
+      const name = basename(resolved);
+      const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+      reply.header("content-disposition", `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    }
     const data = await readFile(resolved);
     return reply
       .type(FILE_MIME_TYPES[ext] ?? "application/octet-stream")
