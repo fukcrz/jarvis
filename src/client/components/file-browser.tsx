@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { ArrowLeft, Check, ChevronDown, ChevronRight, Clipboard, Download, ExternalLink, FileCode2, FileQuestion, FileText, Folder, FolderOpen } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, ChevronRight, FileCode2, FileQuestion, FileText, Folder, FolderOpen } from "lucide-react";
 import type { Workspace, WorkspaceDirectoryListing, WorkspaceFileContent } from "../../shared/protocol";
 import { api, ApiError, workspaceFileUrl } from "../api";
 import { MAX_TABLE_ROWS, parseDelimited, previewKindForPath, type PreviewKind } from "../lib/file-preview";
@@ -308,7 +308,7 @@ function FilePreview({ state, cwd, onBack, onCopy }: { state: FilePreviewState; 
   const downloadUrl = workspaceFileUrl(cwd, state.path, { download: true });
   const copyable = state.content !== undefined && (state.kind === "text" || state.kind === "markdown" || state.kind === "table");
   return <article className={`file-preview file-preview-${state.kind}`}>
-    <header className="file-preview-header"><Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft size={15} />返回目录</Button><div className="file-preview-title"><FileCode2 size={16} /><strong>{state.name}</strong><small>{state.content === undefined ? kindLabel(state.kind) : `${formatBytes(state.content.size)}${state.content.truncated ? " · 已截断" : ""}`}</small></div><div className="file-preview-actions">{copyable ? <Button variant="secondary" size="sm" onClick={() => onCopy(state.content!.content, "已复制文件内容")}><Clipboard size={14} />复制</Button> : null}<a className="button button-secondary button-sm" href={url} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开</a><a className="button button-secondary button-sm" href={downloadUrl} download><Download size={14} />下载</a></div></header>
+    <header className="file-preview-header"><Button variant="ghost" size="sm" className="file-preview-back" title={state.content === undefined ? kindLabel(state.kind) : `${formatBytes(state.content.size)}${state.content.truncated ? " · 已截断" : ""}`} onClick={onBack}><ArrowLeft size={15} /><span className="file-preview-back-name">{state.name}</span></Button><div className="file-preview-actions">{copyable ? <Button variant="secondary" size="sm" onClick={() => onCopy(state.content!.content, "已复制文件内容")}>复制</Button> : null}<a className="button button-secondary button-sm" href={url} target="_blank" rel="noreferrer">打开</a><a className="button button-secondary button-sm" href={downloadUrl} download>下载</a></div></header>
     {state.content?.truncated === true ? <div className="file-preview-notice">文件较大，仅显示前 512 KB。</div> : null}
     <div className="file-preview-body"><FilePreviewBody state={state} cwd={cwd} url={url} /></div>
   </article>;
