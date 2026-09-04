@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, Folder, MoreVertical, Pencil, Plus, Search, Settings2, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, Folder, MoreVertical, Pencil, Plus, Search, Settings2, Trash2 } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionLabel } from "../lib/utils";
+import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionLabel, sessionListWindow } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 
@@ -43,6 +43,10 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
   const [workspaceFilter, setWorkspaceFilter] = useState(() => window.localStorage.getItem("jarvis.mobile.session-project") ?? "all");
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [openSwipeKey, setOpenSwipeKey] = useState<string | null>(null);
+  /** 全部视图：项目组展开状态（默认全部收起，同 PC 侧栏；不持久化，每次进入重置）。 */
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Record<string, boolean>>({});
+  /** 展开的组内会话窗口步数（默认窗口 + 每次「展开更多」+1，同 PC 侧栏）。 */
+  const [sessionExpandSteps, setSessionExpandSteps] = useState<Record<string, number>>({});
   useEffect(() => {
     if (workspaceFilter !== "all" && !props.workspaces.some((workspace) => workspace.id === workspaceFilter)) {
       setWorkspaceFilter("all");
@@ -74,6 +78,19 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
   const setSwipeOpen = (key: string, open: boolean) => {
     setOpenSwipeKey((current) => (open ? key : current === key ? null : current));
   };
+  const toggleGroup = (workspaceId: string) => {
+    setExpandedGroupIds((current) => ({ ...current, [workspaceId]: current[workspaceId] !== true }));
+  };
+  const expandGroupSessions = (workspaceId: string) => {
+    setSessionExpandSteps((current) => ({ ...current, [workspaceId]: (current[workspaceId] ?? 0) + 1 }));
+  };
+  const collapseGroupSessions = (workspaceId: string) => {
+    setSessionExpandSteps((current) => ({ ...current, [workspaceId]: 0 }));
+  };
+  const renderSessionRows = (workspaceId: string, sessions: SessionSummary[]) => sessions.map((session) => {
+    const rowKey = `${workspaceId}:${session.id}`;
+    return <MobileSessionRow key={rowKey} rowKey={rowKey} session={session} selected={session.id === props.selectedSessionId} open={openSwipeKey === rowKey} onOpenChange={setSwipeOpen} onSelect={() => props.onSelectSession(workspaceId, session.id)} onMenu={() => props.onOpenSessionMenu(workspaceId, session)} onRename={() => props.onRenameSession(workspaceId, session)} onDelete={() => props.onDeleteSession(workspaceId, session)} />;
+  });
   return <section className="mobile-page mobile-all-sessions-page" aria-label="全部会话">
     <header className="mobile-switcher-header"><strong>{props.assistantName}</strong><div className="mobile-switcher-actions"><Button variant="ghost" size="icon" aria-label="搜索会话" title="搜索会话" onClick={props.onOpenSearch}><Search size={18} /></Button><Button variant="ghost" size="icon" aria-label="查看文件" title="文件" onClick={props.onOpenFiles}><Folder size={18} /></Button><Button variant="ghost" size="icon" aria-label="打开设置" title="设置" onClick={props.onOpenSettings}><Settings2 size={18} /></Button><Button variant="ghost" size="icon" aria-label="新建会话" onClick={requestCreateSession} disabled={props.workspaces.length === 0}><Plus size={20} /></Button></div></header>
     <nav className="mobile-session-projects" aria-label="按项目筛选会话"><button type="button" className={workspaceFilter === "all" ? "selected" : ""} onClick={() => setWorkspaceFilter("all")}>全部</button>{props.workspaces.map((workspace) => <button type="button" key={workspace.id} className={workspaceFilter === workspace.id ? "selected" : ""} onClick={() => setWorkspaceFilter(workspace.id)}>{workspace.label}</button>)}<button type="button" className="mobile-add-project" aria-label="添加项目" onClick={props.onAddProject}><Plus size={15} /></button></nav>
@@ -84,20 +101,29 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
       if (swipeTarget?.getAttribute("data-swipe-id") !== openSwipeKey) setOpenSwipeKey(null);
     }}>
       {groups.length === 0 ? <div className="mobile-page-empty">暂无会话</div> : null}
-      {groups.map(({ workspace, sessions }) => <section className="mobile-session-group" key={workspace.id}>
-        <div className="mobile-session-group-header">
-          <Folder size={14} aria-hidden="true" />
-          <strong>{workspace.label}</strong>
-          <span className="mobile-session-group-count">{sessions.length} 个会话</span>
-          <Button variant="ghost" size="icon" className="mobile-session-group-new" aria-label={`在 ${workspace.label} 中新建会话`} onClick={() => props.onCreateSession(workspace.id)}><Plus size={16} /></Button>
-        </div>
-        <div className="mobile-session-group-list">
-          {sessions.map((session) => {
-            const rowKey = `${workspace.id}:${session.id}`;
-            return <MobileSessionRow key={rowKey} rowKey={rowKey} session={session} selected={session.id === props.selectedSessionId} open={openSwipeKey === rowKey} onOpenChange={setSwipeOpen} onSelect={() => props.onSelectSession(workspace.id, session.id)} onMenu={() => props.onOpenSessionMenu(workspace.id, session)} onRename={() => props.onRenameSession(workspace.id, session)} onDelete={() => props.onDeleteSession(workspace.id, session)} />;
-          })}
-        </div>
-      </section>)}
+      {workspaceFilter !== "all" ? groups.map(({ workspace, sessions }) => <div className="mobile-session-group-list" key={workspace.id}>{renderSessionRows(workspace.id, sessions)}</div>) : groups.map(({ workspace, sessions }) => {
+        // 默认收起：与 PC 侧栏一致，只显示项目头；展开后按窗口展示会话（关注中的始终可见）。
+        const expanded = expandedGroupIds[workspace.id] === true;
+        const listWindow = sessionListWindow(sessions, sessionExpandSteps[workspace.id] ?? 0);
+        const attention = expanded ? undefined : sessions[0];
+        return <section className={`mobile-session-group${expanded ? " expanded" : ""}`} key={workspace.id}>
+          <div className="mobile-session-group-header">
+            <button type="button" className="mobile-session-group-toggle" aria-expanded={expanded} aria-label={`${expanded ? "收起" : "展开"}${workspace.label}的会话`} onClick={() => toggleGroup(workspace.id)}>
+              <ChevronRight size={15} className="mobile-session-group-chevron" aria-hidden="true" />
+              <Folder size={14} aria-hidden="true" />
+              <strong>{workspace.label}</strong>
+              {attention !== undefined && sessionAttentionLabel(attention) !== undefined ? <span className={`sidebar-activity attention-${attention.attentionState ?? "idle"} ${attention.runState}`} role="status" aria-label={`${workspace.label} 有${sessionAttentionLabel(attention)}`} /> : null}
+              <span className="mobile-session-group-count">{sessions.length} 个会话</span>
+            </button>
+            <Button variant="ghost" size="icon" className="mobile-session-group-new" aria-label={`在 ${workspace.label} 中新建会话`} onClick={() => props.onCreateSession(workspace.id)}><Plus size={16} /></Button>
+          </div>
+          {expanded ? <div className="mobile-session-group-list">
+            {renderSessionRows(workspace.id, listWindow.sessions)}
+            {listWindow.hasMore ? <button type="button" className="mobile-session-window-action" onClick={() => expandGroupSessions(workspace.id)} aria-label="展开更多会话"><ChevronDown size={14} />展开更多会话</button> : null}
+            {listWindow.expanded ? <button type="button" className="mobile-session-window-action" onClick={() => collapseGroupSessions(workspace.id)} aria-label="收起会话"><ChevronUp size={14} />收起会话</button> : null}
+          </div> : null}
+        </section>;
+      })}
     </div>
     <Dialog open={projectPickerOpen} onOpenChange={setProjectPickerOpen}>
       <DialogContent title="选择项目" description="新会话将创建在所选项目中。">

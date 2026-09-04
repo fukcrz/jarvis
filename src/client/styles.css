@@ -331,10 +331,19 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-session-action-rename { background: #303036; color: #d3d2dc; }
 .mobile-session-action-delete { background: #4a1f28; color: #ff9d9d; }
 .mobile-session-action-delete:disabled { opacity: 0.45; }
-.mobile-session-group-header { display: flex; align-items: center; gap: 7px; position: sticky; top: 0; z-index: 2; padding: 12px 8px 9px; background: var(--canvas); color: var(--subtle); }
-.mobile-session-group-header strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13px; font-weight: 650; }
-.mobile-session-group-count { flex: 0 0 auto; color: var(--subtle); font-size: 11px; }
+.mobile-session-group-header { display: flex; align-items: center; gap: 2px; position: sticky; top: 0; z-index: 2; padding: 8px 4px 4px; background: var(--canvas); color: var(--subtle); }
+.mobile-session-group-toggle { display: flex; align-items: center; min-width: 0; flex: 1; gap: 7px; border: 0; border-radius: 6px; background: transparent; padding: 7px 4px 8px; color: var(--subtle); text-align: left; }
+.mobile-session-group-toggle:hover, .mobile-session-group-toggle:focus-visible { background: var(--surface-hover); color: #c8c5ce; }
+.mobile-session-group-toggle:focus-visible { outline: none; }
+.mobile-session-group-toggle strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13px; font-weight: 650; }
+.mobile-session-group-toggle .sidebar-activity { flex: 0 0 auto; margin-right: 0; }
+.mobile-session-group-chevron { flex: 0 0 auto; color: var(--muted); transition: transform 0.18s ease; }
+.mobile-session-group.expanded .mobile-session-group-chevron { transform: rotate(90deg); }
+.mobile-session-group-count { flex: 0 0 auto; margin-left: auto; color: var(--subtle); font-size: 11px; }
 .mobile-session-group-new { margin-left: auto; }
+.mobile-session-window-action { display: flex; align-items: center; gap: 5px; width: 100%; border: 0; border-radius: 6px; background: transparent; padding: 12px 10px 14px; color: var(--subtle); font-size: 12px; text-align: left; }
+.mobile-session-window-action:hover { background: var(--surface-hover); color: #c8c5ce; }
+.mobile-session-window-action svg { flex: 0 0 auto; }
 .mobile-project-select, .mobile-session-select { display: flex; align-items: center; min-width: 0; flex: 1; gap: 11px; border: 0; background: transparent; padding: 15px 8px; color: var(--ink); text-align: left; }
 .mobile-project-select:hover, .mobile-session-select:hover { color: var(--accent-strong); }
 .mobile-project-select span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
