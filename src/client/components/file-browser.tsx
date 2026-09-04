@@ -202,12 +202,6 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     if (nextExpanded && entriesByPath[path] === undefined) await loadDirectory(path);
   };
 
-  const focusDirectory = async (path: string) => {
-    setFocusedPath(path);
-    setExpandedPaths((current) => ({ ...current, [path]: true }));
-    if (entriesByPath[path] === undefined) await loadDirectory(path);
-  };
-
   const copy = async (value: string, message: string) => {
     try {
       await navigator.clipboard.writeText(value);
@@ -220,7 +214,6 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
 
   const rootListing = entriesByPath[""];
   const treeEntries = rootListing?.entries ?? [];
-  const breadcrumbs = buildBreadcrumbs(focusedPath);
 
   if (workspace === undefined) return <section className="file-browser-page"><div className="file-browser-empty"><FolderOpen size={28} /><h2>暂无工作区</h2><Button onClick={onBack}>返回会话</Button></div></section>;
 
@@ -233,11 +226,6 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     <div className="file-browser-body">
       <aside className="file-browser-sidebar">
         <div className="file-browser-sidebar-header">
-          <div className="file-browser-toolbar">
-            <div className="file-browser-breadcrumb">
-              {breadcrumbs.length === 0 ? <button type="button" className="current" onClick={() => void focusDirectory("")}>根目录</button> : breadcrumbs.map((crumb, index) => <span key={crumb.path}><ChevronRight size={14} /><button type="button" className={focusedPath === crumb.path ? "current" : ""} onClick={() => { void focusDirectory(crumb.path); }}>{index === 0 ? crumb.label : crumb.name}</button></span>)}
-            </div>
-          </div>
           {error === undefined ? null : <div className="file-browser-error" role="alert">{error}</div>}
         </div>
         <div className="file-browser-tree" ref={treeRef} aria-label="文件树">
@@ -373,16 +361,6 @@ function sameDirectoryListing(current: WorkspaceDirectoryListing | undefined, ne
     const candidate = next.entries[index];
     return candidate !== undefined && entry.name === candidate.name && entry.path === candidate.path && entry.kind === candidate.kind;
   });
-}
-
-function buildBreadcrumbs(path: string): Array<{ path: string; name: string; label: string }> {
-  const segments = path.split("/").filter(Boolean);
-  const breadcrumbs: Array<{ path: string; name: string; label: string }> = [];
-  for (const [index, segment] of segments.entries()) {
-    const nextPath = segments.slice(0, index + 1).join("/");
-    breadcrumbs.push({ path: nextPath, name: segment, label: segment });
-  }
-  return breadcrumbs;
 }
 
 function isPathInBranch(current: string, ancestor: string): boolean {
