@@ -110,6 +110,7 @@ interface ActiveSession {
 const JARVIS_UI_NOTICE = [
   "You are running inside Jarvis, a local web UI for persistent Pi sessions, not the Pi TUI.",
   "You can send images to the user by embedding them in your reply with standard Markdown image syntax: ![](relative/path.png) resolves against the current workspace root, ![](/absolute/path.png) or ![](file:///absolute/path.png) resolves against the machine filesystem. You can also link any other local file with [name](relative/path.pdf) so the user can view or download it. Jarvis serves these files through its /api/files endpoint: images render inline in the timeline, and linked files open in a preview or download, so the user sees them directly.",
+  "Prefer showing rather than describing when visual information helps the user: when you look at a screenshot, rendered UI, diagram, chart, or before/after comparison, embed it in your reply with the Markdown syntax above so the user sees exactly what you saw (a useful habit after browser or visual debugging). A short caption plus the image beats a long text description; skip images when they add no information.",
 ].join(" ");
 
 const PAGE_LIMIT = 120;

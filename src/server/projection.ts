@@ -70,6 +70,7 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
     if (role === "toolResult") {
       const toolId = stringValue(message["toolCallId"]) || `orphan:${entryId}`;
       const output = textFromContent(message["content"]);
+      const images = toolImagesFromResult(message["content"]);
       const existingIndex = toolIndex.get(toolId);
       const state: ToolState = message["isError"] === true ? "failed" : "completed";
       if (existingIndex !== undefined) {
@@ -78,13 +79,13 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
           items[existingIndex] = {
             ...current,
             state,
-            ...(state === "failed" ? { error: output } : { output }),
+            ...(state === "failed" ? { error: output } : { output, ...(images.length === 0 ? {} : { images }) }),
           };
           continue;
         }
       }
       const tool = toolFromCall(toolId, stringValue(message["toolName"]) || "tool", undefined, createdAt, state);
-      items.push({ ...tool, ...(state === "failed" ? { error: output } : { output }) });
+      items.push({ ...tool, ...(state === "failed" ? { error: output } : { output }), ...(state === "failed" || images.length === 0 ? {} : { images }) });
       toolIndex.set(toolId, items.length - 1);
       continue;
     }
@@ -256,6 +257,7 @@ export function toolFromCall(
 export function toolWithResult(tool: ToolTimelineItem, result: unknown, isError: boolean, durationMs?: number): ToolTimelineItem {
   const text = truncate(textFromToolResult(result));
   const metadata = toolResultMetadata(result);
+  const images = isError ? [] : toolImagesFromResult(result);
   const exitCode = metadata.exitCode ?? (tool.name === "bash" && isError ? bashExitCodeFromError(text) : undefined);
   const failed = isError || exitCode !== undefined && exitCode !== 0;
   const next = {
@@ -267,21 +269,25 @@ export function toolWithResult(tool: ToolTimelineItem, result: unknown, isError:
   };
   if (failed) {
     delete next.output;
+    delete next.images;
     if (text !== "") next.error = text;
     return next;
   }
   delete next.error;
   if (text !== "") next.output = text;
+  if (images.length > 0) next.images = images;
   return next;
 }
 
 export function toolWithPartial(tool: ToolTimelineItem, result: unknown): ToolTimelineItem {
   const output = truncate(textFromToolResult(result));
   const metadata = toolResultMetadata(result);
+  const images = toolImagesFromResult(result);
   return {
     ...tool,
     state: "running",
     ...(output === "" ? {} : { output }),
+    ...(images.length === 0 ? {} : { images }),
     ...(metadata.truncated ? { truncated: true } : {}),
   };
 }
@@ -366,6 +372,38 @@ export function textFromToolResult(value: unknown): string {
   } catch {
     return "Tool returned an unreadable result.";
   }
+}
+
+/** 工具结果中单个图片的最大 base64 长度（约 7.5 MiB 解码后），避免超大图片撑爆时间线事件。 */
+const MAX_TOOL_IMAGE_DATA_CHARS = 10_000_000;
+
+/**
+ * 提取工具结果中的图片附件（如 read 读取图片文件时的 content 里的 image parts），
+ * 用于在时间线上向用户展示 AI 实际看到的图片。非 image/* 或者数据过大的部分被丢弃。
+ */
+export function toolImagesFromResult(value: unknown): ImageAttachment[] {
+  if (isRecord(value)) {
+    const parts: unknown[] = Array.isArray(value["content"]) ? value["content"] : [];
+    const direct = Array.isArray(value["images"]) ? value["images"] : [];
+    const candidates = [...parts, ...direct];
+    const collected: ImageAttachment[] = [];
+    let totalChars = 0;
+    for (const part of candidates) {
+      if (!isRecord(part) || part["type"] !== "image") continue;
+      const data = stringValue(part["data"]);
+      const mimeType = stringValue(part["mimeType"]) || stringValue(part["mediaType"]);
+      if (data === "" || mimeType === "" || !mimeType.startsWith("image/")) continue;
+      if (totalChars + data.length > MAX_TOOL_IMAGE_DATA_CHARS) continue;
+      totalChars += data.length;
+      collected.push({ mimeType, data });
+    }
+    return collected;
+  }
+  if (Array.isArray(value)) {
+    // 结果本身就是图片数组（{ mimeType, data } 形状）时尝试解析。
+    return value.flatMap((entry) => toolImagesFromResult({ content: [entry] }));
+  }
+  return [];
 }
 
 function bashExitCodeFromError(value: string): number | undefined {

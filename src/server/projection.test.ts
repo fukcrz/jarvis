@@ -73,6 +73,64 @@ describe("projectHistory", () => {
     expect(completed).toMatchObject({ kind: "tool", name: "bash", cwd: "D:/projects/jarvis", state: "completed", exitCode: 0, durationMs: 1250, truncated: true, output: "29 passed" });
   });
 
+  it("carries image parts from read tool results onto the tool item", () => {
+    const running = toolFromCall("read-1", "read", { path: "screenshot.png" }, "2026-08-09T00:00:00.000Z", "running");
+    const completed = toolWithResult(running, {
+      content: [
+        { type: "text", text: "Read image file [image/png]" },
+        { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+      ],
+    }, false);
+
+    expect(completed).toMatchObject({
+      kind: "tool",
+      name: "read",
+      state: "completed",
+      output: "Read image file [image/png]",
+      images: [{ mimeType: "image/png", data: "iVBORw0KGgo=" }],
+    });
+  });
+
+  it("replays image-bearing tool results from persisted history", () => {
+    const items = projectHistory([
+      {
+        type: "message",
+        id: "tool-call",
+        message: { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "screenshot.png" } }] },
+      },
+      {
+        type: "message",
+        id: "tool-result",
+        message: {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read",
+          content: [
+            { type: "text", text: "Read image file [image/png]" },
+            { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+          ],
+        },
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "tool", name: "read", state: "completed", output: "Read image file [image/png]", images: [{ mimeType: "image/png", data: "iVBORw0KGgo=" }] });
+  });
+
+  it("drops oversized or non-image tool result parts", () => {
+    const running = toolFromCall("read-2", "read", { path: "big.png" }, "2026-08-09T00:00:00.000Z", "running");
+    const completed = toolWithResult(running, {
+      content: [
+        { type: "text", text: "Read image file [image/png]" },
+        { type: "image", data: "x".repeat(10_000_001), mimeType: "image/png" },
+        { type: "image", data: "iVBORw0KGgo=", mimeType: "application/octet-stream" },
+      ],
+    }, false);
+
+    expect(completed).toMatchObject({ kind: "tool", name: "read", state: "completed", output: "Read image file [image/png]" });
+    expect(completed).not.toHaveProperty("images");
+  });
+
   it("projects persisted compaction and branch summaries as distinct context markers", () => {
     const items = projectHistory([
       { type: "compaction", id: "compact-entry", timestamp: "2026-08-09T00:00:03.000Z", summary: "## Current work\n- Added retry feedback", firstKeptEntryId: "kept", tokensBefore: 128_400 },

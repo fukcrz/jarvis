@@ -342,6 +342,8 @@ export interface ToolTimelineItem {
   error?: string;
   /** 用户 !cmd 命令：true 表示输出不发送给模型（!! 前缀）。 */
   excludeFromContext?: boolean;
+  /** 工具结果携带的图片（如 read 读取图片文件时），用于在工具行内展示。 */
+  images?: ImageAttachment[];
 }
 
 /** 模型推理过程：思考时展开流式展示，完成后自动收起。 */

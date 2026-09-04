@@ -178,6 +178,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .activity-items .tool-list-item .tool-title { overflow: hidden; color: inherit; font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .activity-items .tool-list-item .tool-target { color: inherit; font-size: 11px; }
 .activity-items .tool-list-item .tool-duration { color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+.activity-items .tool-list-item .tool-has-image { display: inline-flex; align-items: center; justify-self: end; color: var(--subtle); }
+.activity-items .tool-list-item .tool-images { display: flex; flex-wrap: wrap; gap: 7px; padding-bottom: 2px; }
+.activity-items .tool-list-item .tool-images .message-image-thumb { width: 68px; height: 68px; }
 .activity-items .tool-list-item .tool-details { margin: 0; border: 0; border-top: 1px solid rgb(255 255 255 / .07); border-radius: 0; background: transparent; padding: 7px 7px 10px 27px; }
 .activity-items, .activity-items .tool-list-item, .activity-items .tool-list-item .tool-details, .activity-items .tool-list-item .inline-details, .activity-items .tool-list-item .tool-details > div, .activity-items .tool-list-item .detail-command-line, .activity-items .tool-list-item .detail-input { min-width: 0; max-width: 100%; }
 .activity-items .tool-list-item .tool-details { overflow: hidden; }
