@@ -90,7 +90,7 @@ export interface AuthLoginOperation {
   error?: string;
 }
 
-export const TUNNEL_METHODS = ["cloudflared", "localtunnel", "ssh", "sish", "frp"] as const;
+export const TUNNEL_METHODS = ["cloudflared", "sish", "frp"] as const;
 export type TunnelMethod = typeof TUNNEL_METHODS[number];
 
 export type TunnelState = "idle" | "starting" | "running" | "stopping" | "error";
@@ -122,21 +122,30 @@ export interface TunnelFrpConfig {
   domain?: string;
 }
 
-export interface TunnelConfig {
-  /** 是否自动穿透（服务启动时自动连接） */
-  enabled: boolean;
+/** 一条穿透配置（目标端口固定为当前服务端口）。 */
+export interface TunnelEntryConfig {
+  id: string;
+  /** 可选展示名，缺省为方法名 */
+  name?: string;
   method: TunnelMethod;
-  /** 本机被穿透的端口，0 表示使用服务自身端口 */
-  port: number;
+  /** 自动启动：服务启动时自动连接，默认 false */
+  enabled: boolean;
   sish?: TunnelSishConfig;
   frp?: TunnelFrpConfig;
 }
 
-export interface TunnelStatus {
+/** 添加/编辑穿透条目的输入（id 由服务端生成）。 */
+export interface TunnelInput {
+  name?: string;
+  method: TunnelMethod;
+  enabled?: boolean;
+  sish?: TunnelSishConfig;
+  frp?: TunnelFrpConfig;
+}
+
+/** 穿透条目的配置 + 实时状态。 */
+export interface TunnelSnapshot extends TunnelEntryConfig {
   state: TunnelState;
-  method?: TunnelMethod;
-  port?: number;
-  /** 公网地址（连接成功后） */
   url?: string;
   error?: string;
   startedAt?: number;

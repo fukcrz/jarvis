@@ -1,12 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { TunnelConfig, TunnelFrpConfig, TunnelLogEntry, TunnelMethod, TunnelStatus } from "../shared/protocol.js";
+import type { TunnelEntryConfig, TunnelFrpConfig, TunnelLogEntry, TunnelMethod, TunnelSnapshot, TunnelState } from "../shared/protocol.js";
 import { TUNNEL_METHODS } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 
-const CONFIG_VERSION = 1;
+const CONFIG_VERSION = 2;
 const MAX_LOG_LINES = 300;
 const MAX_LINE_LENGTH = 400;
 const RESTART_BASE_DELAY_MS = 3_000;
@@ -16,8 +17,6 @@ const FRP_READY_DELAY_MS = 2_000;
 
 const URL_PATTERNS: Record<TunnelMethod, RegExp[]> = {
   cloudflared: [/https:\/\/[a-z0-9-]+\.trycloudflare\.com/],
-  localtunnel: [/https:\/\/[^\s]+\.loca\.lt/],
-  ssh: [/https:\/\/[^\s]+\.(?:lhr\.life|lhr\.rocks)/],
   sish: [/https:\/\/[^\s]+/],
   frp: [/start proxy success/i],
 };
@@ -25,8 +24,24 @@ const URL_PATTERNS: Record<TunnelMethod, RegExp[]> = {
 const VERSION_FLAGS: Record<string, string[]> = {
   cloudflared: ["--version"],
   frpc: ["-v"],
-  ssh: ["-V"],
 };
+
+/** 单个穿透条目的运行时状态。 */
+interface TunnelInstance {
+  config: TunnelEntryConfig;
+  state: TunnelState;
+  url?: string;
+  error?: string;
+  startedAt?: number;
+  pid?: number;
+  logs: TunnelLogEntry[];
+  child?: ChildProcess;
+  stopping: boolean;
+  restartAttempt: number;
+  restartTimer?: NodeJS.Timeout;
+  urlTimer?: NodeJS.Timeout;
+  killTimer?: NodeJS.Timeout;
+}
 
 interface SpawnPlan {
   command: string;
@@ -35,21 +50,22 @@ interface SpawnPlan {
   constructedUrl?: string;
 }
 
-type TunnelConfigPatch = Partial<Pick<TunnelConfig, "enabled" | "method" | "port" | "sish" | "frp">>;
+export interface TunnelInput {
+  name?: string;
+  method: TunnelMethod;
+  enabled?: boolean;
+  sish?: TunnelFrpServerInput;
+  frp?: TunnelFrpConfig;
+}
+interface TunnelFrpServerInput { server: string; subdomain?: string; sshPort?: number }
 
-/** 内网穿透：子进程管理、自动下载二进制、URL 解析、断线重连、配置持久化。 */
+/** 内网穿透：多条目（cloudflared/sish/frp），各自独立进程、状态、重连与日志。 */
 export class TunnelService {
   private readonly configPath: string;
   private readonly binDir: string;
-  private config: TunnelConfig = { enabled: false, method: "cloudflared", port: 0 };
-  private status: TunnelStatus = { state: "idle", logs: [] };
+  private tunnels: TunnelEntryConfig[] = [];
+  private readonly instances = new Map<string, TunnelInstance>();
   private defaultPort = 0;
-  private child: ChildProcess | undefined;
-  private stopping = false;
-  private restartAttempt = 0;
-  private restartTimer: NodeJS.Timeout | undefined;
-  private urlTimer: NodeJS.Timeout | undefined;
-  private killTimer: NodeJS.Timeout | undefined;
 
   constructor(private readonly logInfo: (message: string) => void = () => undefined) {
     const home = process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis");
@@ -57,172 +73,224 @@ export class TunnelService {
     this.binDir = join(home, "bin");
   }
 
-  /** listen 之后调用：注入服务端口；若开启了自动穿透则直接拉起。 */
+  /** listen 之后调用：注入服务端口；迁移旧配置并拉起自动启动的条目。 */
   async initialize(defaultPort: number): Promise<void> {
     this.defaultPort = defaultPort;
     const envPort = Number(process.env["JARVIS_TUNNEL_PORT"]);
     if (validPort(envPort)) this.defaultPort = envPort;
     await this.loadConfig().catch((error) => this.logInfo(`读取穿透配置失败: ${asMessage(error)}`));
-    if (this.config.enabled) {
-      this.logInfo("自动穿透已开启，正在启动隧道");
-      void this.start().catch((error) => this.logInfo(`自动穿透启动失败: ${asMessage(error)}`));
+    for (const tunnel of this.tunnels) this.instances.set(tunnel.id, this.createInstance(tunnel));
+    for (const tunnel of this.tunnels.filter((item) => item.enabled)) {
+      this.logInfo(`自动穿透已开启（${tunnel.method}），正在启动隧道`);
+      void this.startTunnel(tunnel.id).catch((error) => this.logInfo(`自动穿透启动失败: ${asMessage(error)}`));
     }
   }
 
-  getConfig(): TunnelConfig {
-    return { ...this.config, port: this.effectivePort() };
+  listTunnels(): TunnelSnapshot[] {
+    return this.tunnels.map((config) => this.snapshot(config.id));
   }
 
-  getStatus(): TunnelStatus {
-    return this.status;
-  }
-
-  /** 启动穿透并持久化方法/端口配置（不改变 enabled）。 */
-  async start(patch?: TunnelConfigPatch): Promise<TunnelStatus> {
-    this.applyPatch(patch);
+  /** 添加条目并持久化；enabled=true 时立即启动。 */
+  async addTunnel(input: TunnelInput): Promise<TunnelSnapshot> {
+    const method = normalizeMethod(input.method);
+    const tunnel: TunnelEntryConfig = {
+      id: randomUUID(),
+      method,
+      enabled: input.enabled === true,
+      ...(input.name?.trim() ? { name: input.name.trim() } : {}),
+      ...(method === "sish" && input.sish?.server.trim() ? { sish: normalizeSish(input.sish) } : {}),
+      ...(method === "frp" && input.frp?.server.trim() ? { frp: normalizeFrp(input.frp) } : {}),
+    };
+    this.tunnels.push(tunnel);
     await this.persist();
-    await this.spawnTunnel();
-    return this.status;
+    this.instances.set(tunnel.id, this.createInstance(tunnel));
+    if (tunnel.enabled) await this.startTunnel(tunnel.id);
+    return this.snapshot(tunnel.id);
   }
 
-  /** 停止穿透（不改变 enabled，自动穿透开关独立控制）。 */
-  async stop(): Promise<TunnelStatus> {
-    this.stopping = true;
-    clearTimeout(this.restartTimer);
-    clearTimeout(this.urlTimer);
-    await this.stopProcess();
-    this.status = { state: "idle", method: this.status.method, port: this.effectivePort(), logs: this.status.logs.slice(-MAX_LOG_LINES) };
-    return this.status;
-  }
-
-  /** 更新配置并持久化；enabled=true 时按新配置启动/重启，false 时停止。 */
-  async updateSettings(patch: TunnelConfigPatch): Promise<TunnelStatus> {
-    const next: TunnelConfig = { ...this.config };
-    if (patch.method !== undefined) {
-      if (!isTunnelMethod(patch.method)) throw new AppError("TUNNEL_INVALID_METHOD", "未知的穿透方式", 400);
-      next.method = patch.method;
-    }
-    if (patch.port !== undefined) {
-      if (!validPort(patch.port)) throw new AppError("TUNNEL_INVALID_PORT", "目标端口必须在 1-65535 之间", 400);
-      next.port = patch.port;
-    }
-    if (patch.sish !== undefined) next.sish = patch.sish;
-    if (patch.frp !== undefined) next.frp = patch.frp;
-    if (patch.enabled !== undefined) next.enabled = patch.enabled;
-    const configChanged = JSON.stringify({ method: next.method, port: next.port, sish: next.sish, frp: next.frp })
-      !== JSON.stringify({ method: this.config.method, port: this.config.port, sish: this.config.sish, frp: this.config.frp });
-    this.config = next;
+  /** 更新条目（含自动启动开关）；enabled 变化时联动启停。 */
+  async updateTunnel(tunnelId: string, input: TunnelInput): Promise<TunnelSnapshot> {
+    const tunnel = this.findConfig(tunnelId);
+    const method = normalizeMethod(input.method);
+    const next: TunnelEntryConfig = {
+      id: tunnel.id,
+      method,
+      enabled: input.enabled === true,
+      ...(input.name?.trim() ? { name: input.name.trim() } : {}),
+      ...(method === "sish" && input.sish?.server.trim() ? { sish: normalizeSish(input.sish) } : {}),
+      ...(method === "frp" && input.frp?.server.trim() ? { frp: normalizeFrp(input.frp) } : {}),
+    };
+    const wasEnabled = tunnel.enabled;
+    Object.assign(tunnel, next);
     await this.persist();
-    if (this.config.enabled) {
-      if (this.status.state === "idle" || this.status.state === "error" || configChanged) await this.spawnTunnel();
-    } else if (this.status.state !== "idle") {
-      this.stopping = true;
-      clearTimeout(this.restartTimer);
-      clearTimeout(this.urlTimer);
-      await this.stopProcess();
-      this.status = { state: "idle", method: this.status.method, port: this.effectivePort(), logs: this.status.logs.slice(-MAX_LOG_LINES) };
-    }
-    return this.status;
+    const instance = this.instance(tunnelId);
+    instance.stopping = true;
+    clearTimeout(instance.restartTimer);
+    clearTimeout(instance.urlTimer);
+    await this.stopProcess(instance);
+    instance.config = next;
+    instance.state = "idle";
+    instance.error = undefined;
+    instance.url = undefined;
+    instance.pid = undefined;
+    instance.restartAttempt = 0;
+    // 自动启动：开启时启动，关闭时保持停止。手动启动/停止不受影响。
+    if (next.enabled && !wasEnabled) await this.startTunnel(tunnelId);
+    if (!next.enabled && wasEnabled) this.logInfo(`穿透已停止自动启动（${next.method}）`);
+    return this.snapshot(tunnelId);
+  }
+
+  async startTunnel(tunnelId: string): Promise<TunnelSnapshot> {
+    const instance = this.instance(tunnelId);
+    await this.spawnTunnel(instance);
+    return this.snapshot(tunnelId);
+  }
+
+  async stopTunnel(tunnelId: string): Promise<TunnelSnapshot> {
+    const instance = this.instance(tunnelId);
+    instance.stopping = true;
+    clearTimeout(instance.restartTimer);
+    clearTimeout(instance.urlTimer);
+    await this.stopProcess(instance);
+    instance.state = "idle";
+    instance.url = undefined;
+    instance.error = undefined;
+    instance.pid = undefined;
+    return this.snapshot(tunnelId);
+  }
+
+  async removeTunnel(tunnelId: string): Promise<void> {
+    const tunnel = this.findConfig(tunnelId);
+    const instance = this.instance(tunnelId);
+    instance.stopping = true;
+    clearTimeout(instance.restartTimer);
+    clearTimeout(instance.urlTimer);
+    clearTimeout(instance.killTimer);
+    await this.stopProcess(instance);
+    this.instances.delete(tunnelId);
+    this.tunnels = this.tunnels.filter((item) => item.id !== tunnel.id);
+    await this.persist();
+    this.logInfo(`已删除穿透条目（${tunnel.method}）`);
   }
 
   async dispose(): Promise<void> {
-    this.stopping = true;
-    clearTimeout(this.restartTimer);
-    clearTimeout(this.urlTimer);
-    clearTimeout(this.killTimer);
-    await this.stopProcess();
+    for (const instance of this.instances.values()) {
+      instance.stopping = true;
+      clearTimeout(instance.restartTimer);
+      clearTimeout(instance.urlTimer);
+      clearTimeout(instance.killTimer);
+      await this.stopProcess(instance);
+    }
   }
 
-  private effectivePort(): number {
-    return this.config.port > 0 ? this.config.port : this.defaultPort;
+  private findConfig(tunnelId: string): TunnelEntryConfig {
+    const tunnel = this.tunnels.find((item) => item.id === tunnelId);
+    if (tunnel === undefined) throw new AppError("TUNNEL_NOT_FOUND", "穿透条目不存在", 404);
+    return tunnel;
   }
 
-  private applyPatch(patch: TunnelConfigPatch | undefined): void {
-    if (patch === undefined) return;
-    const next: TunnelConfig = { ...this.config };
-    if (patch.method !== undefined && isTunnelMethod(patch.method)) next.method = patch.method;
-    if (patch.port !== undefined && validPort(patch.port)) next.port = patch.port;
-    if (patch.sish !== undefined) next.sish = patch.sish;
-    if (patch.frp !== undefined) next.frp = patch.frp;
-    if (patch.enabled !== undefined) next.enabled = patch.enabled;
-    this.config = next;
+  private instance(tunnelId: string): TunnelInstance {
+    const instance = this.instances.get(tunnelId);
+    if (instance === undefined) throw new AppError("TUNNEL_NOT_FOUND", "穿透条目不存在", 404);
+    return instance;
+  }
+
+  private createInstance(config: TunnelEntryConfig): TunnelInstance {
+    return { config, state: "idle", logs: [], stopping: false, restartAttempt: 0 };
+  }
+
+  private snapshot(tunnelId: string): TunnelSnapshot {
+    const instance = this.instance(tunnelId);
+    return {
+      id: instance.config.id,
+      ...(instance.config.name === undefined ? {} : { name: instance.config.name }),
+      method: instance.config.method,
+      enabled: instance.config.enabled,
+      ...(instance.config.sish === undefined ? {} : { sish: instance.config.sish }),
+      ...(instance.config.frp === undefined ? {} : { frp: instance.config.frp }),
+      state: instance.state,
+      ...(instance.url === undefined ? {} : { url: instance.url }),
+      ...(instance.error === undefined ? {} : { error: instance.error }),
+      ...(instance.startedAt === undefined ? {} : { startedAt: instance.startedAt }),
+      ...(instance.pid === undefined ? {} : { pid: instance.pid }),
+      logs: instance.logs,
+    };
   }
 
   private async loadConfig(): Promise<void> {
-    const parsed = JSON.parse(await readFile(this.configPath, "utf8")) as Partial<TunnelConfig & { version: number }>;
-    if (parsed.version !== CONFIG_VERSION || !isTunnelMethod(parsed.method)) throw new Error("Unsupported tunnel config");
-    this.config = {
-      enabled: parsed.enabled === true,
-      method: parsed.method,
-      port: validPort(parsed.port) ? parsed.port : 0,
-      sish: parsed.sish,
-      frp: parsed.frp,
-    };
+    const parsed = JSON.parse(await readFile(this.configPath, "utf8")) as Partial<{ version: number; tunnels?: unknown[]; enabled?: boolean; method?: unknown }>;
+    if (parsed.version === 1 && isTunnelMethod(parsed.method)) {
+      // 迁移：旧单例配置 → 单条目，自动启动统一改为手动。
+      this.tunnels = [{
+        id: randomUUID(),
+        method: parsed.method,
+        enabled: false,
+        ...(legacySish(parsed) === undefined ? {} : { sish: legacySish(parsed) }),
+        ...(legacyFrp(parsed) === undefined ? {} : { frp: legacyFrp(parsed) }),
+      }];
+      await this.persist();
+      this.logInfo("已迁移旧穿透配置为条目（自动启动默认关闭）");
+      return;
+    }
+    if (parsed.version !== CONFIG_VERSION || !Array.isArray(parsed.tunnels)) throw new Error("Unsupported tunnel config");
+    this.tunnels = parsed.tunnels.flatMap((value): TunnelEntryConfig[] => {
+      if (!isEntryConfig(value)) return [];
+      return [{ ...value, enabled: value.enabled === true }];
+    });
   }
 
   private async persist(): Promise<void> {
     await mkdir(dirname(this.configPath), { recursive: true });
-    await writeFile(this.configPath, JSON.stringify({ version: CONFIG_VERSION, ...this.config }, null, 2));
+    await writeFile(this.configPath, JSON.stringify({ version: CONFIG_VERSION, tunnels: this.tunnels }, null, 2));
   }
 
-  private async spawnTunnel(): Promise<void> {
-    await this.stopProcess();
-    this.stopping = false;
-    this.restartAttempt = 0;
-    const method = this.config.method;
-    const port = this.effectivePort();
-    if (port <= 0) {
-      this.fail("未设置目标端口");
-      return;
-    }
-    this.status = { state: "starting", method, port, startedAt: Date.now(), logs: this.status.logs.slice(-MAX_LOG_LINES) };
+  private async spawnTunnel(instance: TunnelInstance): Promise<void> {
+    await this.stopProcess(instance);
+    instance.stopping = false;
+    instance.restartAttempt = 0;
+    const method = instance.config.method;
+    const port = this.defaultPort;
+    instance.state = "starting";
+    instance.startedAt = Date.now();
+    instance.error = undefined;
+    instance.url = undefined;
     let plan: SpawnPlan;
     try {
-      plan = await this.buildPlan(port);
+      plan = await this.buildPlan(instance.config, port);
     } catch (error) {
-      this.fail(asMessage(error));
+      this.fail(instance, asMessage(error));
       return;
     }
     this.logInfo(`启动穿透: ${method} → localhost:${port}`);
     const child = spawn(plan.command, plan.args, { detached: platform() !== "win32", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-    this.child = child;
-    this.status = { ...this.status, pid: child.pid };
-    const splitter = createLineSplitter((line) => this.handleLine(line, plan, child));
+    instance.child = child;
+    instance.pid = child.pid;
+    const splitter = createLineSplitter((line) => this.handleLine(instance, line, plan, child));
     child.stdout?.on("data", splitter);
     child.stderr?.on("data", splitter);
     child.on("error", (error) => {
-      if (this.child !== child) return;
-      this.fail(`无法启动 ${plan.command}: ${asMessage(error)}`);
+      if (instance.child !== child) return;
+      this.fail(instance, `无法启动 ${plan.command}: ${asMessage(error)}`);
     });
     child.on("exit", (code, signal) => {
-      if (this.child !== child) return;
-      this.handleExit(code, signal);
+      if (instance.child !== child) return;
+      this.handleExit(instance, code, signal);
     });
     if (plan.constructedUrl !== undefined) {
-      this.urlTimer = setTimeout(() => {
-        if (this.child === child && this.status.state === "starting") this.setRunning(plan.constructedUrl as string);
+      instance.urlTimer = setTimeout(() => {
+        if (instance.child === child && instance.state === "starting") this.setRunning(instance, plan.constructedUrl as string);
       }, FRP_READY_DELAY_MS);
     }
   }
 
-  private async buildPlan(port: number): Promise<SpawnPlan> {
-    switch (this.config.method) {
+  private async buildPlan(config: TunnelEntryConfig, port: number): Promise<SpawnPlan> {
+    switch (config.method) {
       case "cloudflared": {
         const binary = await this.ensureBinary("cloudflared");
         return { command: binary, args: ["tunnel", "--url", `http://127.0.0.1:${port}`, "--no-autoupdate", "--metrics", "127.0.0.1:0"] };
       }
-      case "localtunnel": {
-        const npx = platform() === "win32" ? "npx.cmd" : "npx";
-        return { command: npx, args: ["--yes", "localtunnel", "--port", String(port)] };
-      }
-      case "ssh": {
-        return {
-          command: "ssh",
-          args: ["-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes", "-R", `80:localhost:${port}`, "nokey@localhost.run"],
-        };
-      }
       case "sish": {
-        const sish = this.config.sish;
+        const sish = config.sish;
         if (sish === undefined || sish.server.trim() === "") throw new AppError("TUNNEL_SISH_SERVER", "请填写 sish 服务器地址", 400);
         const server = sish.server.trim();
         const subdomain = sish.subdomain?.trim() ?? "";
@@ -233,7 +301,7 @@ export class TunnelService {
         return { command: "ssh", args };
       }
       case "frp": {
-        const frp = this.config.frp;
+        const frp = config.frp;
         if (frp === undefined || frp.server.trim() === "") throw new AppError("TUNNEL_FRP_SERVER", "请填写 frps 服务器地址", 400);
         const binary = await this.ensureBinary("frpc");
         const configPath = await this.writeFrpcConfig(frp, port);
@@ -244,65 +312,72 @@ export class TunnelService {
     }
   }
 
-  private handleLine(line: string, plan: SpawnPlan, child: ChildProcess): void {
-    this.appendLog(line);
-    if (this.child !== child || (this.status.state === "running" && this.status.url !== undefined)) return;
-    const url = detectTunnelUrl(this.config.method, line, plan.constructedUrl);
-    if (url !== undefined) this.setRunning(url);
+  private handleLine(instance: TunnelInstance, line: string, plan: SpawnPlan, child: ChildProcess): void {
+    this.appendLog(instance, line);
+    if (instance.child !== child || (instance.state === "running" && instance.url !== undefined)) return;
+    const url = detectTunnelUrl(instance.config.method, line, plan.constructedUrl);
+    if (url !== undefined) this.setRunning(instance, url);
   }
 
-  private setRunning(url: string): void {
-    this.restartAttempt = 0;
-    if (this.status.state !== "running" || this.status.url !== url) this.logInfo(`穿透就绪: ${url}`);
-    this.status = { ...this.status, state: "running", url, error: undefined };
+  private setRunning(instance: TunnelInstance, url: string): void {
+    instance.restartAttempt = 0;
+    if (instance.state !== "running" || instance.url !== url) this.logInfo(`穿透就绪: ${url}`);
+    instance.state = "running";
+    instance.url = url;
+    instance.error = undefined;
   }
 
-  private appendLog(line: string): void {
-    const entry: TunnelLogEntry = { t: Date.now(), line: line.slice(0, MAX_LINE_LENGTH) };
-    this.status = { ...this.status, logs: [...this.status.logs.slice(-(MAX_LOG_LINES - 1)), entry] };
+  private appendLog(instance: TunnelInstance, line: string): void {
+    instance.logs = [...instance.logs.slice(-(MAX_LOG_LINES - 1)), { t: Date.now(), line: line.slice(0, MAX_LINE_LENGTH) }];
   }
 
-  private fail(message: string): void {
+  private fail(instance: TunnelInstance, message: string): void {
     this.logInfo(`穿透失败: ${message}`);
-    this.status = { ...this.status, state: "error", error: message, url: undefined, pid: undefined };
-    this.child = undefined;
+    instance.state = "error";
+    instance.error = message;
+    instance.url = undefined;
+    instance.pid = undefined;
+    instance.child = undefined;
   }
 
-  private handleExit(code: number | null, signal: string | null): void {
-    this.child = undefined;
-    clearTimeout(this.urlTimer);
-    if (this.stopping) {
-      this.status = { state: "idle", method: this.status.method, port: this.effectivePort(), logs: this.status.logs.slice(-MAX_LOG_LINES) };
+  private handleExit(instance: TunnelInstance, code: number | null, signal: string | null): void {
+    instance.child = undefined;
+    clearTimeout(instance.urlTimer);
+    if (instance.stopping) {
+      instance.state = "idle";
+      instance.pid = undefined;
       return;
     }
     const reason = signal !== null ? `信号 ${signal}` : `退出码 ${code ?? "?"}`;
     this.logInfo(`穿透进程退出 (${reason})，自动重连中`);
-    this.status = { ...this.status, state: "error", error: `隧道已断开（${reason}），正在自动重连…`, url: undefined };
-    this.scheduleRestart();
+    instance.state = "error";
+    instance.error = `隧道已断开（${reason}），正在自动重连…`;
+    instance.url = undefined;
+    this.scheduleRestart(instance);
   }
 
-  private scheduleRestart(): void {
-    if (this.stopping) return;
-    const delay = Math.min(RESTART_BASE_DELAY_MS * 2 ** this.restartAttempt, RESTART_MAX_DELAY_MS);
-    this.restartAttempt += 1;
+  private scheduleRestart(instance: TunnelInstance): void {
+    if (instance.stopping) return;
+    const delay = Math.min(RESTART_BASE_DELAY_MS * 2 ** instance.restartAttempt, RESTART_MAX_DELAY_MS);
+    instance.restartAttempt += 1;
     this.logInfo(`将在 ${Math.round(delay / 1000)}s 后重连`);
-    this.restartTimer = setTimeout(() => {
-      if (this.stopping) return;
-      void this.spawnTunnel();
+    instance.restartTimer = setTimeout(() => {
+      if (instance.stopping) return;
+      void this.spawnTunnel(instance);
     }, delay);
   }
 
-  private async stopProcess(): Promise<void> {
-    this.stopping = true;
-    clearTimeout(this.restartTimer);
-    clearTimeout(this.urlTimer);
-    const child = this.child;
-    this.child = undefined;
+  private async stopProcess(instance: TunnelInstance): Promise<void> {
+    instance.stopping = true;
+    clearTimeout(instance.restartTimer);
+    clearTimeout(instance.urlTimer);
+    const child = instance.child;
+    instance.child = undefined;
     if (child === undefined || child.pid === undefined) return;
     this.logInfo("停止穿透进程");
     killProcess(child.pid);
-    clearTimeout(this.killTimer);
-    this.killTimer = setTimeout(() => killProcess(child.pid as number, true), 2_000);
+    clearTimeout(instance.killTimer);
+    instance.killTimer = setTimeout(() => killProcess(child.pid as number, true), 2_000);
   }
 
   /** 找到可用二进制：PATH → 本地缓存 → 自动下载。 */
@@ -311,13 +386,12 @@ export class TunnelService {
     const localPath = join(this.binDir, exe);
     if (commandAvailable(name)) return name;
     if (await fileExists(localPath)) return localPath;
-    this.appendLog(`未找到 ${name}，开始自动下载…`);
+    this.logInfo(`未找到 ${name}，开始自动下载…`);
     try {
       if (name === "cloudflared") await this.downloadCloudflared(localPath);
       else await this.downloadFrpc(localPath);
       return localPath;
     } catch (error) {
-      this.appendLog(`自动下载 ${name} 失败: ${asMessage(error)}`);
       throw new AppError("TUNNEL_BINARY_MISSING", `缺少 ${name} 且自动下载失败：${asMessage(error)}`, 500);
     }
   }
@@ -344,7 +418,7 @@ export class TunnelService {
   }
 
   private async downloadTo(url: string, destPath: string, assetName: string): Promise<void> {
-    this.appendLog(`下载 ${assetName} …`);
+    this.logInfo(`下载 ${assetName} …`);
     const response = await fetch(url);
     if (!response.ok) throw new Error(`下载失败 (HTTP ${response.status})`);
     const data = Buffer.from(await response.arrayBuffer());
@@ -364,7 +438,7 @@ export class TunnelService {
       await writeFile(destPath, data);
     }
     if (platform() !== "win32") await chmod(destPath, 0o755);
-    this.appendLog(`${assetName} 就绪`);
+    this.logInfo(`${assetName} 就绪`);
   }
 
   private async writeFrpcConfig(frp: TunnelFrpConfig, localPort: number): Promise<string> {
@@ -409,6 +483,61 @@ export function buildFrpcToml(host: string, hostPort: number, localPort: number,
     "",
   ];
   return lines.join("\n");
+}
+
+function normalizeMethod(value: unknown): TunnelMethod {
+  if (!isTunnelMethod(value)) throw new AppError("TUNNEL_INVALID_METHOD", "未知的穿透方式", 400);
+  return value;
+}
+
+function normalizeSish(value: { server: string; subdomain?: string; sshPort?: number }): { server: string; subdomain?: string; sshPort?: number } {
+  return {
+    server: value.server.trim(),
+    ...(value.subdomain?.trim() ? { subdomain: value.subdomain.trim() } : {}),
+    ...(validPort(value.sshPort) ? { sshPort: value.sshPort } : {}),
+  };
+}
+
+function normalizeFrp(value: TunnelFrpConfig): TunnelFrpConfig {
+  return {
+    server: value.server.trim(),
+    ...(value.token?.trim() ? { token: value.token.trim() } : {}),
+    ...(validPort(value.remotePort) ? { remotePort: value.remotePort } : {}),
+    ...(value.domain?.trim() ? { domain: value.domain.trim() } : {}),
+  };
+}
+
+function legacySish(value: unknown): { server: string; subdomain?: string; sshPort?: number } | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const parsed = value as Record<string, unknown>;
+  if (typeof parsed["sish"] !== "object" || parsed["sish"] === null) return undefined;
+  const sish = parsed["sish"] as Record<string, unknown>;
+  if (typeof sish["server"] !== "string") return undefined;
+  return {
+    server: sish["server"],
+    ...(typeof sish["subdomain"] === "string" && sish["subdomain"] !== "" ? { subdomain: sish["subdomain"] } : {}),
+    ...(validPort(sish["sshPort"]) ? { sshPort: sish["sshPort"] as number } : {}),
+  };
+}
+
+function legacyFrp(value: unknown): TunnelFrpConfig | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const parsed = value as Record<string, unknown>;
+  if (typeof parsed["frp"] !== "object" || parsed["frp"] === null) return undefined;
+  const frp = parsed["frp"] as Record<string, unknown>;
+  if (typeof frp["server"] !== "string") return undefined;
+  return {
+    server: frp["server"],
+    ...(typeof frp["token"] === "string" && frp["token"] !== "" ? { token: frp["token"] } : {}),
+    ...(validPort(frp["remotePort"]) ? { remotePort: frp["remotePort"] as number } : {}),
+    ...(typeof frp["domain"] === "string" && frp["domain"] !== "" ? { domain: frp["domain"] } : {}),
+  };
+}
+
+function isEntryConfig(value: unknown): value is TunnelEntryConfig {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return typeof entry["id"] === "string" && isTunnelMethod(entry["method"]);
 }
 
 function parseHostPort(value: string, defaultPort: number): [string, number] {
@@ -463,6 +592,10 @@ async function findFile(root: string, name: string): Promise<string | undefined>
   return undefined;
 }
 
+function archName(): string {
+  return process.arch === "x64" ? "amd64" : process.arch;
+}
+
 function createLineSplitter(onLine: (line: string) => void): (chunk: Buffer) => void {
   let pending = "";
   return (chunk: Buffer) => {
@@ -483,10 +616,6 @@ function stripAnsi(value: string): string {
 
 function cleanUrl(value: string): string {
   return value.replace(/[),.;]+$/, "");
-}
-
-function archName(): string {
-  return process.arch === "x64" ? "amd64" : process.arch;
 }
 
 function validPort(value: unknown): value is number {

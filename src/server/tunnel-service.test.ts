@@ -7,16 +7,6 @@ describe("detectTunnelUrl", () => {
     expect(detectTunnelUrl("cloudflared", line)).toBe("https://abc-123.trycloudflare.com");
   });
 
-  it("解析 localtunnel 的 your url is 行", () => {
-    const line = "your url is: https://lucky-hen-42.loca.lt";
-    expect(detectTunnelUrl("localtunnel", line)).toBe("https://lucky-hen-42.loca.lt");
-  });
-
-  it("解析 localhost.run 的 lhr.life URL", () => {
-    const line = "https://wild-nest-9.lhr.life";
-    expect(detectTunnelUrl("ssh", line)).toBe("https://wild-nest-9.lhr.life");
-  });
-
   it("解析 sish 的子域名 URL", () => {
     const line = "Forwarding: https://myjarvis.example.com";
     expect(detectTunnelUrl("sish", line)).toBe("https://myjarvis.example.com");
@@ -34,7 +24,7 @@ describe("detectTunnelUrl", () => {
 
   it("无关日志不产生 URL", () => {
     expect(detectTunnelUrl("cloudflared", "connecting to edge…")).toBeUndefined();
-    expect(detectTunnelUrl("ssh", "Warning: Permanently added host key")).toBeUndefined();
+    expect(detectTunnelUrl("sish", "Warning: Permanently added host key")).toBeUndefined();
   });
 });
 

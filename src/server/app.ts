@@ -158,26 +158,34 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   registerSelfRestart(app, events);
 
   const tunnelMethodInput = z.enum(TUNNEL_METHODS);
-  const tunnelStartInput = z.object({ method: z.enum(TUNNEL_METHODS), port: z.number().int().min(1).max(65535).optional() }).strict();
   const tunnelSishInput = z.object({ server: z.string().min(1).max(500), subdomain: z.string().max(200).optional(), sshPort: z.number().int().min(1).max(65535).optional() }).strict();
   const tunnelFrpInput = z.object({ server: z.string().min(1).max(500), token: z.string().max(2_000).optional(), remotePort: z.number().int().min(1).max(65535).optional(), domain: z.string().max(300).optional() }).strict();
-  const tunnelSettingsInput = z.object({
+  const tunnelEntryInput = z.object({
+    name: z.string().max(60).optional(),
+    method: tunnelMethodInput,
     enabled: z.boolean().optional(),
-    method: tunnelMethodInput.optional(),
-    port: z.number().int().min(1).max(65535).optional(),
     sish: tunnelSishInput.optional(),
     frp: tunnelFrpInput.optional(),
   }).strict();
-  // 内网穿透：把本 UI 暴露到公网（无鉴权，地址泄露即人人可访问）。
-  app.get("/api/tunnel", async () => ({ status: services.tunnel.getStatus(), settings: services.tunnel.getConfig() }));
-  app.post("/api/tunnel/start", async (request) => {
-    const body = tunnelStartInput.parse(request.body);
-    return { status: await services.tunnel.start({ method: body.method, ...(body.port === undefined ? {} : { port: body.port }) }) };
+  // 内网穿透：多条目（cloudflared/sish/frp），各自独立启停，自动启动为条目级开关（默认关闭）。
+  app.get("/api/tunnel", async () => ({ tunnels: services.tunnel.listTunnels() }));
+  app.post("/api/tunnel", async (request) => ({ tunnel: await services.tunnel.addTunnel(tunnelEntryInput.parse(request.body)) }));
+  app.put("/api/tunnel/:tunnelId", async (request) => {
+    const { tunnelId } = z.object({ tunnelId: z.string().uuid() }).parse(request.params);
+    return { tunnel: await services.tunnel.updateTunnel(tunnelId, tunnelEntryInput.parse(request.body)) };
   });
-  app.post("/api/tunnel/stop", async () => ({ status: await services.tunnel.stop() }));
-  app.put("/api/tunnel/settings", async (request) => {
-    const body = tunnelSettingsInput.parse(request.body);
-    return { status: await services.tunnel.updateSettings(body), settings: services.tunnel.getConfig() };
+  app.post("/api/tunnel/:tunnelId/start", async (request) => {
+    const { tunnelId } = z.object({ tunnelId: z.string().uuid() }).parse(request.params);
+    return { tunnel: await services.tunnel.startTunnel(tunnelId) };
+  });
+  app.post("/api/tunnel/:tunnelId/stop", async (request) => {
+    const { tunnelId } = z.object({ tunnelId: z.string().uuid() }).parse(request.params);
+    return { tunnel: await services.tunnel.stopTunnel(tunnelId) };
+  });
+  app.delete("/api/tunnel/:tunnelId", async (request) => {
+    const { tunnelId } = z.object({ tunnelId: z.string().uuid() }).parse(request.params);
+    await services.tunnel.removeTunnel(tunnelId);
+    return { removed: true };
   });
   app.get("/api/settings", async () => ({ settings: settings.getSettings() }));
   app.patch("/api/settings", async (request) => ({ settings: await settings.updateSettings(settingsInput.parse(request.body)) }));

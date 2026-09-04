@@ -1253,3 +1253,57 @@ describe("abort with queued messages", () => {
     expect(runtime.queue.followUp).toHaveLength(0);
   });
 });
+
+describe("tunnel entries", () => {
+  it("adds, lists, updates without auto-start, and removes tunnel entries", async () => {
+    const server = activeApp();
+
+    // 添加：默认不自动启动
+    const created = await server.inject({ method: "POST", url: "/api/tunnel", payload: { method: "cloudflared", name: "演示" } });
+    expect(created.statusCode).toBe(200);
+    const tunnel = created.json<{ tunnel: { id: string; method: string; enabled: boolean; state: string } }>().tunnel;
+    expect(tunnel.id).toBeTruthy();
+    expect(tunnel.method).toBe("cloudflared");
+    expect(tunnel.enabled).toBe(false);
+    expect(tunnel.state).toBe("idle");
+
+    // 列表
+    const listed = await server.inject({ method: "GET", url: "/api/tunnel" });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({ tunnels: [{ id: tunnel.id, method: "cloudflared", enabled: false, name: "演示" }] });
+
+    // 更新为 sish（配置服务器），仍不自动启动
+    const updated = await server.inject({ method: "PUT", url: `/api/tunnel/${tunnel.id}`, payload: { method: "sish", enabled: false, sish: { server: "user@tun.example.com" } } });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({ tunnel: { method: "sish", enabled: false, state: "idle", sish: { server: "user@tun.example.com" } } });
+
+    // 未知条目 → 404
+    const missing = await server.inject({ method: "POST", url: "/api/tunnel/00000000-0000-4000-8000-000000000000/start", payload: {} });
+    expect(missing.statusCode).toBe(404);
+
+    // 删除
+    const removed = await server.inject({ method: "DELETE", url: `/api/tunnel/${tunnel.id}` });
+    expect(removed.statusCode).toBe(200);
+    const after = await server.inject({ method: "GET", url: "/api/tunnel" });
+    expect(after.json()).toEqual({ tunnels: [] });
+  });
+
+  it("migrates legacy single-tunnel config into an entry with auto-start off", async () => {
+    await app?.close();
+    await writeFile(join(jarvisHome, "tunnel.json"), JSON.stringify({ version: 1, enabled: true, method: "sish", port: 9528, sish: { server: "user@tun.example.com", subdomain: "jarvis" } }));
+    app = await buildApp();
+    await app.jarvis.tunnel.initialize(9528);
+    const server = activeApp();
+
+    const listed = await server.inject({ method: "GET", url: "/api/tunnel" });
+    expect(listed.statusCode).toBe(200);
+    const tunnels = listed.json<{ tunnels: Array<{ method: string; enabled: boolean; sish?: { server: string; subdomain: string } }> }>().tunnels;
+    expect(tunnels).toHaveLength(1);
+    expect(tunnels[0]).toMatchObject({ method: "sish", enabled: false, sish: { server: "user@tun.example.com", subdomain: "jarvis" } });
+
+    // 已迁移为 v2 持久化
+    const persisted = JSON.parse(await readFile(join(jarvisHome, "tunnel.json"), "utf8")) as { version: number; tunnels: unknown[] };
+    expect(persisted.version).toBe(2);
+    expect(persisted.tunnels).toHaveLength(1);
+  });
+});
