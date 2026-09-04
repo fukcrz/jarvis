@@ -357,7 +357,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-page-empty { padding: 40px 16px; color: var(--subtle); text-align: center; font-size: 13px; }
 .mobile-search-spin { animation: mobile-search-spin 0.9s linear infinite; }
 @keyframes mobile-search-spin { to { transform: rotate(360deg); } }
-.session-search-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; overflow: hidden; }
+.session-search-dialog { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 12px; overflow: hidden; }
 .session-search-input { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line-strong); border-radius: 7px; background: #19191d; padding: 9px 11px; color: var(--subtle); }
 .session-search-input:focus-within { border-color: var(--accent); }
 .session-search-input input { min-width: 0; flex: 1; border: 0; outline: none; background: transparent; color: var(--ink); font-size: 13px; }
