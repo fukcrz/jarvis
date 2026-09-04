@@ -12,6 +12,7 @@ import { SessionContextMenu, type SessionContextMenuTarget } from "./components/
 import { ProjectContextMenu, type ProjectContextMenuTarget } from "./components/project-context-menu";
 import { MobileActionSheet, type MobileActionTarget } from "./components/mobile-action-sheet";
 import { MobileSessionSwitcher } from "./components/mobile-navigation";
+import { SessionSearchDialog } from "./components/session-search-dialog";
 import { Timeline } from "./components/timeline";
 import { SettingsPage } from "./components/settings-page";
 import { FileBrowser } from "./components/file-browser";
@@ -62,6 +63,7 @@ export function App() {
   const [globalExtensionToasts, setGlobalExtensionToasts] = useState<ExtensionToast[]>([]);
   const [sessionNotice, setSessionNotice] = useState<string | undefined>();
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ workspaceId: string; session: SessionSummary } | undefined>();
   const [renameValue, setRenameValue] = useState("");
   const [projectRenameTarget, setProjectRenameTarget] = useState<Workspace | undefined>();
@@ -274,6 +276,12 @@ export function App() {
     const entries = await Promise.all(projects.map(async (workspace) => [workspace.id, await api.listSessions(workspace.id)] as const));
     return Object.fromEntries(entries);
   }, []);
+
+  // 移动端全文搜索：跨项目并行查询，服务端对会话正文做全文匹配。
+  const searchSessions = useCallback(async (query: string): Promise<Record<string, SessionSummary[]>> => {
+    const entries = await Promise.all(workspaces.map(async (workspace) => [workspace.id, await api.listSessions(workspace.id, query)] as const));
+    return Object.fromEntries(entries);
+  }, [workspaces]);
 
   useEffect(() => {
     void Promise.all([loadWorkspaces(), api.settings().then((settings) => { setAssistantName(settings.assistantName); })]).catch((error: unknown) => setPageError(error instanceof Error ? error.message : "无法加载应用设置")).finally(() => setLoading(false));
@@ -923,6 +931,7 @@ export function App() {
     onOpenSessionMenu={(targetWorkspaceId, session, position) => setSessionMenu({ workspaceId: targetWorkspaceId, session, ...position })}
     onLongPressProject={(workspace) => setMobileActionTarget({ kind: "project", workspace })}
     onLongPressSession={(targetWorkspaceId, session) => setMobileActionTarget({ kind: "session", workspaceId: targetWorkspaceId, session })}
+    onOpenSearch={() => setSearchOpen(true)}
     assistantName={assistantName}
     onOpenSettings={() => navigate("/settings")}
     onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)}
@@ -954,11 +963,11 @@ export function App() {
               <div><h1>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined || selectedWorkspace === undefined ? null : <Tooltip label="重命名会话"><Button variant="ghost" size="icon" aria-label="重命名会话" onClick={() => { setRenameTarget({ workspaceId: selectedWorkspace.id, session: selectedSession }); setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); }}><Pencil size={15} /></Button></Tooltip>}</div>
             </div>
           </div>
-        </header>}
+                  </header>}
         {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : isFilesPage ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "files" ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)} /> : <section className="mobile-chat-page">
+        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "files" ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onRenameSession={(targetWorkspaceId, session) => { setRenameTarget({ workspaceId: targetWorkspaceId, session }); setRenameValue(session.name ?? sessionLabel(session.name, session.preview)); }} onDeleteSession={(targetWorkspaceId, session) => setDeleteTarget({ workspaceId: targetWorkspaceId, session })} onOpenSearch={() => setSearchOpen(true)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
             <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate("/projects", { replace: true })}><ArrowLeft size={19} /></Button>
             <div className="mobile-chat-session">{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</div>
@@ -987,6 +996,7 @@ export function App() {
         setProjectMenu(undefined);
         setProjectRemoveTarget(workspace);
       }} />}
+      <SessionSearchDialog open={searchOpen} onOpenChange={setSearchOpen} workspaces={workspaces} searchSessions={searchSessions} onSelectSession={(workspaceId, sessionId) => { chooseSession(workspaceId, sessionId); }} />
       <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onRenameProject={(workspace) => {
         setMobileActionTarget(undefined);
         setProjectRenameTarget(workspace);

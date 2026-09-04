@@ -156,17 +156,26 @@ export class SessionService {
       ? await SessionManager.list(workspace.cwd)
       : await SessionManager.list(workspace.cwd, sessionDir);
     const attention = await this.attention.list(workspaceId);
-    const summaries = listed.map((entry) => this.summaryFromList(workspace, entry, attention.get(entry.id)));
+    const needle = query?.trim().toLocaleLowerCase();
+    // SessionInfo.allMessagesText 已包含会话全部 user/assistant 消息文本（list 时读入），
+    // 全文搜索在此直接命中，不增加额外磁盘开销。
+    const listedMatches = listed
+      .map((entry) => ({
+        summary: this.summaryFromList(workspace, entry, attention.get(entry.id)),
+        searchText: `${entry.name ?? ""}\n${entry.firstMessage ?? ""}\n${entry.allMessagesText}`,
+      }))
+      .filter(({ searchText }) => needle === undefined || needle === "" || searchText.toLocaleLowerCase().includes(needle));
+    const summaries = listedMatches.map(({ summary, searchText }) => attachSearchSnippet(summary, searchText, needle));
 
     for (const active of this.active.values()) {
       if (active.ref.workspaceId !== workspaceId || summaries.some((summary) => summary.id === active.ref.sessionId)) continue;
-      summaries.unshift(this.summaryFromActive(active));
+      const summary = this.summaryFromActive(active);
+      const searchText = sessionBranchSearchText(summary.name, summary.preview, active.session.sessionManager.getBranch());
+      if (needle !== undefined && needle !== "" && !searchText.toLocaleLowerCase().includes(needle)) continue;
+      summaries.unshift(attachSearchSnippet(summary, searchText, needle));
     }
 
-    const needle = query?.trim().toLocaleLowerCase();
-    return summaries
-      .filter((summary) => needle === undefined || needle === "" || `${summary.name ?? ""}\n${summary.preview ?? ""}`.toLocaleLowerCase().includes(needle))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   async markViewed(ref: SessionRef): Promise<SessionSummary> {
@@ -1848,6 +1857,32 @@ function findUserMessageEntry(entries: readonly unknown[], messageId: string): R
 function firstUserMessage(entries: readonly unknown[]): string | null {
   const history = projectHistory(entries);
   return history.find((item): item is MessageTimelineItem => item.kind === "message" && item.role === "user")?.text ?? null;
+}
+
+/** 内存中活跃会话的全文检索文本：名称 + 首条消息 + 全部 user/assistant 消息文本。 */
+function sessionBranchSearchText(name: string | null, preview: string | null, entries: readonly unknown[]): string {
+  const text = projectHistory(entries)
+    .filter((item): item is MessageTimelineItem => item.kind === "message")
+    .map((item) => item.text)
+    .join("\n");
+  return `${name ?? ""}\n${preview ?? ""}\n${text}`;
+}
+
+/** 命中关键词时提取其周围上下文（±48 字符），用于搜索结果中展示命中原因。 */
+function snippetAround(text: string, needle: string, radius = 48): string | undefined {
+  const index = text.toLocaleLowerCase().indexOf(needle);
+  if (index < 0) return undefined;
+  const start = Math.max(0, index - radius);
+  const end = Math.min(text.length, index + needle.length + radius);
+  const piece = text.slice(start, end).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "…" : ""}${piece}${end < text.length ? "…" : ""}`;
+}
+
+/** 搜索结果附带命中片段（非搜索响应保持原样，不污染普通列表数据）。 */
+function attachSearchSnippet(summary: SessionSummary, searchText: string, needle: string | undefined): SessionSummary {
+  if (needle === undefined || needle === "") return summary;
+  const snippet = snippetAround(searchText, needle);
+  return snippet === undefined ? summary : { ...summary, matchSnippet: snippet };
 }
 
 function isMissingFile(error: unknown): boolean {

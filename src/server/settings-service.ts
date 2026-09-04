@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir, resolveModelScopeWithDiagnostics, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthEvent, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
-import type { AppSettings, AuthLoginOperation, EnabledModelRef, EnabledModelsStatus, ManagedModel, ManagedProvider, ProviderStatus } from "../shared/protocol.js";
+import type { AppSettings, AuthLoginOperation, EnabledModelRef, EnabledModelsStatus, FetchedModel, ManagedModel, ManagedProvider, ProviderStatus } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 
 interface StoredSettings { version: 1; assistantName: string; }
@@ -48,7 +48,10 @@ export class SettingsService {
     try {
       const parsed = JSON.parse(await readFile(this.settingsPath, "utf8")) as Partial<StoredSettings>;
       if (parsed.version !== 1 || typeof parsed.assistantName !== "string") throw new Error("Unsupported settings format");
-      this.settings = { version: 1, assistantName: normalizeAssistantName(parsed.assistantName) };
+      this.settings = {
+        version: 1,
+        assistantName: normalizeAssistantName(parsed.assistantName),
+      };
     } catch (error) {
       if (!isMissingFile(error)) throw error;
       await this.persistSettings();
@@ -57,8 +60,8 @@ export class SettingsService {
 
   getSettings(): AppSettings { return { assistantName: this.settings.assistantName }; }
 
-  async updateSettings(input: { assistantName: string }): Promise<AppSettings> {
-    this.settings.assistantName = normalizeAssistantName(input.assistantName);
+  async updateSettings(input: Partial<Pick<AppSettings, "assistantName">>): Promise<AppSettings> {
+    if (input.assistantName !== undefined) this.settings.assistantName = normalizeAssistantName(input.assistantName);
     await this.persistSettings();
     return this.getSettings();
   }
@@ -139,6 +142,45 @@ export class SettingsService {
     delete config.providers[providerId];
     await this.writeModelsConfig(config);
     await this.refreshRuntime();
+  }
+
+  /** 拉取供应商的模型列表（用于「添加模型」时自动填入，不写任何配置）。 */
+  async fetchProviderModels(providerId: string): Promise<FetchedModel[]> {
+    assertProviderId(providerId);
+    const runtime = await this.modelRuntime();
+    const [provider, auth, config] = await Promise.all([
+      Promise.resolve(runtime.getProvider(providerId)),
+      runtime.getAuth(providerId),
+      this.readModelsConfig(),
+    ]);
+    if (provider === undefined) throw new AppError("PROVIDER_NOT_FOUND", "Provider not found", 404);
+    const baseUrl = auth?.auth.baseUrl ?? provider.baseUrl;
+    if (typeof baseUrl !== "string" || baseUrl === "") throw new AppError("PROVIDER_AUTH_MISSING", "Provider base URL is not configured", 400);
+    const configured = record(config.providers[providerId]) ? config.providers[providerId] : {};
+    const api = isApi(configured["api"]) ? configured["api"] : detectApiFromProvider(provider, configured);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const url = modelsEndpoint(baseUrl, api);
+      const headers: Record<string, string> = { ...(record(auth?.auth.headers) ? auth.auth.headers as Record<string, string> : {}) };
+      if (auth?.auth.apiKey !== undefined) {
+        if (api === "anthropic-messages") {
+          headers["x-api-key"] = auth.auth.apiKey;
+          headers["anthropic-version"] ??= "2023-06-01";
+        } else {
+          headers["authorization"] = `Bearer ${auth.auth.apiKey}`;
+        }
+      }
+      const response = await fetch(url, { headers, signal: controller.signal });
+      if (!response.ok) throw new AppError("PROVIDER_MODELS_FETCH_FAILED", `模型列表接口返回 ${String(response.status)}`, 400);
+      const body: unknown = await response.json();
+      return projectFetchedModels(body, api);
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError("PROVIDER_MODELS_FETCH_FAILED", `无法获取模型列表：${asMessage(error)}`, 400);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** 当前「启用模型」设置：patterns 与它们解析出的模型列表。 */
@@ -375,10 +417,55 @@ function normalizeAssistantName(value: string): string {
 function assertProviderId(providerId: string): void {
   if (!PROVIDER_ID.test(providerId)) throw new AppError("PROVIDER_ID_INVALID", "Provider ID must contain only letters, numbers, dots, hyphens, or underscores", 400);
 }
-function isApi(value: string): value is ManagedProvider["api"] {
+function isApi(value: unknown): value is ManagedProvider["api"] {
   return value === "openai-completions" || value === "openai-responses" || value === "anthropic-messages" || value === "google-generative-ai";
 }
 function validPositiveInt(value: number | undefined): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
+
+/** 按 API 类型拼模型列表端点（baseUrl 已含版本路径，如 .../v1）。 */
+function modelsEndpoint(baseUrl: string, api: ManagedProvider["api"]): string {
+  const base = baseUrl.replace(/\/$/u, "");
+  return api === "google-generative-ai" ? `${base}/models?pageSize=1000` : `${base}/models`;
+}
+
+/** 解析各 API 的模型列表响应为统一结构（id + 可选显示名）。 */
+function projectFetchedModels(body: unknown, api: ManagedProvider["api"]): FetchedModel[] {
+  const names: Record<string, string | undefined> = {};
+  let rows: unknown[] = [];
+  if (api === "google-generative-ai") {
+    if (!record(body) || !Array.isArray(body["models"])) return [];
+    rows = body["models"];
+    for (const row of rows) {
+      if (record(row) && typeof row["name"] === "string") {
+        const id = row["name"].replace(/^models\//u, "");
+        if (id !== "") names[id] = typeof row["displayName"] === "string" ? row["displayName"] : undefined;
+      }
+    }
+  } else if (api === "anthropic-messages") {
+    if (!record(body) || !Array.isArray(body["data"])) return [];
+    rows = body["data"];
+    for (const row of rows) {
+      if (record(row) && typeof row["id"] === "string" && row["id"] !== "") {
+        names[row["id"]] = typeof row["display_name"] === "string" ? row["display_name"] : undefined;
+      }
+    }
+  } else {
+    if (!record(body) || !Array.isArray(body["data"])) return [];
+    rows = body["data"];
+    for (const row of rows) {
+      if (record(row) && typeof row["id"] === "string" && row["id"] !== "") names[row["id"]] = undefined;
+    }
+  }
+  return Object.entries(names)
+    .map(([id, name]) => ({ id, ...(name === undefined || name === id ? {} : { name }) }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+/** 从 models.json 条目推断 API 类型（缺省按 OpenAI 兼容处理）。 */
+function detectApiFromProvider(_provider: object, configured: Record<string, unknown>): ManagedProvider["api"] {
+  if (isApi(configured["api"])) return configured["api"];
+  return "openai-completions";
+}
 
 /**
  * 把选中的模型集合转换为 Pi enabledModels patterns：

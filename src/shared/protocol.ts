@@ -69,6 +69,12 @@ export interface EnabledModelsStatus {
   resolved: EnabledModelRef[];
 }
 
+/** 从供应商模型列表接口拉取到的模型（不落盘，仅用于填入表单）。 */
+export interface FetchedModel {
+  id: string;
+  name?: string;
+}
+
 export interface AuthLoginOperation {
   id: string;
   providerId: string;
@@ -272,6 +278,8 @@ export interface SessionSummary {
   runState: RunState;
   /** Omitted only by older servers; clients should treat it as idle. */
   attentionState?: SessionAttentionState;
+  /** 全文搜索命中片段（仅搜索响应附带），用于展示命中上下文。 */
+  matchSnippet?: string;
 }
 
 export interface ImageAttachment {

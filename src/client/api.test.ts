@@ -6,6 +6,18 @@ afterEach(() => {
 });
 
 describe("API client", () => {
+  it("sends an assistant-name settings patch", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ settings: { assistantName: "Custom Jarvis" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.updateSettings({ assistantName: "Custom Jarvis" })).resolves.toEqual({ assistantName: "Custom Jarvis" });
+
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe("/api/settings");
+    expect(init?.method).toBe("PATCH");
+    expect(init?.body).toBe(JSON.stringify({ assistantName: "Custom Jarvis" }));
+  });
+
   it("does not send a JSON content type for a request without a body", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ removed: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

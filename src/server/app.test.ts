@@ -137,6 +137,23 @@ async function writeConversationSession(workspacePath: string): Promise<{ id: st
 }
 
 describe("Jarvis HTTP and WebSocket API", () => {
+  it("loads settings and persists an assistant name update", async () => {
+    await app?.close();
+    await writeFile(join(jarvisHome, "settings.json"), JSON.stringify({ version: 1, assistantName: "Legacy Jarvis", uiMode: "beautiful" }));
+    app = await buildApp();
+    const server = activeApp();
+
+    const initial = await server.inject({ method: "GET", url: "/api/settings" });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json()).toEqual({ settings: { assistantName: "Legacy Jarvis" } });
+
+    const updated = await server.inject({ method: "PATCH", url: "/api/settings", payload: { assistantName: "Renamed Jarvis" } });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toEqual({ settings: { assistantName: "Renamed Jarvis" } });
+    const persisted = JSON.parse(await readFile(join(jarvisHome, "settings.json"), "utf8")) as { assistantName: string };
+    expect(persisted.assistantName).toBe("Renamed Jarvis");
+  });
+
   it("lists the platform's directory root picker", async () => {
     const roots = await activeApp().inject({ method: "GET", url: "/api/directories?roots=true" });
     expect(roots.statusCode).toBe(200);
@@ -300,6 +317,35 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const unknown = await server.inject({ method: "PUT", url: "/api/settings/enabled-models", payload: { models: [{ provider: "test-a", id: "nope" }] } });
     expect(unknown.statusCode).toBe(400);
     expect(unknown.json()).toMatchObject({ error: { code: "MODEL_NOT_FOUND" } });
+  });
+
+  it("fetches the model list from a custom provider's compatibility endpoint", async () => {
+    const agentDir = join(jarvisHome, "agent");
+    await mkdir(agentDir, { recursive: true });
+    const { createServer } = await import("node:http");
+    const httpServer = createServer((request, response) => {
+      if (request.url === "/v1/models") {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ data: [{ id: "alpha-new" }, { id: "beta-new" }] }));
+      } else {
+        response.statusCode = 404;
+        response.end();
+      }
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const address = httpServer.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    await writeFile(join(agentDir, "models.json"), JSON.stringify({
+      providers: { "test-custom": { baseUrl, api: "openai-completions", apiKey: "test-key", models: [{ id: "alpha" }] } },
+    }));
+    try {
+      const server = activeApp();
+      const response = await server.inject({ method: "POST", url: "/api/settings/providers/test-custom/fetch-models", payload: {} });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ models: [{ id: "alpha-new" }, { id: "beta-new" }] });
+    } finally {
+      await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
+    }
   });
 
   it("starts a manual compaction once for a repeated direct request", async () => {
@@ -602,6 +648,30 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(listed.statusCode).toBe(200);
     expect(listed.json()).toEqual({ sessions: [] });
     socket.close();
+  });
+
+  it("searches the full session text, not only the title or first message", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "fulltext-search-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+
+    const miss = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions?query=no-such-needle` });
+    expect(miss.statusCode).toBe(200);
+    expect(miss.json()).toEqual({ sessions: [] });
+
+    // "Second answer" 只出现在后续 assistant 消息中，不在标题也不在首条用户消息里。
+    const hit = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions?query=${encodeURIComponent("Second answer")}` });
+    expect(hit.statusCode).toBe(200);
+    const sessions = (hit.json() as { sessions: ({ id: string; matchSnippet?: string })[] }).sessions;
+    expect(sessions.map((session) => session.id)).toContain(source.id);
+    const matched = sessions.find((session) => session.id === source.id);
+    expect(matched?.matchSnippet).toContain("Second answer");
+
+    // 无 query 的普通列表不携带命中片段。
+    const plain = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` });
+    for (const session of (plain.json() as { sessions: ({ matchSnippet?: string })[] }).sessions) expect(session.matchSnippet).toBeUndefined();
   });
 
   it("deletes a newly-created session before Pi persists its JSONL file", async () => {

@@ -196,6 +196,10 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     await settings.removeCustomProvider(params.providerId);
     return { removed: true };
   });
+  app.post("/api/settings/providers/:providerId/fetch-models", async (request) => {
+    const providerId = z.object({ providerId: z.string().min(1).max(120) }).parse(request.params).providerId;
+    return { models: await settings.fetchProviderModels(providerId) };
+  });
   app.post("/api/settings/auth/login", async (request) => {
     const input = authLoginInput.parse(request.body);
     return { operation: await settings.startLogin(input.providerId, input.type) };
