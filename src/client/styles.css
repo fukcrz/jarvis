@@ -326,7 +326,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-session-row { position: relative; z-index: 1; display: flex; align-items: center; gap: 4px; background: var(--canvas); touch-action: pan-y; transition: transform 0.18s ease; will-change: transform; }
 .mobile-session-row.swipe-open { transform: translateX(-88px); }
 .mobile-session-swipe { position: relative; overflow: hidden; border-bottom: 1px solid rgb(48 48 54 / .7); }
-.mobile-session-actions { position: absolute; inset: 0 0 0 auto; display: flex; width: 88px; }
+.mobile-session-actions { position: absolute; z-index: 0; inset: 0 0 0 auto; display: flex; width: 88px; }
 .mobile-session-actions button { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 0; padding: 0; font-size: 11px; font-weight: 600; }
 .mobile-session-action-rename { background: #303036; color: #d3d2dc; }
 .mobile-session-action-delete { background: #4a1f28; color: #ff9d9d; }
@@ -369,7 +369,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-session-projects .mobile-add-project { display: flex; align-items: center; justify-content: center; width: 32px; padding: 4px 0; color: var(--subtle); }
 .mobile-session-projects .mobile-add-project:active { border-color: var(--accent); color: var(--accent-strong); }
 .mobile-switcher-list { flex: 1; padding: 0 12px 24px; }
-.mobile-switcher-list .mobile-session-row.selected { background: transparent; box-shadow: none; }
+.mobile-switcher-list .mobile-session-row.selected { background: var(--canvas); box-shadow: none; }
 .mobile-switcher-list .mobile-session-row.selected .mobile-session-copy strong { color: var(--accent-strong); }
 .mobile-project-picker { display: grid; gap: 2px; }
 .mobile-project-picker button { display: grid; grid-template-columns: 18px minmax(0, 1fr) 18px; align-items: center; width: 100%; min-height: 48px; gap: 10px; border: 0; border-radius: 5px; background: transparent; padding: 9px 8px; color: var(--ink); text-align: left; }
