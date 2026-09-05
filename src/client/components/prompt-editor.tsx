@@ -180,6 +180,20 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
     }
   }, [applyInjectedText, refreshCompletion, isMobile, onAutoFocusConsumed]);
 
+  // App 的 drafts 是草稿的唯一上游：外部变更（取回排队消息、停止恢复等）
+  // 只更新 App 状态，而编辑器非受控（initialValue 仅挂载时读取），
+  // 这里把后续的外部变更同步进编辑器，光标置尾并聚焦。
+  // 与当前文档一致时跳过，避免覆盖用户正在输入的内容：
+  // 输入回环（change → drafts → prop）比较相等后即为无操作。
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === undefined) return;
+    const current = view.state.doc.toString();
+    if (current === initialValue) return;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: initialValue }, selection: { anchor: initialValue.length } });
+    view.focus();
+  }, [initialValue]);
+
   // Command resources arrive asynchronously. Re-run completion against the
   // current document even when the user has not typed another character.
   useEffect(() => {
