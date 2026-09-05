@@ -163,7 +163,13 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
                 <pre>{caddySnippet}</pre>
               </div>}
             </div> : null}
-            <label className="settings-checkbox tunnel-auto-start"><input type="checkbox" checked={tunnel.enabled} disabled={busy !== undefined} onChange={(event) => { void run("update", tunnel.id, () => api.tunnelUpdate(tunnel.id, { ...tunnel, name: tunnel.name, enabled: event.target.checked })); }} /><span>自动启动（服务启动时自动连接，默认关闭）</span></label>
+            <label className="settings-checkbox tunnel-auto-start"><input type="checkbox" checked={tunnel.enabled} disabled={busy !== undefined} onChange={(event) => { const enabled = event.target.checked; void run("update", tunnel.id, () => api.tunnelUpdate(tunnel.id, {
+          method: tunnel.method,
+          enabled,
+          ...(tunnel.name === undefined ? {} : { name: tunnel.name }),
+          ...(tunnel.sish === undefined ? {} : { sish: tunnel.sish }),
+          ...(tunnel.frp === undefined ? {} : { frp: tunnel.frp }),
+        })); }} /><span>自动启动（服务启动时自动连接，默认关闭）</span></label>
             <p className="settings-muted">当前穿透固定指向本机服务端口（生产默认 9528）。</p>
             {tunnel.logs.length === 0 ? null : <div className="tunnel-logs" ref={logRef}>
               {tunnel.logs.map((entry, index) => <div key={`${entry.t}-${index}`}>{entry.line}</div>)}

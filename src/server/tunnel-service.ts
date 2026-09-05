@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import type { TunnelEntryConfig, TunnelFrpConfig, TunnelLogEntry, TunnelMethod, TunnelSnapshot, TunnelState } from "../shared/protocol.js";
 import { TUNNEL_METHODS } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
@@ -428,8 +428,7 @@ export class TunnelService {
       await rm(dir, { recursive: true, force: true });
       await mkdir(dir, { recursive: true });
       await writeFile(join(dir, assetName), data);
-      const result = spawnSync("tar", ["-xf", assetName, "-C", dir], { cwd: dir, stdio: "ignore", windowsHide: true });
-      if (result.error !== undefined || result.status !== 0) throw new Error("解压失败（系统 tar 不可用）");
+      await extractArchiveFile(join(dir, assetName), dir);
       const found = await findFile(dir, basename(destPath));
       if (found === undefined) throw new Error(`解压后未找到 ${basename(destPath)}`);
       await writeFile(destPath, await readFile(found));
@@ -475,7 +474,8 @@ export function buildFrpcToml(host: string, hostPort: number, localPort: number,
     ...(token === "" ? [] : [`auth.token = "${token.replaceAll("\"", "\\\"")}"`]),
     "",
     "[[proxies]]",
-    "name = \"jarvis\"",
+    // 代理名带远程端口后缀：同一 frps 上多实例（多设备/多端口）互不撞名
+    `name = "jarvis-${remotePort}"`,
     "type = \"tcp\"",
     "localIP = \"127.0.0.1\"",
     `localPort = ${localPort}`,
@@ -560,6 +560,45 @@ function killProcess(pid: number, force = false): void {
   } catch {
     // 进程可能已退出
   }
+}
+
+/** 解压下载的归档：zip 走 PowerShell Expand-Archive（Windows）→ 系统 bsdtar → 通用 tar；tar.gz/tgz 走系统 tar。 */
+export async function extractArchiveFile(archivePath: string, destDir: string): Promise<void> {
+  const name = basename(archivePath);
+  if (name.endsWith(".zip")) {
+    if (await extractZipArchive(archivePath, destDir)) return;
+    throw new Error("解压失败：PowerShell 与系统 tar 均不可用或解压失败");
+  }
+  // 全部用相对路径（cwd=归档所在目录）：避免 msys 系 GNU tar 把 "C:\\..." 解析为 rsh 主机
+  const result = spawnSync("tar", ["-xf", name, "-C", relative(dirname(archivePath), destDir) || "."], { cwd: dirname(archivePath), stdio: "ignore", windowsHide: true });
+  if (result.error !== undefined || result.status !== 0) throw new Error("解压失败（系统 tar 不可用）");
+}
+
+/** zip 解压：Windows 上优先 PowerShell Expand-Archive（不受 PATH 中 GNU tar 影响），失败后回退系统 tar。 */
+async function extractZipArchive(archivePath: string, destDir: string): Promise<boolean> {
+  if (platform() === "win32") {
+    const result = spawnSync("powershell.exe", [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+      `Expand-Archive -LiteralPath ${quotePs(archivePath)} -DestinationPath ${quotePs(destDir)} -Force -ErrorAction Stop`,
+    ], { stdio: "ignore", windowsHide: true });
+    if (result.error === undefined && result.status === 0) return true;
+  }
+  const name = basename(archivePath);
+  const systemRoot = process.env["SystemRoot"];
+  const candidates = [
+    ...(platform() === "win32" && systemRoot !== undefined ? [join(systemRoot, "System32", "tar.exe")] : []),
+    "tar",
+  ];
+  for (const bin of candidates) {
+    const result = spawnSync(bin, ["-xf", name, "-C", relative(dirname(archivePath), destDir) || "."], { cwd: dirname(archivePath), stdio: "ignore", windowsHide: true });
+    if (result.error === undefined && result.status === 0) return true;
+  }
+  return false;
+}
+
+/** PowerShell 单引号字符串转义。 */
+function quotePs(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
 }
 
 function commandAvailable(command: string): boolean {
