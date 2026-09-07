@@ -327,11 +327,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mobile-session-list { padding-top: 0; }
 .mobile-project-row { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid rgb(48 48 54 / .7); }
 .mobile-session-row { position: relative; z-index: 1; display: flex; align-items: center; gap: 4px; background: var(--canvas); touch-action: pan-y; transition: transform 0.18s ease; will-change: transform; }
-.mobile-session-row.swipe-open { transform: translateX(-88px); }
+.mobile-session-row.swipe-open { transform: translateX(-132px); }
 .mobile-session-swipe { position: relative; overflow: hidden; border-bottom: 1px solid rgb(48 48 54 / .7); }
-.mobile-session-actions { position: absolute; z-index: 0; inset: 0 0 0 auto; display: flex; width: 88px; }
+.mobile-session-actions { position: absolute; z-index: 0; inset: 0 0 0 auto; display: flex; width: 132px; }
 .mobile-session-actions button { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 0; padding: 0; font-size: 11px; font-weight: 600; }
 .mobile-session-action-rename { background: #303036; color: #d3d2dc; }
+.mobile-session-action-fork { background: #22374a; color: #9fc4e8; }
 .mobile-session-action-delete { background: #4a1f28; color: #ff9d9d; }
 .mobile-session-action-delete:disabled { opacity: 0.45; }
 .mobile-session-group-header { display: flex; align-items: center; gap: 2px; position: sticky; top: 0; z-index: 2; padding: 8px 4px 4px; background: var(--canvas); color: var(--subtle); }

@@ -725,6 +725,44 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(assistantHistory.items.map((item) => item.id)).toEqual([source.user1, source.assistant1]);
   });
 
+  it("forks from the latest user message when messageId is omitted", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "fork-omitted-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+    const baseUrl = `/api/workspaces/${workspace.id}/sessions/${source.id}`;
+
+    const forked = await server.inject({ method: "POST", url: `${baseUrl}/fork`, payload: {} });
+    expect(forked.statusCode).toBe(200);
+    const session = forked.json<{ session: { id: string } }>().session;
+    expect(session.id).not.toBe(source.id);
+    const history = (await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${session.id}/timeline` })).json<{ items: Array<{ id: string }> }>();
+    expect(history.items.map((item) => item.id)).toEqual([source.user1, source.assistant1, source.user2]);
+  });
+
+  it("session-level fork while running stops at the last settled turn", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "fork-running-omitted-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+    const baseUrl = `/api/workspaces/${workspace.id}/sessions/${source.id}`;
+    // 模拟真实运行：prompt 挂起，但用户消息已追加到分支（正在输出中的这一轮）。
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(function (this: AgentSession, text: string) {
+      this.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
+      return new Promise(() => undefined) as never;
+    });
+    await server.inject({ method: "POST", url: `${baseUrl}/prompt`, payload: { text: "Keep running", clientRequestId: randomUUID() } });
+
+    const forked = await server.inject({ method: "POST", url: `${baseUrl}/fork`, payload: {} });
+    expect(forked.statusCode).toBe(200);
+    const session = forked.json<{ session: { id: string } }>().session;
+    const history = (await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${session.id}/timeline` })).json<{ items: Array<{ id: string }> }>();
+    // 正在输出的 user 消息不进分支：只到上一条（assistant2）。
+    expect(history.items.map((item) => item.id)).toEqual([source.user1, source.assistant1, source.user2, source.assistant2]);
+  });
+
   it("edits only a user message, truncates the visible tail, and publishes a rewrite", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "edit-workspace");
@@ -849,7 +887,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     vi.restoreAllMocks();
   });
 
-  it("rejects Fork and edit while the session is running", async () => {
+  it("allows Fork while the session is running but still rejects edit", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "message-action-busy-workspace");
     await mkdir(workspacePath);
@@ -860,10 +898,14 @@ describe("Jarvis HTTP and WebSocket API", () => {
     await server.inject({ method: "POST", url: `${baseUrl}/prompt`, payload: { text: "Keep running", clientRequestId: randomUUID() } });
 
     const fork = await server.inject({ method: "POST", url: `${baseUrl}/fork`, payload: { messageId: source.user1 } });
+    expect(fork.statusCode).toBe(200);
+    const forked = fork.json<{ session: { id: string } }>().session;
+    expect(forked.id).not.toBe(source.id);
+    const history = (await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${forked.id}/timeline` })).json<{ items: Array<{ id: string }> }>();
+    expect(history.items.map((item) => item.id)).toEqual([source.user1]);
+
     const edit = await server.inject({ method: "POST", url: `${baseUrl}/edit-and-resend`, payload: { messageId: source.user1, text: "Edited", clientRequestId: randomUUID() } });
-    expect(fork.statusCode).toBe(409);
     expect(edit.statusCode).toBe(409);
-    expect(fork.json()).toMatchObject({ error: { code: "SESSION_BUSY" } });
     expect(edit.json()).toMatchObject({ error: { code: "SESSION_BUSY" } });
   });
 

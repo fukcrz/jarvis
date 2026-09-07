@@ -121,6 +121,8 @@ const MAX_BASH_OUTPUT_CHARS = 100_000; // 流式气泡的最大输出长度，�
 const PI_ABORT_TIMEOUT_MS = 8_000;
 const SETTLEMENT_RETRY_INTERVAL_MS = 100;
 const SETTLEMENT_MAX_WAIT_MS = 10_000;
+const FORK_SNAPSHOT_RETRIES = 4;
+const FORK_SNAPSHOT_RETRY_DELAY_MS = 50;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/heic", "image/heif"]);
 const JARVIS_COMPACT_COMMAND: ComposerCommand = {
   name: "compact",
@@ -254,18 +256,26 @@ export class SessionService {
     return summary;
   }
 
-  async fork(ref: SessionRef, messageId: string): Promise<SessionSummary> {
+  async fork(ref: SessionRef, messageId?: string): Promise<SessionSummary> {
     const active = await this.getActive(ref);
-    this.assertSessionIdle(active, "Fork");
-    const entryId = findVisibleMessageEntryId(active.session.sessionManager.getBranch(), messageId);
-    if (entryId === undefined) throw new AppError("MESSAGE_NOT_FOUND", "Message not found in this session", 404);
+    const branch = active.session.sessionManager.getBranch();
+    const running = active.state.runState !== "idle" || active.session.isStreaming;
+    const entryId = messageId === undefined ? sessionForkEntryId(branch, running) : findVisibleMessageEntryId(branch, messageId);
+    if (entryId === undefined) {
+      throw new AppError("MESSAGE_NOT_FOUND", messageId === undefined ? "This session has no message to fork from" : "Message not found in this session", 404);
+    }
     const sourcePath = active.session.sessionFile;
     if (sourcePath === undefined) throw new AppError("SESSION_NOT_READY", "Wait for this message to be saved before forking", 409);
 
     const sessionDir = sessionDirectoryFor(active.cwd, getAgentDir());
+    // Forking a running session is safe: the branch derives from a snapshot of
+    // the append-only history and never mutates the live session. The only real
+    // hazard is the fork point entry not being on disk yet (prompt persistence
+    // windows / delayed first flush), so retry briefly until the snapshot
+    // provably contains the entry instead of rejecting the action wholesale.
+    const manager = await this.openSnapshotWithEntry(sessionDir, sourcePath, entryId);
     // createBranchedSession mutates its manager, so never call it on the
     // currently active source manager.
-    const manager = sessionDir === undefined ? SessionManager.open(sourcePath) : SessionManager.open(sourcePath, sessionDir);
     manager.createBranchedSession(entryId);
     const workspace = this.workspaces.get(ref.workspaceId);
     const forked = await this.createActive({ workspaceId: ref.workspaceId, sessionId: "" }, workspace, manager);
@@ -367,6 +377,23 @@ export class SessionService {
     if (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming) {
       throw new AppError("SESSION_BUSY", `${action} requires an idle session`, 409);
     }
+  }
+
+  /**
+   * Open a persisted session snapshot that provably contains `entryId`,
+   * retrying briefly while the running writer catches up with disk.
+   */
+  private async openSnapshotWithEntry(sessionDir: string | undefined, sourcePath: string, entryId: string): Promise<SessionManager> {
+    for (let attempt = 0; attempt < FORK_SNAPSHOT_RETRIES; attempt++) {
+      try {
+        const manager = sessionDir === undefined ? SessionManager.open(sourcePath) : SessionManager.open(sourcePath, sessionDir);
+        if (manager.getEntry(entryId) !== undefined) return manager;
+      } catch {
+        // Snapshot may be mid-rewrite (e.g. first assistant flush); retry.
+      }
+      await sleep(FORK_SNAPSHOT_RETRY_DELAY_MS);
+    }
+    throw new AppError("SESSION_NOT_READY", "Wait for this message to be saved before forking", 409);
   }
 
   /** Recreate Pi's in-memory agent context after moving a session leaf. */
@@ -1739,6 +1766,10 @@ function activeKey(ref: SessionRef): string {
   return `${ref.workspaceId}:${ref.sessionId}`;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Match Pi's environment-over-settings session directory precedence. */
 function sessionDirectoryFor(cwd: string, agentDir: string): string | undefined {
   const environmentValue = process.env["PI_CODING_AGENT_SESSION_DIR"];
@@ -1840,6 +1871,27 @@ function findVisibleMessageEntryId(entries: readonly unknown[], messageId: strin
     if (!isRecord(entry) || entry["type"] !== "message") continue;
     const projected = projectHistory([entry]).find((item): item is MessageTimelineItem => item.kind === "message");
     if (projected?.id === messageId) return stringValue(entry["id"]) || undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Fork point for session-level forking: the latest user message normally.
+ * While the session is running, that user message starts the in-flight turn
+ * (whose output is still being produced), so back off to its parent — the
+ * branch never contains in-progress content, only the last settled turn.
+ */
+function sessionForkEntryId(branch: readonly unknown[], running: boolean): string | undefined {
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const entry = branch[i];
+    if (!isRecord(entry) || entry["type"] !== "message") continue;
+    const message = entry["message"];
+    if (!isRecord(message) || message["role"] !== "user") continue;
+    const id = stringValue(entry["id"]);
+    if (id === "") return undefined;
+    if (!running) return id;
+    const parentId = entry["parentId"];
+    return typeof parentId === "string" ? parentId : undefined;
   }
   return undefined;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, ChevronUp, Folder, MoreVertical, Pencil, Plus, Search, Settings2, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, Folder, GitBranch, MoreVertical, Pencil, Plus, Search, Settings2, Trash2 } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionLabel, sessionListWindow } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -13,6 +13,7 @@ interface MobileSessionSwitcherProps {
   onSelectSession: (workspaceId: string, sessionId: string) => void;
   onOpenSessionMenu: (workspaceId: string, session: SessionSummary) => void;
   onRenameSession: (workspaceId: string, session: SessionSummary) => void;
+  onForkSession: (workspaceId: string, session: SessionSummary) => void;
   onDeleteSession: (workspaceId: string, session: SessionSummary) => void;
   onOpenSearch: () => void;
   onAddProject: () => void;
@@ -26,8 +27,8 @@ interface MobileSessionGroup {
   sessions: SessionSummary[];
 }
 
-/** 左滑露出的操作区宽度（两个 44px 按钮）。 */
-const SWIPE_ACTION_WIDTH = 88;
+/** 左滑露出的操作区宽度（三个 44px 按钮）。 */
+const SWIPE_ACTION_WIDTH = 132;
 
 /** 分组排序权重：组内最紧急的会话决定该组的优先级。 */
 function groupAttentionRank(group: MobileSessionGroup): number {
@@ -89,7 +90,7 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
   };
   const renderSessionRows = (workspaceId: string, sessions: SessionSummary[]) => sessions.map((session) => {
     const rowKey = `${workspaceId}:${session.id}`;
-    return <MobileSessionRow key={rowKey} rowKey={rowKey} session={session} selected={session.id === props.selectedSessionId} open={openSwipeKey === rowKey} onOpenChange={setSwipeOpen} onSelect={() => props.onSelectSession(workspaceId, session.id)} onMenu={() => props.onOpenSessionMenu(workspaceId, session)} onRename={() => props.onRenameSession(workspaceId, session)} onDelete={() => props.onDeleteSession(workspaceId, session)} />;
+    return <MobileSessionRow key={rowKey} rowKey={rowKey} session={session} selected={session.id === props.selectedSessionId} open={openSwipeKey === rowKey} onOpenChange={setSwipeOpen} onSelect={() => props.onSelectSession(workspaceId, session.id)} onMenu={() => props.onOpenSessionMenu(workspaceId, session)} onRename={() => props.onRenameSession(workspaceId, session)} onFork={() => props.onForkSession(workspaceId, session)} onDelete={() => props.onDeleteSession(workspaceId, session)} />;
   });
   return <section className="mobile-page mobile-all-sessions-page" aria-label="全部会话">
     <header className="mobile-switcher-header"><strong>{props.assistantName}</strong><div className="mobile-switcher-actions"><Button variant="ghost" size="icon" aria-label="搜索会话" title="搜索会话" onClick={props.onOpenSearch}><Search size={18} /></Button><Button variant="ghost" size="icon" aria-label="查看文件" title="文件" onClick={props.onOpenFiles}><Folder size={18} /></Button><Button variant="ghost" size="icon" aria-label="打开设置" title="设置" onClick={props.onOpenSettings}><Settings2 size={18} /></Button><Button variant="ghost" size="icon" aria-label="新建会话" onClick={requestCreateSession} disabled={props.workspaces.length === 0}><Plus size={20} /></Button></div></header>
@@ -144,6 +145,7 @@ interface MobileSessionRowProps {
   onSelect: () => void;
   onMenu: () => void;
   onRename: () => void;
+  onFork: () => void;
   onDelete: () => void;
 }
 
@@ -205,6 +207,7 @@ function MobileSessionRow(props: MobileSessionRowProps) {
   return <div className="mobile-session-swipe" data-swipe-id={rowKey}>
     <div className="mobile-session-actions">
       <button type="button" className="mobile-session-action-rename" onClick={() => { onOpenChange(rowKey, false); props.onRename(); }}><Pencil size={15} />重命名</button>
+      <button type="button" className="mobile-session-action-fork" onClick={() => { onOpenChange(rowKey, false); props.onFork(); }}><GitBranch size={15} />分支</button>
       <button type="button" className="mobile-session-action-delete" disabled={session.runState !== "idle"} onClick={() => { onOpenChange(rowKey, false); props.onDelete(); }}><Trash2 size={15} />删除</button>
     </div>
     <div ref={contentRef} className={`mobile-session-row${open ? " swipe-open" : ""}${selected ? " selected" : ""}`} onPointerDown={(event) => {

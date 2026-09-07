@@ -1,5 +1,5 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Pencil, Trash2 } from "lucide-react";
+import { GitBranch, Pencil, Trash2 } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { sessionLabel } from "../lib/utils";
 
@@ -11,6 +11,7 @@ interface MobileActionSheetProps {
   onRenameProject: (workspace: Workspace) => void;
   onRemoveProject: (workspace: Workspace) => void;
   onRenameSession: (workspaceId: string, session: SessionSummary) => void;
+  onForkSession: (workspaceId: string, session: SessionSummary) => void;
   onDeleteSession: (workspaceId: string, session: SessionSummary) => void;
 }
 
@@ -26,6 +27,7 @@ export function MobileActionSheet(props: MobileActionSheetProps) {
           <button type="button" className="action-sheet-item danger" onClick={() => props.onRemoveProject(target.workspace)}><Trash2 size={18} />移除项目</button>
         </> : target?.kind === "session" ? <>
           <button type="button" className="action-sheet-item" onClick={() => props.onRenameSession(target.workspaceId, target.session)}><Pencil size={18} />重命名会话</button>
+          <button type="button" className="action-sheet-item" onClick={() => props.onForkSession(target.workspaceId, target.session)}><GitBranch size={18} />创建分支</button>
           <button type="button" className="action-sheet-item danger" disabled={target.session.runState !== "idle"} onClick={() => props.onDeleteSession(target.workspaceId, target.session)}><Trash2 size={18} />删除会话</button>
         </> : null}
         <DialogPrimitive.Close asChild><button type="button" className="action-sheet-cancel">取消</button></DialogPrimitive.Close>

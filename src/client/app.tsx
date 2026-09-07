@@ -110,7 +110,6 @@ export function App() {
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuTarget | undefined>();
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenuTarget | undefined>();
   const [mobileActionTarget, setMobileActionTarget] = useState<MobileActionTarget | undefined>();
-  const [deleteTarget, setDeleteTarget] = useState<Pick<SessionContextMenuTarget, "workspaceId" | "session"> | undefined>();
   const [deletePending, setDeletePending] = useState(false);
   const [composerCommands, setComposerCommands] = useState<{ sessionKey: string; items: ComposerCommand[] } | undefined>();
   // 移动端：非底部输入框聚焦时，输入栏折叠为紧凑按钮（见 PromptEditor）。
@@ -433,7 +432,6 @@ export function App() {
               });
               setDrafts((current) => withoutDraft(current, workspaceEvent.sessionId));
               setSessionMenu((current) => current?.workspaceId === workspace.id && current.session.id === workspaceEvent.sessionId ? undefined : current);
-              setDeleteTarget((current) => current?.workspaceId === workspace.id && current.session.id === workspaceEvent.sessionId ? undefined : current);
               return;
             }
             setSessionsByWorkspace((current) => ({ ...current, [workspace.id]: mergeSession(current[workspace.id] ?? [], workspaceEvent.session) }));
@@ -624,9 +622,8 @@ export function App() {
     }
   };
 
-  const deleteSession = async () => {
-    const target = deleteTarget;
-    if (target === undefined || deletePending) return;
+  const deleteSession = async (target: { workspaceId: string; session: SessionSummary }) => {
+    if (deletePending) return;
     setDeletePending(true);
     try {
       await api.removeSession({ workspaceId: target.workspaceId, sessionId: target.session.id });
@@ -637,12 +634,24 @@ export function App() {
         // Mobile: back to the session list; desktop: the guard picks the next session.
         navigate(isMobile ? "/projects" : `/sessions/${target.workspaceId}`, { replace: true });
       }
-      setDeleteTarget(undefined);
       setPageError(undefined);
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "无法删除会话");
     } finally {
       setDeletePending(false);
+    }
+  };
+
+  /** 会话级分支：从该会话最新一条 user 消息处复制上下文。 */
+  const forkSessionFromTarget = async (target: { workspaceId: string; sessionId: string }) => {
+    try {
+      const session = await api.forkSession(target);
+      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session) }));
+      setPageError(undefined);
+      setNewSessionFocusId(session.id);
+      chooseSession(target.workspaceId, session.id);
+    } catch (error) {
+      if (!(await recoverSessionConflict(error))) setPageError(error instanceof Error ? error.message : "无法创建分支");
     }
   };
 
@@ -761,13 +770,13 @@ export function App() {
   };
 
   const requestForkMessage = (message: Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>) => {
-    if (selectedRef === undefined || stream.transcript.status.runState !== "idle") return;
+    if (selectedRef === undefined) return;
     setForkTarget(message);
   };
 
   const confirmForkMessage = async () => {
     const message = forkTarget;
-    if (message === undefined || selectedRef === undefined || forkPending || stream.transcript.status.runState !== "idle") return;
+    if (message === undefined || selectedRef === undefined || forkPending) return;
     setForkPending(true);
     try {
       const session = await api.forkSession(selectedRef, message.id);
@@ -942,7 +951,7 @@ export function App() {
   const renderChatContent = () => <>
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
-      <Timeline key={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={stream.transcript.status.runState === "idle" ? requestForkMessage : undefined} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} />
+      <Timeline key={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} />
       <ExtensionPanels panels={stream.extensionPanels} />
       <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
@@ -967,7 +976,7 @@ export function App() {
         {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : isFilesPage ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "files" ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onRenameSession={(targetWorkspaceId, session) => { setRenameTarget({ workspaceId: targetWorkspaceId, session }); setRenameValue(session.name ?? sessionLabel(session.name, session.preview)); }} onDeleteSession={(targetWorkspaceId, session) => setDeleteTarget({ workspaceId: targetWorkspaceId, session })} onOpenSearch={() => setSearchOpen(true)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)} /> : <section className="mobile-chat-page">
+        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "files" ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onRenameSession={(targetWorkspaceId, session) => { setRenameTarget({ workspaceId: targetWorkspaceId, session }); setRenameValue(session.name ?? sessionLabel(session.name, session.preview)); }} onForkSession={(targetWorkspaceId, session) => { void forkSessionFromTarget({ workspaceId: targetWorkspaceId, sessionId: session.id }); }} onDeleteSession={(targetWorkspaceId, session) => { void deleteSession({ workspaceId: targetWorkspaceId, session }); }} onOpenSearch={() => setSearchOpen(true)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
             <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate("/projects", { replace: true })}><ArrowLeft size={19} /></Button>
             <div className="mobile-chat-session">{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</div>
@@ -977,13 +986,16 @@ export function App() {
         </section>}
       </div> : null}
 
-      {sessionMenu === undefined ? null : <SessionContextMenu target={sessionMenu} onClose={closeSessionMenu} onRename={(target) => {
+      {sessionMenu === undefined ? null : <SessionContextMenu target={sessionMenu} onClose={closeSessionMenu} onFork={(target) => {
+        setSessionMenu(undefined);
+        void forkSessionFromTarget({ workspaceId: target.workspaceId, sessionId: target.session.id });
+      }} onRename={(target) => {
         setSessionMenu(undefined);
         setRenameTarget({ workspaceId: target.workspaceId, session: target.session });
         setRenameValue(target.session.name ?? sessionLabel(target.session.name, target.session.preview));
       }} onDelete={(target) => {
         setSessionMenu(undefined);
-        setDeleteTarget({ workspaceId: target.workspaceId, session: target.session });
+        void deleteSession({ workspaceId: target.workspaceId, session: target.session });
       }} />}
       {projectMenu === undefined ? null : <ProjectContextMenu target={projectMenu} onClose={closeProjectMenu} onCreateSession={(workspace) => {
         setProjectMenu(undefined);
@@ -1008,9 +1020,12 @@ export function App() {
         setMobileActionTarget(undefined);
         setRenameTarget({ workspaceId: targetWorkspaceId, session });
         setRenameValue(session.name ?? sessionLabel(session.name, session.preview));
+      }} onForkSession={(targetWorkspaceId, session) => {
+        setMobileActionTarget(undefined);
+        void forkSessionFromTarget({ workspaceId: targetWorkspaceId, sessionId: session.id });
       }} onDeleteSession={(targetWorkspaceId, session) => {
         setMobileActionTarget(undefined);
-        setDeleteTarget({ workspaceId: targetWorkspaceId, session });
+        void deleteSession({ workspaceId: targetWorkspaceId, session });
       }} />
 
       <WorkspaceDialog open={workspaceDialogOpen} onOpenChange={setWorkspaceDialogOpen} onAdd={addWorkspace} />
@@ -1038,16 +1053,6 @@ export function App() {
           <div className="dialog-actions">
             <Button variant="secondary" onClick={() => setForkTarget(undefined)} disabled={forkPending}>取消</Button>
             <Button className="fork-confirm-button" onClick={() => { void confirmForkMessage(); }} disabled={forkPending}>{forkPending ? "正在创建…" : "创建分支"}</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={deleteTarget !== undefined} onOpenChange={(open) => { if (!open && !deletePending) setDeleteTarget(undefined); }}>
-        <DialogContent title="删除会话" description="此操作将永久删除 Pi 会话历史。">
-          <p className="delete-session-message"><strong>{deleteTarget === undefined ? "" : sessionLabel(deleteTarget.session.name, deleteTarget.session.preview)}</strong>将被永久删除。</p>
-          <div className="dialog-actions">
-            <Button variant="secondary" onClick={() => setDeleteTarget(undefined)} disabled={deletePending}>取消</Button>
-            <Button variant="danger" onClick={() => { void deleteSession(); }} disabled={deletePending}>{deletePending ? "正在删除…" : "删除会话"}</Button>
           </div>
         </DialogContent>
       </Dialog>

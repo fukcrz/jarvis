@@ -186,7 +186,7 @@ export const api = {
   },
   commands: async (ref: SessionRef): Promise<ComposerCommand[]> => (await request<{ commands: ComposerCommand[] }>(`${sessionPath(ref)}/commands`)).commands,
   createSession: async (workspaceId: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`/api/workspaces/${workspaceId}/sessions`, { method: "POST", body: "{}" })).session,
-  forkSession: async (ref: SessionRef, messageId: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`${sessionPath(ref)}/fork`, { method: "POST", body: JSON.stringify({ messageId }) })).session,
+  forkSession: async (ref: SessionRef, messageId?: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`${sessionPath(ref)}/fork`, { method: "POST", body: JSON.stringify(messageId === undefined ? {} : { messageId }) })).session,
   removeSession: async (ref: SessionRef): Promise<void> => { await request(sessionPath(ref), { method: "DELETE" }); },
   renameSession: async (ref: SessionRef, name: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(sessionPath(ref), { method: "PATCH", body: JSON.stringify({ name }) })).session,
   markSessionViewed: async (ref: SessionRef): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`${sessionPath(ref)}/viewed`, { method: "POST", body: "{}" })).session,
