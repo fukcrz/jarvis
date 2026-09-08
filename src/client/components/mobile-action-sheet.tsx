@@ -3,7 +3,7 @@ import { GitBranch, Pencil, Trash2 } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { sessionLabel } from "../lib/utils";
 
-export type MobileActionTarget = { kind: "project"; workspace: Workspace } | { kind: "session"; workspaceId: string; session: SessionSummary };
+export type MobileActionTarget = { kind: "project"; workspace: Workspace } | { kind: "session"; workspaceId: string; workspaceLabel: string; session: SessionSummary };
 
 interface MobileActionSheetProps {
   target?: MobileActionTarget;
@@ -21,7 +21,7 @@ export function MobileActionSheet(props: MobileActionSheetProps) {
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="action-sheet-overlay" />
       <DialogPrimitive.Content className="action-sheet" aria-label={target?.kind === "project" ? "项目操作" : "会话操作"}>
-        <DialogPrimitive.Title className="action-sheet-title">{target?.kind === "project" ? target.workspace.label : target === undefined ? "" : sessionLabel(target.session.name, target.session.preview)}</DialogPrimitive.Title>
+        <DialogPrimitive.Title className="action-sheet-title">{target?.kind === "project" ? <span className="action-sheet-title-main">{target.workspace.label}</span> : target === undefined ? "" : <><span className="action-sheet-title-main">{sessionLabel(target.session.name, target.session.preview)}</span><span className="action-sheet-title-subtitle">{target.workspaceLabel}</span></>}</DialogPrimitive.Title>
         {target?.kind === "project" ? <>
           <button type="button" className="action-sheet-item" onClick={() => props.onRenameProject(target.workspace)}><Pencil size={18} />重命名项目</button>
           <button type="button" className="action-sheet-item danger" onClick={() => props.onRemoveProject(target.workspace)}><Trash2 size={18} />移除项目</button>

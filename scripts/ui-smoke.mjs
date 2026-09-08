@@ -354,6 +354,14 @@ async function verifyMobileNavigation(page, name, session) {
   await page.locator(`.mobile-session-row[data-session-id="${session.sessionId}"]`).click();
   await page.locator(".mobile-chat-header").waitFor({ state: "visible", timeout: 5_000 });
   await waitForSessionSocket(page, session.sessionId);
+
+  const sessionName = (await page.locator(".mobile-chat-session").textContent())?.trim() ?? "";
+  await page.getByRole("button", { name: "当前会话操作" }).click();
+  const actionSheet = page.locator(".action-sheet");
+  await actionSheet.locator(".action-sheet-title-main").getByText(sessionName, { exact: true }).waitFor({ state: "visible", timeout: 5_000 });
+  await actionSheet.locator(".action-sheet-title-subtitle").getByText(session.label, { exact: true }).waitFor({ state: "visible", timeout: 5_000 });
+  await actionSheet.getByRole("button", { name: "取消" }).click();
+
   await assertNoHorizontalOverflow(page, name);
 }
 

@@ -923,7 +923,8 @@ export function App() {
   };
 
   const openMobileSessionMenu = (workspaceId: string, session: SessionSummary) => {
-    setMobileActionTarget({ kind: "session", workspaceId, session });
+    const workspace = workspaces.find((item) => item.id === workspaceId);
+    if (workspace !== undefined) setMobileActionTarget({ kind: "session", workspaceId, workspaceLabel: workspace.label, session });
   };
 
   const sidebar = <Sidebar
@@ -939,7 +940,7 @@ export function App() {
     onOpenProjectMenu={(workspace, position) => setProjectMenu({ workspace, ...position })}
     onOpenSessionMenu={(targetWorkspaceId, session, position) => setSessionMenu({ workspaceId: targetWorkspaceId, session, ...position })}
     onLongPressProject={(workspace) => setMobileActionTarget({ kind: "project", workspace })}
-    onLongPressSession={(targetWorkspaceId, session) => setMobileActionTarget({ kind: "session", workspaceId: targetWorkspaceId, session })}
+    onLongPressSession={openMobileSessionMenu}
     onOpenSearch={() => setSearchOpen(true)}
     assistantName={assistantName}
     onOpenSettings={() => navigate("/settings")}
