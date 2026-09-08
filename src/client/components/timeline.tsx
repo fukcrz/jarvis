@@ -32,6 +32,8 @@ interface TimelineProps {
 
 /** Distance from the bottom (px) within which the list is considered "following" the latest content. */
 const NEAR_BOTTOM_PX = 72;
+/** Load the preceding page just before the user reaches the start of the timeline. */
+const HISTORY_LOAD_TOP_PX = 72;
 
 /**
  * Break auto-follow as soon as the user starts a scroll-away gesture.
@@ -43,6 +45,10 @@ export function shouldStopFollowingOnGesture(element: Pick<HTMLElement, "clientH
   // deltaY < 0 means scrolling up. Do not leave follow mode when there is no
   // actual vertical range, or when the viewport cannot move farther upward.
   return deltaY < 0 && element.scrollHeight > element.clientHeight && element.scrollTop > 0;
+}
+
+export function shouldLoadEarlierAtTop(element: Pick<HTMLElement, "scrollTop">, hasMore: boolean, loadingMore: boolean): boolean {
+  return hasMore && !loadingMore && element.scrollTop <= HISTORY_LOAD_TOP_PX;
 }
 
 function stopFollowingOnGesture(element: HTMLDivElement, setFollowing: (value: boolean) => void, deltaY: number) {
@@ -71,6 +77,7 @@ function userMessagePreview(item: MessageTimelineItem): string {
 export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const touchYRef = useRef<number | undefined>(undefined);
+  const loadingEarlierRef = useRef(false);
   const highlightTimerRef = useRef<number | undefined>(undefined);
   const activeNavigationTimerRef = useRef<number | undefined>(undefined);
   const activeNavigationIdRef = useRef<string | undefined>(undefined);
@@ -81,6 +88,8 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   const [markerPositions, setMarkerPositions] = useState<Record<string, number>>({});
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const [loadingAllHistory, setLoadingAllHistory] = useState(false);
+  const [fillingViewport, setFillingViewport] = useState(false);
+  const [fillViewportRevision, setFillViewportRevision] = useState(0);
   const userMessages = useMemo(() => userMessageAnchors(items), [items]);
   const userMessageKey = userMessages.map((item) => item.id).join(":");
   const feedback = getRunFeedback(status, items, streamingMessageId);
@@ -152,13 +161,41 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   }, [items, streamingMessageId, feedback?.label, following, statusIndicatorKey]);
 
   const loadEarlier = async () => {
+    if (!hasMore || loadingEarlierRef.current) return;
+    loadingEarlierRef.current = true;
     const element = scrollRef.current;
     const offset = element === null ? 0 : element.scrollHeight - element.scrollTop;
-    await onLoadMore();
-    requestAnimationFrame(() => {
-      if (element !== null) element.scrollTop = element.scrollHeight - offset;
-    });
+    try {
+      await onLoadMore();
+    } finally {
+      requestAnimationFrame(() => {
+        if (scrollRef.current === element && element !== null) element.scrollTop = element.scrollHeight - offset;
+        loadingEarlierRef.current = false;
+        setFillViewportRevision((value) => value + 1);
+      });
+    }
   };
+
+  const loadWhenNearTop = (element: HTMLDivElement) => {
+    if (!shouldLoadEarlierAtTop(element, hasMore, loadingMore)) return;
+    setFillingViewport(true);
+    void loadEarlier().catch(() => setFillingViewport(false));
+  };
+
+  useEffect(() => {
+    if (!fillingViewport) return;
+    if (!hasMore) {
+      setFillingViewport(false);
+      return;
+    }
+    if (loadingMore || loadingEarlierRef.current) return;
+    const element = scrollRef.current;
+    if (element === null || element.scrollHeight > element.clientHeight) {
+      setFillingViewport(false);
+      return;
+    }
+    void loadEarlier().catch(() => setFillingViewport(false));
+  }, [fillViewportRevision, fillingViewport, hasMore, loadingMore, loadEarlier]);
 
   useEffect(() => {
     if (!loadingAllHistory) return;
@@ -206,18 +243,23 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
         const element = event.currentTarget;
         setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX);
         updateActiveUserMessage();
+        loadWhenNearTop(element);
       }} onWheel={(event) => {
         stopFollowingOnGesture(event.currentTarget, setFollowing, event.deltaY);
+        if (event.deltaY < 0) loadWhenNearTop(event.currentTarget);
       }} onTouchStart={(event) => {
         touchYRef.current = event.touches[0]?.clientY;
       }} onTouchMove={(event) => {
         const previousY = touchYRef.current;
         const currentY = event.touches[0]?.clientY;
         touchYRef.current = currentY;
-        if (previousY !== undefined && currentY !== undefined) stopFollowingOnGesture(event.currentTarget, setFollowing, currentY - previousY);
+        if (previousY !== undefined && currentY !== undefined) {
+          const deltaY = currentY - previousY;
+          stopFollowingOnGesture(event.currentTarget, setFollowing, deltaY);
+          if (deltaY < 0) loadWhenNearTop(event.currentTarget);
+        }
       }}>
         <div className="timeline-inner">
-          {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "正在加载历史记录…" : "加载更早记录"}</Button> : null}
           <div className="timeline-feed">
             {renderTimelineItems(items, streamingMessageId, status, onExtensionUiRespond, onEditUserMessage, onForkMessage, editingMessageId, setEditingMessageId, workspaceCwd, highlightedMessageId)}
             {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}

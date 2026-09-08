@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { groupTimelineItems, shouldStopFollowingOnGesture, userMessageAnchors } from "./timeline";
+import { groupTimelineItems, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, userMessageAnchors } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -70,6 +70,18 @@ describe("shouldStopFollowingOnGesture", () => {
 
   it("stops following when an upward gesture can move away from the latest messages", () => {
     expect(shouldStopFollowingOnGesture({ scrollTop: 600, scrollHeight: 1_200, clientHeight: 600 }, -100)).toBe(true);
+  });
+});
+
+describe("shouldLoadEarlierAtTop", () => {
+  it("loads more history only when the user reaches the top threshold", () => {
+    expect(shouldLoadEarlierAtTop({ scrollTop: 72 }, true, false)).toBe(true);
+    expect(shouldLoadEarlierAtTop({ scrollTop: 73 }, true, false)).toBe(false);
+  });
+
+  it("does not request history without another page or while a request is active", () => {
+    expect(shouldLoadEarlierAtTop({ scrollTop: 0 }, false, false)).toBe(false);
+    expect(shouldLoadEarlierAtTop({ scrollTop: 0 }, true, true)).toBe(false);
   });
 });
 
