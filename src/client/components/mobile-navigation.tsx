@@ -29,6 +29,7 @@ interface MobileSessionGroup {
 
 /** 左滑露出的操作区宽度（三个 44px 按钮）。 */
 const SWIPE_ACTION_WIDTH = 132;
+const MOBILE_EXPANDED_GROUPS_STORAGE_KEY = "jarvis.mobile.projects.expanded";
 
 /** 分组排序权重：组内最紧急的会话决定该组的优先级。 */
 function groupAttentionRank(group: MobileSessionGroup): number {
@@ -44,8 +45,8 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
   const [workspaceFilter, setWorkspaceFilter] = useState(() => window.localStorage.getItem("jarvis.mobile.session-project") ?? "all");
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [openSwipeKey, setOpenSwipeKey] = useState<string | null>(null);
-  /** 全部视图：项目组展开状态（默认全部收起，同 PC 侧栏；不持久化，每次进入重置）。 */
-  const [expandedGroupIds, setExpandedGroupIds] = useState<Record<string, boolean>>({});
+  /** 全部视图：项目组展开状态（默认全部收起，同 PC 侧栏）。 */
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Record<string, boolean>>(readMobileExpandedGroups);
   /** 展开的组内会话窗口步数（默认窗口 + 每次「展开更多」+1，同 PC 侧栏）。 */
   const [sessionExpandSteps, setSessionExpandSteps] = useState<Record<string, number>>({});
   useEffect(() => {
@@ -55,6 +56,9 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
     }
     window.localStorage.setItem("jarvis.mobile.session-project", workspaceFilter);
   }, [props.workspaces, workspaceFilter]);
+  useEffect(() => {
+    saveMobileExpandedGroups(expandedGroupIds);
+  }, [expandedGroupIds]);
   const requestCreateSession = () => {
     if (workspaceFilter === "all") {
       setProjectPickerOpen(true);
@@ -134,6 +138,25 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
       </DialogContent>
     </Dialog>
   </section>;
+}
+
+export function readMobileExpandedGroups(): Record<string, boolean> {
+  try {
+    const raw = window.localStorage.getItem(MOBILE_EXPANDED_GROUPS_STORAGE_KEY);
+    const parsed: unknown = raw === null ? undefined : JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === "boolean")) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+export function saveMobileExpandedGroups(expandedGroupIds: Record<string, boolean>): void {
+  try {
+    window.localStorage.setItem(MOBILE_EXPANDED_GROUPS_STORAGE_KEY, JSON.stringify(expandedGroupIds));
+  } catch {
+    // The session list remains usable when browser storage is unavailable.
+  }
 }
 
 interface MobileSessionRowProps {
