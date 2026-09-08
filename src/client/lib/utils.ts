@@ -43,6 +43,9 @@ export const SESSIONS_COLLAPSED_LIMIT = 5;
 /** 点击一次“展开更多”追加显示的会话数量。 */
 export const SESSIONS_PAGE_SIZE = 5;
 
+/** 聚焦模式中，普通会话保持可见的最近活动时间窗口。 */
+export const SESSION_FOCUS_WINDOW_MS = 10 * 60_000;
+
 /** 会话是否处于执行中（运行中或正在停止）。 */
 export function isSessionRunning(session: SessionSummary): boolean {
   return session.runState === "running" || session.runState === "stopping";
@@ -70,6 +73,14 @@ export function sessionAttentionRank(session: SessionSummary): number {
   if (state === "failed") return 2;
   if (state === "completed_unread") return 3;
   return 4;
+}
+
+/** 聚焦模式保留需要处理的会话，以及最近十分钟内有活动的普通会话。 */
+export function isSessionInFocusWindow(session: SessionSummary, now = Date.now()): boolean {
+  if (sessionAttentionRank(session) < 4) return true;
+  const updatedAt = Date.parse(session.updatedAt);
+  const age = now - updatedAt;
+  return Number.isFinite(updatedAt) && age >= 0 && age <= SESSION_FOCUS_WINDOW_MS;
 }
 
 export interface SessionListWindow {

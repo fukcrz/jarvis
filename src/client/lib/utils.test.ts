@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSummary } from "../../shared/protocol";
-import { matchesSessionQuery, normalizeSessionSearch, parseBashCommand, sessionLabel, sessionListWindow, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
+import { isSessionInFocusWindow, matchesSessionQuery, normalizeSessionSearch, parseBashCommand, sessionLabel, sessionListWindow, SESSION_FOCUS_WINDOW_MS, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
 
 const session: SessionSummary = {
   id: "session-1",
@@ -105,6 +105,29 @@ describe("session list window", () => {
     const small = sessionListWindow([idle("s-0")], 0);
     expect(small.sessions).toHaveLength(1);
     expect(small.hasMore).toBe(false);
+  });
+});
+
+describe("session focus window", () => {
+  const now = Date.parse("2026-02-03T12:00:00.000Z");
+
+  it("keeps every attention state visible regardless of age", () => {
+    const old = "2020-01-01T00:00:00.000Z";
+    expect(isSessionInFocusWindow({ ...session, runState: "running", updatedAt: old }, now)).toBe(true);
+    expect(isSessionInFocusWindow({ ...session, attentionState: "completed_unread", updatedAt: old }, now)).toBe(true);
+    expect(isSessionInFocusWindow({ ...session, attentionState: "failed", updatedAt: old }, now)).toBe(true);
+    expect(isSessionInFocusWindow({ ...session, attentionState: "waiting_interaction", updatedAt: old }, now)).toBe(true);
+  });
+
+  it("keeps ordinary sessions updated within the ten-minute boundary", () => {
+    expect(isSessionInFocusWindow({ ...session, updatedAt: new Date(now - SESSION_FOCUS_WINDOW_MS).toISOString() }, now)).toBe(true);
+    expect(isSessionInFocusWindow({ ...session, updatedAt: new Date(now - SESSION_FOCUS_WINDOW_MS - 1).toISOString() }, now)).toBe(false);
+  });
+
+  it("filters ordinary sessions with invalid, stale, or future activity times", () => {
+    expect(isSessionInFocusWindow({ ...session, updatedAt: "not-a-date" }, now)).toBe(false);
+    expect(isSessionInFocusWindow({ ...session, updatedAt: "2026-02-03T11:00:00.000Z" }, now)).toBe(false);
+    expect(isSessionInFocusWindow({ ...session, updatedAt: "2026-02-03T12:01:00.000Z" }, now)).toBe(false);
   });
 });
 

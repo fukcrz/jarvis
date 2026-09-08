@@ -22,7 +22,7 @@ import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
-import { randomUUID, parseBashCommand, sessionLabel } from "./lib/utils";
+import { isSessionInFocusWindow, randomUUID, parseBashCommand, sessionLabel } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
 
 /** Extract the entity ids carried by the current hash route. */
@@ -37,6 +37,7 @@ function pathParams(pathname: string): { workspaceId?: string; sessionId?: strin
 const COMMAND_RETRY_BASE_DELAY_MS = 750;
 const COMMAND_RETRY_MAX_DELAY_MS = 10_000;
 const EMPTY_COMPOSER_COMMANDS: ComposerCommand[] = [];
+const SESSION_FOCUS_STORAGE_KEY = "jarvis.sessions.focus";
 type ExtensionToast = {
   id: string;
   workspaceId: string;
@@ -57,6 +58,8 @@ export function App() {
   const [sessionsByWorkspace, setSessionsByWorkspace] = useState<Record<string, SessionSummary[]>>({});
   const [sessionId, setSessionId] = useState<string | undefined>(() => initialPath.sessionId ?? window.localStorage.getItem("jarvis.session") ?? undefined);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Record<string, boolean>>(() => readExpandedWorkspaces());
+  const [focusMode, setFocusMode] = useState(readSessionFocusMode);
+  const [focusNow, setFocusNow] = useState(Date.now());
   const [loading, setLoading] = useState(true);
   const [assistantName, setAssistantName] = useState("Jarvis");
   const [pageError, setPageError] = useState<string | undefined>();
@@ -127,6 +130,10 @@ export function App() {
     : { workspaceId: selectedWorkspace.id, sessionId: selectedSession.id }, [selectedWorkspace?.id, selectedSession?.id]);
   const selectedSessionId = selectedRef?.sessionId;
   const selectedRefKey = selectedRef === undefined ? undefined : `${selectedRef.workspaceId}:${selectedRef.sessionId}`;
+  const visibleSessionsByWorkspace = useMemo<Record<string, SessionSummary[]>>(() => {
+    if (!focusMode) return sessionsByWorkspace;
+    return Object.fromEntries(Object.entries(sessionsByWorkspace).map(([id, sessions]) => [id, sessions.filter((session) => isSessionInFocusWindow(session, focusNow))]));
+  }, [focusMode, focusNow, sessionsByWorkspace]);
   const selectedComposerCommands = composerCommands !== undefined && composerCommands.sessionKey === selectedRefKey ? composerCommands.items : EMPTY_COMPOSER_COMMANDS;
   const selectedDraft = selectedSessionId === undefined ? "" : drafts[selectedSessionId] ?? "";
   const updateDraft = useCallback((id: string, value: string) => {
@@ -146,6 +153,19 @@ export function App() {
   }, [selectedSessionId]);
   const closeSessionMenu = useCallback(() => { setSessionMenu(undefined); }, []);
   const closeProjectMenu = useCallback(() => { setProjectMenu(undefined); }, []);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SESSION_FOCUS_STORAGE_KEY, String(focusMode));
+    } catch {
+      // The current view still works when browser storage is unavailable.
+    }
+  }, [focusMode]);
+  useEffect(() => {
+    if (!focusMode) return;
+    setFocusNow(Date.now());
+    const timer = window.setInterval(() => setFocusNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [focusMode]);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
   const stream = useSessionStream(isSettingsPage || isFilesPage ? undefined : selectedRef, assistantName, selectedSession?.name ?? undefined);
 
@@ -929,7 +949,7 @@ export function App() {
 
   const sidebar = <Sidebar
     workspaces={workspaces}
-    sessionsByWorkspace={sessionsByWorkspace}
+    sessionsByWorkspace={visibleSessionsByWorkspace}
     workspaceId={workspaceId}
     selectedSessionId={sessionId}
     expandedWorkspaceIds={expandedWorkspaceIds}
@@ -942,6 +962,8 @@ export function App() {
     onLongPressProject={(workspace) => setMobileActionTarget({ kind: "project", workspace })}
     onLongPressSession={openMobileSessionMenu}
     onOpenSearch={() => setSearchOpen(true)}
+    focusMode={focusMode}
+    onToggleFocusMode={() => setFocusMode((current) => !current)}
     assistantName={assistantName}
     onOpenSettings={() => navigate("/settings")}
     onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)}
@@ -977,7 +999,7 @@ export function App() {
         {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : isFilesPage ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "files" ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={sessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onRenameSession={(targetWorkspaceId, session) => { setRenameTarget({ workspaceId: targetWorkspaceId, session }); setRenameValue(session.name ?? sessionLabel(session.name, session.preview)); }} onForkSession={(targetWorkspaceId, session) => { void forkSessionFromTarget({ workspaceId: targetWorkspaceId, sessionId: session.id }); }} onDeleteSession={(targetWorkspaceId, session) => { void deleteSession({ workspaceId: targetWorkspaceId, session }); }} onOpenSearch={() => setSearchOpen(true)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)} /> : <section className="mobile-chat-page">
+        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "files" ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={visibleSessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onRenameSession={(targetWorkspaceId, session) => { setRenameTarget({ workspaceId: targetWorkspaceId, session }); setRenameValue(session.name ?? sessionLabel(session.name, session.preview)); }} onForkSession={(targetWorkspaceId, session) => { void forkSessionFromTarget({ workspaceId: targetWorkspaceId, sessionId: session.id }); }} onDeleteSession={(targetWorkspaceId, session) => { void deleteSession({ workspaceId: targetWorkspaceId, session }); }} onOpenSearch={() => setSearchOpen(true)} focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
             <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate("/projects", { replace: true })}><ArrowLeft size={19} /></Button>
             <div className="mobile-chat-session">{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</div>
@@ -1087,6 +1109,14 @@ function mergeWorkspace(current: Workspace[], next: Workspace): Workspace[] {
   const copy = [...current];
   copy[existing] = next;
   return copy.sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
+}
+
+function readSessionFocusMode(): boolean {
+  try {
+    return window.localStorage.getItem(SESSION_FOCUS_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
 }
 
 function readExpandedWorkspaces(): Record<string, boolean> {
