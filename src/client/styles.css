@@ -108,11 +108,32 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .empty-workspace { min-height: 0; align-content: center; }
 .empty-workspace h2 { margin: 0; color: var(--ink); font-size: 17px; }
 .timeline-shell { position: relative; min-width: 0; min-height: 0; }
+.timeline-desktop-navigator { position: absolute; z-index: 2; top: 34px; right: max(8px, calc((100% - 870px) / 2 - 18px)); bottom: 42px; display: none; width: 22px; pointer-events: none; }
+.timeline-navigator-track { position: absolute; top: 5px; bottom: 5px; left: 10px; width: 1px; background: linear-gradient(to bottom, transparent, var(--line-strong) 8%, var(--line-strong) 92%, transparent); }
+.timeline-navigator-marker { position: absolute; left: 0; display: grid; place-items: center; width: 22px; height: 20px; transform: translateY(-50%); border: 0; background: transparent; padding: 0; pointer-events: auto; }
+.timeline-navigator-marker-dot { display: block; width: 6px; height: 6px; border: 1px solid var(--subtle); border-radius: 50%; background: var(--canvas); transition: width .14s ease, height .14s ease, border-color .14s ease, background .14s ease; }
+.timeline-navigator-marker:hover .timeline-navigator-marker-dot, .timeline-navigator-marker:focus-visible .timeline-navigator-marker-dot, .timeline-navigator-marker.active .timeline-navigator-marker-dot { width: 9px; height: 9px; border-color: var(--accent-strong); background: var(--accent); box-shadow: 0 0 0 3px rgb(182 168 255 / .14); }
+.timeline-navigator-marker:focus-visible { outline: none; }
+.timeline-navigator-preview { position: absolute; right: 25px; top: 50%; display: grid; width: min(290px, 32vw); gap: 4px; transform: translateY(-50%) translateX(4px); visibility: hidden; opacity: 0; border: 1px solid #4b485a; border-radius: 6px; background: rgb(36 35 43 / .98); box-shadow: 0 12px 30px rgb(0 0 0 / .42); padding: 8px 10px; color: var(--ink); text-align: left; pointer-events: none; transition: opacity .12s ease, transform .12s ease; }
+.timeline-navigator-marker:hover .timeline-navigator-preview, .timeline-navigator-marker:focus-visible .timeline-navigator-preview { visibility: visible; opacity: 1; transform: translateY(-50%) translateX(0); }
+.timeline-navigator-preview small { color: var(--accent-strong); font-size: 10px; font-weight: 650; }
+.timeline-navigator-preview strong { display: -webkit-box; overflow: hidden; color: var(--ink); font-size: 12px; font-weight: 500; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.timeline-mobile-navigator-trigger { position: absolute; right: 14px; bottom: 62px; z-index: 3; display: none; border: 1px solid var(--line-strong); border-radius: 50%; background: rgb(36 36 40 / .94); box-shadow: 0 6px 18px rgb(0 0 0 / .35); }
+.timeline-mobile-navigator-trigger:hover { color: var(--ink); }
+.turn-navigator-dialog { grid-template-rows: auto auto minmax(0, 1fr); width: min(440px, calc(100vw - 28px)); max-height: min(680px, calc(100vh - 28px)); gap: 10px; }
+.turn-navigator-status { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 0 2px 9px; color: var(--subtle); font-size: 10px; }
+.turn-navigator-list { display: grid; align-content: start; gap: 3px; min-height: 0; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+.turn-navigator-item { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: start; gap: 9px; width: 100%; border: 1px solid transparent; border-radius: 5px; background: transparent; padding: 9px 8px; color: var(--muted); text-align: left; }
+.turn-navigator-item > span { color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding-top: 2px; }
+.turn-navigator-item strong { display: -webkit-box; overflow: hidden; color: inherit; font-size: 12px; font-weight: 500; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.turn-navigator-item:hover, .turn-navigator-item:focus-visible { border-color: var(--line-strong); background: var(--surface-hover); color: var(--ink); outline: none; }
+.turn-navigator-item.active { border-color: rgb(182 168 255 / .38); background: var(--accent-soft); color: var(--accent-strong); }
+@media (min-width: 1100px) and (hover: hover) and (pointer: fine) { .timeline-desktop-navigator { display: block; } }
 .timeline { min-width: 0; height: 100%; overflow-y: auto; overscroll-behavior: contain; }
 .timeline-inner { box-sizing: border-box; width: min(870px, 100%); min-width: 0; max-width: 100%; min-height: 100%; margin: 0 auto; padding: 34px clamp(22px, 5vw, 70px) 42px; }
 .history-button { display: flex; margin: 0 auto 20px; }
 .timeline-feed { display: grid; align-content: start; gap: 14px; }
-.message-row { position: relative; display: flex; min-width: 0; }.message-actions { position: absolute; top: calc(100% + 2px); display: flex; align-items: center; justify-content: flex-start; min-height: 18px; gap: 1px; opacity: 0; pointer-events: none; transition: opacity .12s ease; }.message-row:hover .message-actions, .message-row:focus-within .message-actions { opacity: 1; pointer-events: auto; }@media (hover: none) { .message-actions { opacity: 1; pointer-events: auto; } }.message-action-button { display: grid; place-items: center; width: 21px; height: 18px; border: 0; border-radius: 3px; background: transparent; padding: 0; color: #686772; cursor: pointer; }.message-action-button:hover, .message-action-button:focus-visible { background: rgb(255 255 255 / .035); color: #9b9aa5; outline: none; }
+.message-row { position: relative; display: flex; min-width: 0; scroll-margin-top: 112px; transition: background .18s ease; }.message-row.navigator-highlight { border-radius: 7px; background: rgb(182 168 255 / .055); box-shadow: 0 0 0 1px rgb(182 168 255 / .16); }.message-actions { position: absolute; top: calc(100% + 2px); display: flex; align-items: center; justify-content: flex-start; min-height: 18px; gap: 1px; opacity: 0; pointer-events: none; transition: opacity .12s ease; }.message-row:hover .message-actions, .message-row:focus-within .message-actions { opacity: 1; pointer-events: auto; }@media (hover: none) { .message-actions { opacity: 1; pointer-events: auto; } }.message-action-button { display: grid; place-items: center; width: 21px; height: 18px; border: 0; border-radius: 3px; background: transparent; padding: 0; color: #686772; cursor: pointer; }.message-action-button:hover, .message-action-button:focus-visible { background: rgb(255 255 255 / .035); color: #9b9aa5; outline: none; }
 .message-body.user .message-actions { right: 0; justify-content: flex-end; }
 @media (max-width: 760px) { .message-action-button { width: 30px; height: 28px; }.message-inline-editor { width: min(100%, 560px); }.message-inline-editor textarea { min-height: 112px; font-size: 14px; }.message-inline-editor-actions button { min-height: 32px; padding-inline: 10px; } }
 .message-row.assistant { justify-content: flex-start; }
@@ -411,7 +432,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   .mobile-page { display: flex; flex-direction: column; height: 100vh; height: var(--vvh, 100dvh); min-height: 0; background: var(--canvas); }
   .mobile-chat-page { display: flex; flex-direction: column; height: 100vh; height: var(--vvh, 100dvh); min-height: 0; }
   .mobile-chat-content { display: grid; flex: 1; min-height: 0; height: auto; overflow: hidden; }
-  .mobile-chat-session { font-size: 12px; }
+  .timeline-mobile-navigator-trigger { display: grid; }
+  .turn-navigator-dialog { top: auto; right: 0; bottom: 0; left: 0; width: 100vw; max-width: none; max-height: min(78dvh, 680px); transform: none; border-radius: 14px 14px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); }
+  .turn-navigator-item { min-height: 48px; padding-block: 10px; }
   .mobile-page-header, .mobile-switcher-header { flex: 0 0 auto; min-height: calc(56px + env(safe-area-inset-top)); padding-top: calc(8px + env(safe-area-inset-top)); }
   .mobile-chat-header { min-height: calc(54px + env(safe-area-inset-top)); padding-top: calc(8px + env(safe-area-inset-top)); }
   .mobile-page-list { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding-bottom: calc(24px + env(safe-area-inset-bottom)); }

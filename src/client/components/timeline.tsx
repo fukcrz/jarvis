@@ -1,11 +1,12 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { Archive, ArrowDown, Bell, Brain, Check, CircleAlert, Clock3, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
+import { Archive, ArrowDown, Bell, Brain, Check, CircleAlert, Clock3, GitBranch, ListTree, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
 import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
 import { MarkdownMessage } from "./markdown-message";
 import { ToolActivity } from "./tool-activity";
+import { Dialog, DialogContent } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
@@ -48,14 +49,101 @@ function stopFollowingOnGesture(element: HTMLDivElement, setFollowing: (value: b
   if (shouldStopFollowingOnGesture(element, deltaY)) setFollowing(false);
 }
 
+export interface UserMessageAnchor {
+  id: string;
+  preview: string;
+}
+
+/** Build the prompt-only outline shared by desktop rail and mobile turn list. */
+export function userMessageAnchors(items: TimelineItem[]): UserMessageAnchor[] {
+  return items.flatMap((item) => {
+    if (item.kind !== "message" || item.role !== "user") return [];
+    return [{ id: item.id, preview: userMessagePreview(item) }];
+  });
+}
+
+function userMessagePreview(item: MessageTimelineItem): string {
+  const text = item.text.replace(/\s+/g, " ").trim();
+  if (text !== "") return text.length > 110 ? `${text.slice(0, 107)}…` : text;
+  return (item.images?.length ?? 0) > 0 ? "图片消息" : "空消息";
+}
+
 export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const touchYRef = useRef<number | undefined>(undefined);
+  const highlightTimerRef = useRef<number | undefined>(undefined);
+  const activeNavigationTimerRef = useRef<number | undefined>(undefined);
+  const activeNavigationIdRef = useRef<string | undefined>(undefined);
   const [following, setFollowing] = useState(true);
   const [editingMessageId, setEditingMessageId] = useState<string>();
+  const [activeUserMessageId, setActiveUserMessageId] = useState<string>();
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string>();
+  const [markerPositions, setMarkerPositions] = useState<Record<string, number>>({});
+  const [navigatorOpen, setNavigatorOpen] = useState(false);
+  const [loadingAllHistory, setLoadingAllHistory] = useState(false);
+  const userMessages = useMemo(() => userMessageAnchors(items), [items]);
+  const userMessageKey = userMessages.map((item) => item.id).join(":");
   const feedback = getRunFeedback(status, items, streamingMessageId);
   const hasMatchingTimelineFailure = status.lastError !== undefined && items.some((item) => item.kind === "error" && item.state === "failed" && item.code === status.lastError!.code && item.message === status.lastError!.message);
   const statusIndicatorKey = `${status.runState}:${status.compacting?.reason ?? ""}:${status.compacting?.retrying?.retryAt ?? ""}:${status.retrying?.retryAt ?? ""}:${status.lastError?.occurredAt ?? ""}:${error ?? ""}:${notice ?? ""}`;
+
+  const updateActiveUserMessage = () => {
+    const element = scrollRef.current;
+    if (element === null) return;
+    const navigationId = activeNavigationIdRef.current;
+    if (navigationId !== undefined) {
+      setActiveUserMessageId((current) => current === navigationId ? current : navigationId);
+      return;
+    }
+    const rootRect = element.getBoundingClientRect();
+    const threshold = rootRect.top + element.clientHeight * 0.36;
+    const messages = Array.from(element.querySelectorAll<HTMLElement>("[data-user-message-id]"));
+    let nextId = messages[0]?.dataset.userMessageId;
+    for (const message of messages) {
+      if (message.getBoundingClientRect().top > threshold) break;
+      nextId = message.dataset.userMessageId;
+    }
+    setActiveUserMessageId((current) => current === nextId ? current : nextId);
+  };
+
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (element === null) return;
+    const updateNavigatorLayout = () => {
+      const rootRect = element.getBoundingClientRect();
+      const scrollRange = Math.max(1, element.scrollHeight - element.clientHeight);
+      const nextPositions: Record<string, number> = {};
+      for (const message of Array.from(element.querySelectorAll<HTMLElement>("[data-user-message-id]"))) {
+        const id = message.dataset.userMessageId;
+        if (id === undefined) continue;
+        const targetTop = message.getBoundingClientRect().top - rootRect.top + element.scrollTop - element.clientHeight * 0.28;
+        nextPositions[id] = Math.min(1, Math.max(0, targetTop / scrollRange));
+      }
+      setMarkerPositions((current) => {
+        const same = Object.keys(current).length === Object.keys(nextPositions).length && Object.entries(nextPositions).every(([id, position]) => Math.abs((current[id] ?? -1) - position) < 0.002);
+        return same ? current : nextPositions;
+      });
+      updateActiveUserMessage();
+    };
+    const frame = requestAnimationFrame(updateNavigatorLayout);
+    const observer = new ResizeObserver(() => requestAnimationFrame(updateNavigatorLayout));
+    observer.observe(element);
+    const feed = element.querySelector(".timeline-feed");
+    if (feed !== null) observer.observe(feed);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [userMessageKey]);
+
+  useEffect(() => {
+    setActiveUserMessageId((current) => userMessages.some((item) => item.id === current) ? current : userMessages[0]?.id);
+  }, [userMessageKey, userMessages]);
+
+  useEffect(() => () => {
+    if (highlightTimerRef.current !== undefined) window.clearTimeout(highlightTimerRef.current);
+    if (activeNavigationTimerRef.current !== undefined) window.clearTimeout(activeNavigationTimerRef.current);
+  }, []);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
@@ -72,11 +160,52 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
     });
   };
 
+  useEffect(() => {
+    if (!loadingAllHistory) return;
+    if (!hasMore) {
+      setLoadingAllHistory(false);
+      return;
+    }
+    if (loadingMore) return;
+    void loadEarlier().catch(() => setLoadingAllHistory(false));
+  }, [hasMore, loadingAllHistory, loadingMore, loadEarlier]);
+
+  const openNavigator = () => {
+    setNavigatorOpen(true);
+    if (hasMore) setLoadingAllHistory(true);
+  };
+
+  const jumpToUserMessage = (id: string) => {
+    const element = scrollRef.current;
+    const target = element === null ? undefined : Array.from(element.querySelectorAll<HTMLElement>("[data-user-message-id]")).find((item) => item.dataset.userMessageId === id);
+    if (element === null || target === undefined) return;
+    const targetTop = target.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop - Math.min(112, element.clientHeight * 0.22);
+    activeNavigationIdRef.current = id;
+    if (activeNavigationTimerRef.current !== undefined) window.clearTimeout(activeNavigationTimerRef.current);
+    activeNavigationTimerRef.current = window.setTimeout(() => {
+      activeNavigationIdRef.current = undefined;
+      updateActiveUserMessage();
+    }, 500);
+    setFollowing(false);
+    setActiveUserMessageId(id);
+    setHighlightedMessageId(id);
+    requestAnimationFrame(() => {
+      if (scrollRef.current === element) {
+        element.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
+        setActiveUserMessageId(id);
+      }
+    });
+    if (highlightTimerRef.current !== undefined) window.clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = window.setTimeout(() => setHighlightedMessageId(undefined), 1_700);
+    setNavigatorOpen(false);
+  };
+
   return (
     <section className="timeline-shell">
       <div className="timeline" ref={scrollRef} onScroll={(event) => {
         const element = event.currentTarget;
         setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX);
+        updateActiveUserMessage();
       }} onWheel={(event) => {
         stopFollowingOnGesture(event.currentTarget, setFollowing, event.deltaY);
       }} onTouchStart={(event) => {
@@ -90,7 +219,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
         <div className="timeline-inner">
           {hasMore ? <Button variant="secondary" size="sm" className="history-button" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "正在加载历史记录…" : "加载更早记录"}</Button> : null}
           <div className="timeline-feed">
-            {renderTimelineItems(items, streamingMessageId, status, onExtensionUiRespond, onEditUserMessage, onForkMessage, editingMessageId, setEditingMessageId, workspaceCwd)}
+            {renderTimelineItems(items, streamingMessageId, status, onExtensionUiRespond, onEditUserMessage, onForkMessage, editingMessageId, setEditingMessageId, workspaceCwd, highlightedMessageId)}
             {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
             {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
             {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
@@ -100,9 +229,29 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
           </div>
         </div>
       </div>
+      <TurnNavigator anchors={userMessages} activeId={activeUserMessageId} markerPositions={markerPositions} hasMore={hasMore} loadingAll={loadingAllHistory || loadingMore} open={navigatorOpen} onOpenChange={(open) => { setNavigatorOpen(open); if (!open) setLoadingAllHistory(false); }} onOpen={openNavigator} onJump={jumpToUserMessage} />
       {!following ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
     </section>
   );
+}
+
+function TurnNavigator({ anchors, activeId, markerPositions, hasMore, loadingAll, open, onOpenChange, onOpen, onJump }: { anchors: UserMessageAnchor[]; activeId?: string; markerPositions: Record<string, number>; hasMore: boolean; loadingAll: boolean; open: boolean; onOpenChange: (open: boolean) => void; onOpen: () => void; onJump: (id: string) => void }) {
+  if (anchors.length === 0) return null;
+  return <>
+    <nav className="timeline-desktop-navigator" aria-label="用户消息导航">
+      <span className="timeline-navigator-track" aria-hidden="true" />
+      {anchors.map((anchor, index) => <button key={anchor.id} type="button" className={`timeline-navigator-marker${anchor.id === activeId ? " active" : ""}`} style={{ top: `${String((markerPositions[anchor.id] ?? index / Math.max(1, anchors.length - 1)) * 100)}%` }} aria-label={`跳转到第 ${String(index + 1)} 条用户消息：${anchor.preview}`} aria-current={anchor.id === activeId ? "step" : undefined} onClick={() => onJump(anchor.id)}><span className="timeline-navigator-marker-dot" /><span className="timeline-navigator-preview"><small>第 {String(index + 1)} 条用户消息</small><strong>{anchor.preview}</strong></span></button>)}
+    </nav>
+    <Button variant="ghost" size="icon" className="timeline-mobile-navigator-trigger" aria-label="浏览用户消息" title="浏览用户消息" onClick={onOpen}><ListTree size={17} /></Button>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent title="用户消息" description="点击任一消息可跳转到对应轮次。" className="turn-navigator-dialog">
+        <div className="turn-navigator-status"><span>{anchors.length} 条已加载</span>{hasMore || loadingAll ? <span>{loadingAll ? "正在加载完整历史…" : "可加载更早历史"}</span> : <span>完整历史</span>}</div>
+        <div className="turn-navigator-list">
+          {anchors.map((anchor, index) => <button key={anchor.id} type="button" className={`turn-navigator-item${anchor.id === activeId ? " active" : ""}`} aria-current={anchor.id === activeId ? "step" : undefined} onClick={() => onJump(anchor.id)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{anchor.preview}</strong></button>)}
+        </div>
+      </DialogContent>
+    </Dialog>
+  </>;
 }
 
 function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
@@ -230,7 +379,7 @@ function errorSummary(message: string): string {
   return `${firstLine.slice(0, 177)}…`;
 }
 
-const MessageItem = memo(function MessageItem({ item, streaming, editing, onStartEdit, onCancelEdit, onEdit, onFork, baseDir }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; editing: boolean; onStartEdit: () => void; onCancelEdit: () => void; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string }) {
+const MessageItem = memo(function MessageItem({ item, streaming, editing, highlighted, onStartEdit, onCancelEdit, onEdit, onFork, baseDir }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; editing: boolean; highlighted: boolean; onStartEdit: () => void; onCancelEdit: () => void; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string }) {
   const images = item.images ?? [];
   const [previewIndex, setPreviewIndex] = useState<number>();
   const [draft, setDraft] = useState(item.text);
@@ -245,7 +394,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, onStar
     if (sent) onCancelEdit();
   };
   return (
-    <article className={`message-row ${item.role} ${streaming ? "streaming" : ""} ${editing ? "editing" : ""}`}>
+    <article data-user-message-id={item.role === "user" ? item.id : undefined} className={`message-row ${item.role} ${streaming ? "streaming" : ""} ${editing ? "editing" : ""} ${highlighted ? "navigator-highlight" : ""}`}>
       <div className={`message-body ${item.role}`}>
         {images.length === 0 ? null : <div className="message-images" aria-label="消息图片">
           {images.map((image, index) => <button key={`${image.mimeType}:${index}`} type="button" className="message-image-thumb" aria-label={`预览图片 ${index + 1}`} onClick={() => setPreviewIndex(index)}><img src={imageDataUrl(image)} alt={`图片 ${index + 1}`} loading="lazy" /></button>)}
@@ -434,13 +583,13 @@ function hasActiveActivity(items: TimelineItem[], status: SessionStatus): boolea
   return last?.kind === "tool" || (last?.kind === "thinking" && last.state === "running");
 }
 
-function renderTimelineItems(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], editingMessageId: string | undefined, setEditingMessageId: (id: string | undefined) => void, workspaceCwd: string | undefined): ReactNode[] {
+function renderTimelineItems(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], editingMessageId: string | undefined, setEditingMessageId: (id: string | undefined) => void, workspaceCwd: string | undefined, highlightedMessageId?: string): ReactNode[] {
   const grouped = groupTimelineItems(items);
   const lastActivityIndex = grouped.reduce((lastIndex, entry, index) => entry.kind === "activity" ? index : lastIndex, -1);
   const activeActivityIndex = hasActiveActivity(items, status) ? lastActivityIndex : -1;
 
   return grouped.map((entry, index) => {
-    if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} editing={entry.item.id === editingMessageId} onStartEdit={() => setEditingMessageId(entry.item.id)} onCancelEdit={() => setEditingMessageId(undefined)} onEdit={onEditUserMessage} onFork={entry.item.role === "user" ? onForkMessage : undefined} baseDir={workspaceCwd} />;
+    if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} editing={entry.item.id === editingMessageId} highlighted={entry.item.id === highlightedMessageId} onStartEdit={() => setEditingMessageId(entry.item.id)} onCancelEdit={() => setEditingMessageId(undefined)} onEdit={onEditUserMessage} onFork={entry.item.role === "user" ? onForkMessage : undefined} baseDir={workspaceCwd} />;
     if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} retrying={status.retrying !== undefined} />;
     if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={workspaceCwd} />;
     if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={onExtensionUiRespond} />;

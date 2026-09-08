@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { groupTimelineItems, shouldStopFollowingOnGesture } from "./timeline";
+import { groupTimelineItems, shouldStopFollowingOnGesture, userMessageAnchors } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -43,6 +43,20 @@ function thinking(id: string): TimelineItem {
     text: "thinking",
   };
 }
+
+describe("userMessageAnchors", () => {
+  it("keeps only user messages and creates useful previews", () => {
+    const longText = "A".repeat(120);
+    expect(userMessageAnchors([
+      { kind: "message", id: "a", role: "assistant", createdAt: "", text: "answer" },
+      { kind: "message", id: "u", role: "user", createdAt: "", text: `  first\n  ${longText}` },
+      { kind: "message", id: "image", role: "user", createdAt: "", text: "", images: [{ mimeType: "image/png", data: "x" }] },
+    ])).toEqual([
+      { id: "u", preview: `first ${"A".repeat(101)}…` },
+      { id: "image", preview: "图片消息" },
+    ]);
+  });
+});
 
 describe("shouldStopFollowingOnGesture", () => {
   it("keeps following when the timeline has no vertical scroll range", () => {
