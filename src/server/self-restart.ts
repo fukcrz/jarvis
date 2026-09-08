@@ -58,7 +58,9 @@ function childEntry(): string {
 function spawnChild(): void {
   const child = spawn(process.execPath, [childEntry()], {
     env: { ...process.env, JARVIS_SELF_RESTART: "1" },
-    stdio: "inherit",
+    // The replacement must not inherit the old process's console handles.
+    // `windowsHide` cannot undo an inherited console attached by stdio.
+    stdio: ["ignore", "ignore", "ignore"],
     detached: true,
     windowsHide: true,
   });

@@ -87,6 +87,12 @@ await replaceOnce(
 );
 
 await replaceOnce(
+  join(codingAgentDist, "../core/footer-data-provider.js"),
+  "        execFile(\"git\", [\"--no-optional-locks\", \"symbolic-ref\", \"--quiet\", \"--short\", \"HEAD\"], {\n            cwd: repoDir,\n            encoding: \"utf8\",\n        }, (error, stdout) => {",
+  "        execFile(\"git\", [\"--no-optional-locks\", \"symbolic-ref\", \"--quiet\", \"--short\", \"HEAD\"], {\n            cwd: repoDir,\n            encoding: \"utf8\",\n            windowsHide: true,\n        }, (error, stdout) => {",
+);
+
+await replaceOnce(
   join(codingAgentRoot, "dist/utils/tools-manager.js"),
   "        const result = spawnSync(cmd, [\"--version\"], { stdio: \"pipe\" });",
   "        const result = spawnSync(cmd, [\"--version\"], { stdio: \"pipe\", windowsHide: true });",
