@@ -9,6 +9,7 @@ import { ToolActivity } from "./tool-activity";
 import { Dialog, DialogContent } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
+import { useIsMobile } from "../hooks/use-is-mobile";
 
 interface TimelineProps {
   items: TimelineItem[];
@@ -90,6 +91,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   const [loadingAllHistory, setLoadingAllHistory] = useState(false);
   const [fillingViewport, setFillingViewport] = useState(false);
   const [fillViewportRevision, setFillViewportRevision] = useState(0);
+  const isMobile = useIsMobile();
   const userMessages = useMemo(() => userMessageAnchors(items), [items]);
   const userMessageKey = userMessages.map((item) => item.id).join(":");
   const feedback = getRunFeedback(status, items, streamingMessageId);
@@ -271,19 +273,19 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
           </div>
         </div>
       </div>
-      <TurnNavigator anchors={userMessages} activeId={activeUserMessageId} markerPositions={markerPositions} hasMore={hasMore} loadingAll={loadingAllHistory || loadingMore} open={navigatorOpen} onOpenChange={(open) => { setNavigatorOpen(open); if (!open) setLoadingAllHistory(false); }} onOpen={openNavigator} onJump={jumpToUserMessage} />
+      <TurnNavigator mobile={isMobile} anchors={userMessages} activeId={activeUserMessageId} markerPositions={markerPositions} hasMore={hasMore} loadingAll={loadingAllHistory || loadingMore} open={navigatorOpen} onOpenChange={(open) => { setNavigatorOpen(open); if (!open) setLoadingAllHistory(false); }} onOpen={openNavigator} onJump={jumpToUserMessage} />
       {!following ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
     </section>
   );
 }
 
-function TurnNavigator({ anchors, activeId, markerPositions, hasMore, loadingAll, open, onOpenChange, onOpen, onJump }: { anchors: UserMessageAnchor[]; activeId?: string; markerPositions: Record<string, number>; hasMore: boolean; loadingAll: boolean; open: boolean; onOpenChange: (open: boolean) => void; onOpen: () => void; onJump: (id: string) => void }) {
+function TurnNavigator({ mobile, anchors, activeId, markerPositions, hasMore, loadingAll, open, onOpenChange, onOpen, onJump }: { mobile: boolean; anchors: UserMessageAnchor[]; activeId?: string; markerPositions: Record<string, number>; hasMore: boolean; loadingAll: boolean; open: boolean; onOpenChange: (open: boolean) => void; onOpen: () => void; onJump: (id: string) => void }) {
   if (anchors.length === 0) return null;
+  if (!mobile) return <nav className="timeline-desktop-navigator" aria-label="用户消息导航">
+    <span className="timeline-navigator-track" aria-hidden="true" />
+    {anchors.map((anchor, index) => <button key={anchor.id} type="button" className={`timeline-navigator-marker${anchor.id === activeId ? " active" : ""}`} style={{ top: `${String((markerPositions[anchor.id] ?? index / Math.max(1, anchors.length - 1)) * 100)}%` }} aria-label={`跳转到第 ${String(index + 1)} 条用户消息：${anchor.preview}`} aria-current={anchor.id === activeId ? "step" : undefined} onClick={() => onJump(anchor.id)}><span className="timeline-navigator-marker-dot" /><span className="timeline-navigator-preview"><small>第 {String(index + 1)} 条用户消息</small><strong>{anchor.preview}</strong></span></button>)}
+  </nav>;
   return <>
-    <nav className="timeline-desktop-navigator" aria-label="用户消息导航">
-      <span className="timeline-navigator-track" aria-hidden="true" />
-      {anchors.map((anchor, index) => <button key={anchor.id} type="button" className={`timeline-navigator-marker${anchor.id === activeId ? " active" : ""}`} style={{ top: `${String((markerPositions[anchor.id] ?? index / Math.max(1, anchors.length - 1)) * 100)}%` }} aria-label={`跳转到第 ${String(index + 1)} 条用户消息：${anchor.preview}`} aria-current={anchor.id === activeId ? "step" : undefined} onClick={() => onJump(anchor.id)}><span className="timeline-navigator-marker-dot" /><span className="timeline-navigator-preview"><small>第 {String(index + 1)} 条用户消息</small><strong>{anchor.preview}</strong></span></button>)}
-    </nav>
     <Button variant="ghost" size="icon" className="timeline-mobile-navigator-trigger" aria-label="浏览用户消息" title="浏览用户消息" onClick={onOpen}><ListTree size={17} /></Button>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="用户消息" description="点击任一消息可跳转到对应轮次。" className="turn-navigator-dialog">
