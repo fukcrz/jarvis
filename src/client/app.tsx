@@ -24,6 +24,7 @@ import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
 import { isSessionInFocusWindow, randomUUID, parseBashCommand, sessionLabel } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
+import { extensionToastDuration, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
 
 /** Extract the entity ids carried by the current hash route. */
 function pathParams(pathname: string): { workspaceId?: string; sessionId?: string } {
@@ -38,14 +39,6 @@ const COMMAND_RETRY_BASE_DELAY_MS = 750;
 const COMMAND_RETRY_MAX_DELAY_MS = 10_000;
 const EMPTY_COMPOSER_COMMANDS: ComposerCommand[] = [];
 const SESSION_FOCUS_STORAGE_KEY = "jarvis.sessions.focus";
-type ExtensionToast = {
-  id: string;
-  workspaceId: string;
-  sessionId?: string;
-  message: string;
-  tone: "info" | "warning" | "error";
-};
-
 export function App() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -419,7 +412,7 @@ export function App() {
     if (globalExtensionToasts.length === 0) return;
     const timers = globalExtensionToasts.map((toast) => window.setTimeout(() => {
       setGlobalExtensionToasts((current) => current.filter((candidate) => candidate.id !== toast.id));
-    }, toast.tone === "error" ? 10_000 : 5_000));
+    }, extensionToastDuration(toast.tone)));
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [globalExtensionToasts]);
 
@@ -440,7 +433,11 @@ export function App() {
             if (workspaceEvent.type === "extension.notify") {
               const { notification } = workspaceEvent;
               const tone: "info" | "warning" | "error" = notification.notifyType === "warning" || notification.notifyType === "error" ? notification.notifyType : "info";
-              setGlobalExtensionToasts((current) => [...current, { id: notification.id, workspaceId: workspaceEvent.workspaceId, sessionId: notification.sessionId, message: notification.message, tone }].slice(-4));
+              const incoming: ExtensionToastInput = { id: notification.id, workspaceId: workspaceEvent.workspaceId, sessionId: notification.sessionId, message: notification.message, tone };
+              setGlobalExtensionToasts((current) => {
+                const merged = mergeExtensionToast(current[0], incoming);
+                return merged === current[0] ? current : [merged];
+              });
               return;
             }
             if (workspaceEvent.type === "session.deleted") {
@@ -1166,7 +1163,7 @@ function ExtensionToasts({ toasts, sessionsByWorkspace, onOpenSession, onDismiss
       const session = toast.sessionId === undefined ? undefined : sessionsByWorkspace[toast.workspaceId]?.find((candidate) => candidate.id === toast.sessionId);
       const label = session === undefined ? undefined : sessionLabel(session.name, session.preview);
       return <div key={toast.id} className={`extension-toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}>
-        <Icon size={15} /><div className="extension-toast-copy">{toast.sessionId === undefined ? null : <button type="button" className="extension-toast-source" onClick={() => onOpenSession(toast.workspaceId, toast.sessionId!)}>{label ?? "打开来源会话"}</button>}<span>{toast.message}</span></div><button type="button" aria-label="关闭通知" onClick={() => onDismiss(toast.id)}><X size={14} /></button>
+        <Icon size={15} /><div className="extension-toast-copy">{toast.sessionId === undefined ? null : <button type="button" className="extension-toast-source" onClick={() => onOpenSession(toast.workspaceId, toast.sessionId!)}>{label ?? "打开来源会话"}</button>}{toast.count > 1 ? <strong className="extension-toast-count">{toast.count} 条扩展通知</strong> : null}<span>{toast.message}</span></div><button type="button" aria-label="关闭通知" onClick={() => onDismiss(toast.id)}><X size={14} /></button>
       </div>;
     })}
   </div>;
