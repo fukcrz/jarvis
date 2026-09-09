@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { Archive, ArrowDown, Bell, Brain, Check, CircleAlert, Clock3, GitBranch, ListTree, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
+import { Archive, ArrowDown, Bell, Brain, Check, CircleAlert, Clock3, Copy, GitBranch, ListTree, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
 import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
@@ -457,8 +457,20 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, highli
 });
 
 function MessageActions({ item, streaming, onEdit, onFork }: { item: MessageTimelineItem; streaming: boolean; onEdit?: () => void; onFork?: (item: MessageTimelineItem) => void }) {
-  if (streaming || item.role !== "user" || (onEdit === undefined && onFork === undefined)) return null;
+  const [copied, setCopied] = useState(false);
+  if (streaming || item.role !== "user") return null;
+  const canCopy = item.text !== "";
+  if (!canCopy && onEdit === undefined && onFork === undefined) return null;
+  const handleCopy = () => {
+    void navigator.clipboard.writeText(item.text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    }).catch(() => {});
+  };
   return <div className="message-actions">
+    {!canCopy ? null : <Tooltip label={copied ? "已复制" : "复制消息"}>
+      <button type="button" className={`message-action-button${copied ? " copied" : ""}`} aria-label={copied ? "已复制消息" : "复制消息"} onClick={handleCopy}>{copied ? <Check size={14} /> : <Copy size={14} />}</button>
+    </Tooltip>}
     {onEdit === undefined ? null : <Tooltip label="编辑并重新生成">
       <button type="button" className="message-action-button" aria-label="编辑并重新生成" onClick={onEdit}><Pencil size={14} /></button>
     </Tooltip>}
