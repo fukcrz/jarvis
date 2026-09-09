@@ -10,6 +10,12 @@
 - 动手前先自查：`ss -tlnp | grep 9528`，若端口上有监听进程，说明 Jarvis 正在运行，**默认不要动它**。
 - **服务运行期间构建是安全的**（如 `npm run build` 重新生成 `dist/`），可以正常执行，不影响正在运行的服务。
 
+## Windows 后台进程与控制台
+
+- Windows 上新增或修改 `spawn`、`execFile`、`spawnSync` 等子进程调用时，必须显式设置 `windowsHide: true`，并且不得继承控制台 `stdio`。
+- 需要在调用者退出后持续运行的 Windows Node 服务，禁止直接对 Node 使用 `detached: true`：这会创建控制台窗口。必须复用 `scripts/prod-service.mjs` 的隐藏启动器，或采用等效的隐藏启动方案。
+- 后台服务或工具启动路径的改动，必须用非 `9528` 的隔离端口实测：没有控制台弹窗、调用命令返回后进程持续运行、且能够正常停止。
+
 ## 其他注意事项
 
 - 自举式开发：用 Jarvis 开发 Jarvis 的约定见 [BOOTSTRAP.md](BOOTSTRAP.md)（编译与重启分离；重启只由用户触发）。
