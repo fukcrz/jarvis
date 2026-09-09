@@ -184,6 +184,10 @@ export const api = {
     const params = new URLSearchParams({ path });
     return (await request<{ file: WorkspaceFileContent }>(`/api/workspaces/${workspaceId}/file?${params.toString()}`)).file;
   },
+  removeWorkspaceEntry: async (workspaceId: string, path: string): Promise<void> => {
+    const params = new URLSearchParams({ path });
+    await request(`/api/workspaces/${workspaceId}/entry?${params.toString()}`, { method: "DELETE" });
+  },
   commands: async (ref: SessionRef): Promise<ComposerCommand[]> => (await request<{ commands: ComposerCommand[] }>(`${sessionPath(ref)}/commands`)).commands,
   createSession: async (workspaceId: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`/api/workspaces/${workspaceId}/sessions`, { method: "POST", body: "{}" })).session,
   forkSession: async (ref: SessionRef, messageId?: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`${sessionPath(ref)}/fork`, { method: "POST", body: JSON.stringify(messageId === undefined ? {} : { messageId }) })).session,

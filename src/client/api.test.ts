@@ -30,6 +30,18 @@ describe("API client", () => {
     expect(new Headers(init?.headers).has("content-type")).toBe(false);
   });
 
+  it("encodes and sends a workspace entry deletion request", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ removed: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.removeWorkspaceEntry("da69b38d-f132-4c84-8c4f-6174015e9c5e", "src/hello world.ts");
+
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe("/api/workspaces/da69b38d-f132-4c84-8c4f-6174015e9c5e/entry?path=src%2Fhello+world.ts");
+    expect(init?.method).toBe("DELETE");
+    expect(new Headers(init?.headers).has("content-type")).toBe(false);
+  });
+
   it("does not send a JSON content type when deleting a session", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ removed: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

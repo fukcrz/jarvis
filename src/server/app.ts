@@ -1,4 +1,4 @@
-import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { platform } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -23,6 +23,7 @@ const workspaceOrderInput = z.object({ ids: z.array(z.string().uuid()).max(500) 
 const directoryQuery = z.object({ path: z.string().min(1).optional(), roots: z.enum(["true"]).optional() }).strict();
 const fileSearchQuery = z.object({ query: z.string().max(160).optional() }).strict();
 const workspacePathQuery = z.object({ path: z.string().max(2000).optional() }).strict();
+const workspaceEntryQuery = z.object({ path: z.string().min(1).max(2000) }).strict();
 const sessionNameInput = z.object({ name: z.string().min(1).max(120) }).strict();
 const modelInput = z.object({ provider: z.string().min(1).max(160), modelId: z.string().min(1).max(320) }).strict();
 const thinkingInput = z.object({ level: z.enum(THINKING_LEVELS) }).strict();
@@ -317,6 +318,13 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const workspace = workspaces.get(params.workspaceId);
     return { file: await readWorkspaceFile(workspace.cwd, query.path) };
   });
+  app.delete("/api/workspaces/:workspaceId/entry", async (request) => {
+    const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
+    const query = workspaceEntryQuery.parse(request.query);
+    const workspace = workspaces.get(params.workspaceId);
+    await removeWorkspaceEntry(workspace.cwd, query.path);
+    return { removed: true };
+  });
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/commands", async (request) => ({ commands: await sessions.commands(sessionRef(request.params)) }));
 
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/timeline", async (request) => {
@@ -498,6 +506,34 @@ async function listWorkspaceDirectory(cwd: string, requestedPath: string): Promi
   return { path: relativePath, name: basename(directory) || root, ...(parent === undefined ? {} : { parent }), entries: visible, isGitRepository: await pathExists(join(directory, ".git")) };
 }
 
+async function removeWorkspaceEntry(cwd: string, requestedPath: string): Promise<void> {
+  const root = await realpath(cwd).catch(() => { throw new AppError("WORKSPACE_UNAVAILABLE", "Workspace is unavailable", 404); });
+  const normalized = requestedPath.replaceAll("\\", "/");
+  if (normalized === "" || normalized.startsWith("/") || isAbsolute(normalized) || normalized.split("/").some((part) => part === "..")) {
+    throw new AppError("FILE_DELETE_INVALID", "Path is outside the workspace", 400);
+  }
+  const candidate = resolve(root, normalized);
+  const parent = await realpath(dirname(candidate)).catch(() => { throw new AppError("FILE_NOT_FOUND", "File or directory not found", 404); });
+  if (!isPathInside(root, parent)) throw new AppError("FILE_DELETE_INVALID", "Path is outside the workspace", 400);
+  const metadata = await lstat(candidate).catch(() => undefined);
+  if (metadata === undefined) throw new AppError("FILE_NOT_FOUND", "File or directory not found", 404);
+  if (metadata.isSymbolicLink()) throw new AppError("FILE_DELETE_INVALID", "Symbolic links cannot be deleted from the file browser", 400);
+  if (!metadata.isFile() && !metadata.isDirectory()) throw new AppError("FILE_DELETE_INVALID", "Only files and directories can be deleted", 400);
+  const resolved = await realpath(candidate).catch(() => { throw new AppError("FILE_NOT_FOUND", "File or directory not found", 404); });
+  if (!isPathInside(root, resolved) || resolved === root) throw new AppError("FILE_DELETE_INVALID", "Path is outside the workspace", 400);
+  try {
+    await rm(candidate, { recursive: metadata.isDirectory(), force: false });
+  } catch (error) {
+    if (isRecord(error) && error["code"] === "ENOENT") throw new AppError("FILE_NOT_FOUND", "File or directory not found", 404);
+    throw new AppError("FILE_DELETE_FAILED", "Unable to delete file or directory", 500);
+  }
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relativePath = relative(root, candidate);
+  return relativePath !== ".." && !relativePath.startsWith(`..${String.fromCharCode(47)}`) && !relativePath.startsWith(`..${String.fromCharCode(92)}`) && !isAbsolute(relativePath);
+}
+
 async function readWorkspaceFile(cwd: string, requestedPath: string): Promise<WorkspaceFileContent> {
   const root = await realpath(cwd).catch(() => { throw new AppError("WORKSPACE_UNAVAILABLE", "Workspace is unavailable", 404); });
   const filePath = await resolveWorkspacePath(root, requestedPath, "FILE_NOT_FOUND");
@@ -570,6 +606,10 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function sessionRef(value: unknown): SessionRef {

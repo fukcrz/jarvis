@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -616,6 +616,45 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const directory = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(workspaceRoot)}` });
     expect(directory.statusCode).toBe(404);
     expect(directory.json()).toMatchObject({ error: { code: "FILE_NOT_FOUND" } });
+  });
+
+  it("deletes workspace files and recursively deletes directories without leaving the workspace", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "entry-delete-workspace");
+    const nestedPath = join(workspacePath, "src", "nested");
+    await mkdir(nestedPath, { recursive: true });
+    await writeFile(join(workspacePath, "remove.txt"), "remove");
+    await writeFile(join(nestedPath, "keep.txt"), "remove");
+    const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } });
+    const workspace = created.json() as { workspace: { id: string } };
+
+    const file = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.workspace.id}/entry?path=remove.txt` });
+    expect(file.statusCode).toBe(200);
+    expect(file.json()).toEqual({ removed: true });
+    expect(existsSync(join(workspacePath, "remove.txt"))).toBe(false);
+
+    const directory = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.workspace.id}/entry?path=src` });
+    expect(directory.statusCode).toBe(200);
+    expect(existsSync(join(workspacePath, "src"))).toBe(false);
+
+    const root = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.workspace.id}/entry?path=` });
+    expect(root.statusCode).toBe(400);
+    expect(root.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+
+    const dot = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.workspace.id}/entry?path=.` });
+    expect(dot.statusCode).toBe(400);
+    expect(dot.json()).toMatchObject({ error: { code: "FILE_DELETE_INVALID" } });
+
+    if (platform() !== "win32") {
+      await symlink(join(jarvisHome, "outside.txt"), join(workspacePath, "linked.txt"));
+      const linked = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.workspace.id}/entry?path=linked.txt` });
+      expect(linked.statusCode).toBe(400);
+      expect(linked.json()).toMatchObject({ error: { code: "FILE_DELETE_INVALID" } });
+    }
+
+    const outside = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.workspace.id}/entry?path=..%2Foutside.txt` });
+    expect(outside.statusCode).toBe(400);
+    expect(outside.json()).toMatchObject({ error: { code: "FILE_DELETE_INVALID" } });
   });
 
   it("deletes a session JSONL file and broadcasts a workspace event", async () => {

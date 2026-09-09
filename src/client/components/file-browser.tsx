@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { ArrowLeft, Check, ChevronDown, ChevronRight, FileCode2, FileQuestion, FileText, Folder, FolderOpen } from "lucide-react";
 import type { Workspace, WorkspaceDirectoryListing, WorkspaceFileContent } from "../../shared/protocol";
 import { api, ApiError, workspaceFileUrl } from "../api";
@@ -7,6 +7,7 @@ import { MAX_TABLE_ROWS, parseDelimited, previewKindForPath, type PreviewKind } 
 import { MarkdownMessage } from "./markdown-message";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
+import { FileContextMenu, type FileContextMenuTarget } from "./file-context-menu";
 
 interface FileBrowserProps {
   workspaces: Workspace[];
@@ -35,6 +36,9 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
   const [preview, setPreview] = useState<FilePreviewState>();
   const [error, setError] = useState<string>();
   const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<FileContextMenuTarget>();
+  const [deleteTarget, setDeleteTarget] = useState<FileContextMenuTarget>();
+  const [deletePending, setDeletePending] = useState(false);
   const [focusedPath, setFocusedPath] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth());
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -42,6 +46,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
   const treeScrollRef = useRef(0);
   const loadedDirectoryPathsRef = useRef(new Set<string>());
   const loadingDirectoryPathsRef = useRef(new Set<string>());
+  const deleteRequestRef = useRef(0);
   const workspaceRef = useRef(workspaceId);
   const workspace = workspaces.find((item) => item.id === workspaceId);
   workspaceRef.current = workspaceId;
@@ -95,6 +100,10 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     loadingDirectoryPathsRef.current.clear();
     setPreview(undefined);
     setError(undefined);
+    setContextMenu(undefined);
+    setDeleteTarget(undefined);
+    deleteRequestRef.current += 1;
+    setDeletePending(false);
     setFocusedPath("");
     setWorkspacePickerOpen(false);
     if (workspaceId !== undefined) void loadDirectory("");
@@ -212,6 +221,40 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     }
   };
 
+  const removeEntry = async () => {
+    const target = deleteTarget;
+    const targetWorkspaceId = workspaceRef.current;
+    if (target === undefined || targetWorkspaceId === undefined || deletePending) return;
+    const requestId = deleteRequestRef.current + 1;
+    deleteRequestRef.current = requestId;
+    setDeletePending(true);
+    try {
+      await api.removeWorkspaceEntry(targetWorkspaceId, target.path);
+      if (workspaceRef.current !== targetWorkspaceId || deleteRequestRef.current !== requestId) return;
+      setDeleteTarget(undefined);
+      setContextMenu(undefined);
+      if (preview?.path === target.path || (target.kind === "directory" && preview?.path.startsWith(`${target.path}/`))) setPreview(undefined);
+      const parentPath = directoryPath(target.path);
+      loadedDirectoryPathsRef.current.delete(target.path);
+      for (const cachedPath of [...loadedDirectoryPathsRef.current]) {
+        if (cachedPath.startsWith(`${target.path}/`)) loadedDirectoryPathsRef.current.delete(cachedPath);
+      }
+      setEntriesByPath((current) => {
+        const next = { ...current };
+        delete next[target.path];
+        for (const cachedPath of Object.keys(next)) if (cachedPath.startsWith(`${target.path}/`)) delete next[cachedPath];
+        return next;
+      });
+      await loadDirectory(parentPath);
+      if (workspaceRef.current !== targetWorkspaceId || deleteRequestRef.current !== requestId) return;
+      setError(undefined);
+    } catch (reason: unknown) {
+      if (workspaceRef.current === targetWorkspaceId && deleteRequestRef.current === requestId) setError(reason instanceof Error ? reason.message : "删除失败");
+    } finally {
+      if (deleteRequestRef.current === requestId) setDeletePending(false);
+    }
+  };
+
   const rootListing = entriesByPath[""];
   const treeEntries = rootListing?.entries ?? [];
 
@@ -229,7 +272,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
           {error === undefined ? null : <div className="file-browser-error" role="alert">{error}</div>}
         </div>
         <div className="file-browser-tree" ref={treeRef} aria-label="文件树">
-          {rootListing === undefined ? <p className="file-browser-status">正在读取…</p> : treeEntries.map((entry) => renderTreeNode(entry, 0, { entriesByPath, expandedPaths, focusedPath, loadingPaths, selectedFilePath: preview?.path, onToggleDirectory: (path) => { void toggleDirectory(path); }, onOpenFile: (path) => { void openFile(path); } }))}
+          {rootListing === undefined ? <p className="file-browser-status">正在读取…</p> : treeEntries.map((entry) => renderTreeNode(entry, 0, { entriesByPath, expandedPaths, focusedPath, loadingPaths, selectedFilePath: preview?.path, onToggleDirectory: (path) => { void toggleDirectory(path); }, onOpenFile: (path) => { void openFile(path); }, onContextMenu: (entry, event) => { event.preventDefault(); setFocusedPath(entry.path); setContextMenu({ ...entry, x: event.clientX, y: event.clientY }); } }))}
           {rootListing !== undefined && treeEntries.length === 0 ? <p className="file-browser-status">此项目没有文件</p> : null}
         </div>
       </aside>
@@ -250,6 +293,13 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
         </div>
       </DialogContent>
     </Dialog>
+    {contextMenu === undefined ? null : <FileContextMenu target={contextMenu} fullPath={joinWorkspacePath(workspace.cwd, contextMenu.path)} onClose={() => setContextMenu(undefined)} onCopy={(value, message) => { setContextMenu(undefined); void copy(value, message); }} onDelete={(target) => { setContextMenu(undefined); setDeleteTarget(target); }} />}
+    <Dialog open={deleteTarget !== undefined} onOpenChange={(open) => { if (!open && !deletePending) setDeleteTarget(undefined); }}>
+      <DialogContent title={deleteTarget?.kind === "directory" ? "删除目录" : "删除文件"}>
+        <p className="delete-session-message"><strong>{deleteTarget?.name ?? ""}</strong>{deleteTarget?.kind === "directory" ? "及其全部内容将被递归删除。" : "将被永久删除。"}</p>
+        <div className="dialog-actions"><Button variant="secondary" onClick={() => setDeleteTarget(undefined)} disabled={deletePending}>取消</Button><Button variant="danger" onClick={() => { void removeEntry(); }} disabled={deletePending}>{deletePending ? "删除中…" : "删除"}</Button></div>
+      </DialogContent>
+    </Dialog>
   </section>;
 }
 
@@ -264,6 +314,7 @@ function renderTreeNode(
     selectedFilePath?: string;
     onToggleDirectory: (path: string) => void;
     onOpenFile: (path: string) => void;
+    onContextMenu: (entry: WorkspaceDirectoryListing["entries"][number], event: MouseEvent<HTMLButtonElement>) => void;
   },
 ): ReactNode {
   const isDirectory = entry.kind === "directory";
@@ -276,6 +327,7 @@ function renderTreeNode(
       className={`file-browser-entry ${isDirectory ? "directory" : "file"} ${state.selectedFilePath === entry.path ? "selected" : ""} ${active ? "active" : ""}`}
       style={{ paddingInlineStart: `${13 + depth * 16}px` }}
       onClick={() => isDirectory ? state.onToggleDirectory(entry.path) : state.onOpenFile(entry.path)}
+      onContextMenu={(event) => state.onContextMenu(entry, event)}
       disabled={state.loadingPaths[entry.path] === true}
       aria-expanded={isDirectory ? expanded : undefined}
     >
@@ -340,6 +392,12 @@ function TablePreview({ text, name }: { text: string; name: string }) {
     </table>
     {rows.length > MAX_TABLE_ROWS ? <p className="file-preview-table-notice">表格较大，仅显示前 {MAX_TABLE_ROWS} 行（共 {rows.length} 行）。</p> : null}
   </div>;
+}
+
+function joinWorkspacePath(cwd: string, path: string): string {
+  if (path === "") return cwd;
+  const separator = cwd.includes("\\") ? "\\" : "/";
+  return `${cwd.replace(/[\\/]+$/, "")}${separator}${path.replaceAll("/", separator)}`;
 }
 
 function kindLabel(kind: PreviewKind): string {
