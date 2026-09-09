@@ -11,4 +11,6 @@ test-results/
 *.tsbuildinfo
 .DS_Store
 NUL
+.runtime/
+logs/prod-*.log
 logs/watch-flash.ps1

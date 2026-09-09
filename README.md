@@ -44,7 +44,16 @@ For a production build served by Fastify directly:
 
 ```bash
 npm run build
-NODE_ENV=production npm start
+npm run prod:start # Background start; defaults to port 9528
+npm run prod:stop  # Stop the background production server
+```
+
+`prod:start` does not rebuild and refuses to replace an existing service. Its PID is recorded under `.runtime/` and its output is appended to `logs/prod-9528.log`. The port can be overridden for both commands with `JARVIS_PORT` (or `PORT`). On macOS and Linux, `prod:stop` sends `SIGTERM` and waits for the server to close. Windows cannot deliver that signal to a detached Node process, so it terminates the server process tree immediately.
+
+To run the production server attached to the current terminal instead, use:
+
+```bash
+npm run prod:foreground
 ```
 
 The same build is what the preview packages ship (`npm pack` runs `prepack`,

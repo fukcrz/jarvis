@@ -10,6 +10,7 @@
   "files": [
     "bin",
     "dist",
+    "scripts",
     "README.md",
     "LICENSE"
   ],
@@ -32,6 +33,9 @@
     "build:server": "tsc -p tsconfig.server.json",
     "build:web": "vite build",
     "start": "node dist/server/server/index.js",
+    "prod:foreground": "node scripts/prod-foreground.mjs",
+    "prod:start": "node scripts/prod-start.mjs",
+    "prod:stop": "node scripts/prod-stop.mjs",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "vitest run",
