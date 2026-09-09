@@ -43,6 +43,10 @@ function groupLatestUpdatedAt(group: MobileSessionGroup): string {
   return group.sessions.reduce((latest, session) => (session.updatedAt.localeCompare(latest) > 0 ? session.updatedAt : latest), "");
 }
 
+export function shouldShowMobileSessionGroup(sessionCount: number, focusMode: boolean): boolean {
+  return sessionCount > 0 || focusMode;
+}
+
 export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
   const [workspaceFilter, setWorkspaceFilter] = useState(() => window.localStorage.getItem("jarvis.mobile.session-project") ?? "all");
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
@@ -75,7 +79,7 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
       if (workspaceFilter !== "all" && workspace.id !== workspaceFilter) continue;
       const sessions = (props.sessionsByWorkspace[workspace.id] ?? [])
         .sort((a, b) => sessionAttentionRank(a) - sessionAttentionRank(b) || b.updatedAt.localeCompare(a.updatedAt));
-      if (sessions.length === 0) continue;
+      if (!shouldShowMobileSessionGroup(sessions.length, props.focusMode)) continue;
       result.push({ workspace, sessions });
     }
     // 组排序：有需要关注的会话的组优先，再按组内最近活动（活跃项目靠前）。

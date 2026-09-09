@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readMobileExpandedGroups, saveMobileExpandedGroups } from "./mobile-navigation.js";
+import { readMobileExpandedGroups, saveMobileExpandedGroups, shouldShowMobileSessionGroup } from "./mobile-navigation.js";
 
 const storage = new Map<string, string>();
 
@@ -15,6 +15,14 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("mobile session group visibility", () => {
+  it("keeps empty projects visible in focus mode", () => {
+    expect(shouldShowMobileSessionGroup(0, true)).toBe(true);
+    expect(shouldShowMobileSessionGroup(0, false)).toBe(false);
+    expect(shouldShowMobileSessionGroup(2, false)).toBe(true);
+  });
 });
 
 describe("mobile session group expansion", () => {
