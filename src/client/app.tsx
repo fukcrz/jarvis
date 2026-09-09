@@ -22,7 +22,7 @@ import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
-import { isSessionInFocusWindow, randomUUID, parseBashCommand, sessionLabel } from "./lib/utils";
+import { isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionLabel } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { extensionToastDuration, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
 
@@ -66,6 +66,9 @@ export function App() {
   const [projectRenameValue, setProjectRenameValue] = useState("");
   const [projectRemoveTarget, setProjectRemoveTarget] = useState<Workspace | undefined>();
   const [projectRemovePending, setProjectRemovePending] = useState(false);
+  const [workspaceOrderPending, setWorkspaceOrderPending] = useState(false);
+  const workspaceOrderRequestRef = useRef<number | undefined>(undefined);
+  const workspaceOrderSequenceRef = useRef(0);
   // Mobile uses the global session list as its home: #/projects and #/chat/:workspaceId/:sessionId.
   const isSettingsPage = location.pathname === "/settings";
   const isFilesPage = location.pathname.startsWith("/files");
@@ -283,6 +286,29 @@ export function App() {
     setWorkspaces(values);
     setWorkspaceId((current) => current !== undefined && values.some((workspace) => workspace.id === current) ? current : values[0]?.id);
   }, []);
+
+  const reorderWorkspaces = useCallback((sourceId: string, targetId: string, placeAfter: boolean): void => {
+    if (workspaceOrderRequestRef.current !== undefined) return;
+    const previous = workspaces;
+    const next = reorderById(previous, sourceId, targetId, placeAfter);
+    if (next === undefined) return;
+    const requestId = ++workspaceOrderSequenceRef.current;
+    workspaceOrderRequestRef.current = requestId;
+    setWorkspaceOrderPending(true);
+    setWorkspaces(next);
+    void api.reorderWorkspaces(next.map((workspace) => workspace.id)).then((saved) => {
+      if (workspaceOrderRequestRef.current !== requestId) return;
+      setWorkspaces(saved);
+    }).catch((error: unknown) => {
+      if (workspaceOrderRequestRef.current !== requestId) return;
+      setWorkspaces((current) => current.map((workspace) => workspace.id).join() === next.map((workspace) => workspace.id).join() ? previous : current);
+      setPageError(error instanceof Error ? error.message : "工作区排序失败");
+    }).finally(() => {
+      if (workspaceOrderRequestRef.current !== requestId) return;
+      workspaceOrderRequestRef.current = undefined;
+      setWorkspaceOrderPending(false);
+    });
+  }, [workspaces]);
 
   const loadProjectSessions = useCallback(async (projects: Workspace[]): Promise<Record<string, SessionSummary[]>> => {
     const entries = await Promise.all(projects.map(async (workspace) => [workspace.id, await api.listSessions(workspace.id)] as const));
@@ -964,6 +990,8 @@ export function App() {
     assistantName={assistantName}
     onOpenSettings={() => navigate("/settings")}
     onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)}
+    onReorderWorkspaces={reorderWorkspaces}
+    workspaceOrderPending={workspaceOrderPending}
   />;
 
   if (loading) return <main className="app-loading">正在打开工作区…</main>;

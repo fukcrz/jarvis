@@ -25,6 +25,19 @@ export function sessionLabel(name: string | null, preview: string | null): strin
   return name?.trim() || preview?.trim().replace(/\s+/g, " ").slice(0, 72) || "新会话";
 }
 
+/** 将列表中的一项移动到另一项的前面或后面。 */
+export function reorderById<T extends { id: string }>(items: T[], sourceId: string, targetId: string, placeAfter: boolean): T[] | undefined {
+  const sourceIndex = items.findIndex((item) => item.id === sourceId);
+  const targetIndex = items.findIndex((item) => item.id === targetId);
+  if (sourceIndex === -1 || targetIndex === -1 || sourceIndex === targetIndex) return undefined;
+  const next = [...items];
+  const [source] = next.splice(sourceIndex, 1);
+  if (source === undefined) return undefined;
+  const adjustedTargetIndex = next.findIndex((item) => item.id === targetId);
+  next.splice(adjustedTargetIndex + (placeAfter ? 1 : 0), 0, source);
+  return next;
+}
+
 /**
  * 解析输入框里的 bang 命令：`!cmd` 输出进上下文，`!!cmd` 不进。
  * 返回 undefined 表示这不是一条命令（与 Pi TUI 一致：单独的 `!` 按普通消息发送）。

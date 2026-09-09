@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSummary } from "../../shared/protocol";
-import { isSessionInFocusWindow, matchesSessionQuery, normalizeSessionSearch, parseBashCommand, sessionLabel, sessionListWindow, SESSION_FOCUS_WINDOW_MS, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
+import { isSessionInFocusWindow, matchesSessionQuery, normalizeSessionSearch, parseBashCommand, reorderById, sessionLabel, sessionListWindow, SESSION_FOCUS_WINDOW_MS, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
 
 const session: SessionSummary = {
   id: "session-1",
@@ -27,6 +27,20 @@ function stopping(id: string): SessionSummary {
 function ids(items: { id: string }[]): string[] {
   return items.map((item) => item.id);
 }
+
+describe("workspace ordering", () => {
+  const items = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }];
+
+  it("moves an item before or after the target", () => {
+    expect(reorderById(items, "d", "b", false)?.map((item) => item.id)).toEqual(["a", "d", "b", "c"]);
+    expect(reorderById(items, "a", "c", true)?.map((item) => item.id)).toEqual(["b", "c", "a", "d"]);
+  });
+
+  it("returns undefined for an invalid or unchanged move", () => {
+    expect(reorderById(items, "missing", "b", false)).toBeUndefined();
+    expect(reorderById(items, "a", "a", false)).toBeUndefined();
+  });
+});
 
 describe("session search", () => {
   it("matches session titles case-insensitively and by substring", () => {

@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Files, Focus, Folder, FolderPlus, MessageSquarePlus, Search, Settings2 } from "lucide-react";
-import { useState, type PointerEvent } from "react";
+import { useRef, useState, type DragEvent, type PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionLabel, sessionListWindow } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -25,11 +25,16 @@ interface SidebarProps {
   assistantName: string;
   onOpenSettings: () => void;
   onOpenFiles: () => void;
+  onReorderWorkspaces: (sourceId: string, targetId: string, placeAfter: boolean) => void;
+  workspaceOrderPending: boolean;
 }
 
 export function Sidebar(props: SidebarProps) {
   /** 每个项目展开会话的步数（0 = 默认收起状态，每展开一次 +1）。 */
   const [sessionExpands, setSessionExpands] = useState<Record<string, number>>({});
+  const [draggingWorkspaceId, setDraggingWorkspaceId] = useState<string | undefined>();
+  const draggingWorkspaceIdRef = useRef<string | undefined>(undefined);
+  const [dropTarget, setDropTarget] = useState<{ id: string; placeAfter: boolean } | undefined>();
 
   function expandSessions(workspaceId: string): void {
     setSessionExpands((prev) => ({ ...prev, [workspaceId]: (prev[workspaceId] ?? 0) + 1 }));
@@ -38,6 +43,40 @@ export function Sidebar(props: SidebarProps) {
   function collapseSessions(workspaceId: string): void {
     setSessionExpands((prev) => ({ ...prev, [workspaceId]: 0 }));
   }
+
+  function startWorkspaceDrag(event: DragEvent<HTMLElement>, workspaceId: string): void {
+    if (event.dataTransfer === null) return;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", workspaceId);
+    draggingWorkspaceIdRef.current = workspaceId;
+    setDraggingWorkspaceId(workspaceId);
+  }
+
+  function updateDropTarget(event: DragEvent<HTMLElement>, workspaceId: string): void {
+    const sourceId = draggingWorkspaceIdRef.current;
+    if (sourceId === undefined || sourceId === workspaceId) return;
+    event.preventDefault();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const placeAfter = event.clientY >= bounds.top + bounds.height / 2;
+    setDropTarget((current) => current?.id === workspaceId && current.placeAfter === placeAfter ? current : { id: workspaceId, placeAfter });
+  }
+
+  function finishWorkspaceDrag(): void {
+    draggingWorkspaceIdRef.current = undefined;
+    setDraggingWorkspaceId(undefined);
+    setDropTarget(undefined);
+  }
+
+  function dropWorkspace(event: DragEvent<HTMLElement>, workspaceId: string): void {
+    event.preventDefault();
+    const sourceId = draggingWorkspaceIdRef.current;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const placeAfter = event.clientY >= bounds.top + bounds.height / 2;
+    finishWorkspaceDrag();
+    if (sourceId === undefined || sourceId === workspaceId) return;
+    props.onReorderWorkspaces(sourceId, workspaceId, placeAfter);
+  }
+
   return (
     <aside className="sidebar">
       <div className="sidebar-toolbar">
@@ -54,8 +93,8 @@ export function Sidebar(props: SidebarProps) {
           const toggleLabel = `${expanded ? "收起" : "展开"}${workspace.label}的会话`;
 
           return (
-            <section className="project-node" key={workspace.id}>
-              <div className="project-row">
+            <section className={`project-node${draggingWorkspaceId === workspace.id ? " dragging" : ""}${dropTarget?.id === workspace.id && dropTarget.placeAfter ? " drop-after" : ""}${dropTarget?.id === workspace.id && !dropTarget.placeAfter ? " drop-before" : ""}`} key={workspace.id}>
+              <div className="project-row" draggable={!props.workspaceOrderPending} onDragStart={(event) => startWorkspaceDrag(event, workspace.id)} onDragOver={(event) => updateDropTarget(event, workspace.id)} onDragLeave={(event) => { if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return; setDropTarget((current) => current?.id === workspace.id ? undefined : current); }} onDrop={(event) => dropWorkspace(event, workspace.id)} onDragEnd={finishWorkspaceDrag}>
                 <button className="project-toggle" type="button" aria-label={toggleLabel} aria-expanded={expanded} onClick={() => { if (!consumeLongPress()) props.onToggleWorkspace(workspace.id); }} onContextMenu={(event) => {
                   event.preventDefault();
                   const bounds = event.currentTarget.getBoundingClientRect();

@@ -55,8 +55,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .sidebar-toolbar .button { width: 27px; height: 27px; }
 .project-tree { display: grid; align-content: start; flex: 1; gap: 7px; min-height: 0; overflow-y: auto; margin: 0 -2px; padding: 0 2px 12px; }
 .project-node { display: grid; gap: 0; min-width: 0; }
-.project-row { display: flex; align-items: center; min-width: 0; gap: 2px; border-radius: 999px; background: transparent; padding-inline: 6px; }
-.project-row:hover, .project-row:focus-within { background: #37333f; }
+.project-row { position: relative; display: flex; align-items: center; min-width: 0; gap: 2px; border-radius: 999px; background: transparent; padding-inline: 6px; cursor: grab; }
+.project-row:hover, .project-row:focus-within { background: #37333f; }.project-row:active { cursor: grabbing; }.project-node.dragging { opacity: .5; }.project-node.drop-before > .project-row::before, .project-node.drop-after > .project-row::after { position: absolute; right: 6px; left: 6px; height: 2px; border-radius: 2px; background: var(--accent); content: ""; pointer-events: none; }.project-node.drop-before > .project-row::before { top: -4px; }.project-node.drop-after > .project-row::after { bottom: -4px; }
 .project-toggle { display: grid; grid-template-columns: 15px minmax(0, 1fr); align-items: center; flex: 1; min-width: 0; gap: 7px; border: 0; border-radius: 999px; background: transparent; padding: 6px 9px; color: #c7c4cd; text-align: left; }
 .project-toggle:hover { color: #f4f2f7; }
 .project-toggle span { overflow: hidden; color: inherit; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
