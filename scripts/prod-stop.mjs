@@ -16,7 +16,7 @@ import {
 
 async function main() {
   const port = productionPort();
-  const { pidFile } = runtimePaths(port);
+  const { launcherFile, pidFile } = runtimePaths(port);
   let pid = readPid(pidFile);
 
   if (pid !== undefined && !(await isJarvisServerListeningOn(pid, port))) {
@@ -50,7 +50,10 @@ async function main() {
     if (!await waitForExit(pid, 5_000)) throw new Error(`进程 ${pid} 未能停止`);
   }
 
-  if (!processExists(pid)) removePidFile(pidFile);
+  if (!processExists(pid)) {
+    removePidFile(pidFile);
+    removePidFile(launcherFile);
+  }
   console.log("生产服务已停止");
 }
 

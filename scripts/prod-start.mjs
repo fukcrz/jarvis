@@ -81,16 +81,17 @@ async function main() {
     throw new Error("无法创建生产服务进程");
   }
   const healthy = startError === undefined && await waitForHealth(port);
-  if (!healthy || !(await isJarvisServerListeningOn(child.pid, port))) {
-    if (processExists(child.pid)) {
-      try { await requestProcessStop(child.pid); } catch { /* process may already have exited */ }
+  const serverPid = await listenerPid(port);
+  if (!healthy || serverPid === undefined || !(await isJarvisServerListeningOn(serverPid, port))) {
+    if (serverPid !== undefined && await isJarvisServerProcess(serverPid)) {
+      try { await requestProcessStop(serverPid); } catch { /* process may already have exited */ }
     }
     const detail = startError instanceof Error ? `：${startError.message}` : "";
     throw new Error(`服务未能在 30 秒内启动${detail}，请查看 ${logFile}`);
   }
 
-  writeFileSync(pidFile, `${child.pid}\n`, "utf8");
-  console.log(`生产服务已在后台启动：PID ${child.pid}，http://127.0.0.1:${port}`);
+  writeFileSync(pidFile, `${serverPid}\n`, "utf8");
+  console.log(`生产服务已在后台启动：PID ${serverPid}，http://127.0.0.1:${port}`);
   console.log(`日志：${logFile}`);
 }
 

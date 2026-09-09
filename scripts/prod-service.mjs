@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -23,6 +23,8 @@ export function runtimePaths(port) {
     runtimeDir,
     pidFile: join(runtimeDir, `jarvis-production-${port}.pid`),
     logFile: join(root, "logs", `prod-${port}.log`),
+    errorLogFile: join(root, "logs", `prod-${port}.error.log`),
+    launcherFile: join(runtimeDir, `jarvis-production-${port}.cmd`),
   };
 }
 
@@ -206,12 +208,42 @@ export async function waitForExit(pid, timeoutMs = 30_000) {
   return !processExists(pid);
 }
 
+function powershellLiteral(value) {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function cmdLiteral(value) {
+  return `"${value.replaceAll("%", "%%")}"`;
+}
+
 export function startServer(port, stdoutFd, stderrFd) {
+  const host = process.env["HOST"] ?? "0.0.0.0";
+  if (process.platform === "win32") {
+    const { errorLogFile, launcherFile, logFile } = runtimePaths(port);
+    writeFileSync(launcherFile, [
+      "@echo off",
+      "setlocal DisableDelayedExpansion",
+      `set "NODE_ENV=production"`,
+      `set "PORT=${port}"`,
+      `set "HOST=${host.replaceAll("%", "%%")}"`,
+      `cd /d ${cmdLiteral(root)}`,
+      `${cmdLiteral(process.execPath)} ${cmdLiteral(entry)} >> ${cmdLiteral(logFile)} 2>> ${cmdLiteral(errorLogFile)}`,
+      "endlocal",
+    ].join("\r\n") + "\r\n", "utf8");
+    const command = `Start-Process -FilePath ${powershellLiteral(process.env["ComSpec"] ?? "cmd.exe")} -ArgumentList @('/d', '/c', ${powershellLiteral(launcherFile)}) -WorkingDirectory ${powershellLiteral(root)} -WindowStyle Hidden`;
+    const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
+    return spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedCommand], {
+      cwd: root,
+      windowsHide: true,
+      stdio: "ignore",
+    });
+  }
+
   return spawn(process.execPath, [entry], {
     cwd: root,
     detached: true,
     windowsHide: true,
-    env: { ...process.env, NODE_ENV: "production", PORT: String(port), HOST: process.env["HOST"] ?? "0.0.0.0" },
+    env: { ...process.env, NODE_ENV: "production", PORT: String(port), HOST: host },
     stdio: ["ignore", stdoutFd, stderrFd],
   });
 }
