@@ -3,6 +3,7 @@ import { Check, Clock3, Image as ImageIcon, LoaderCircle, RotateCcw, XCircle } f
 import type { ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
 import { formatRunElapsed } from "../run-feedback";
+import { ImagePreview } from "./image-lightbox";
 
 interface ToolActivityProps {
   items: ToolTimelineItem[];
@@ -91,8 +92,6 @@ function compactCommand(value?: string): string {
 function GenericToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open: boolean; onToggle: () => void }) {
   const output = item.error ?? item.output;
   const images = item.images ?? [];
-  const [previewIndex, setPreviewIndex] = useState<number>();
-  const preview = previewIndex === undefined ? undefined : images[previewIndex];
   return (
     <article className={`tool-item tool-list-item ${item.state}`}>
       <button className="tool-summary" type="button" onClick={onToggle} aria-expanded={open}>
@@ -103,15 +102,11 @@ function GenericToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open
       </button>
       {open ? <div className="tool-details inline-details">
         {images.length === 0 ? null : <div className="tool-images" aria-label="读取到的图片">
-          {images.map((image, index) => <button key={`${image.mimeType}:${index}`} type="button" className="message-image-thumb" aria-label={`预览图片 ${index + 1}`} onClick={() => setPreviewIndex(index)}><img src={imageDataUrl(image)} alt={`图片 ${index + 1}`} loading="lazy" /></button>)}
+          {images.map((image, index) => <ImagePreview key={`${image.mimeType}:${index}`} src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`}><button type="button" className="message-image-thumb" aria-label={`预览图片 ${String(index + 1)}`}><img src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`} loading="lazy" /></button></ImagePreview>)}
         </div>}
         {item.name === "read" ? null : item.inputPreview === undefined ? null : <div className="detail-input"><span className="detail-label">输入</span><code>{item.inputPreview}</code></div>}
         {output === undefined ? null : <div><pre className={item.error === undefined ? "" : "tool-error-output"}>{output}</pre></div>}
       </div> : null}
-      {preview === undefined ? null : <div className="image-lightbox" role="dialog" aria-label={`预览图片 ${previewIndex! + 1}`} onClick={() => setPreviewIndex(undefined)}>
-        <button type="button" className="image-lightbox-close" aria-label="关闭图片预览" onClick={() => setPreviewIndex(undefined)}><XCircle size={20} /></button>
-        <img src={imageDataUrl(preview)} alt={`图片 ${previewIndex! + 1}`} onClick={(event) => event.stopPropagation()} />
-      </div>}
     </article>
   );
 }

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdate, useCodeMirror } from "@uiw/react-codemirror";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { ArrowUp, Command, FileCode2, History, LoaderCircle, MessageSquare, Plus, RotateCcw, Square, X, XCircle, Zap } from "lucide-react";
+import { ArrowUp, Command, FileCode2, History, LoaderCircle, MessageSquare, Plus, RotateCcw, Square, X, Zap } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionFileReference, SessionQueue, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
 import { useIsMobile } from "../hooks/use-is-mobile";
+import { ImagePreview } from "./image-lightbox";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
@@ -87,8 +88,6 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [preparingCount, setPreparingCount] = useState(0);
   const [hasDraft, setHasDraft] = useState(() => initialValue.trim() !== "");
-  const [previewIndex, setPreviewIndex] = useState<number>();
-  const preview = previewIndex === undefined ? undefined : attachments[previewIndex];
 
   useEffect(() => { busyRef.current = busy; }, [busy]);
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
@@ -329,7 +328,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
         {attachments.length === 0 && preparingCount === 0 ? null : <div className="composer-attachments">
           {attachments.map((attachment, index) => (
             <div className="composer-attachment" key={`${attachment.mimeType}:${index}`}>
-              <button type="button" className="composer-attachment-preview" aria-label={`预览图片 ${index + 1}`} onClick={() => { setPreviewIndex(index); }}><img src={imageDataUrl(attachment)} alt={`附件 ${index + 1}`} /></button>
+              <ImagePreview key={`${attachment.mimeType}:${index}`} src={imageDataUrl(attachment)} alt={`图片 ${String(index + 1)}`}><button type="button" className="composer-attachment-preview" aria-label={`预览图片 ${String(index + 1)}`}><img src={imageDataUrl(attachment)} alt={`附件 ${String(index + 1)}`} /></button></ImagePreview>
               <button type="button" className="composer-attachment-remove" aria-label="移除图片" onClick={() => { removeAttachment(index); }}><X size={10} /></button>
             </div>
           ))}
@@ -397,10 +396,6 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
         </div>
       </div>
       <input ref={galleryRef} className="composer-file-input" type="file" accept="image/*" multiple onChange={(event) => { handleFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
-      {preview === undefined ? null : <div className="image-lightbox" role="dialog" aria-label={`预览图片 ${previewIndex! + 1}`} onClick={() => setPreviewIndex(undefined)}>
-        <button type="button" className="image-lightbox-close" aria-label="关闭图片预览" onClick={() => setPreviewIndex(undefined)}><XCircle size={20} /></button>
-        <img src={imageDataUrl(preview)} alt={`图片 ${previewIndex! + 1}`} onClick={(event) => event.stopPropagation()} />
-      </div>}
     </section>
   );
 }

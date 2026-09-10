@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useState, type ComponentProps } from "react";
-import { ImageOff, XCircle } from "lucide-react";
+import { createContext, useContext, useState, type ComponentProps } from "react";
+import { ImageOff } from "lucide-react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { defaultSchema, type Schema } from "hast-util-sanitize";
 import rehypeHighlight from "rehype-highlight";
@@ -31,6 +31,8 @@ const rehypePlugins: PluggableList = [[rehypeSanitize, sanitizeSchema], rehypeHi
 // 这里只放行 data:image/*（base64 内嵌图），其余 URL 行为保持默认（javascript: 等仍被拦截）。
 const urlTransform = (url: string): string =>
   /^data:image\//i.test(url) ? url : defaultUrlTransform(url);
+
+import { ImagePreview } from "./image-lightbox";
 
 interface MarkdownMessageProps {
   text: string;
@@ -113,29 +115,16 @@ export function imageFallbackTarget(src: string | undefined): string {
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- node 是 react-markdown 注入的 hast 节点，需从 DOM 属性中剥离。
 function MarkdownImage({ node: _node, src, alt, title, ...rest }: ComponentProps<"img"> & { node?: HastNode }) {
-  const [open, setOpen] = useState(false);
   const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
-    window.addEventListener("keydown", onKeyDown);
-    return () => { window.removeEventListener("keydown", onKeyDown); };
-  }, [open]);
   const label = alt === undefined || alt === "" ? "图片预览" : alt;
   if (failed) return <span className="message-image-fallback" role="img" aria-label={label}>
     <ImageOff size={15} aria-hidden />
     <span className="message-image-fallback-path" title={src}>{imageFallbackTarget(src)}</span>
     {src === undefined ? null : <a href={src} target="_blank" rel="noreferrer">打开</a>}
   </span>;
-  return <>
-    <span className="message-image-frame">
-      <img {...rest} className="message-image" src={src} alt={alt ?? ""} title={title} loading="lazy" onError={() => setFailed(true)} onClick={() => setOpen(true)} />
-    </span>
-    {!open ? null : <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={label} onClick={() => setOpen(false)}>
-      <button type="button" className="image-lightbox-close" aria-label="关闭图片预览" onClick={() => setOpen(false)}><XCircle size={20} /></button>
-      <img src={src} alt={label} onClick={(event) => event.stopPropagation()} />
-    </div>}
-  </>;
+  return <ImagePreview className="message-image-frame" src={src ?? ""} alt={label}>
+    <img {...rest} className="message-image" src={src} alt={alt ?? ""} title={title} loading="lazy" onError={() => setFailed(true)} />
+  </ImagePreview>;
 }
 
 interface HastNode {
