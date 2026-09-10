@@ -281,9 +281,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .turn-process-chevron { flex: 0 0 auto; transition: transform .14s ease; }
 .turn-process-chevron.expanded { transform: rotate(90deg); }
 .turn-process-label { flex: 0 0 auto; font-size: 12px; font-weight: 500; }
-.turn-process-count, .turn-process-elapsed, .turn-process-failure { flex: 0 0 auto; color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.turn-process-failure { margin-left: auto; color: var(--warm); }
-.turn-process.failed .turn-process-summary { color: var(--muted); }
+.turn-process-count, .turn-process-elapsed { flex: 0 0 auto; color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .turn-process-body { display: grid; gap: 0; margin-top: 5px; border-left: 1px solid var(--line); padding-left: 7px; }
 .thinking-item { overflow: hidden; }
 .thinking-item.running, .thinking-item.completed { border: 0; background: transparent; }

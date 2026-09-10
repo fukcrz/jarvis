@@ -784,8 +784,6 @@ function renderItemRange(entry: TimelineRenderItem): { start?: string; end?: str
 export interface TurnProcessSummary {
   /** 工具调用总数。 */
   operations: number;
-  /** 失败的条目数：失败的工具调用与未被恢复的错误卡片。 */
-  failed: number;
   durationMs?: number;
 }
 
@@ -801,19 +799,13 @@ function processEndAt(turn: TimelineTurn): string | undefined {
 
 export function summarizeTurnProcess(turn: TimelineTurn): TurnProcessSummary {
   let operations = 0;
-  let failed = 0;
   for (const entry of turn.process) {
-    if (entry.kind === "activity") {
-      operations += entry.items.length;
-      failed += entry.items.filter((item) => item.state === "failed").length;
-    } else if (entry.kind === "error") {
-      failed += entry.items.filter((item) => item.state === "failed").length;
-    }
+    if (entry.kind === "activity") operations += entry.items.length;
   }
   const start = Date.parse(processStartAt(turn) ?? "");
   const end = Date.parse(processEndAt(turn) ?? "");
   const durationMs = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : undefined;
-  return { operations, failed, ...(durationMs === undefined ? {} : { durationMs }) };
+  return { operations, ...(durationMs === undefined ? {} : { durationMs }) };
 }
 
 /** 单条思考/工具组/事件本身就是一行摘要，再套一层折叠没有收益；过程文本可能很长，值得折。 */
@@ -842,18 +834,6 @@ function formatProcessElapsed(durationMs: number): string | undefined {
 }
 
 /** 计时器单独成一个小组件：每秒钟只重渲染这一个节点。 */
-function TurnElapsed({ active, startedAt, durationMs }: { active: boolean; startedAt?: string; durationMs?: number }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [active, startedAt]);
-  const elapsed = active ? formatRunElapsed(startedAt, now) : durationMs === undefined ? undefined : formatProcessElapsed(durationMs);
-  return elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>;
-}
-
 function turnProcessLabel(summary: TurnProcessSummary): string {
   const seconds = summary.durationMs === undefined ? 0 : Math.round(summary.durationMs / 1_000);
   const minutes = Math.floor(seconds / 60);
@@ -861,7 +841,6 @@ function turnProcessLabel(summary: TurnProcessSummary): string {
     "过程",
     ...(summary.operations === 0 ? [] : [`${String(summary.operations)} 项操作`]),
     ...(summary.durationMs === undefined ? [] : [`用时 ${minutes === 0 ? `${String(seconds)} 秒` : `${String(minutes)} 分 ${String(seconds % 60)} 秒`}`]),
-    ...(summary.failed === 0 ? [] : [`${String(summary.failed)} 项失败`]),
   ].join("，");
 }
 
@@ -890,10 +869,12 @@ function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderConte
 function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRenderContext & { turn: TimelineTurn; active: boolean; autoCollapse: boolean }) {
   const foldable = shouldFoldTurnProcess(turn);
   const summary = summarizeTurnProcess(turn);
-  // 只有拿到最终汇报、且不需要人工介入、也没有以失败收尾的回合才自动收起。
+  // 只有拿到最终汇报、且不需要人工介入、也没有以失败收尾的回合才收起过程。
   const pinned = isTurnPinned(turn);
   const failed = turnEndedInFailure(turn);
   const canAutoCollapse = turn.final !== undefined && !pinned && !failed;
+  // 运行中不出现折叠行：过程和以前一样直接铺在时间线上。
+  const collapsible = foldable && canAutoCollapse && !active;
   const [open, setOpen] = useState(() => active || !canAutoCollapse);
   const touched = useRef(false);
   const wasActive = useRef(active);
@@ -911,16 +892,16 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
     setOpen(!canAutoCollapse);
   }, [active, autoCollapse, canAutoCollapse]);
 
+  const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
   const process = turn.process.map((entry) => renderTimelineEntry(entry, context));
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
-    {!foldable ? process : <section className={`turn-process ${open ? "expanded" : "collapsed"}${summary.failed === 0 ? "" : " failed"}`}>
+    {!collapsible ? process : <section className={`turn-process ${open ? "expanded" : "collapsed"}`}>
       <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => { touched.current = true; setOpen((value) => !value); }}>
         <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
         <span className="turn-process-label">过程</span>
         {summary.operations === 0 ? null : <span className="turn-process-count">{summary.operations} 项操作</span>}
-        <TurnElapsed active={active} startedAt={processStartAt(turn)} durationMs={summary.durationMs} />
-        {summary.failed === 0 ? null : <span className="turn-process-failure">{summary.failed} 项失败</span>}
+        {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
       </button>
       {!open ? null : <div className="turn-process-body">{process}</div>}
     </section>}

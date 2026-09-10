@@ -171,7 +171,7 @@ describe("groupTimelineTurns", () => {
 });
 
 describe("summarizeTurnProcess", () => {
-  it("counts operations, failures, and the process duration", () => {
+  it("counts operations and the process duration", () => {
     const [turn] = groupTimelineTurns([
       user("u1"),
       { ...tool("a"), createdAt: "2026-01-01T00:00:10.000Z" },
@@ -180,13 +180,13 @@ describe("summarizeTurnProcess", () => {
       message("m1"),
     ]);
 
-    expect(turn === undefined ? undefined : summarizeTurnProcess(turn)).toEqual({ operations: 2, failed: 2, durationMs: 20_000 });
+    expect(turn === undefined ? undefined : summarizeTurnProcess(turn)).toEqual({ operations: 2, durationMs: 20_000 });
   });
 
   it("omits durations that cannot be derived from timestamps", () => {
     const [turn] = groupTimelineTurns([user("u1"), { ...tool("a"), createdAt: "" }, tool("b")]);
 
-    expect(turn === undefined ? undefined : summarizeTurnProcess(turn)).toEqual({ operations: 2, failed: 0 });
+    expect(turn === undefined ? undefined : summarizeTurnProcess(turn)).toEqual({ operations: 2 });
   });
 });
 

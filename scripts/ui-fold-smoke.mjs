@@ -38,7 +38,6 @@ async function foldState(page, index) {
     count: await page.locator(".turn-process").count(),
     expanded: await fold.locator(".turn-process-summary").getAttribute("aria-expanded"),
     header: (await fold.locator(".turn-process-summary").textContent()) ?? "",
-    failures: await fold.locator(".turn-process-failure").count(),
   };
 }
 
@@ -84,15 +83,16 @@ try {
   await emit("assistant.completed", { message: { kind: "message", id: "m2", role: "assistant", createdAt: at(6), text: "问题在分组函数，已修复。" } });
   await page.waitForTimeout(400);
 
-  const running = await foldState(page, 0);
-  if (running.count !== 1) failures.push(`running: expected 1 folded turn, got ${String(running.count)}`);
-  if (running.expanded !== "true") failures.push("running: the active turn is not expanded");
-  if (!/^过程2 项操作\d+:\d\d$/.test(running.header)) failures.push(`running: unexpected fold header "${running.header}"`);
+  // 运行中不出现折叠行：过程和以前一样直接铺在时间线上。
+  if (await page.locator(".turn-process").count() !== 0) failures.push("running: the fold row appeared while the turn was still running");
+  if (await page.locator(".turn-process-summary").count() !== 0) failures.push("running: the fold row appeared while the turn was still running");
+  if (await page.locator(".activity-group").count() === 0) failures.push("running: the process entries are not rendered inline");
   await page.screenshot({ path: join(screenshotDir, "jarvis-fold-running.png") });
 
   await emit("run.settled", status(sessionId, "idle"));
   await page.waitForTimeout(400);
   const settled = await foldState(page, 0);
+  if (settled.count !== 1) failures.push("settled: the finished turn has no fold row");
   if (settled.expanded !== "false") failures.push("settled: the finished turn did not collapse");
   if (!/^过程2 项操作\d+:\d\d$/.test(settled.header)) failures.push(`settled: unexpected fold header "${settled.header}"`);
   if (await page.locator(".message-row.assistant").last().textContent() !== "问题在分组函数，已修复。") failures.push("settled: the final answer is not visible outside the fold");
@@ -107,33 +107,30 @@ try {
   if ((await foldState(page, 0)).expanded !== "true") failures.push("manual: a manually expanded turn was collapsed again");
   await page.screenshot({ path: join(screenshotDir, "jarvis-fold-expanded.png") });
 
-  // 没有最终汇报、且以失败收尾的回合保持展开。
+  // 没有最终汇报、且以失败收尾的回合不折叠：过程与错误卡片保持原样可见。
   await emit("message.created", { message: { kind: "message", id: "u2", role: "user", createdAt: at(20), text: "再跑一次测试。" } });
   await emit("assistant.delta", { messageId: "m3", delta: "正在运行测试。" });
   await emit("tool.upsert", { tool: { kind: "tool", id: "call_3", createdAt: at(21), name: "bash", title: "Run command", state: "failed", inputPreview: "npm test", error: "1 failed" } });
   await emit("timeline.upsert", { item: { kind: "error", id: "e1", createdAt: at(22), code: "PI_RUNTIME_ERROR", message: "HTTP 503", state: "failed" } });
   await page.waitForTimeout(400);
-  const failed = await foldState(page, 1);
-  if (failed.expanded !== "true") failures.push("failed: a failing turn collapsed");
-  if (failed.failures !== 1) failures.push("failed: the failure marker is missing");
+  if (await page.locator(".turn-process").count() !== 1) failures.push("failed: a failing turn was folded away");
+  if (await page.locator(".timeline-error").isVisible() !== true) failures.push("failed: the failure entry is not visible");
 
   // 等待响应的扩展交互不能被关进折叠里。
   await emit("message.created", { message: { kind: "message", id: "u3", role: "user", createdAt: at(30), text: "删除这个文件。" } });
   await emit("assistant.delta", { messageId: "m4", delta: "需要你确认。" });
   await emit("extension.uiRequest", { request: { id: "c0ffee00-0000-4000-8000-00000000000f", method: "confirm", title: "允许删除文件", message: "将删除构建缓存。" } });
   await page.waitForTimeout(400);
-  const pending = await foldState(page, 2);
-  if (pending.expanded !== "true") failures.push("pending: a turn waiting for user input collapsed");
+  if (await page.locator(".turn-process").count() !== 1) failures.push("pending: a turn waiting for user input was folded away");
   if (await page.locator(".extension-operation.pending").count() !== 1) failures.push("pending: the pending interaction is not rendered");
 
-  // 用户 !cmd（`bash:` 前缀）所在回合默认展开，命令输出不被关进折叠里。
+  // 用户 !cmd（`bash:` 前缀）所在回合不折叠，命令输出直接可见。
   await emit("message.created", { message: { kind: "message", id: "u4", role: "user", createdAt: at(40), text: "查看状态。" } });
   await emit("thinking.delta", { thinkingId: "t3", delta: "先看看仓库状态。", createdAt: at(41) });
   await emit("thinking.completed", { thinkingId: "t3", text: "先看看仓库状态。", createdAt: at(41) });
   await emit("tool.upsert", { tool: { kind: "tool", id: "bash:run-9", createdAt: at(42), name: "bash", title: "Run command", state: "completed", inputPreview: "git status", output: "clean" } });
   await page.waitForTimeout(400);
-  const command = await foldState(page, 3);
-  if (command.expanded !== "true") failures.push("command: a turn containing a user !cmd collapsed");
+  if (await page.locator(".turn-process").count() !== 1) failures.push("command: a turn containing a user !cmd was folded away");
   if (await page.locator(".command-summary").filter({ hasText: "git status" }).isVisible() !== true) failures.push("command: the user !cmd output is not visible");
   await page.screenshot({ path: join(screenshotDir, "jarvis-fold-pinned.png") });
 
