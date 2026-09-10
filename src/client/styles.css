@@ -609,7 +609,6 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .login-field input:focus { border-color: var(--accent); outline: none; }
 .login-error { width: 100%; margin: 0; border-left: 2px solid var(--danger); border-radius: 3px; background: var(--danger-soft); padding: 8px 10px; color: #ffb4b6; font-size: 12px; line-height: 1.45; }
 .login-submit { width: 100%; min-height: 38px; }
-.login-hint { margin: 0; color: var(--subtle); font-size: 11px; text-align: center; line-height: 1.5; }
 .security-status { display: grid; justify-items: start; gap: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 12px; }
 .security-status small { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .security-form { display: grid; max-width: 420px; gap: 12px; }

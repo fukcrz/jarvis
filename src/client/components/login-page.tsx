@@ -51,7 +51,6 @@ export function LoginPage({ assistantName, onAuthenticated }: LoginPageProps) {
         {pending ? <Loader2 size={15} className="spin" /> : <KeyRound size={15} />}
         {pending ? "正在登录…" : "登录"}
       </Button>
-      <p className="login-hint">登录状态保持 7 天，使用期间自动续期。</p>
     </form>
   </main>;
 }

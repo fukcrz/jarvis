@@ -621,7 +621,7 @@ function SecurityPanel({ onMessage }: { onMessage: (message: string, tone?: Sett
     {loading ? <p className="settings-muted">正在读取认证状态…</p> : <>
       <div className="security-status">
         <span className={`provider-chip ${enabled ? "ready" : "unset"}`}>{enabled ? <><Check size={12} />已启用登录认证</> : "未设置密码"}</span>
-        <small>{enabled ? "登录状态保持 7 天，使用期间自动续期。" : "当前任何能访问该地址的人都可以操作会话；开启公网穿透前请先设置密码。"}</small>
+        <small>{enabled ? null : "当前任何能访问该地址的人都可以操作会话；开启公网穿透前请先设置密码。"}</small>
       </div>
       <form className="security-form" onSubmit={(event) => { void save(event); }}>
         {enabled ? <label className="settings-field"><span>当前密码</span><input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label> : null}
