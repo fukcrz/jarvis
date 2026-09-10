@@ -429,7 +429,6 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, highli
   const [draft, setDraft] = useState(item.text);
   const [submitting, setSubmitting] = useState(false);
   const preview = previewIndex === undefined ? undefined : images[previewIndex];
-  const hasMessageActions = !editing && !streaming && item.role === "user" && (item.text !== "" || onEdit !== undefined || onFork !== undefined);
   useEffect(() => { if (!editing) setDraft(item.text); }, [editing, item.text]);
   const submitEdit = async () => {
     if (onEdit === undefined || submitting || (draft.trim() === "" && images.length === 0)) return;
@@ -439,7 +438,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, highli
     if (sent) onCancelEdit();
   };
   return (
-    <article data-user-message-id={item.role === "user" ? item.id : undefined} className={`message-row ${item.role} ${streaming ? "streaming" : ""} ${editing ? "editing" : ""} ${hasMessageActions ? "has-message-actions" : ""} ${highlighted ? "navigator-highlight" : ""}`}>
+    <article data-user-message-id={item.role === "user" ? item.id : undefined} className={`message-row ${item.role} ${streaming ? "streaming" : ""} ${editing ? "editing" : ""} ${highlighted ? "navigator-highlight" : ""}`}>
       <div className={`message-body ${item.role}`}>
         {images.length === 0 ? null : <div className="message-images" aria-label="消息图片">
           {images.map((image, index) => <button key={`${image.mimeType}:${index}`} type="button" className="message-image-thumb" aria-label={`预览图片 ${index + 1}`} onClick={() => setPreviewIndex(index)}><img src={imageDataUrl(image)} alt={`图片 ${index + 1}`} loading="lazy" /></button>)}
