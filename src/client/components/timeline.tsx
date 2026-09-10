@@ -1,9 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { Archive, ArrowDown, Bell, Brain, Check, CircleAlert, Clock3, Copy, GitBranch, ListTree, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
+import { Archive, ArrowDown, Bell, Brain, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, ListTree, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
 import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
+import { parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, type ExtensionSelectOption } from "../lib/extension-dialog";
 import { MarkdownMessage } from "./markdown-message";
 import { ToolActivity } from "./tool-activity";
 import { Dialog, DialogContent } from "./ui/dialog";
@@ -483,6 +484,9 @@ function MessageActions({ item, streaming, onEdit, onFork }: { item: MessageTime
 type ExtensionDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
 type ExtensionResponse = { value?: string; confirmed?: boolean; cancelled?: boolean };
 
+/** 共享的空集合：对话框重置时复用同一个引用，避免每次渲染都新建 Set。 */
+const EMPTY_PREVIEWS: ReadonlySet<number> = new Set();
+
 function ExtensionUiOperation({ item, onRespond }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"] }) {
   if (item.request.method === "notify") return <ExtensionNotification item={item} />;
   return <ExtensionDialogOperation item={item} onRespond={onRespond} />;
@@ -495,13 +499,19 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [submitting, setSubmitting] = useState(false);
   const [showResult, setShowResult] = useState(false);
+  const [expandedPreviews, setExpandedPreviews] = useState<ReadonlySet<number>>(EMPTY_PREVIEWS);
 
+  // 重连/重新水合会用同一份数据重建请求对象，但同一个对话框不该因此清掉已展开的预览。
+  const requestIdRef = useRef(request.id);
   useEffect(() => {
+    if (requestIdRef.current === request.id) return;
+    requestIdRef.current = request.id;
     setValue(request.method === "editor" ? request.prefill ?? "" : "");
     setActiveIndex(0);
     optionRefs.current = [];
     setSubmitting(false);
     setShowResult(false);
+    setExpandedPreviews(EMPTY_PREVIEWS);
   }, [request]);
 
   const respond = (response: ExtensionResponse) => {
@@ -509,28 +519,69 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
     setSubmitting(true);
     Promise.resolve(onRespond(request.id, response)).catch(() => setSubmitting(false));
   };
+  // 扩展回退格式的选项带序号/描述/预览；解析不出来时按原始字符串渲染。
+  const dialog = useMemo(() => request.method === "select" ? parseSelectDialog(request) : undefined, [request]);
+  const choices: ExtensionSelectOption[] = request.method === "select"
+    ? dialog?.options ?? request.options.map((option) => ({ value: option, label: option }))
+    : [];
+  const togglePreview = (index: number) => {
+    setExpandedPreviews((current) => {
+      const next = new Set(current);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
   const onSelectKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (request.method !== "select") return;
+    // 预览开关是同一容器里的独立控件：它自己的 Enter/Space 不能被选项导航抢走（否则会误提交）。
+    if (event.target instanceof HTMLElement && event.target.closest(".extension-select-preview") !== null) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const nextIndex = event.key === "ArrowDown"
-        ? (activeIndex + 1) % request.options.length
-        : (activeIndex - 1 + request.options.length) % request.options.length;
+        ? (activeIndex + 1) % choices.length
+        : (activeIndex - 1 + choices.length) % choices.length;
       setActiveIndex(nextIndex);
       requestAnimationFrame(() => optionRefs.current[nextIndex]?.focus());
     } else if (event.key === "Enter" || event.key === " ") {
+      const choice = choices[activeIndex];
+      if (choice === undefined) return;
       event.preventDefault();
-      respond({ value: request.options[activeIndex] });
+      respond({ value: choice.value });
     }
   };
 
   if (item.outcome !== undefined) return <ExtensionResult item={item} expanded={showResult} onToggle={() => setShowResult((current) => !current)} />;
-  return <article className={`extension-operation pending ${request.method}`} aria-label={`扩展操作：${request.title}`} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); respond({ cancelled: true }); } }}>
+  const title = dialog === undefined ? request.title : selectDialogTitle(dialog);
+  return <article className={`extension-operation pending ${request.method}`} aria-label={`扩展操作：${title}`} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); respond({ cancelled: true }); } }}>
     <div className="extension-operation-heading"><Clock3 size={14} /><span>{extensionOperationPrompt(request.method)}</span><ExtensionTimeout timeout={request.timeout} createdAt={item.createdAt} /></div>
-    {request.method === "select" ? <div className="extension-operation-title-row"><p className="extension-operation-title">{request.title}</p><button type="button" className="extension-dock-close" aria-label="取消选择" disabled={submitting} onClick={() => respond({ cancelled: true })}><X size={16} /></button></div> : <p className="extension-operation-title">{request.title}</p>}
+    {request.method === "select" ? <div className="extension-operation-title-row"><p className="extension-operation-title extension-dialog-question">{dialog?.header === undefined ? null : <span className="extension-dialog-header">{dialog.header}</span>}{dialog?.question ?? request.title}</p><button type="button" className="extension-dock-close" aria-label="取消选择" disabled={submitting} onClick={() => respond({ cancelled: true })}><X size={16} /></button></div> : <p className="extension-operation-title">{request.title}</p>}
     {request.method === "confirm" && request.message !== undefined ? <p className="extension-operation-message">{request.message}</p> : null}
-    {request.method === "select" ? <div className="extension-select-list" role="listbox" aria-label={request.title} tabIndex={0} onKeyDown={onSelectKeyDown}>
-      {request.options.map((option, index) => <button ref={(element) => { optionRefs.current[index] = element; }} key={option} type="button" role="option" aria-selected={false} disabled={submitting} onFocus={() => setActiveIndex(index)} onClick={() => respond({ value: option })}>{option}</button>)}
+    {request.method === "select" ? <div className="extension-select-list" role="listbox" aria-label={title} tabIndex={0} onKeyDown={onSelectKeyDown}>
+      {dialog === undefined
+        ? request.options.map((option, index) => <button ref={(element) => { optionRefs.current[index] = element; }} key={option} type="button" role="option" aria-selected={false} className="extension-select-plain" disabled={submitting} onFocus={() => setActiveIndex(index)} onClick={() => respond({ value: option })}>{option}</button>)
+        : choices.map((option, index) => {
+          // 选项本身是 role=option 的按钮；预览开关必须是独立控件（按钮不能嵌套按钮），
+          // 所以这里用一层普通容器把两者并排放，点预览不会误提交该选项。
+          const expanded = expandedPreviews.has(index);
+          return <div key={option.value} role="group" className={`extension-select-option${option.custom === true ? " custom" : ""}`}>
+            <button ref={(element) => { optionRefs.current[index] = element; }} type="button" role="option" aria-selected={false} className="extension-select-choice" disabled={submitting} onFocus={() => setActiveIndex(index)} onClick={() => respond({ value: option.value })}>
+              {option.custom === true ? <Pencil size={13} className="extension-select-custom-icon" aria-hidden /> : <span className="extension-select-index" aria-hidden>{option.index ?? index + 1}</span>}
+              <span className="extension-select-body">
+                <span className="extension-select-label">{option.label}</span>
+                {option.description === undefined ? null : <span className="extension-select-description">{option.description}</span>}
+              </span>
+            </button>
+            {option.preview === undefined ? null : <div className="extension-select-preview">
+              <button type="button" className="extension-select-preview-toggle" aria-expanded={expanded} disabled={submitting} onClick={() => togglePreview(index)}>
+                <ChevronRight size={12} className={`extension-select-chevron${expanded ? " expanded" : ""}`} aria-hidden />
+                <span className="extension-select-preview-label">{expanded ? "收起预览" : "预览"}</span>
+                {expanded ? null : <span className="extension-select-preview-hint">{previewSummary(option.preview)}</span>}
+              </button>
+              {expanded ? <pre className="extension-select-preview-body">{option.preview}</pre> : null}
+            </div>}
+          </div>;
+        })}
     </div> : null}
     {request.method === "input" ? <input autoFocus className="extension-dialog-input" placeholder={request.placeholder} value={value} disabled={submitting} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); respond({ value }); } }} /> : null}
     {request.method === "editor" ? <textarea autoFocus className="extension-dialog-input multiline" value={value} disabled={submitting} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); respond({ value }); } }} rows={8} /> : null}
@@ -553,10 +604,18 @@ function ExtensionNotification({ item }: { item: ExtensionUiTimelineItem }) {
 function ExtensionResult({ item, expanded, onToggle }: { item: ExtensionUiTimelineItem; expanded: boolean; onToggle: () => void }) {
   const request = item.request as ExtensionDialogRequest;
   const canExpand = item.outcome === "answered" && (request.method === "input" || request.method === "editor") && item.value !== undefined && item.value !== "";
-  return <article className={`extension-operation ${item.outcome ?? "closed"}`} aria-label={`扩展操作：${request.title}`}>
+  const title = useMemo(() => dialogAriaTitle(request), [request]);
+  return <article className={`extension-operation ${item.outcome ?? "closed"}`} aria-label={`扩展操作：${title}`}>
     <div className="extension-result-line"><span className="extension-operation-icon">{item.outcome === "answered" ? <Check size={14} /> : <XCircle size={14} />}</span><span>{extensionOperationLabel(item)}</span>{canExpand ? <button type="button" onClick={onToggle} aria-expanded={expanded}>{expanded ? "收起" : "查看内容"}</button> : null}</div>
     {canExpand && expanded ? <pre className="extension-result-content">{item.value}</pre> : null}
   </article>;
+}
+
+/** 问题标题（无障碍标签用）：结构化后只取短标签 + 问题正文，不再带上折叠的预览正文。 */
+function dialogAriaTitle(request: ExtensionDialogRequest): string {
+  if (request.method !== "select") return request.title;
+  const dialog = parseSelectDialog(request);
+  return dialog === undefined ? request.title : selectDialogTitle(dialog);
 }
 
 function extensionOperationPrompt(method: ExtensionDialogRequest["method"]): string {
@@ -566,7 +625,7 @@ function extensionOperationPrompt(method: ExtensionDialogRequest["method"]): str
 function extensionOperationLabel(item: ExtensionUiTimelineItem): string {
   if (item.outcome === "answered") {
     if (item.request.method === "confirm") return item.confirmed === true ? "已允许" : "已拒绝";
-    if (item.request.method === "select") return `已选择：${item.value ?? "未选择"}`;
+    if (item.request.method === "select") return `已选择：${item.value === undefined ? "未选择" : selectAnswerLabel(item.request.options, item.value)}`;
     return item.value === "" ? "已提交空内容" : "已提交";
   }
   return item.outcome === "timeout" ? "已超时" : item.outcome === "cancelled" ? "已取消" : "已关闭";
