@@ -20,6 +20,7 @@
 - `npm test`（vitest，160 个用例）
 - `npm run build`（tsc + vite）
 - `node scripts/ui-smoke.mjs`（Playwright UI 冒烟）
+- `node scripts/ui-select-smoke.mjs`（扩展选择卡片冒烟，不依赖 ui-smoke 流水线，可单独跑）
 
 ## 会话内命令
 
