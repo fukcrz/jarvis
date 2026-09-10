@@ -270,7 +270,8 @@ async function verifyRunFeedback(page, name, sessionId, emit) {
   });
   await page.getByText("上下文压缩未完成").waitFor({ state: "visible", timeout: 5_000 });
   await page.getByRole("button", { name: "重试压缩" }).waitFor({ state: "visible", timeout: 5_000 });
-  await page.getByRole("button", { name: "查看诊断" }).click();
+  // 失败卡片在化简后由标题按钮直接展开/收起诊断（原「查看诊断」独立按钮已移除）。
+  await page.getByRole("button", { name: /上下文压缩未完成/ }).click();
   await page.getByText("PI_COMPACTION_FAILED").waitFor({ state: "visible", timeout: 5_000 });
   await page.getByText("smoke-request-409", { exact: true }).waitFor({ state: "visible", timeout: 5_000 });
   await page.getByText("409 Conflict: summary rejected (request id: smoke-request-409)").waitFor({ state: "visible", timeout: 5_000 });
