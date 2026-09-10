@@ -595,3 +595,21 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
   .tool-summary:hover { color: var(--ink); }
   .activity-items .tool-list-item .tool-summary:hover { color: var(--muted); }
 }
+
+/* --- 登录认证：登录页与设置页「安全」 --- */
+.login-page { display: grid; place-content: center; min-height: 100vh; background: radial-gradient(120% 90% at 50% 0%, #221f30 0%, var(--canvas) 58%); padding: 24px; }
+.login-card { display: grid; justify-items: center; width: min(360px, 100%); gap: 16px; border: 1px solid var(--line-strong); border-radius: 12px; background: rgb(29 29 32 / .92); box-shadow: 0 24px 60px rgb(0 0 0 / .45); padding: 28px 26px 22px; }
+.login-mark { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-strong); }
+.login-heading { display: grid; justify-items: center; gap: 5px; text-align: center; }
+.login-heading h1 { margin: 0; font-size: 19px; font-weight: 650; }
+.login-heading p { margin: 0; color: var(--muted); font-size: 12px; }
+.login-field { display: grid; width: 100%; gap: 6px; color: var(--muted); font-size: 11px; }
+.login-field input { width: 100%; min-height: 38px; border: 1px solid var(--line-strong); border-radius: 6px; background: #19191b; padding: 8px 10px; color: var(--ink); font-size: 14px; }
+.login-field input:focus { border-color: var(--accent); outline: none; }
+.login-error { width: 100%; margin: 0; border-left: 2px solid var(--danger); border-radius: 3px; background: var(--danger-soft); padding: 8px 10px; color: #ffb4b6; font-size: 12px; line-height: 1.45; }
+.login-submit { width: 100%; min-height: 38px; }
+.login-hint { margin: 0; color: var(--subtle); font-size: 11px; text-align: center; line-height: 1.5; }
+.security-status { display: grid; gap: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 12px; }
+.security-status small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.security-form { display: grid; max-width: 420px; gap: 12px; }
+.security-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, Boxes, Check, ChevronRight, CircleAlert, CheckCircle2, ExternalLink, FolderPlus, Globe, KeyRound, LogOut, LucideIcon, Pencil, Plus, RotateCw, Save, Search, Settings2, Trash2, X } from "lucide-react";
-import type { AppSettings, AuthLoginOperation, EnabledModelsStatus, FetchedModel, ManagedModel, ManagedProvider, ProviderStatus, Workspace } from "../../shared/protocol";
-import { api } from "../api";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { ArrowDown, ArrowUp, Boxes, Check, ChevronRight, CircleAlert, CheckCircle2, ExternalLink, FolderPlus, Globe, KeyRound, LogOut, LucideIcon, Pencil, Plus, RotateCw, Save, Search, Settings2, ShieldCheck, Trash2, X } from "lucide-react";
+import type { AppSettings, AuthLoginOperation, AuthStatus, EnabledModelsStatus, FetchedModel, ManagedModel, ManagedProvider, ProviderStatus, Workspace } from "../../shared/protocol";
+import { api, notifyUnauthorized } from "../api";
 import { isNotificationEnabled, requestNotificationPermission, setNotificationEnabled } from "../notifications";
 import { displayModelName } from "../model-display";
 import { Button } from "./ui/button";
@@ -19,7 +19,7 @@ interface SettingsPageProps {
   onBack: () => void;
 }
 
-type SettingsTab = "general" | "providers" | "workspaces" | "tunnel";
+type SettingsTab = "general" | "providers" | "workspaces" | "tunnel" | "security";
 type SettingsMessageTone = "success" | "error";
 /** 添加供应商向导的阶段：选择已知供应商 / 已知供应商登录 / 自定义协议 / 自定义连接信息。 */
 type ProviderStage =
@@ -277,6 +277,7 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
         <button type="button" className={tab === "general" ? "selected" : ""} onClick={() => setTab("general")}><Settings2 size={16} />常规</button>
         <button type="button" className={tab === "providers" ? "selected" : ""} onClick={() => setTab("providers")}><KeyRound size={16} />供应商与账号</button>
         <button type="button" className={tab === "workspaces" ? "selected" : ""} onClick={() => setTab("workspaces")}><FolderPlus size={16} />工作区</button>
+        <button type="button" className={tab === "security" ? "selected" : ""} onClick={() => setTab("security")}><ShieldCheck size={16} />安全</button>
         <button type="button" className={tab === "tunnel" ? "selected" : ""} onClick={() => setTab("tunnel")}><Globe size={16} />内网穿透</button>
       </nav>
       <main className="settings-content">
@@ -285,6 +286,7 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
         {tab === "providers" ? <section className="settings-section"><div className="settings-section-heading"><div><h2>供应商与账号</h2><p className="settings-muted">统一管理连接凭据、供应商接口和可用模型。</p></div><Button size="sm" onClick={openNewProvider}><Plus size={14} />添加供应商</Button></div>{loading ? <p className="settings-muted">正在读取供应商…</p> : <><button type="button" className="scope-strip" onClick={() => setGlobalModelsOpen(true)}><Boxes size={16} /><span className="scope-strip-main"><strong>{unrestricted ? "模型范围：全部可用" : `模型范围：已启用 ${String(enabledDraft.size)} 个模型`}</strong><small>{unrestricted ? "未设置白名单，所有供应商的模型都在选择器中 · 点击调整" : "按白名单显示 · 点击统一勾选"}</small></span><ChevronRight size={15} /></button><label className="settings-checkbox settings-show-all"><input type="checkbox" checked={providersShowAll} onChange={(event) => setProvidersShowAll(event.target.checked)} /><span>{providersShowAll ? "隐藏未启用的供应商" : `显示全部供应商（${String(hiddenProviderCount)} 个未启用）`}</span></label>{visibleProviders.length === 0 && customProviders.length === 0 ? <EmptyState icon={KeyRound} title="还没有供应商" hint="登录官方账号，或添加任意 OpenAI 兼容接口" actionLabel="添加供应商" onAction={openNewProvider} /> : <div className="provider-list">{visibleProviders.map((item) => <ProviderRow key={item.id} status={item} custom={customById.get(item.id)} enabledCount={providerEnabledCounts.get(item.id) ?? 0} busy={busy} onOpen={openProviderDetail} onEdit={openEditProvider} onRemove={setProviderRemoveTarget} />)}{customProviders.filter((item) => !providers.some((status) => status.id === item.id)).map((item) => <article className="provider-row" key={item.id}><span className="provider-avatar" style={providerAvatarStyle(item.id)}>{(item.name ?? item.id).slice(0, 1).toUpperCase()}</span><div className="provider-main"><strong>{item.name ?? item.id}</strong><small>{item.models.length} 个模型 · 未加载（运行时不可用）</small></div><div className="provider-status"><Button variant="secondary" size="sm" onClick={() => openEditProvider(item)}>编辑</Button><Button variant="ghost" size="icon" aria-label={`删除 ${item.id}`} title="删除供应商" disabled={busy === item.id} onClick={() => setProviderRemoveTarget(item)}><Trash2 size={15} /></Button></div></article>)}</div>}</>}</section> : null}
         {tab === "workspaces" ? <section className="settings-section"><div className="settings-section-heading"><h2>工作区</h2><Button size="sm" onClick={() => setWorkspaceDialogOpen(true)}><FolderPlus size={14} />添加工作区</Button></div>{workspaces.length === 0 ? <EmptyState icon={FolderPlus} title="还没有工作区" hint="添加本地目录，为每个项目维护独立会话" actionLabel="添加工作区" onAction={() => setWorkspaceDialogOpen(true)} /> : <div className="provider-list">{workspaces.map((workspace, index) => <article className="provider-row workspace-settings-row" key={workspace.id}><div className="provider-main"><strong>{workspace.label}</strong><small>{workspace.cwd}</small></div><div className="provider-status workspace-settings-actions"><Button variant="ghost" size="icon" aria-label="上移工作区" title="上移" disabled={index === 0 || workspaceBusy !== undefined} onClick={() => { void moveWorkspace(index, -1); }}><ArrowUp size={15} /></Button><Button variant="ghost" size="icon" aria-label="下移工作区" title="下移" disabled={index === workspaces.length - 1 || workspaceBusy !== undefined} onClick={() => { void moveWorkspace(index, 1); }}><ArrowDown size={15} /></Button><Button variant="ghost" size="icon" aria-label={`删除工作区 ${workspace.label}`} title="删除工作区" disabled={workspaceBusy !== undefined} onClick={() => setWorkspaceRemoveTarget(workspace)}><Trash2 size={15} /></Button></div></article>)}</div>}</section> : null}
         {tab === "tunnel" ? <TunnelPanel onMessage={(nextMessage, tone) => showMessage(nextMessage, tone)} /> : null}
+        {tab === "security" ? <SecurityPanel onMessage={(nextMessage, tone) => showMessage(nextMessage, tone)} /> : null}
       </main>
     </div>
     <Dialog open={providerDialogOpen} onOpenChange={(open) => { if (!open && busy !== "provider") setProviderDialogOpen(false); }}><DialogContent className="provider-dialog" title={providerDialogTitle} description={providerDialogDescription(providerStage, editingProvider)}><ProviderWizard providers={pickerProviders} provider={provider} stage={providerStage} editing={editingProvider} busy={busy === "provider"} search={providerSearch} onSearchChange={setProviderSearch} onChange={setProvider} onStageChange={setProviderStage} onCancel={() => setProviderDialogOpen(false)} onLogin={startLogin} onSave={(openModels) => { void saveProvider(openModels === true ? { openModelsAfterSave: true } : undefined); }} /></DialogContent></Dialog>
@@ -545,4 +547,96 @@ function AuthOperation({ operation, prompt, event, onRespond, onCancel, onClose 
   const [value, setValue] = useState("");
   const options = useMemo(() => prompt?.options ?? [], [prompt?.options]);
   return <div className="auth-operation-overlay"><div className="auth-operation"><div className="settings-section-heading"><h2>{operation.state === "completed" ? "登录完成" : operation.state === "failed" ? "登录失败" : operation.state === "cancelled" ? "登录已取消" : "正在登录"}</h2><Button variant="ghost" size="icon" aria-label="取消登录" title="取消登录" onClick={operation.state === "running" ? onCancel : onClose}><X size={17} /></Button></div>{event?.message ? <p className="auth-event">{event.message}</p> : null}{event?.url ? <a className="auth-link" href={event.url} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开授权页面</a> : null}{operation.error ? <p className="settings-error">{operation.error}</p> : null}{operation.state === "running" && prompt ? <form className="auth-prompt" onSubmit={(eventSubmit) => { eventSubmit.preventDefault(); if (value.trim() !== "") { onRespond(value); setValue(""); } }}>{prompt.type === "select" ? <div className="auth-options">{options.map((option) => <button type="button" key={option.id} onClick={() => onRespond(option.id)}><strong>{option.label}</strong>{option.description ? <small>{option.description}</small> : null}</button>)}</div> : <><label>{prompt.message}<input autoFocus type={prompt.type === "secret" ? "password" : "text"} placeholder={prompt.placeholder} value={value} onChange={(eventInput) => setValue(eventInput.target.value)} /></label><Button type="submit" disabled={value.trim() === ""}>提交</Button></>}</form> : null}{operation.state === "completed" || operation.state === "failed" || operation.state === "cancelled" ? <Button onClick={onClose}>关闭</Button> : null}</div></div>;
+}
+
+/** 安全：访问密码（设置/修改/关闭）与登录设备管理。 */
+function SecurityPanel({ onMessage }: { onMessage: (message: string, tone?: SettingsMessageTone) => void }) {
+  const [status, setStatus] = useState<AuthStatus | undefined>();
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [disableOpen, setDisableOpen] = useState(false);
+  const enabled = status?.required === true;
+
+  useEffect(() => {
+    let disposed = false;
+    void api.authStatus().then(({ auth }) => { if (!disposed) setStatus(auth); })
+      .catch((error: unknown) => { if (!disposed) onMessage(error instanceof Error ? error.message : "无法读取认证状态", "error"); })
+      .finally(() => { if (!disposed) setLoading(false); });
+    return () => { disposed = true; };
+  }, []);
+
+  const save = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (busy) return;
+    if (newPassword.length < 8) { onMessage("密码至少 8 位", "error"); return; }
+    if (newPassword !== confirmPassword) { onMessage("两次输入的密码不一致", "error"); return; }
+    setBusy(true);
+    try {
+      setStatus(await api.setPassword(newPassword, enabled ? currentPassword : undefined));
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      onMessage(enabled ? "密码已更新，其他设备需要重新登录" : "已启用登录认证，下次打开需要输入密码");
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "密码保存失败", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disable = async () => {
+    setDisableOpen(false);
+    if (currentPassword === "") { onMessage("请先填写当前密码", "error"); return; }
+    setBusy(true);
+    try {
+      setStatus(await api.setPassword(null, currentPassword));
+      setCurrentPassword("");
+      onMessage("已关闭登录认证");
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "关闭认证失败", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** 退出登录：清掉本地会话后由 AuthGate 回到登录页。 */
+  const signOut = (allDevices: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    const request = allDevices ? api.logoutAll() : api.logout();
+    void request.catch((error: unknown) => { onMessage(error instanceof Error ? error.message : "退出登录失败", "error"); })
+      .finally(() => { notifyUnauthorized(); });
+  };
+
+  return <section className="settings-section">
+    <div className="settings-section-heading">
+      <div>
+        <h2>安全</h2>
+        <p className="settings-muted">访问密码保护整个工作台：未登录的设备无法读取会话、执行命令或打开穿透地址。</p>
+      </div>
+    </div>
+    {loading ? <p className="settings-muted">正在读取认证状态…</p> : <>
+      <div className="security-status">
+        <span className={`provider-chip ${enabled ? "ready" : "unset"}`}>{enabled ? <><Check size={12} />已启用登录认证</> : "未设置密码"}</span>
+        <small>{enabled ? "登录状态保持 7 天，使用期间自动续期。" : "当前任何能访问该地址的人都可以操作会话；开启公网穿透前请先设置密码。"}</small>
+      </div>
+      <form className="security-form" onSubmit={(event) => { void save(event); }}>
+        {enabled ? <label className="settings-field"><span>当前密码</span><input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label> : null}
+        <label className="settings-field"><span>新密码</span><input type="password" autoComplete="new-password" minLength={8} placeholder="至少 8 位" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+        <label className="settings-field"><span>确认新密码</span><input type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
+        <div className="security-actions">
+          <Button type="submit" disabled={busy || newPassword === ""}><ShieldCheck size={15} />{enabled ? "修改密码" : "启用登录认证"}</Button>
+          {enabled ? <Button type="button" variant="danger" disabled={busy} onClick={() => setDisableOpen(true)}>关闭认证</Button> : null}
+        </div>
+      </form>
+      {enabled ? <div className="security-actions">
+        <Button variant="secondary" disabled={busy} onClick={() => signOut(false)}><LogOut size={15} />退出登录</Button>
+        <Button variant="ghost" disabled={busy} onClick={() => signOut(true)}>退出所有设备</Button>
+      </div> : null}
+    </>}
+    <Dialog open={disableOpen} onOpenChange={(open) => { if (!open && !busy) setDisableOpen(false); }}><DialogContent title="关闭登录认证"><p className="delete-session-message">关闭后，任何能访问该地址的人都可以读取会话、执行命令与修改文件，公网穿透地址也会直接暴露。</p><div className="dialog-actions"><Button variant="secondary" onClick={() => setDisableOpen(false)} disabled={busy}>取消</Button><Button variant="danger" onClick={() => { void disable(); }} disabled={busy}>关闭认证</Button></div></DialogContent></Dialog>
+  </section>;
 }

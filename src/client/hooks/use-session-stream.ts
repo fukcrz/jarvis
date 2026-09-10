@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { api, sessionPath, socketUrl } from "../api";
+import { api, notifyUnauthorized, sessionPath, socketUrl } from "../api";
 import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, sessionEventSchema } from "../../shared/protocol";
 import { notifyRunFinished, type RunNotificationInfo } from "../notifications";
 import { addOptimisticUserMessage, applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, removeOptimisticUserMessage, replaceUserMessageWithOptimistic, type TranscriptState } from "../transcript";
@@ -188,11 +188,16 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
           connection.close();
         });
       });
-      connection.addEventListener("close", () => {
+      connection.addEventListener("close", (event) => {
         if (disposed || socket !== connection) return;
         socket = undefined;
         hydrated = false;
         buffered = [];
+        // 4401：服务端因未登录关闭握手，不再重连，交由 AuthGate 回到登录页。
+        if (event.code === 4401) {
+          notifyUnauthorized();
+          return;
+        }
         attempt += 1;
         dispatch({ type: "connection", value: "reconnecting" });
         reconnectTimer = window.setTimeout(connect, Math.min(10_000, 700 * (2 ** Math.min(attempt, 4))));

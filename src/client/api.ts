@@ -23,12 +23,20 @@ import type {
   Workspace,
   AppSettings,
   AuthLoginOperation,
+  AuthStatus,
   EnabledModelRef,
   EnabledModelsStatus,
   FetchedModel,
   ManagedProvider,
   ProviderStatus,
 } from "../shared/protocol";
+
+/** 会话失效（HTTP 401 / WebSocket 4401）时广播，由 AuthGate 切回登录页。 */
+export const UNAUTHORIZED_EVENT = "jarvis:unauthorized";
+
+export function notifyUnauthorized(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+}
 
 export class ApiError extends Error {
   constructor(
@@ -54,6 +62,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (options?.body !== undefined && options.body !== null && !headers.has("content-type")) headers.set("content-type", "application/json");
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
+    // 登录态失效：通知外层切回登录页（登录/状态接口自身的 401 不算）。
+    if (response.status === 401 && !path.startsWith("/api/auth/")) notifyUnauthorized();
     const body = await response.json().catch(() => undefined) as unknown;
     const error = apiErrorDetails(body);
     const code = error.code ?? "REQUEST_FAILED";
@@ -123,6 +133,13 @@ function parseValidationDetails(message: string): string | undefined {
 }
 
 export const api = {
+  /** 登录状态：assistantName 也一并返回，登录页与欢迎页用同一名字。 */
+  authStatus: async (): Promise<{ auth: AuthStatus; assistantName: string }> => request<{ auth: AuthStatus; assistantName: string }>("/api/auth/status"),
+  login: async (password: string): Promise<AuthStatus> => (await request<{ auth: AuthStatus }>("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) })).auth,
+  logout: async (): Promise<AuthStatus> => (await request<{ auth: AuthStatus }>("/api/auth/logout", { method: "POST", body: "{}" })).auth,
+  logoutAll: async (): Promise<AuthStatus> => (await request<{ auth: AuthStatus }>("/api/auth/logout-all", { method: "POST", body: "{}" })).auth,
+  /** newPassword = null 关闭认证；已启用认证时必须提供当前密码。 */
+  setPassword: async (newPassword: string | null, currentPassword?: string): Promise<AuthStatus> => (await request<{ auth: AuthStatus }>("/api/auth/password", { method: "PUT", body: JSON.stringify({ newPassword, ...(currentPassword === undefined ? {} : { currentPassword }) }) })).auth,
   directory: async (path?: string, roots = false): Promise<DirectoryListing> => {
     const params = new URLSearchParams();
     if (path !== undefined) params.set("path", path);

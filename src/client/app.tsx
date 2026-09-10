@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, Bell, CircleAlert, FolderPlus, MoreVertical, Pencil, Plus, Puzzle, X } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
-import { api, isSessionConflict, socketUrl } from "./api";
+import { api, isSessionConflict, notifyUnauthorized, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
 import { ThinkingSelector } from "./components/thinking-selector";
@@ -482,8 +482,14 @@ export function App() {
             // A malformed workspace event does not invalidate the active view.
           }
         });
-        connection.addEventListener("close", () => {
-          if (!disposed && socket === connection) reconnect = window.setTimeout(connect, 1_500);
+        connection.addEventListener("close", (event) => {
+          if (disposed || socket !== connection) return;
+          // 4401：服务端因未登录拒绝，AuthGate 会切回登录页，不再重连。
+          if (event.code === 4401) {
+            notifyUnauthorized();
+            return;
+          }
+          reconnect = window.setTimeout(connect, 1_500);
         });
       };
       connect();
