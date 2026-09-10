@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, ChevronUp, Focus, Folder, GitBranch, MoreVertical, Pencil, Plus, Search, Settings2, Trash2 } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleDot, Focus, Folder, GitBranch, LoaderCircle, MoreVertical, Pencil, Plus, Search, Settings2, Trash2 } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionLabel, sessionListWindow } from "../lib/utils";
+import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionAttentionState, sessionLabel, sessionListWindow } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 
@@ -45,6 +45,11 @@ function groupLatestUpdatedAt(group: MobileSessionGroup): string {
 
 export function shouldShowMobileSessionGroup(sessionCount: number, focusMode: boolean): boolean {
   return sessionCount > 0 || focusMode;
+}
+
+export function projectAttentionSession(sessions: SessionSummary[]): SessionSummary | undefined {
+  const session = [...sessions].sort((a, b) => sessionAttentionRank(a) - sessionAttentionRank(b) || b.updatedAt.localeCompare(a.updatedAt))[0];
+  return session === undefined || sessionAttentionLabel(session) === undefined ? undefined : session;
 }
 
 export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
@@ -104,7 +109,10 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
   });
   return <section className="mobile-page mobile-all-sessions-page" aria-label="全部会话">
     <header className="mobile-switcher-header"><strong>{props.assistantName}</strong><div className="mobile-switcher-actions"><Button variant="ghost" size="icon" aria-label="搜索会话" title="搜索会话" onClick={props.onOpenSearch}><Search size={18} /></Button><Button variant="ghost" size="icon" className={`session-focus-toggle${props.focusMode ? " active" : ""}`} aria-label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} aria-pressed={props.focusMode} title={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} onClick={props.onToggleFocusMode}><Focus size={18} /></Button><Button variant="ghost" size="icon" aria-label="查看文件" title="文件" onClick={props.onOpenFiles}><Folder size={18} /></Button><Button variant="ghost" size="icon" aria-label="打开设置" title="设置" onClick={props.onOpenSettings}><Settings2 size={18} /></Button><Button variant="ghost" size="icon" aria-label="新建会话" onClick={requestCreateSession} disabled={props.workspaces.length === 0}><Plus size={20} /></Button></div></header>
-    <nav className="mobile-session-projects" aria-label="按项目筛选会话"><button type="button" className={workspaceFilter === "all" ? "selected" : ""} onClick={() => setWorkspaceFilter("all")}>全部</button>{props.workspaces.map((workspace) => <button type="button" key={workspace.id} className={workspaceFilter === workspace.id ? "selected" : ""} onClick={() => setWorkspaceFilter(workspace.id)}>{workspace.label}</button>)}<button type="button" className="mobile-add-project" aria-label="添加项目" onClick={props.onAddProject}><Plus size={15} /></button></nav>
+    <nav className="mobile-session-projects" aria-label="按项目筛选会话"><button type="button" className={workspaceFilter === "all" ? "selected" : ""} onClick={() => setWorkspaceFilter("all")}>全部</button>{props.workspaces.map((workspace) => {
+      const attentionSession = projectAttentionSession(props.sessionsByWorkspace[workspace.id] ?? []);
+      return <button type="button" key={workspace.id} className={workspaceFilter === workspace.id ? "selected" : ""} aria-label={`${workspace.label}${attentionSession === undefined ? "" : `，${sessionAttentionLabel(attentionSession)}`}`} onClick={() => setWorkspaceFilter(workspace.id)}><span className="mobile-project-label">{workspace.label}</span><MobileProjectStatus session={attentionSession} /></button>;
+    })}<button type="button" className="mobile-add-project" aria-label="添加项目" onClick={props.onAddProject}><Plus size={15} /></button></nav>
     <div className="mobile-page-list mobile-switcher-list" onPointerDown={(event) => {
       // 点击列表其他位置时收起已滑开的行（行内的手势处理自身）。
       if (openSwipeKey === null) return;
@@ -163,6 +171,15 @@ export function saveMobileExpandedGroups(expandedGroupIds: Record<string, boolea
   } catch {
     // The session list remains usable when browser storage is unavailable.
   }
+}
+
+function MobileProjectStatus({ session }: { session: SessionSummary | undefined }) {
+  if (session === undefined) return null;
+  const state = sessionAttentionState(session);
+  const label = sessionAttentionLabel(session);
+  if (label === undefined) return null;
+  const Icon = state === "running" ? LoaderCircle : state === "failed" ? CircleAlert : state === "completed_unread" ? CheckCircle2 : CircleDot;
+  return <span className={`mobile-project-status attention-${state}${session.runState === "stopping" ? " stopping" : ""}`} title={label} aria-hidden="true"><Icon size={13} className={state === "running" ? "spin" : undefined} /></span>;
 }
 
 interface MobileSessionRowProps {
