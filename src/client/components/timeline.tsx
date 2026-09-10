@@ -1,10 +1,10 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { Archive, ArrowDown, Bell, Brain, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, ListTree, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
 import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
-import { parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, type ExtensionSelectOption } from "../lib/extension-dialog";
+import { parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, splitDialogHeading, type ExtensionSelectOption } from "../lib/extension-dialog";
 import { MarkdownMessage } from "./markdown-message";
 import { ToolActivity } from "./tool-activity";
 import { Dialog, DialogContent } from "./ui/dialog";
@@ -487,6 +487,14 @@ type ExtensionResponse = { value?: string; confirmed?: boolean; cancelled?: bool
 /** 共享的空集合：对话框重置时复用同一个引用，避免每次渲染都新建 Set。 */
 const EMPTY_PREVIEWS: ReadonlySet<number> = new Set();
 
+/**
+ * 待回答对话框的草稿。时间线按「回合」分组，而回合的 key 在用户消息缺失时会取首条
+ * 条目的 id（`groupTimelineTurns`）：重新水合、加载更早历史、压缩重写都可能改变它，
+ * 于是卡片会被重挂载。草稿必须活在组件实例之外，否则用户写一半的内容会跟着重挂载消失。
+ * 键是对话框 id（每个请求唯一的 UUID），对话框落定后清理。
+ */
+const dialogDrafts = new Map<string, string>();
+
 function ExtensionUiOperation({ item, onRespond }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"] }) {
   if (item.request.method === "notify") return <ExtensionNotification item={item} />;
   return <ExtensionDialogOperation item={item} onRespond={onRespond} />;
@@ -494,7 +502,11 @@ function ExtensionUiOperation({ item, onRespond }: { item: ExtensionUiTimelineIt
 
 function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"] }) {
   const request = item.request as ExtensionDialogRequest;
-  const [value, setValue] = useState(request.method === "editor" ? request.prefill ?? "" : "");
+  const [value, setValueState] = useState(() => dialogDrafts.get(request.id) ?? (request.method === "editor" ? request.prefill ?? "" : ""));
+  const setValue = useCallback((next: string) => {
+    dialogDrafts.set(request.id, next);
+    setValueState(next);
+  }, [request.id]);
   const [activeIndex, setActiveIndex] = useState(0);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -514,7 +526,13 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
     setSubmitting(false);
     setShowResult(false);
     setExpandedPreviews(EMPTY_PREVIEWS);
-  }, [request]);
+  }, [request, setValue]);
+
+  // 对话框落定（已答/取消/超时/关闭）后不再需要草稿。
+  useEffect(() => {
+    if (item.outcome === undefined) return;
+    dialogDrafts.delete(request.id);
+  }, [item.outcome, request.id]);
 
   const respond = (response: ExtensionResponse) => {
     if (item.outcome !== undefined || submitting || onRespond === undefined) return;
@@ -555,9 +573,11 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
 
   if (item.outcome !== undefined) return <ExtensionResult item={item} expanded={showResult} onToggle={() => setShowResult((current) => !current)} />;
   const title = dialog === undefined ? request.title : selectDialogTitle(dialog);
+  // 非选择卡（确认/输入/编辑）的标题也带扩展自己拼的信息，同样拆出短标签、保留换行结构。
+  const heading = request.method === "select" ? undefined : splitDialogHeading(request.title);
   return <article className={`extension-operation pending ${request.method}`} aria-label={`扩展操作：${title}`} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); respond({ cancelled: true }); } }}>
     <div className="extension-operation-heading"><Clock3 size={14} /><span>{extensionOperationPrompt(request.method)}</span><ExtensionTimeout timeout={request.timeout} createdAt={item.createdAt} /></div>
-    {request.method === "select" ? <div className="extension-operation-title-row"><p className="extension-operation-title extension-dialog-question">{dialog?.header === undefined ? null : <span className="extension-dialog-header">{dialog.header}</span>}{dialog?.question ?? request.title}</p><button type="button" className="extension-dock-close" aria-label="取消选择" disabled={submitting} onClick={() => respond({ cancelled: true })}><X size={16} /></button></div> : <p className="extension-operation-title">{request.title}</p>}
+    {request.method === "select" ? <div className="extension-operation-title-row"><p className="extension-operation-title extension-dialog-question">{dialog?.header === undefined ? null : <span className="extension-dialog-header">{dialog.header}</span>}{dialog?.question ?? request.title}</p><button type="button" className="extension-dock-close" aria-label="取消选择" disabled={submitting} onClick={() => respond({ cancelled: true })}><X size={16} /></button></div> : <p className="extension-operation-title extension-dialog-question">{heading?.header === undefined ? null : <span className="extension-dialog-header">{heading.header}</span>}{heading?.question ?? request.title}</p>}
     {request.method === "confirm" && request.message !== undefined ? <p className="extension-operation-message">{request.message}</p> : null}
     {request.method === "select" ? <div className="extension-select-list" role="listbox" aria-label={title} tabIndex={0} onKeyDown={onSelectKeyDown}>
       {dialog === undefined
@@ -615,9 +635,12 @@ function ExtensionResult({ item, expanded, onToggle }: { item: ExtensionUiTimeli
 
 /** 问题标题（无障碍标签用）：结构化后只取短标签 + 问题正文，不再带上折叠的预览正文。 */
 function dialogAriaTitle(request: ExtensionDialogRequest): string {
-  if (request.method !== "select") return request.title;
-  const dialog = parseSelectDialog(request);
-  return dialog === undefined ? request.title : selectDialogTitle(dialog);
+  if (request.method === "select") {
+    const dialog = parseSelectDialog(request);
+    return dialog === undefined ? request.title : selectDialogTitle(dialog);
+  }
+  const heading = splitDialogHeading(request.title);
+  return heading.header === undefined ? heading.question : `${heading.header}：${heading.question}`;
 }
 
 function extensionOperationPrompt(method: ExtensionDialogRequest["method"]): string {

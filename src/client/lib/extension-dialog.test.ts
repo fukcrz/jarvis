@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSelectDialog, parseSelectOptions, previewSummary, selectAnswerLabel, selectDialogTitle } from "./extension-dialog";
+import { parseSelectDialog, parseSelectOptions, previewSummary, selectAnswerLabel, selectDialogTitle, splitDialogHeading } from "./extension-dialog";
 
 /**
  * 标题按 `rpc-fallback.ts` 的 `buildPreviewBlock` 拼法构造：问题 + `\n\n` +
@@ -129,6 +129,15 @@ describe("selectDialogTitle", () => {
     const dialog = parseSelectDialog({ title: TITLE, options: OPTIONS })!;
     expect(selectDialogTitle(dialog)).toBe("统一顺序：gpt 组统一后的 provider 优先顺序，确定哪一种？");
     expect(selectDialogTitle({ question: "要继续吗？", options: [] })).toBe("要继续吗？");
+  });
+});
+
+describe("splitDialogHeading", () => {
+  it("拆出方括号短标签，保留问题正文里的换行结构", () => {
+    expect(splitDialogHeading("[严格程度] 规则写多硬？\n\n输入你的回答：")).toEqual({ header: "严格程度", question: "规则写多硬？\n\n输入你的回答：" });
+    expect(splitDialogHeading("选择要使用的模型")).toEqual({ question: "选择要使用的模型" });
+    // 方括号后面没有正文时不当作短标签。
+    expect(splitDialogHeading("[只是提示]")).toEqual({ question: "[只是提示]" });
   });
 });
 

@@ -41,6 +41,13 @@ export interface ExtensionSelectDialog {
   options: ExtensionSelectOption[];
 }
 
+export interface ExtensionDialogHeading {
+  /** 方括号短标签，没有时为 undefined。 */
+  header?: string;
+  /** 标题正文（已去掉短标签）。 */
+  question: string;
+}
+
 type SelectRequest = Pick<Extract<ExtensionUiRequest, { method: "select" }>, "title" | "options">;
 
 /** 解析编号选项行；只要有一行不是「N. …」的形态就整体放弃。 */
@@ -89,10 +96,16 @@ export function parseSelectDialog(request: SelectRequest): ExtensionSelectDialog
     return preview === undefined || preview.body === "" ? option : { ...option, preview: preview.body };
   });
 
-  const headerMatch = SHORT_HEADER.exec(question);
-  const body = (headerMatch === null ? question : headerMatch[2]).trim();
-  if (body === "") return undefined;
-  return { ...(headerMatch === null ? {} : { header: headerMatch[1] }), question: body, options: merged };
+  const heading = splitDialogHeading(question);
+  if (heading.question === "") return undefined;
+  return { ...(heading.header === undefined ? {} : { header: heading.header }), question: heading.question, options: merged };
+}
+
+/** 拆出扩展自己加的方括号短标签（如「[严格程度] 规则写多硬？」，没有标签就是整段标题）。 */
+export function splitDialogHeading(title: string): ExtensionDialogHeading {
+  const trimmed = title.trim();
+  const match = SHORT_HEADER.exec(trimmed);
+  return match === null ? { question: trimmed } : { header: match[1], question: match[2].trim() };
 }
 
 /** 问题标题：短标签 + 问题正文（不含折叠在标题里的预览正文）。 */

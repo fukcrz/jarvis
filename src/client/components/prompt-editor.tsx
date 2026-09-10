@@ -74,6 +74,9 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
   const completionItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const attachmentsRef = useRef(attachments);
   const injectedTextRef = useRef(injectedText);
+  /** 已应用的扩展注入编号：重连/重新水合会重建内容相同、对象身份不同的注入，
+      重复应用会把用户后来写进编辑器的内容整体覆盖掉。 */
+  const appliedInjectionRef = useRef<number | undefined>(undefined);
   const draftInjectionRef = useRef(draftInjection);
   const commandsRef = useRef(commands);
   const searchFilesRef = useRef(searchFiles);
@@ -96,11 +99,18 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
     view.focus();
   }, []);
 
+  /** 每个 nonce 只注入一次；编辑器重挂载（切换会话）时 ref 会重置，注入会重新生效。 */
+  const applyExtensionText = useCallback((view: EditorView, injection: { text: string; nonce: number } | undefined) => {
+    if (injection === undefined || appliedInjectionRef.current === injection.nonce) return;
+    appliedInjectionRef.current = injection.nonce;
+    applyInjectedText(view, injection);
+  }, [applyInjectedText]);
+
   useEffect(() => {
     injectedTextRef.current = injectedText;
     const view = viewRef.current;
-    if (view !== undefined) applyInjectedText(view, injectedText);
-  }, [applyInjectedText, injectedText]);
+    if (view !== undefined) applyExtensionText(view, injectedText);
+  }, [applyExtensionText, injectedText]);
 
   useEffect(() => {
     draftInjectionRef.current = draftInjection;
@@ -170,7 +180,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
     viewRef.current = view;
     const initial = initialValueRef.current;
     if (initial !== "") view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: initial } });
-    applyInjectedText(view, injectedTextRef.current);
+    applyExtensionText(view, injectedTextRef.current);
     applyInjectedText(view, draftInjectionRef.current);
     refreshCompletion(view);
     // 新建会话后自动聚焦（移动端聚焦会弹出键盘，忽略）。
@@ -178,7 +188,7 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
       view.focus();
       onAutoFocusConsumed?.();
     }
-  }, [applyInjectedText, refreshCompletion, isMobile, onAutoFocusConsumed]);
+  }, [applyExtensionText, applyInjectedText, refreshCompletion, isMobile, onAutoFocusConsumed]);
 
   // App 的 drafts 是草稿的唯一上游：外部变更（取回排队消息、停止恢复等）
   // 只更新 App 状态，而编辑器非受控（initialValue 仅挂载时读取），
