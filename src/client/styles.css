@@ -238,10 +238,10 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .message-content table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 .message-content th, .message-content td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; }
 .message-content th { background: #1b1b1e; color: var(--muted); font-weight: 650; white-space: nowrap; }
-/* 图片：外框限高（超长截图不霸屏，框内可滚动），点击进灯箱查看完整尺寸 */
-.message-image-frame { display: block; width: fit-content; max-width: 100%; max-height: min(70vh, 560px); overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #141418; line-height: 0; }
+/* 图片：只限高、等比缩放到框内（不做框内滚动），点击进灯箱看原尺寸 */
+.message-image-frame { display: block; width: fit-content; max-width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: #141418; line-height: 0; }
 .message-image-frame:hover { border-color: var(--line-strong); }
-.message-image-frame > img { display: block; max-width: 100%; height: auto; cursor: zoom-in; }
+.message-image-frame > img { display: block; width: auto; height: auto; max-width: 100%; max-height: min(70vh, 560px); cursor: zoom-in; }
 .message-image-fallback { display: flex; align-items: center; width: fit-content; max-width: 100%; gap: 8px; border: 1px dashed var(--line-strong); border-radius: 6px; background: var(--surface); padding: 8px 10px; color: var(--muted); font-size: 11px; }
 .message-image-fallback > svg { flex: 0 0 auto; color: var(--warm); }
 .message-image-fallback-path { min-width: 0; overflow: hidden; font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
