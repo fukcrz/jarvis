@@ -113,19 +113,52 @@ export function imageFallbackTarget(src: string | undefined): string {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- node 是 react-markdown 注入的 hast 节点，需从 DOM 属性中剥离。
-function MarkdownImage({ node: _node, src, alt, title, ...rest }: ComponentProps<"img"> & { node?: HastNode }) {
-  const [failed, setFailed] = useState(false);
-  const label = alt === undefined || alt === "" ? "图片预览" : alt;
-  if (failed) return <span className="message-image-fallback" role="img" aria-label={label}>
+/**
+ * 判断 markdown 图片语法指向的媒体类型：
+ * /api/files 引用取真实路径扩展名，远程 URL 取路径扩展名，data: 取 MIME。
+ * 浏览器不解码的容器（.mkv/.avi 等）归为 image，走加载失败兑底。
+ */
+export function mediaKindForSource(src: string | undefined): "image" | "video" | "audio" {
+  if (src === undefined || src === "") return "image";
+  if (/^data:video\//i.test(src)) return "video";
+  if (/^data:audio\//i.test(src)) return "audio";
+  const local = /^\/api\/files\?(.*)$/.exec(src);
+  const target = local === null ? src : (new URLSearchParams(local[1]).get("path") ?? "");
+  const normalized = (target.split(/[?#]/)[0] ?? "").replaceAll("\\", "/");
+  const name = normalized.slice(normalized.lastIndexOf("/") + 1).toLowerCase();
+  const dot = name.lastIndexOf(".");
+  const ext = dot === -1 ? "" : name.slice(dot);
+  if (VIDEO_EXTENSIONS.has(ext)) return "video";
+  return AUDIO_EXTENSIONS.has(ext) ? "audio" : "image";
+}
+
+function MediaFallback({ label, src }: { label: string; src: string | undefined }) {
+  return <span className="message-image-fallback" role="img" aria-label={label}>
     <ImageOff size={15} aria-hidden />
     <span className="message-image-fallback-path" title={src}>{imageFallbackTarget(src)}</span>
     {src === undefined ? null : <a href={src} target="_blank" rel="noreferrer">打开</a>}
+  </span>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- node 是 react-markdown 注入的 hast 节点，需从 DOM 属性中剥离。
+function MarkdownMedia({ node: _node, src, alt, title, ...rest }: ComponentProps<"img"> & { node?: HastNode }) {
+  const [failed, setFailed] = useState(false);
+  const label = alt === undefined || alt === "" ? "图片预览" : alt;
+  const kind = mediaKindForSource(src);
+  if (failed) return <MediaFallback label={label} src={src} />;
+  // 视频/音频用浏览器原生控件直接渲染，不做灯箱也不自动播放。
+  if (kind !== "image") return <span className={`message-media-frame${kind === "audio" ? " message-audio-frame" : ""}`}>
+    {kind === "video"
+      ? <video src={src} controls preload="metadata" playsInline aria-label={label} title={title} onError={() => setFailed(true)} />
+      : <audio src={src} controls preload="metadata" aria-label={label} onError={() => setFailed(true)} />}
   </span>;
   return <ImagePreview className="message-image-frame" src={src ?? ""} alt={label}>
     <img {...rest} className="message-image" src={src} alt={alt ?? ""} title={title} loading="lazy" onError={() => setFailed(true)} />
   </ImagePreview>;
 }
+
+const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v", ".ogv"]);
+const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".ogg", ".oga", ".m4a", ".aac", ".flac", ".opus"]);
 
 interface HastNode {
   type?: string;
@@ -167,7 +200,7 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & { node?:
   );
 }
 
-const components = { pre: CodeBlock, a: LocalLink, img: MarkdownImage };
+const components = { pre: CodeBlock, a: LocalLink, img: MarkdownMedia };
 
 export function MarkdownMessage({ text, streaming = false, baseDir }: MarkdownMessageProps) {
   const content = baseDir === undefined ? text : rewriteLocalImageUrls(text, baseDir);

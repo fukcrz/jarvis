@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { MarkdownMessage, imageFallbackTarget, rewriteLocalImageUrls } from "./markdown-message";
+import { MarkdownMessage, imageFallbackTarget, mediaKindForSource, rewriteLocalImageUrls } from "./markdown-message";
 
 describe("MarkdownMessage", () => {
   it("renders Markdown while a message is still streaming", () => {
@@ -128,6 +128,37 @@ describe("MarkdownMessage", () => {
     expect(markup).toContain('<a href="mailto:a@b.c">邮件</a>');
     expect(markup).toContain('<a href="/api/files?path=z.png">已服务</a>');
     expect(markup).not.toContain("local-file-link");
+  });
+
+  it("renders video and audio targets as inline players instead of images", () => {
+    const video = renderToStaticMarkup(createElement(MarkdownMessage, { text: "![录屏](clips/demo.mp4)", baseDir: "/ws" }));
+    expect(video).toContain('class="message-media-frame"');
+    expect(video).toContain('<video src="/api/files?path=clips%2Fdemo.mp4&amp;cwd=%2Fws" controls=""');
+    expect(video).toContain('playsInline=""');
+    expect(video).not.toContain("message-image-frame");
+
+    const audio = renderToStaticMarkup(createElement(MarkdownMessage, { text: "![语音](voice.mp3)", baseDir: "/ws" }));
+    expect(audio).toContain('class="message-media-frame message-audio-frame"');
+    expect(audio).toContain('<audio src="/api/files?path=voice.mp3&amp;cwd=%2Fws" controls=""');
+
+    // 浏览器不解码的容器不做特例：仍走图片分支，加载失败后显示兑底提示
+    const unsupported = renderToStaticMarkup(createElement(MarkdownMessage, { text: "![录屏](clips/demo.mkv)", baseDir: "/ws" }));
+    expect(unsupported).toContain('class="message-image"');
+    expect(unsupported).not.toContain("<video");
+  });
+
+  it("detects media kind from local references, remote URLs, and data URIs", () => {
+    expect(mediaKindForSource("/api/files?path=clips%2Fdemo.mp4&cwd=%2Fws")).toBe("video");
+    expect(mediaKindForSource("/api/files?path=C%3A%5Ctmp%5Cscreen.WEBM")).toBe("video");
+    expect(mediaKindForSource("/api/files?path=voice.ogg")).toBe("audio");
+    expect(mediaKindForSource("https://example.com/a/demo.mp4?token=1")).toBe("video");
+    expect(mediaKindForSource("https://example.com/a/voice.m4a#t=3")).toBe("audio");
+    expect(mediaKindForSource("data:video/mp4;base64,AAAA")).toBe("video");
+    expect(mediaKindForSource("data:audio/mpeg;base64,AAAA")).toBe("audio");
+    expect(mediaKindForSource("data:image/png;base64,AAAA")).toBe("image");
+    expect(mediaKindForSource("/api/files?path=clips%2Fdemo.mkv")).toBe("image");
+    expect(mediaKindForSource("/api/files?path=shot.png")).toBe("image");
+    expect(mediaKindForSource(undefined)).toBe("image");
   });
 
   it("labels a failed image with its local path, host, or embed kind", () => {
