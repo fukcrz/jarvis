@@ -501,7 +501,9 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
   const [showResult, setShowResult] = useState(false);
   const [expandedPreviews, setExpandedPreviews] = useState<ReadonlySet<number>>(EMPTY_PREVIEWS);
 
-  // 重连/重新水合会用同一份数据重建请求对象，但同一个对话框不该因此清掉已展开的预览。
+  // 重连/重新水合会用同一份数据重建 request 对象，但对话框本身没变：不能因此丢掉用户
+  // 已经写了一半的内容（移动端切后台回来、网络恢复都会触发 resync → 重拉快照），也不该
+  // 收起已展开的预览。只有真的换了对话框（id 变化）才重置。
   const requestIdRef = useRef(request.id);
   useEffect(() => {
     if (requestIdRef.current === request.id) return;

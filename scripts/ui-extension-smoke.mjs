@@ -1,13 +1,14 @@
 /**
- * 扩展「选择」卡片的冒烟验证：把 `ask_user_question` 在非终端宿主里的 RPC 回退负载投进
- * 一个真实会话，断言渲染把折叠在标题里的预览块并回各自的选项，并在移动端 / 桌面端各截一张图。
+ * 扩展「选择 / 输入」卡片的冒烟验证：把 `ask_user_question` 在非终端宿主里的 RPC 回退负载投进
+ * 一个真实会话，断言渲染把折叠在标题里的预览块并回各自的选项、重新同步快照不会清掉已输入的内容，
+ * 并在移动端 / 桌面端各截一张图。
  *
  * 单独成脚本的原因：`ui-smoke.mjs` 的同类检查挂在整条流水线后面（命令补全、运行反馈等），
  * 前者一旦抖动就再也跑不到这里；这段检查只依赖会话页 + WebSocket，能独立、稳定地跑完。
  *
  * 用法（需要先起开发服务：npm run dev）：
- *   npm run test:ui:select
- *   JARVIS_URL=http://127.0.0.1:28471 SHOT_DIR=/tmp node scripts/ui-select-smoke.mjs
+ *   npm run test:ui:extension
+ *   JARVIS_URL=http://127.0.0.1:28471 SHOT_DIR=/tmp node scripts/ui-extension-smoke.mjs
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -93,6 +94,15 @@ try {
       submissions.push(JSON.parse(route.request().postData() ?? "{}"));
       await route.fulfill({ contentType: "application/json", body: "{}" });
     });
+    // 真实环境里待回答的对话框由服务端保留在快照里；这里注入的卡片也要出现在 runtime 快照中，
+    // 否则「重新同步」时卡片会整个消失，测不到「同一张卡片重新水合后状态是否保留」。
+    let pendingInput;
+    await page.route("**/api/workspaces/*/sessions/*/runtime", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      const cards = [...(body.extensionUi?.cards ?? []), ...(pendingInput === undefined ? [] : [pendingInput])];
+      await route.fulfill({ response, json: { ...body, extensionUi: { ...(body.extensionUi ?? { dialogs: [], cards: [], statuses: {}, widgets: {} }), cards } } });
+    });
 
     const requestId = `c0ffee00-0000-4000-8000-00000000001${String(index)}`;
     const emit = (event) => page.evaluate((payload) => {
@@ -166,6 +176,35 @@ try {
     await plainCard.screenshot({ path: join(shotDir, `select-${viewport.name}-plain.png`) });
     await request(900_000_004, "extension.uiSettled", { id: plainId, outcome: "cancelled" });
 
+    // 输入卡（问答题的自行输入）：移动端切后台/回前台、网络恢复都会触发 resync → 重拉权威快照。
+    // 同一张卡片重新水合时不能把已经写了一半的内容清掉。
+    const inputId = `${requestId.slice(0, -1)}8`;
+    const answer = "一刀切，除非必要，否则不在";
+    pendingInput = {
+      kind: "extension-ui",
+      id: `ext:${inputId}`,
+      createdAt: new Date().toISOString(),
+      request: { id: inputId, method: "input", title: "[严格程度] 规则写多硬？\n\n输入你的回答：", timeout: 300_000 },
+    };
+    await request(900_000_005, "extension.uiRequest", { request: pendingInput.request });
+    const inputCard = page.locator(".extension-operation.input.pending");
+    await inputCard.waitFor({ state: "visible", timeout: 5_000 });
+    const field = inputCard.locator(".extension-dialog-input");
+    await field.click();
+    await page.keyboard.type(answer);
+    await inputCard.screenshot({ path: join(shotDir, `input-${viewport.name}.png`) });
+    await page.evaluate(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("online"));
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+    });
+    await page.waitForTimeout(800);
+    if (await inputCard.count() !== 1) failures.push(`${viewport.name}: 重新同步快照后输入卡整个消失了`);
+    else if (await field.inputValue() !== answer) failures.push(`${viewport.name}: 重新同步快照后输入框内容被清空（现在是「${await field.inputValue()}」）`);
+    if (submissions.length !== 1) failures.push(`${viewport.name}: 输入卡重新同步期间发生了多余提交`);
+    await request(900_000_006, "extension.uiSettled", { id: inputId, outcome: "cancelled" });
+    pendingInput = undefined;
+
     await context.close();
   }
 } catch (error) {
@@ -183,5 +222,5 @@ if (failures.length > 0) {
   console.error(failures.join("\n"));
   process.exitCode = 1;
 } else {
-  console.log(`Select dialog smoke passed → ${shotDir}/select-*.png`);
+  console.log(`Extension dialog smoke passed → ${shotDir}/select-*.png, ${shotDir}/input-*.png`);
 }
