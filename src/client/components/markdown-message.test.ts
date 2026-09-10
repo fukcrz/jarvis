@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { MarkdownMessage, rewriteLocalImageUrls } from "./markdown-message";
+import { MarkdownMessage, imageFallbackTarget, rewriteLocalImageUrls } from "./markdown-message";
 
 describe("MarkdownMessage", () => {
   it("renders Markdown while a message is still streaming", () => {
@@ -50,7 +50,10 @@ describe("MarkdownMessage", () => {
       text: `看这张图：\n\n![测试图](${dataUri})`,
     }));
 
-    expect(markup).toContain(`<img src="${dataUri}" alt="测试图"/>`);
+    expect(markup).toContain(`<img class="message-image" src="${dataUri}" alt="测试图" loading="lazy"/>`);
+    // 图片先渲染为可点击缩略，点击前不出现灯箱。
+    expect(markup).toContain('class="message-image-frame"');
+    expect(markup).not.toContain("image-lightbox");
   });
 
   it("still strips javascript: URLs from image src", () => {
@@ -67,7 +70,7 @@ describe("MarkdownMessage", () => {
       text: "![网络图](https://example.com/pic.png)",
     }));
 
-    expect(markup).toContain('<img src="https://example.com/pic.png" alt="网络图"/>');
+    expect(markup).toContain('<img class="message-image" src="https://example.com/pic.png" alt="网络图" loading="lazy"/>');
   });
 
   it("rewrites workspace-relative local image paths to the /api/files endpoint", () => {
@@ -98,7 +101,7 @@ describe("MarkdownMessage", () => {
       text: "![图](shots/a.png)",
       baseDir: "/ws",
     }));
-    expect(markup).toContain('<img src="/api/files?path=shots%2Fa.png&amp;cwd=%2Fws" alt="图"/>');
+    expect(markup).toContain('<img class="message-image" src="/api/files?path=shots%2Fa.png&amp;cwd=%2Fws" alt="图" loading="lazy"/>');
   });
 
   it("rewrites local file links to the /api/files endpoint and opens them in a new tab", () => {
@@ -107,8 +110,11 @@ describe("MarkdownMessage", () => {
       baseDir: "/ws",
     }));
 
-    expect(markup).toContain('<a href="/api/files?path=docs%2Fdesign.pdf&amp;cwd=%2Fws" target="_blank" rel="noreferrer">设计稿</a>');
-    expect(markup).toContain('<a href="/api/files?path=%2Ftmp%2Farchive.zip" target="_blank" rel="noreferrer">打包件</a>');
+    expect(markup).toContain('href="/api/files?path=docs%2Fdesign.pdf&amp;cwd=%2Fws"');
+    expect(markup).toContain('href="/api/files?path=%2Ftmp%2Farchive.zip"');
+    // 本地文件链接标类名，站外链接靠 CSS 的 [href^="http"] 区分。
+    expect(markup.match(/class="local-file-link"/g)).toHaveLength(2);
+    expect(markup.match(/target="_blank" rel="noreferrer"/g)).toHaveLength(2);
   });
 
   it("leaves remote, anchor, mailto, and existing /api/ links untouched", () => {
@@ -121,5 +127,15 @@ describe("MarkdownMessage", () => {
     expect(markup).toContain('<a href="#section">锚点</a>');
     expect(markup).toContain('<a href="mailto:a@b.c">邮件</a>');
     expect(markup).toContain('<a href="/api/files?path=z.png">已服务</a>');
+    expect(markup).not.toContain("local-file-link");
+  });
+
+  it("labels a failed image with its local path, host, or embed kind", () => {
+    expect(imageFallbackTarget("/api/files?path=shots%2Fa.png&cwd=%2Fws")).toBe("shots/a.png（相对 /ws）");
+    expect(imageFallbackTarget("/api/files?path=%2Ftmp%2Fmissing.png")).toBe("/tmp/missing.png");
+    expect(imageFallbackTarget("/api/files?path=D%3A%2Ftmp%2Fmissing.png&cwd=D%3A%5Cws")).toBe("D:/tmp/missing.png");
+    expect(imageFallbackTarget("data:image/png;base64,AAAA")).toBe("内嵌图片");
+    expect(imageFallbackTarget("https://example.com/a/b.png?x=1")).toBe("example.com/a/b.png");
+    expect(imageFallbackTarget(undefined)).toBe("图片地址缺失");
   });
 });

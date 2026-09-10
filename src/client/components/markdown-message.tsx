@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, type ComponentProps } from "react";
+import { createContext, useContext, useEffect, useState, type ComponentProps } from "react";
+import { ImageOff, XCircle } from "lucide-react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { defaultSchema, type Schema } from "hast-util-sanitize";
 import rehypeHighlight from "rehype-highlight";
@@ -76,11 +77,65 @@ export function rewriteLocalLinkHref(href: string | undefined, cwd: string | und
 const LocalFileCwdContext = createContext<string | undefined>(undefined);
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- node 是 react-markdown 注入的 hast 节点，需从 DOM 属性中剥离。
-function LocalLink({ node: _node, href, children, ...rest }: ComponentProps<"a"> & { node?: HastNode }) {
+function LocalLink({ node: _node, href, className, children, ...rest }: ComponentProps<"a"> & { node?: HastNode }) {
   const cwd = useContext(LocalFileCwdContext);
   const resolved = rewriteLocalLinkHref(href, cwd);
-  if (resolved === href) return <a href={href} {...rest}>{children}</a>;
-  return <a href={resolved} target="_blank" rel="noreferrer" {...rest}>{children}</a>;
+  if (resolved === href) return <a href={href} className={className} {...rest}>{children}</a>;
+  // 本地文件链接标类名，便于与站外链接区分（站外链接加外开标记）。
+  return <a href={resolved} className={className === undefined ? "local-file-link" : `local-file-link ${className}`} target="_blank" rel="noreferrer" {...rest}>{children}</a>;
+}
+
+/**
+ * 图片加载失败时在提示条里显示的目标：本地引用显示解码后的路径（相对路径带上工作区基准），
+ * 内嵌图与远程图分别显示说明或 host+path，避免把超长 URL 或 base64 直接铺满一行。
+ */
+export function imageFallbackTarget(src: string | undefined): string {
+  if (src === undefined || src === "") return "图片地址缺失";
+  if (src.startsWith("data:")) return "内嵌图片";
+  const local = /^\/api\/files\?(.*)$/.exec(src);
+  if (local !== null) {
+    const query = new URLSearchParams(local[1]);
+    const target = query.get("path") ?? "";
+    const cwd = query.get("cwd");
+    if (target === "") return "本地图片";
+    // 前端对非 / 开头的路径都会带上 cwd（含 Windows 盘符路径），只有真正的相对路径才提示基准目录。
+    const absolute = target.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(target) || target.startsWith("\\\\");
+    return cwd === null || absolute ? target : `${target}（相对 ${cwd}）`;
+  }
+  try {
+    const url = new URL(src, "http://localhost");
+    const label = `${url.host}${url.pathname}`;
+    return label.length <= 90 ? label : `${label.slice(0, 89)}…`;
+  } catch {
+    return src.length <= 90 ? src : `${src.slice(0, 89)}…`;
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- node 是 react-markdown 注入的 hast 节点，需从 DOM 属性中剥离。
+function MarkdownImage({ node: _node, src, alt, title, ...rest }: ComponentProps<"img"> & { node?: HastNode }) {
+  const [open, setOpen] = useState(false);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => { window.removeEventListener("keydown", onKeyDown); };
+  }, [open]);
+  const label = alt === undefined || alt === "" ? "图片预览" : alt;
+  if (failed) return <span className="message-image-fallback" role="img" aria-label={label}>
+    <ImageOff size={15} aria-hidden />
+    <span className="message-image-fallback-path" title={src}>{imageFallbackTarget(src)}</span>
+    {src === undefined ? null : <a href={src} target="_blank" rel="noreferrer">打开</a>}
+  </span>;
+  return <>
+    <span className="message-image-frame">
+      <img {...rest} className="message-image" src={src} alt={alt ?? ""} title={title} loading="lazy" onError={() => setFailed(true)} onClick={() => setOpen(true)} />
+    </span>
+    {!open ? null : <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={label} onClick={() => setOpen(false)}>
+      <button type="button" className="image-lightbox-close" aria-label="关闭图片预览" onClick={() => setOpen(false)}><XCircle size={20} /></button>
+      <img src={src} alt={label} onClick={(event) => event.stopPropagation()} />
+    </div>}
+  </>;
 }
 
 interface HastNode {
@@ -123,7 +178,7 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & { node?:
   );
 }
 
-const components = { pre: CodeBlock, a: LocalLink };
+const components = { pre: CodeBlock, a: LocalLink, img: MarkdownImage };
 
 export function MarkdownMessage({ text, streaming = false, baseDir }: MarkdownMessageProps) {
   const content = baseDir === undefined ? text : rewriteLocalImageUrls(text, baseDir);
