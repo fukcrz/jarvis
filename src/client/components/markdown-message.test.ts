@@ -73,6 +73,29 @@ describe("MarkdownMessage", () => {
     expect(markup).toContain('<img class="message-image" src="https://example.com/pic.png" alt="网络图" loading="lazy"/>');
   });
 
+  it("leaves image references inside code fences and inline code untouched", () => {
+    const markdown = [
+      "正文 ![图](shot.png)",
+      "",
+      "```mermaid",
+      "flowchart LR",
+      "  A[开始] --> B[![](shot.png)]",
+      "```",
+      "",
+      "~~~",
+      "![](tilde.png)",
+      "~~~",
+      "",
+      "行内示例 `![](inline.png)` 不改写",
+    ].join("\n");
+    const rewritten = rewriteLocalImageUrls(markdown, "/ws");
+
+    expect(rewritten).toContain("正文 ![图](/api/files?path=shot.png&cwd=%2Fws)");
+    expect(rewritten).toContain("A[开始] --> B[![](shot.png)]");
+    expect(rewritten).toContain("![](tilde.png)");
+    expect(rewritten).toContain("`![](inline.png)`");
+  });
+
   it("rewrites workspace-relative local image paths to the /api/files endpoint", () => {
     const rewritten = rewriteLocalImageUrls("截图：\n\n![成果](shot.png) 和 ![备份](backup/copy.png)", "/home/user/workspace");
 

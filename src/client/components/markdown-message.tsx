@@ -41,25 +41,51 @@ interface MarkdownMessageProps {
   baseDir?: string;
 }
 
+const IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)]+)\)/g;
+const FENCE_PATTERN = /^\s{0,3}(`{3,}|~{3,})/;
+
+/** 重写正文里的单个图片引用；下划线由调用方保证不在代码里。 */
+function rewriteImageReference(whole: string, alt: string, target: string, cwd: string | undefined): string {
+  const trimmed = target.trim();
+  if (/^(https?:\/\/|data:|blob:|mailto:)/i.test(trimmed)) return whole;
+  if (trimmed.startsWith("/api/")) return whole;
+  const withoutScheme = trimmed.startsWith("file://") ? trimmed.slice("file://".length) : trimmed;
+  // 路径与可选标题（"title" / 'title' / (title)）以空白+引号分隔；路径本身允许含空格。
+  const titleIndex = withoutScheme.search(/\s+["'(]/);
+  const path = titleIndex === -1 ? withoutScheme : withoutScheme.slice(0, titleIndex);
+  const rest = titleIndex === -1 ? "" : withoutScheme.slice(titleIndex);
+  if (path === "") return whole;
+  const query = `path=${encodeURIComponent(path)}${path.startsWith("/") || cwd === undefined || cwd === "" ? "" : `&cwd=${encodeURIComponent(cwd)}`}`;
+  return `![${alt}](/api/files?${query}${rest})`;
+}
+
+/** 行内代码（`…`）不参与重写，否则行内示例会被改坏。 */
+function rewriteOutsideInlineCode(line: string, cwd: string | undefined): string {
+  return line
+    .split(/(`+[^`]*`+)/)
+    .map((segment, index) => index % 2 === 1 ? segment : segment.replace(IMAGE_PATTERN, (whole, alt: string, target: string) => rewriteImageReference(whole, alt, target, cwd)))
+    .join("");
+}
+
 /**
  * 把 AI 回复里的本地图片引用重写为 Jarvis 的 /api/files 接口 URL。
  * 与本地 md 文档一致：支持相对路径（以工作区 cwd 为基准）、绝对路径、file:// 形式；
  * http(s)/data: 等已有 URL 与 /api/ 前缀保持原样。
+ * 代码围栏与行内代码里的示例属于代码本身，必须原样保留（例如 mermaid 标签里的 `![](x.png)`）。
  */
 export function rewriteLocalImageUrls(markdown: string, cwd: string | undefined): string {
-  return markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (whole, alt: string, target: string) => {
-    const trimmed = target.trim();
-    if (/^(https?:\/\/|data:|blob:|mailto:)/i.test(trimmed)) return whole;
-    if (trimmed.startsWith("/api/")) return whole;
-    const withoutScheme = trimmed.startsWith("file://") ? trimmed.slice("file://".length) : trimmed;
-    // 路径与可选标题（"title" / 'title' / (title)）以空白+引号分隔；路径本身允许含空格。
-    const titleIndex = withoutScheme.search(/\s+["'(]/);
-    const path = titleIndex === -1 ? withoutScheme : withoutScheme.slice(0, titleIndex);
-    const rest = titleIndex === -1 ? "" : withoutScheme.slice(titleIndex);
-    if (path === "") return whole;
-    const query = `path=${encodeURIComponent(path)}${path.startsWith("/") || cwd === undefined || cwd === "" ? "" : `&cwd=${encodeURIComponent(cwd)}`}`;
-    return `![${alt}](/api/files?${query}${rest})`;
-  });
+  let fence: string | undefined;
+  return markdown.split("\n").map((line) => {
+    const match = FENCE_PATTERN.exec(line);
+    const marker = match?.[1];
+    if (fence === undefined) {
+      if (marker === undefined) return rewriteOutsideInlineCode(line, cwd);
+      fence = marker;
+      return line;
+    }
+    if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length) fence = undefined;
+    return line;
+  }).join("\n");
 }
 
 /**
