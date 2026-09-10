@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Clock3, Image as ImageIcon, LoaderCircle, RotateCcw, XCircle } from "lucide-react";
 import type { ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
@@ -14,7 +14,9 @@ interface ToolActivityProps {
 
 /** Renders Pi tool activity as compact, inline timeline rows. */
 export function ToolActivity({ items, active, startedAt, stopping }: ToolActivityProps) {
-  const [open, setOpen] = useState(() => items.some((item) => item.name === "bash" && item.id.startsWith("bash:")));
+  const defaultOpen = isActivityOpenByDefault(items);
+  const [open, setOpen] = useState(defaultOpen);
+  const touched = useRef(false);
   const [openToolId, setOpenToolId] = useState<string>();
   const [now, setNow] = useState(() => Date.now());
   const state = activityState(items, active);
@@ -28,9 +30,13 @@ export function ToolActivity({ items, active, startedAt, stopping }: ToolActivit
     return () => window.clearInterval(timer);
   }, [active, startedAt]);
 
+  useEffect(() => {
+    if (!touched.current) setOpen(defaultOpen);
+  }, [defaultOpen]);
+
   return (
     <article className={`activity-group ${state}`}>
-      <button className="activity-summary" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      <button className="activity-summary" type="button" onClick={() => { touched.current = true; setOpen((value) => !value); }} aria-expanded={open}>
         <span className="activity-state-icon">{toolIcon(state)}</span>
         {summary.label === undefined ? null : <span className="activity-label">{summary.label}</span>}
         {summary.detail === undefined ? null : <span className="activity-detail">{summary.detail}</span>}
@@ -39,6 +45,11 @@ export function ToolActivity({ items, active, startedAt, stopping }: ToolActivit
       {open ? <div className="activity-items">{items.map((item) => <ToolRow key={item.id} item={item} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
     </article>
   );
+}
+
+/** Keep short tool runs visible while preserving the explicit-command exception. */
+export function isActivityOpenByDefault(items: readonly ToolTimelineItem[]): boolean {
+  return items.length <= 3 || items.some((item) => item.name === "bash" && item.id.startsWith("bash:"));
 }
 
 function ToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open: boolean; onToggle: () => void }) {
