@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, ExternalLink, Loader2, Pencil, Plus, Radio, Square, Trash2 } from "lucide-react";
-import type { TunnelInput, TunnelMethod, TunnelSnapshot, TunnelState } from "../../shared/protocol";
+import type { TunnelInput, TunnelLogEntry, TunnelMethod, TunnelSnapshot, TunnelState } from "../../shared/protocol";
 import { api } from "../api";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
@@ -35,12 +35,12 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
   const [detailId, setDetailId] = useState<string | undefined>();
   const [busy, setBusy] = useState<string | undefined>();
   const [copied, setCopied] = useState<"url" | "caddy" | undefined>();
+  const [removeTarget, setRemoveTarget] = useState<TunnelSnapshot | undefined>();
   const onMessageRef = useRef(onMessage);
-  const logRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { onMessageRef.current = onMessage; });
 
-  // 轮询状态：驱动 URL/日志/错误展示。
+  // 轮询状态：驱动 URL/日志/错误展示；页面在后台时暂停，回到前台立即刷新。
   useEffect(() => {
     let disposed = false;
     const load = async () => {
@@ -52,14 +52,11 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
       }
     };
     void load();
-    const timer = window.setInterval(() => { void load(); }, 2_000);
-    return () => { disposed = true; window.clearInterval(timer); };
+    const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 2_000);
+    const onVisible = () => { if (!document.hidden) void load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { disposed = true; window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
-
-  useEffect(() => {
-    const element = logRef.current;
-    if (element !== null) element.scrollTop = element.scrollHeight;
-  }, [tunnels]);
 
   const run = async (operation: string, id: string, fn: () => Promise<TunnelSnapshot>) => {
     if (busy !== undefined) return;
@@ -88,11 +85,14 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
       setBusy(undefined);
     }
   };
-  const remove = async (tunnel: TunnelSnapshot) => {
+  const remove = async () => {
+    const tunnel = removeTarget;
+    if (tunnel === undefined || busy !== undefined) return;
     setBusy(`remove-${tunnel.id}`);
     try {
       await api.tunnelRemove(tunnel.id);
       setTunnels((current) => current.filter((item) => item.id !== tunnel.id));
+      setRemoveTarget(undefined);
       onMessageRef.current("已删除穿透");
     } catch (error) {
       onMessageRef.current(error instanceof Error ? error.message : "删除失败", "error");
@@ -135,7 +135,7 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
                 <Button variant="ghost" size="icon" aria-label="复制公网地址" title="复制公网地址" onClick={() => { void copyText(tunnel.url as string, "url"); }}>{copied === "url" ? <Check size={13} /> : <Copy size={13} />}</Button>
               </>}
               <Button variant="ghost" size="icon" aria-label={`编辑 ${tunnel.name ?? methodName(tunnel.method)}`} title="编辑" onClick={() => { setEditing(tunnel); setEditorOpen(true); }} disabled={busy !== undefined}><Pencil size={14} /></Button>
-              <Button variant="ghost" size="icon" aria-label={`删除 ${tunnel.name ?? methodName(tunnel.method)}`} title="删除" disabled={busy !== undefined} onClick={() => { void remove(tunnel); }}><Trash2 size={14} /></Button>
+              <Button variant="ghost" size="icon" aria-label={`删除 ${tunnel.name ?? methodName(tunnel.method)}`} title="删除" disabled={busy !== undefined} onClick={() => setRemoveTarget(tunnel)}><Trash2 size={14} /></Button>
               <Button variant={tunnel.state === "idle" || tunnel.state === "error" ? "default" : "danger"} size="sm" disabled={busy !== undefined} onClick={() => {
                 if (tunnel.state === "idle" || tunnel.state === "error") void run("start", tunnel.id, () => api.tunnelStart(tunnel.id));
                 else void run("stop", tunnel.id, () => api.tunnelStop(tunnel.id));
@@ -171,15 +171,33 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
           ...(tunnel.frp === undefined ? {} : { frp: tunnel.frp }),
         })); }} /><span>自动启动（服务启动时自动连接，默认关闭）</span></label>
             <p className="settings-muted">当前穿透固定指向本机服务端口（生产默认 9528）。</p>
-            {tunnel.logs.length === 0 ? null : <div className="tunnel-logs" ref={logRef}>
-              {tunnel.logs.map((entry, index) => <div key={`${entry.t}-${index}`}>{entry.line}</div>)}
-            </div>}
+            {tunnel.logs.length === 0 ? null : <TunnelLogView logs={tunnel.logs} />}
           </div> : null}
         </article>;
       })}
     </div>}
     <TunnelEditor open={editorOpen} tunnel={editing} busy={busy === "editor"} onClose={() => setEditorOpen(false)} onSave={addOrUpdate} />
+    <Dialog open={removeTarget !== undefined} onOpenChange={(open) => { if (!open && busy === undefined) setRemoveTarget(undefined); }}><DialogContent title="删除穿透"><p className="delete-session-message"><strong>{removeTarget === undefined ? "" : removeTarget.name ?? methodName(removeTarget.method)}</strong>的配置将被删除；正在运行的穿透会先停止。此操作不可撤销。</p><div className="dialog-actions"><Button variant="secondary" onClick={() => setRemoveTarget(undefined)} disabled={busy !== undefined}>取消</Button><Button variant="danger" onClick={() => { void remove(); }} disabled={busy !== undefined}>删除</Button></div></DialogContent></Dialog>
   </section>;
+}
+
+/** 隧道日志：按条目独立滚动；仅当用户本来就在底部时才自动跟随新日志。 */
+function TunnelLogView({ logs }: { logs: TunnelLogEntry[] }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const stickRef = useRef(true);
+  const onScroll = () => {
+    const element = ref.current;
+    if (element === null) return;
+    stickRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24;
+  };
+  useEffect(() => {
+    const element = ref.current;
+    if (element === null || !stickRef.current) return;
+    element.scrollTop = element.scrollHeight;
+  }, [logs]);
+  return <div className="tunnel-logs" ref={ref} onScroll={onScroll}>
+    {logs.map((entry, index) => <div key={`${entry.t}-${index}`}>{entry.line}</div>)}
+  </div>;
 }
 
 /** 添加/编辑穿透的对话框：选类型 + 服务器配置 + 自动启动开关（默认关闭）。 */
