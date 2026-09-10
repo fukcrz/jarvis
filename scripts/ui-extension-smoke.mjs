@@ -189,6 +189,7 @@ try {
     await request(900_000_005, "extension.uiRequest", { request: pendingInput.request });
     const inputCard = page.locator(".extension-operation.input.pending");
     await inputCard.waitFor({ state: "visible", timeout: 5_000 });
+    if ((await inputCard.locator(".extension-dialog-header").textContent())?.trim() !== "严格程度") failures.push(`${viewport.name}: 输入卡的方括号短标签没有单独渲染`);
     const field = inputCard.locator(".extension-dialog-input");
     await field.click();
     await page.keyboard.type(answer);
@@ -204,6 +205,37 @@ try {
     if (submissions.length !== 1) failures.push(`${viewport.name}: 输入卡重新同步期间发生了多余提交`);
     await request(900_000_006, "extension.uiSettled", { id: inputId, outcome: "cancelled" });
     pendingInput = undefined;
+
+    // 确认卡同样拆出短标签（改动不能只照顾选择/输入两种形态）。
+    const confirmId = `${requestId.slice(0, -1)}7`;
+    await request(900_000_007, "extension.uiRequest", { request: { id: confirmId, method: "confirm", title: "[删除缓存] 允许清理构建缓存吗？", message: "将删除 dist/ 下的临时文件。", timeout: 300_000 } });
+    const confirmCard = page.locator(".extension-operation.confirm.pending");
+    await confirmCard.waitFor({ state: "visible", timeout: 5_000 });
+    if ((await confirmCard.locator(".extension-dialog-header").textContent())?.trim() !== "删除缓存") failures.push(`${viewport.name}: 确认卡的方括号短标签没有单独渲染`);
+    await confirmCard.screenshot({ path: join(shotDir, `confirm-${viewport.name}.png`) });
+    await request(900_000_008, "extension.uiSettled", { id: confirmId, outcome: "cancelled" });
+
+    // 扩展往主输入框注入文本（set_editor_text）：重同步快照不能把用户后来写的内容覆盖掉。
+    const injected = "注入的模板文本";
+    await page.route("**/api/workspaces/*/sessions/*/runtime", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({ response, json: { ...body, extensionUi: { ...(body.extensionUi ?? { dialogs: [], cards: [], statuses: {}, widgets: {} }), cards: [], editorText: { text: injected, revision: 1 } } } });
+    });
+    const composer = page.locator(".composer-editor .cm-content");
+    await request(900_000_009, "extension.uiRequest", { request: { id: `${requestId.slice(0, -1)}6`, method: "set_editor_text", text: injected } });
+    await page.waitForFunction((text) => document.querySelector(".composer-editor .cm-content")?.textContent === text, injected, { timeout: 5_000 });
+    await composer.click();
+    await page.keyboard.press("End");
+    await page.keyboard.type("＋追加内容");
+    await page.evaluate(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("online"));
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+    });
+    await page.waitForTimeout(800);
+    const composerText = await composer.textContent();
+    if (composerText !== `${injected}＋追加内容`) failures.push(`${viewport.name}: 重新同步快照后主输入框内容被覆盖（现在是「${composerText ?? ""}」）`);
 
     await context.close();
   }
