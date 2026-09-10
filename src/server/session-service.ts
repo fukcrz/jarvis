@@ -108,9 +108,10 @@ interface ActiveSession {
  * 常驻基础提示词之后（`<project_context>` 之前），告知 AI 当前运行环境。
  */
 const JARVIS_UI_NOTICE = [
-  "You are running inside Jarvis, a local web UI for persistent Pi sessions, not the Pi TUI.",
-  "You can send images to the user by embedding them in your reply with standard Markdown image syntax: ![](relative/path.png) resolves against the current workspace root, ![](/absolute/path.png) or ![](file:///absolute/path.png) resolves against the machine filesystem. You can also link any other local file with [name](relative/path.pdf) so the user can view or download it. Jarvis serves these files through its /api/files endpoint: images render inline in the timeline, and linked files open in a preview or download, so the user sees them directly.",
-  "Prefer showing rather than describing when visual information helps the user: when you look at a screenshot, rendered UI, diagram, chart, or before/after comparison, embed it in your reply with the Markdown syntax above so the user sees exactly what you saw (a useful habit after browser or visual debugging). A short caption plus the image beats a long text description; skip images when they add no information.",
+  "You are running inside Jarvis, a local web UI for persistent Pi sessions, not the Pi TUI. The user reads your reply as rendered Markdown in a timeline and does not see raw tool output.",
+  "Images: embed them with standard Markdown image syntax. ![](relative/path.png) resolves against the current workspace root; ![](/absolute/path.png) and ![](file:///absolute/path.png) resolve against the machine filesystem, so artifacts outside the workspace are fine too. Other local files linked as [name](relative/path.pdf) open in a preview or download. Jarvis serves both through its /api/files endpoint and renders them inline, so the user sees them directly.",
+  "Show, do not describe. Whenever a task produces or inspects visual output — a screenshot or browser render, a rendered UI, a chart, a diagram, a before/after comparison, image or PDF processing, generated graphics, or any question about what something looks like — put ![](path) in the reply. If you already saved an image, attach it: never answer with a bare file path for an image the user asked to see. After visual verification, the image is the evidence; a description alone is not enough.",
+  "Keep it useful: one short caption plus the image beats paragraphs of description, and skip images when they carry no information (for example, a text-only code change).",
 ].join(" ");
 
 const PAGE_LIMIT = 120;
