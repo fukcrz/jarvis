@@ -148,7 +148,7 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
           {tunnel.error === undefined ? null : <div className="settings-error" role="alert">{tunnel.error}</div>}
           {detailOpen ? <div className="tunnel-entry-detail">
             <div className="tunnel-config-fields">
-              <label className="settings-field"><span>目标端口</span><input value={String(portNumber("") === undefined ? "" : "")} disabled placeholder="跟随当前服务端口" /></label>
+              <label className="settings-field"><span>目标端口</span><input value="" disabled placeholder="跟随当前服务端口" /></label>
             </div>
             {tunnel.method === "sish" && tunnel.sish !== undefined ? <div className="tunnel-config-fields">
               <label className="settings-field"><span>服务器地址</span><input value={tunnel.sish.server} disabled /></label>

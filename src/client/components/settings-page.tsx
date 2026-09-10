@@ -136,7 +136,7 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
       const saved = await api.saveCustomProvider(provider);
       setCustomProviders((current) => [...current.filter((item) => item.id !== saved.id), saved].sort((a, b) => a.id.localeCompare(b.id)));
       setProviderDialogOpen(false);
-      showMessage(saved.models.length === 0 ? "供应商已保存，点击行内「模型」按钮添加模型" : "供应商和模型配置已保存");
+      showMessage(saved.models.length === 0 ? "供应商已保存，点击行内「模型管理」按钮添加模型" : "供应商和模型配置已保存");
       await reload();
     } catch (error) { showMessage(error instanceof Error ? error.message : "供应商保存失败", "error"); }
     finally { setBusy(undefined); }
@@ -153,9 +153,10 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
     try {
       if (custom !== undefined) await api.saveCustomProvider(custom);
       const allKeys = new Set(providers.flatMap((provider) => provider.models.map((model) => modelKey(provider.id, model.id))));
+      if (enabledDraft.size === 0 && allKeys.size > 0) { showMessage("请至少启用一个模型", "error"); return; }
       // 全选 = 无限制，保持 Pi 配置干净（enabledModels 不写）。
-      const selected = enabledDraft.size === allKeys.size ? [] : [...enabledDraft].map((key) => splitModelKey(key));
-      const next = await api.updateEnabledModels(selected);
+      const unrestricted = allKeys.size > 0 && enabledDraft.size === allKeys.size && [...allKeys].every((key) => enabledDraft.has(key));
+      const next = await api.updateEnabledModels(unrestricted ? [] : [...enabledDraft].map((key) => splitModelKey(key)));
       setEnabledDraft(initializeDraft(providers, next));
       showMessage("模型已保存，会话模型选择器已更新");
       await reload();
@@ -246,8 +247,11 @@ function providerDialogDescription(stage: ProviderStage, editing: boolean): stri
 }
 
 function ProviderRow({ status, custom, enabledCount, busy, onLogin, onLogout, onEdit, onManageModels, onRemove }: { status: ProviderStatus; custom?: ManagedProvider; enabledCount: number; busy?: string; onLogin: (provider: ProviderStatus, type: "api_key" | "oauth") => void; onLogout: (provider: ProviderStatus) => void; onEdit: (provider: ManagedProvider) => void; onManageModels: (provider: ProviderStatus) => void; onRemove: (id: string) => void }) {
-  const modelCount = custom?.models.length || status.models.length;
-  return <article className="provider-row"><div className="provider-main"><strong>{custom?.name ?? status.name}</strong><small>{status.id} · {status.models.length === 0 ? "未加载" : `${enabledCount}/${modelCount} 个模型已添加`}</small></div><div className="provider-status">{status.authConfigured ? <><span className="status-ready"><Check size={14} />{status.authSource ?? "已配置"}</span><Button variant="ghost" size="icon" aria-label={`退出 ${status.name}`} title={`退出 ${status.name}`} disabled={busy === status.id} onClick={() => onLogout(status)}><LogOut size={15} /></Button></> : <>{status.supportsApiKey ? <Button variant="secondary" size="sm" disabled={busy === status.id} onClick={() => onLogin(status, "api_key")}><KeyRound size={13} />API Key</Button> : null}{status.supportsOAuth ? <Button variant="secondary" size="sm" disabled={busy === status.id} onClick={() => onLogin(status, "oauth")}><ExternalLink size={13} />登录</Button> : null}</>}<Button variant="ghost" size="icon" aria-label={`管理 ${status.name} 的模型`} title="模型管理" disabled={status.models.length === 0} onClick={() => onManageModels(status)}><Boxes size={15} /></Button>{custom === undefined ? null : <><Button variant="secondary" size="sm" onClick={() => onEdit(custom)}>编辑</Button><Button variant="ghost" size="icon" aria-label={`删除 ${status.id}`} title="删除供应商配置" disabled={busy === status.id} onClick={() => onRemove(status.id)}><Trash2 size={15} /></Button></>}</div></article>;
+  const configuredCount = custom?.models.length ?? 0;
+  // 自定义供应商以 models.json 配置为准；内置供应商以全局启用集合为准。
+  const modelCount = configuredCount > 0 ? configuredCount : status.models.length;
+  const summary = modelCount === 0 ? "未加载" : custom !== undefined ? `${modelCount} 个模型` : enabledCount >= modelCount ? `全部 ${modelCount} 个模型可用` : `${enabledCount}/${modelCount} 个模型已添加`;
+  return <article className="provider-row"><div className="provider-main"><strong>{custom?.name ?? status.name}</strong><small>{status.id} · {summary}</small></div><div className="provider-status">{status.authConfigured ? <><span className="status-ready"><Check size={14} />{status.authSource ?? "已配置"}</span><Button variant="ghost" size="icon" aria-label={`退出 ${status.name}`} title={`退出 ${status.name}`} disabled={busy === status.id} onClick={() => onLogout(status)}><LogOut size={15} /></Button></> : <>{status.supportsApiKey ? <Button variant="secondary" size="sm" disabled={busy === status.id} onClick={() => onLogin(status, "api_key")}><KeyRound size={13} />API Key</Button> : null}{status.supportsOAuth ? <Button variant="secondary" size="sm" disabled={busy === status.id} onClick={() => onLogin(status, "oauth")}><ExternalLink size={13} />登录</Button> : null}</>}<Button variant="ghost" size="icon" aria-label={`管理 ${status.name} 的模型`} title="模型管理" disabled={modelCount === 0} onClick={() => onManageModels(status)}><Boxes size={15} /></Button>{custom === undefined ? null : <><Button variant="secondary" size="sm" onClick={() => onEdit(custom)}>编辑</Button><Button variant="ghost" size="icon" aria-label={`删除 ${status.id}`} title="删除供应商配置" disabled={busy === status.id} onClick={() => onRemove(status.id)}><Trash2 size={15} /></Button></>}</div></article>;
 }
 
 function ProviderWizard({ providers, provider, stage, editing, busy, search, onSearchChange, onChange, onStageChange, onCancel, onLogin, onSave }: { providers: ProviderStatus[]; provider: ManagedProvider; stage: ProviderStage; editing: boolean; busy: boolean; search: string; onSearchChange: (value: string) => void; onChange: (provider: ManagedProvider) => void; onStageChange: (stage: ProviderStage) => void; onCancel: () => void; onLogin: (provider: ProviderStatus, type: "api_key" | "oauth") => void; onSave: () => void }) {
@@ -261,7 +265,7 @@ function ProviderWizard({ providers, provider, stage, editing, busy, search, onS
   if (stage.kind === "custom-protocol") {
     return <div className="provider-wizard"><div className="api-choice-list">{API_OPTIONS.map((option) => <button type="button" key={option.id} className={`api-choice ${provider.api === option.id ? "selected" : ""}`} onClick={() => onChange({ ...provider, api: option.id })}><span><strong>{option.label}</strong><small>{option.description}</small></span>{provider.api === option.id ? <Check size={16} /> : null}</button>)}</div><div className="dialog-actions"><Button variant="secondary" onClick={() => onStageChange({ kind: "pick" })}>返回</Button><Button onClick={() => onStageChange({ kind: "custom-connection" })}>下一步</Button></div></div>;
   }
-  return <div className="provider-wizard"><div className="provider-editor-grid"><label><span>ID</span><input value={provider.id} disabled={editing} autoFocus={!editing} onChange={(event) => onChange({ ...provider, id: event.target.value })} placeholder="例如 my-provider" /></label><label><span>显示名称（可选）</span><input value={provider.name ?? ""} onChange={(event) => onChange({ ...provider, name: event.target.value || undefined })} placeholder="例如 我的模型服务" /></label><label className="provider-editor-wide"><span>Base URL</span><input value={provider.baseUrl} onChange={(event) => onChange({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></label><label className="settings-checkbox"><input type="checkbox" checked={provider.authHeader} onChange={(event) => onChange({ ...provider, authHeader: event.target.checked })} /><span>发送 Bearer Authorization</span></label></div><div className="dialog-actions"><Button variant="secondary" onClick={editing ? onCancel : () => onStageChange({ kind: "custom-protocol" })}>{editing ? "取消" : "上一步"}</Button><Button disabled={busy || !detailsValid} onClick={onSave}><Save size={14} />{busy ? "保存中…" : "确认并保存"}</Button></div></div>;
+  return <div className="provider-wizard"><div className="provider-editor-grid"><label><span>ID</span><input value={provider.id} disabled={editing} autoFocus={!editing} onChange={(event) => onChange({ ...provider, id: event.target.value })} placeholder="例如 my-provider" /></label><label><span>显示名称（可选）</span><input value={provider.name ?? ""} onChange={(event) => onChange({ ...provider, name: event.target.value || undefined })} placeholder="例如 我的模型服务" /></label><label className="provider-editor-wide"><span>Base URL</span><input value={provider.baseUrl} onChange={(event) => onChange({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></label><label className="provider-editor-wide"><span>接口协议</span><select value={provider.api} onChange={(event) => onChange({ ...provider, api: event.target.value as ManagedProvider["api"] })}>{API_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label><label className="settings-checkbox"><input type="checkbox" checked={provider.authHeader} onChange={(event) => onChange({ ...provider, authHeader: event.target.checked })} /><span>发送 Bearer Authorization</span></label></div><div className="dialog-actions"><Button variant="secondary" onClick={editing ? onCancel : () => onStageChange({ kind: "custom-protocol" })}>{editing ? "取消" : "上一步"}</Button><Button disabled={busy || !detailsValid} onClick={onSave}><Save size={14} />{busy ? "保存中…" : "确认并保存"}</Button></div></div>;
 }
 
 /** 供应商的模型管理：已添加列表 + 添加视图（内置列表选择 / 自定义手动编辑 + 自动获取） + 编辑视图。 */
@@ -285,16 +289,17 @@ function ModelManagerDialog({ provider, custom, draft, busy, onDraftChange, onCu
   const [fetching, setFetching] = useState(false);
   const [manualId, setManualId] = useState("");
   const [manualName, setManualName] = useState("");
-  const total = provider.models.length;
-  // 已添加：全局启用集合 ∩ 该供应商模型。
-  const addedModels = useMemo(() => provider.models
-    .filter((model) => draft.has(modelKey(provider.id, model.id)))
-    .sort((left, right) => (left.name ?? left.id).localeCompare(right.name ?? right.id)), [provider, draft]);
+  // 已添加列表：自定义供应商以 models.json 配置为准（即该供应商的模型清单）；
+  // 内置供应商以全局启用集合为准（内置模型无需逐个配置）。
+  const addedModels = useMemo(() => (custom?.models ?? provider.models)
+    .filter((model) => custom !== undefined || draft.has(modelKey(provider.id, model.id)))
+    .sort((left, right) => (left.name ?? left.id).localeCompare(right.name ?? right.id)), [provider, custom, draft]);
   // 可添加：内置 = 该供应商尚未添加的全部模型；自定义 = 从接口获取到的模型。
   const addCandidates = useMemo(() => {
     if (custom !== undefined) {
       if (fetched === undefined) return [];
-      return fetched.filter((model) => !draft.has(modelKey(provider.id, model.id)));
+      const configuredIds = new Set(custom.models.map((model) => model.id));
+      return fetched.filter((model) => !configuredIds.has(model.id));
     }
     const needle = addSearch.trim().toLocaleLowerCase();
     return provider.models
@@ -306,7 +311,8 @@ function ModelManagerDialog({ provider, custom, draft, busy, onDraftChange, onCu
 
   const applyFetched = (models: FetchedModel[]) => {
     setFetched(models);
-    setAddSelected(new Set(models.filter((model) => !draft.has(modelKey(provider.id, model.id))).map((model) => modelKey(provider.id, model.id))));
+    const configuredIds = new Set(custom?.models.map((model) => model.id) ?? []);
+    setAddSelected(new Set(models.filter((model) => !configuredIds.has(model.id)).map((model) => modelKey(provider.id, model.id))));
   };
   const addSelectedModels = () => {
     const next = new Set(draft);
@@ -344,8 +350,11 @@ function ModelManagerDialog({ provider, custom, draft, busy, onDraftChange, onCu
     setView("list");
   };
   const title = view === "add" ? `添加模型 · ${provider.name}` : view === "edit" ? `编辑模型 · ${provider.name}` : `模型管理 · ${provider.name}`;
-  return <Dialog open onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }}><DialogContent className="provider-dialog model-manager-dialog" title={title} description={view === "list" ? `已添加的模型会出现在会话的模型选择器中（${addedModels.length}/${total}）。` : view === "add" ? custom === undefined ? "从供应商的模型列表中选择要添加的模型。" : "从接口获取模型列表自动填入，或手动添加模型信息。" : "编辑模型的显示信息。点击「保存模型」统一写入。"}>
-    {view === "list" ? <div className="provider-wizard"><div className="model-manage-list">{addedModels.length === 0 ? <div className="model-empty">尚未添加模型，点击「添加模型」。</div> : addedModels.map((model) => { const configured = customModelById.get(model.id); return <div className="model-manage-row" key={model.id}><button type="button" className="model-manage-row-main" disabled={custom === undefined} onClick={() => { setEditModel(configured ?? { ...model }); setView("edit"); }}><span className="model-manage-copy"><strong>{displayModelName(model.name ?? model.id)}</strong><small>{model.id}{model.reasoning ? " · 思考" : ""}{model.vision ? " · 图片" : ""}</small></span></button><Button variant="ghost" size="icon" aria-label={`移除 ${model.id}`} title="移除模型" disabled={busy} onClick={() => removeModel(model.id)}><Trash2 size={14} /></Button></div>; })}</div><div className="dialog-actions"><Button variant="secondary" size="sm" onClick={onClose}>关闭</Button><Button variant="secondary" disabled={busy || provider.models.length === 0} onClick={() => { setAddSelected(new Set()); setFetched(undefined); setAddSearch(""); setView("add"); }}><Plus size={14} />添加模型</Button><Button disabled={busy} onClick={() => onSave(custom)}><Save size={14} />{busy ? "保存中…" : "保存模型"}</Button></div></div> : null}
+  const listDescription = custom === undefined
+    ? `已添加的模型会出现在会话的模型选择器中（${addedModels.length}/${provider.models.length}）。`
+    : `该供应商已配置 ${addedModels.length} 个模型，添加后即可在会话的模型选择器中使用。`;
+  return <Dialog open onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }}><DialogContent className="provider-dialog model-manager-dialog" title={title} description={view === "list" ? listDescription : view === "add" ? custom === undefined ? "从供应商的模型列表中选择要添加的模型。" : "从接口获取模型列表自动填入，或手动添加模型信息。" : "编辑模型的显示信息。点击「保存模型」统一写入。"}>
+    {view === "list" ? <div className="provider-wizard"><div className="model-manage-list">{addedModels.length === 0 ? <div className="model-empty">尚未添加模型，点击「添加模型」。</div> : addedModels.map((model) => { const configured = customModelById.get(model.id); return <div className="model-manage-row" key={model.id}><button type="button" className="model-manage-row-main" disabled={custom === undefined} onClick={() => { setEditModel(configured ?? { ...model }); setView("edit"); }}><span className="model-manage-copy"><strong>{displayModelName(model.name ?? model.id)}</strong><small>{model.id}{model.reasoning ? " · 思考" : ""}{model.vision ? " · 图片" : ""}</small></span></button><Button variant="ghost" size="icon" aria-label={`移除 ${model.id}`} title="移除模型" disabled={busy} onClick={() => removeModel(model.id)}><Trash2 size={14} /></Button></div>; })}</div><div className="dialog-actions"><Button variant="secondary" size="sm" onClick={onClose}>关闭</Button><Button variant="secondary" disabled={busy || (custom === undefined && provider.models.length === 0)} onClick={() => { setAddSelected(new Set()); setFetched(undefined); setAddSearch(""); setView("add"); }}><Plus size={14} />添加模型</Button><Button disabled={busy || draft.size === 0} title={draft.size === 0 ? "请至少启用一个模型" : undefined} onClick={() => onSave(custom)}><Save size={14} />{busy ? "保存中…" : "保存模型"}</Button></div></div> : null}
     {view === "add" ? <div className="provider-wizard">{custom === undefined ? (
       <div className="provider-picker">
         <label className="provider-picker-search"><Search size={14} /><input autoFocus value={addSearch} onChange={(event) => setAddSearch(event.target.value)} placeholder="搜索模型…" /></label>
@@ -362,16 +371,10 @@ function ModelManagerDialog({ provider, custom, draft, busy, onDraftChange, onCu
     ) : (
       <div className="model-manage-custom-add">
         <div className="settings-section-heading">
-          <p className="settings-muted">{fetched === undefined ? "从接口获取模型列表会自动填入下方选择（不会直接添加），也可手动填写模型信息。" : `已从接口获取 ${fetched.length} 个模型（已过滤已添加的），勾选后点「添加所选」。`}</p>
+          <p className="settings-muted">{fetched === undefined ? "可从接口获取模型列表自动填入，也可在下方手动添加。" : `已从接口获取 ${fetched.length} 个模型（已过滤已添加的），勾选后点「添加所选」，或在下方手动添加。`}</p>
           <Button variant="secondary" size="sm" disabled={fetching} onClick={() => { setFetching(true); void onFetch(provider.id).then(applyFetched).catch(() => { setFetched(undefined); }).finally(() => setFetching(false)); }}><RotateCw size={13} />{fetching ? "获取中…" : "从接口获取模型列表"}</Button>
         </div>
-        {fetched === undefined ? (
-          <div className="model-manage-manual">
-            <label className="provider-editor-grid"><span>模型 ID*</span><input value={manualId} onChange={(event) => setManualId(event.target.value)} placeholder="例如 gpt-4o" /></label>
-            <label className="provider-editor-grid"><span>显示名称（可选）</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} placeholder="例如 GPT-4o" /></label>
-            <Button variant="secondary" size="sm" disabled={manualId.trim() === ""} onClick={addManualModel}><Plus size={13} />手动添加</Button>
-          </div>
-        ) : (
+        {fetched === undefined ? null : (
           <div className="pick-model-list model-manage-addable">
             {addCandidates.length === 0 ? <div className="model-empty">获取到的模型都已添加。</div> : addCandidates.map((model) => {
               const key = modelKey(provider.id, model.id);
@@ -380,6 +383,11 @@ function ModelManagerDialog({ provider, custom, draft, busy, onDraftChange, onCu
             })}
           </div>
         )}
+        <div className="model-manage-manual">
+          <label className="provider-editor-grid"><span>模型 ID*</span><input value={manualId} onChange={(event) => setManualId(event.target.value)} placeholder="例如 gpt-4o" /></label>
+          <label className="provider-editor-grid"><span>显示名称（可选）</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} placeholder="例如 GPT-4o" /></label>
+          <Button variant="secondary" size="sm" disabled={manualId.trim() === ""} onClick={addManualModel}><Plus size={13} />手动添加</Button>
+        </div>
         <div className="dialog-actions">
           <Button variant="secondary" onClick={() => { setAddSelected(new Set()); setFetched(undefined); setAddSearch(""); setView("list"); }}>返回</Button>
           {fetched === undefined || addSelected.size === 0 ? null : <Button onClick={addSelectedModels}>添加所选（{addSelected.size}）</Button>}
