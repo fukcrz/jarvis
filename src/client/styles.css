@@ -217,6 +217,11 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .code-block-copy.copied { color: var(--success); }
 .message-content pre { max-width: 100%; overflow-x: auto; margin: 0; border: 0; border-radius: 0; background: transparent; padding: 13px; color: #e4e4e7; }
 .message-content pre code { background: transparent; padding: 0; color: inherit; font-size: 12px; }
+/* mermaid 图形卡片：沿用代码块外框，头部多一个「源码/图形」切换 */
+.mermaid-block-actions { display: inline-flex; align-items: center; gap: 2px; }
+.mermaid-block-diagram { display: grid; place-items: center; overflow-x: auto; padding: 14px 12px; }
+.mermaid-block-diagram svg { max-width: 100%; height: auto; }
+.mermaid-block-error { margin: 0; border-bottom: 1px solid #333339; background: var(--warm-soft); padding: 6px 12px; color: var(--warm); font-size: 11px; }
 /* highlight.js 语法高亮配色（贴合应用暗色紫调） */
 .message-content .hljs { color: #e4e4e7; background: transparent; }
 .message-content .hljs-comment, .message-content .hljs-quote, .message-content .hljs-code { color: #8a8a94; font-style: italic; }

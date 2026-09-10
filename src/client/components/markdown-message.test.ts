@@ -184,6 +184,22 @@ describe("MarkdownMessage", () => {
     expect(mediaKindForSource(undefined)).toBe("image");
   });
 
+  it("renders mermaid fences as a diagram card that falls back to source", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "流程：\n\n```mermaid\nflowchart LR\n  A[开始] --> B[结束]\n```",
+    }));
+
+    expect(markup).toContain('class="code-block mermaid-block"');
+    expect(markup).toContain(">mermaid<");
+    // 静态渲染（尚未执行副作用）时显示源码，不当作普通代码块高亮
+    expect(markup).toContain("A[开始] --&gt; B[结束]");
+    expect(markup).toContain("code-block-copy");
+    expect(markup).not.toContain("mermaid-block-diagram");
+
+    const streaming = renderToStaticMarkup(createElement(MarkdownMessage, { text: "```mermaid\nflowchart LR\n  A --> B\n```", streaming: true }));
+    expect(streaming).toContain('class="code-block mermaid-block"');
+  });
+
   it("labels a failed image with its local path, host, or embed kind", () => {
     expect(imageFallbackTarget("/api/files?path=shots%2Fa.png&cwd=%2Fws")).toBe("shots/a.png（相对 /ws）");
     expect(imageFallbackTarget("/api/files?path=%2Ftmp%2Fmissing.png")).toBe("/tmp/missing.png");

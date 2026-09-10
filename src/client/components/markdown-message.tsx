@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, type ComponentProps } from "react";
+import { createContext, useContext, useEffect, useState, type ComponentProps } from "react";
 import { ImageOff } from "lucide-react";
+import { renderMermaidDiagram } from "../lib/mermaid";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { defaultSchema, type Schema } from "hast-util-sanitize";
 import rehypeHighlight from "rehype-highlight";
@@ -103,6 +104,8 @@ export function rewriteLocalLinkHref(href: string | undefined, cwd: string | und
 }
 
 const LocalFileCwdContext = createContext<string | undefined>(undefined);
+/** 流式输出中：mermaid 块只显示源码，等这一轮结束再渲染图形。 */
+const MarkdownStreamingContext = createContext(false);
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- node 是 react-markdown 注入的 hast 节点，需从 DOM 属性中剥离。
 function LocalLink({ node: _node, href, className, children, ...rest }: ComponentProps<"a"> & { node?: HastNode }) {
@@ -213,6 +216,7 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & { node?:
       window.setTimeout(() => setCopied(false), 1600);
     }).catch(() => {});
   };
+  if (lang === "mermaid") return <MermaidBlock code={code} />;
   return (
     <div className="code-block">
       <div className="code-block-bar">
@@ -226,12 +230,55 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & { node?:
   );
 }
 
+/**
+ * ```mermaid 代码块：异步渲染成 SVG。流式输出期间只显示源码（半成品图会抖动/报错），
+ * 渲染失败时回退成源码并说明状态；可以手动在图形与源码之间切换。
+ */
+function MermaidBlock({ code }: { code: string }) {
+  const streaming = useContext(MarkdownStreamingContext);
+  const [svg, setSvg] = useState<string>();
+  const [failed, setFailed] = useState(false);
+  const [showSource, setShowSource] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (streaming || code.trim() === "") return;
+    let cancelled = false;
+    void renderMermaidDiagram(code)
+      .then((result) => { if (!cancelled) { setSvg(result); setFailed(false); } })
+      .catch(() => { if (!cancelled) { setSvg(undefined); setFailed(true); } });
+    return () => { cancelled = true; };
+  }, [code, streaming]);
+
+  const handleCopy = () => {
+    void navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    }).catch(() => {});
+  };
+  const diagram = svg !== undefined && !failed && !streaming;
+  return <div className="code-block mermaid-block">
+    <div className="code-block-bar">
+      <span className="code-block-lang">mermaid</span>
+      <span className="mermaid-block-actions">
+        {diagram ? <button type="button" className="code-block-copy" onClick={() => setShowSource((current) => !current)}>{showSource ? "图形" : "源码"}</button> : null}
+        <button type="button" className={`code-block-copy${copied ? " copied" : ""}`} onClick={handleCopy} disabled={code === ""}>{copied ? "已复制" : "复制"}</button>
+      </span>
+    </div>
+    {!failed ? null : <p className="mermaid-block-error" role="status">图形渲染失败，已显示源码</p>}
+    {diagram && !showSource
+      ? <div className="mermaid-block-diagram" dangerouslySetInnerHTML={{ __html: svg }} />
+      : <pre><code>{code}</code></pre>}
+  </div>;
+}
+
 const components = { pre: CodeBlock, a: LocalLink, img: MarkdownMedia };
 
 export function MarkdownMessage({ text, streaming = false, baseDir }: MarkdownMessageProps) {
   const content = baseDir === undefined ? text : rewriteLocalImageUrls(text, baseDir);
   return <LocalFileCwdContext.Provider value={baseDir}>
+    <MarkdownStreamingContext.Provider value={streaming}>
     <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={components}>{content}</ReactMarkdown>
     {streaming ? <span className="streaming-cursor" aria-hidden="true" /> : null}
-  </LocalFileCwdContext.Provider>;
+  </MarkdownStreamingContext.Provider></LocalFileCwdContext.Provider>;
 }
