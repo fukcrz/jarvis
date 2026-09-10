@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { TimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { groupTimelineItems, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, userMessageAnchors } from "./timeline";
+import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
+import { groupTimelineItems, groupTimelineTurns, isTurnPinned, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -13,7 +13,7 @@ function tool(id: string, name = "read"): ToolTimelineItem {
   };
 }
 
-function message(id: string): TimelineItem {
+function message(id: string): MessageTimelineItem {
   return {
     kind: "message",
     id,
@@ -23,7 +23,7 @@ function message(id: string): TimelineItem {
   };
 }
 
-function error(id: string): TimelineItem {
+function error(id: string): ErrorTimelineItem {
   return {
     kind: "error",
     id,
@@ -34,7 +34,7 @@ function error(id: string): TimelineItem {
   };
 }
 
-function thinking(id: string): TimelineItem {
+function thinking(id: string): ThinkingTimelineItem {
   return {
     kind: "thinking",
     id,
@@ -42,6 +42,18 @@ function thinking(id: string): TimelineItem {
     state: "completed",
     text: "thinking",
   };
+}
+
+function user(id: string): MessageTimelineItem {
+  return { kind: "message", id, createdAt: "2026-01-01T00:00:00.000Z", role: "user", text: "prompt" };
+}
+
+function command(id: string): ToolTimelineItem {
+  return { ...tool(id, "bash"), id: `bash:${id}` };
+}
+
+function dialog(id: string, outcome?: ExtensionUiTimelineItem["outcome"]): ExtensionUiTimelineItem {
+  return { kind: "extension-ui", id, createdAt: "2026-01-01T00:00:00.000Z", request: { id, method: "confirm", title: "继续？" }, ...(outcome === undefined ? {} : { outcome }) };
 }
 
 describe("userMessageAnchors", () => {
@@ -127,5 +139,85 @@ describe("groupTimelineItems", () => {
 
   it("returns an empty list for an empty timeline", () => {
     expect(groupTimelineItems([])).toEqual([]);
+  });
+});
+
+describe("groupTimelineTurns", () => {
+  it("splits turns at user messages and lifts the trailing assistant text out of the process", () => {
+    const result = groupTimelineTurns([user("u1"), thinking("t1"), tool("a"), message("m1"), user("u2"), message("m2")]);
+
+    expect(result).toEqual([
+      { key: "turn:u1", user: user("u1"), process: [{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }], final: message("m1") },
+      { key: "turn:u2", user: user("u2"), process: [], final: message("m2") },
+    ]);
+  });
+
+  it("keeps process entries that follow the last text inside the turn", () => {
+    const [turn] = groupTimelineTurns([user("u1"), message("m1"), tool("a")]);
+
+    expect(turn?.final).toBeUndefined();
+    expect(turn?.process).toEqual([{ kind: "message", item: message("m1") }, { kind: "activity", items: [tool("a")] }]);
+  });
+
+  it("collects leading entries that precede any user message into their own turn", () => {
+    const [turn] = groupTimelineTurns([tool("a"), user("u1"), message("m1")]);
+
+    expect(turn).toEqual({ key: "turn:a", process: [{ kind: "activity", items: [tool("a")] }] });
+  });
+
+  it("returns an empty list for an empty timeline", () => {
+    expect(groupTimelineTurns([])).toEqual([]);
+  });
+});
+
+describe("summarizeTurnProcess", () => {
+  it("counts operations, failures, and the process duration", () => {
+    const [turn] = groupTimelineTurns([
+      user("u1"),
+      { ...tool("a"), createdAt: "2026-01-01T00:00:10.000Z" },
+      { ...tool("b"), createdAt: "2026-01-01T00:00:20.000Z", state: "failed" },
+      { ...error("e1"), groupId: "g", createdAt: "2026-01-01T00:00:30.000Z" },
+      message("m1"),
+    ]);
+
+    expect(turn === undefined ? undefined : summarizeTurnProcess(turn)).toEqual({ operations: 2, failed: 2, durationMs: 20_000 });
+  });
+
+  it("omits durations that cannot be derived from timestamps", () => {
+    const [turn] = groupTimelineTurns([user("u1"), { ...tool("a"), createdAt: "" }, tool("b")]);
+
+    expect(turn === undefined ? undefined : summarizeTurnProcess(turn)).toEqual({ operations: 2, failed: 0 });
+  });
+});
+
+describe("shouldFoldTurnProcess", () => {
+  it("folds multi-entry processes and single process messages", () => {
+    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }] })).toBe(true);
+    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "message", item: message("m1") }] })).toBe(true);
+  });
+
+  it("does not fold a single summary row or an empty process", () => {
+    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }] })).toBe(false);
+    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "activity", items: [tool("a")] }] })).toBe(false);
+    expect(shouldFoldTurnProcess({ key: "t", process: [] })).toBe(false);
+  });
+});
+
+describe("isTurnPinned", () => {
+  it("pins turns with a pending interaction or a user !cmd", () => {
+    expect(isTurnPinned({ key: "t", process: [{ kind: "extension-ui", item: dialog("d1") }] })).toBe(true);
+    expect(isTurnPinned({ key: "t", process: [{ kind: "activity", items: [command("c1")] }] })).toBe(true);
+  });
+
+  it("leaves settled interactions unaffected", () => {
+    expect(isTurnPinned({ key: "t", process: [{ kind: "extension-ui", item: dialog("d1", "answered") }] })).toBe(false);
+    expect(isTurnPinned({ key: "t", process: [{ kind: "activity", items: [tool("a", "bash")] }] })).toBe(false);
+  });
+});
+
+describe("turnEndedInFailure", () => {
+  it("flags unrecovered errors and ignores recovered attempts", () => {
+    expect(turnEndedInFailure({ key: "t", process: [{ kind: "error", items: [{ ...error("e1"), state: "recovered" }] }] })).toBe(false);
+    expect(turnEndedInFailure({ key: "t", process: [{ kind: "error", items: [error("e1")] }] })).toBe(true);
   });
 });

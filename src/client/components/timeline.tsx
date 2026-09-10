@@ -264,7 +264,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
       }}>
         <div className="timeline-inner">
           <div className="timeline-feed">
-            {renderTimelineItems(items, streamingMessageId, status, onExtensionUiRespond, onEditUserMessage, onForkMessage, editingMessageId, setEditingMessageId, workspaceCwd, highlightedMessageId)}
+            {renderTimelineTurns(items, streamingMessageId, status, onExtensionUiRespond, onEditUserMessage, onForkMessage, editingMessageId, setEditingMessageId, workspaceCwd, highlightedMessageId, following)}
             {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
             {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
             {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
@@ -723,19 +723,218 @@ function hasActiveActivity(items: TimelineItem[], status: SessionStatus): boolea
   return last?.kind === "tool" || (last?.kind === "thinking" && last.state === "running");
 }
 
-function renderTimelineItems(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], editingMessageId: string | undefined, setEditingMessageId: (id: string | undefined) => void, workspaceCwd: string | undefined, highlightedMessageId?: string): ReactNode[] {
-  const grouped = groupTimelineItems(items);
-  const lastActivityIndex = grouped.reduce((lastIndex, entry, index) => entry.kind === "activity" ? index : lastIndex, -1);
-  const activeActivityIndex = hasActiveActivity(items, status) ? lastActivityIndex : -1;
+/** 最后一段连续工具条目的首条 id：把运行中的耗时计时交给真正活跃的那一组。 */
+function lastActivityGroupId(items: TimelineItem[]): string | undefined {
+  const lastToolIndex = items.reduce((last, item, index) => item.kind === "tool" ? index : last, -1);
+  if (lastToolIndex === -1) return undefined;
+  let start = lastToolIndex;
+  while (start > 0 && items[start - 1]?.kind === "tool") start -= 1;
+  return items[start]?.id;
+}
 
-  return grouped.map((entry, index) => {
-    if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === streamingMessageId} editing={entry.item.id === editingMessageId} highlighted={entry.item.id === highlightedMessageId} onStartEdit={() => setEditingMessageId(entry.item.id)} onCancelEdit={() => setEditingMessageId(undefined)} onEdit={onEditUserMessage} onFork={entry.item.role === "user" ? onForkMessage : undefined} baseDir={workspaceCwd} />;
-    if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} retrying={status.retrying !== undefined} />;
-    if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={workspaceCwd} />;
-    if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={onExtensionUiRespond} />;
-    if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={workspaceCwd} />;
-    return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={index === activeActivityIndex} startedAt={status.activeRun?.startedAt} stopping={status.runState === "stopping"} />;
-  });
+export interface TimelineTurn {
+  /** React key 与折叠状态的依据。 */
+  key: string;
+  /** 触发该回合的用户消息；历史分页从回合中间开始时没有。 */
+  user?: MessageTimelineItem;
+  /** 折叠进「过程」的条目：思考、工具组、过程文本、错误、上下文事件。 */
+  process: TimelineRenderItem[];
+  /** 留在折叠外作为最终汇报的 assistant 文本。 */
+  final?: MessageTimelineItem;
+}
+
+/** 以用户消息为界把渲染条目组成回合，并把回合最后一条 assistant 文本提为最终汇报。 */
+export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
+  const turns: TimelineTurn[] = [];
+  let current: TimelineTurn | undefined;
+  const openTurn = (key: string): TimelineTurn => {
+    const turn: TimelineTurn = { key, process: [] };
+    turns.push(turn);
+    current = turn;
+    return turn;
+  };
+
+  for (const entry of groupTimelineItems(items)) {
+    if (entry.kind === "message" && entry.item.role === "user") {
+      openTurn(`turn:${entry.item.id}`).user = entry.item;
+      continue;
+    }
+    (current ?? openTurn(`turn:${renderItemKey(entry)}`)).process.push(entry);
+  }
+  for (const turn of turns) {
+    // 只有它确实是回合最后一条时才外提，否则会把后发生的过程条目排到最终汇报之前。
+    const last = turn.process.at(-1);
+    if (last?.kind === "message" && last.item.role === "assistant") {
+      turn.final = last.item;
+      turn.process.pop();
+    }
+  }
+  return turns;
+}
+
+function renderItemKey(entry: TimelineRenderItem): string {
+  return entry.kind === "activity" || entry.kind === "error" ? entry.items[0]?.id ?? "empty" : entry.item.id;
+}
+
+function renderItemRange(entry: TimelineRenderItem): { start?: string; end?: string } {
+  const items: Array<{ createdAt: string }> = entry.kind === "activity" || entry.kind === "error" ? entry.items : [entry.item];
+  return { start: items[0]?.createdAt, end: items.at(-1)?.createdAt };
+}
+
+export interface TurnProcessSummary {
+  /** 工具调用总数。 */
+  operations: number;
+  /** 失败的条目数：失败的工具调用与未被恢复的错误卡片。 */
+  failed: number;
+  durationMs?: number;
+}
+
+function processStartAt(turn: TimelineTurn): string | undefined {
+  const first = turn.process.at(0);
+  return first === undefined ? undefined : renderItemRange(first).start;
+}
+
+function processEndAt(turn: TimelineTurn): string | undefined {
+  const last = turn.process.at(-1);
+  return last === undefined ? undefined : renderItemRange(last).end;
+}
+
+export function summarizeTurnProcess(turn: TimelineTurn): TurnProcessSummary {
+  let operations = 0;
+  let failed = 0;
+  for (const entry of turn.process) {
+    if (entry.kind === "activity") {
+      operations += entry.items.length;
+      failed += entry.items.filter((item) => item.state === "failed").length;
+    } else if (entry.kind === "error") {
+      failed += entry.items.filter((item) => item.state === "failed").length;
+    }
+  }
+  const start = Date.parse(processStartAt(turn) ?? "");
+  const end = Date.parse(processEndAt(turn) ?? "");
+  const durationMs = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : undefined;
+  return { operations, failed, ...(durationMs === undefined ? {} : { durationMs }) };
+}
+
+/** 单条思考/工具组/事件本身就是一行摘要，再套一层折叠没有收益；过程文本可能很长，值得折。 */
+export function shouldFoldTurnProcess(turn: TimelineTurn): boolean {
+  if (turn.process.length >= 2) return true;
+  return turn.process.at(0)?.kind === "message";
+}
+
+/** 等待用户响应的扩展交互，或用户主动执行的 !cmd（`bash:` 前缀）：默认展开，不去藏需要人看的内容。 */
+export function isTurnPinned(turn: TimelineTurn): boolean {
+  return turn.process.some((entry) =>
+    (entry.kind === "extension-ui" && entry.item.outcome === undefined)
+    || (entry.kind === "activity" && entry.items.some((item) => item.id.startsWith("bash:"))));
+}
+
+/** 回合以未恢复的错误收尾时保持展开。 */
+export function turnEndedInFailure(turn: TimelineTurn): boolean {
+  return turn.process.some((entry) => entry.kind === "error" && entry.items.some((item) => item.state === "failed"));
+}
+
+/** 过程耗时：与运行计时同一格式（M:SS），不足 1 秒不显示。 */
+function formatProcessElapsed(durationMs: number): string | undefined {
+  const seconds = Math.floor(durationMs / 1_000);
+  if (seconds < 1 || seconds > 86_400) return undefined;
+  return `${String(Math.floor(seconds / 60))}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/** 计时器单独成一个小组件：每秒钟只重渲染这一个节点。 */
+function TurnElapsed({ active, startedAt, durationMs }: { active: boolean; startedAt?: string; durationMs?: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [active, startedAt]);
+  const elapsed = active ? formatRunElapsed(startedAt, now) : durationMs === undefined ? undefined : formatProcessElapsed(durationMs);
+  return elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>;
+}
+
+function turnProcessLabel(summary: TurnProcessSummary): string {
+  const seconds = summary.durationMs === undefined ? 0 : Math.round(summary.durationMs / 1_000);
+  const minutes = Math.floor(seconds / 60);
+  return [
+    "过程",
+    ...(summary.operations === 0 ? [] : [`${String(summary.operations)} 项操作`]),
+    ...(summary.durationMs === undefined ? [] : [`用时 ${minutes === 0 ? `${String(seconds)} 秒` : `${String(minutes)} 分 ${String(seconds % 60)} 秒`}`]),
+    ...(summary.failed === 0 ? [] : [`${String(summary.failed)} 项失败`]),
+  ].join("，");
+}
+
+interface TurnRenderContext {
+  streamingMessageId?: string;
+  status: SessionStatus;
+  activeActivityId?: string;
+  editingMessageId?: string;
+  highlightedMessageId?: string;
+  workspaceCwd?: string;
+  onExtensionUiRespond?: TimelineProps["onExtensionUiRespond"];
+  onEditUserMessage?: TimelineProps["onEditUserMessage"];
+  onForkMessage?: TimelineProps["onForkMessage"];
+  setEditingMessageId: (id: string | undefined) => void;
+}
+
+function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext): ReactNode {
+  if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} editing={entry.item.id === context.editingMessageId} highlighted={entry.item.id === context.highlightedMessageId} onStartEdit={() => context.setEditingMessageId(entry.item.id)} onCancelEdit={() => context.setEditingMessageId(undefined)} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
+  if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} retrying={context.status.retrying !== undefined} />;
+  if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
+  if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} />;
+  if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
+  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={entry.items[0]?.id === context.activeActivityId} startedAt={context.status.activeRun?.startedAt} stopping={context.status.runState === "stopping"} />;
+}
+
+function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRenderContext & { turn: TimelineTurn; active: boolean; autoCollapse: boolean }) {
+  const foldable = shouldFoldTurnProcess(turn);
+  const summary = summarizeTurnProcess(turn);
+  // 只有拿到最终汇报、且不需要人工介入、也没有以失败收尾的回合才自动收起。
+  const pinned = isTurnPinned(turn);
+  const failed = turnEndedInFailure(turn);
+  const canAutoCollapse = turn.final !== undefined && !pinned && !failed;
+  const [open, setOpen] = useState(() => active || !canAutoCollapse);
+  const touched = useRef(false);
+  const wasActive = useRef(active);
+
+  useEffect(() => {
+    const startedRunning = wasActive.current !== active;
+    wasActive.current = active;
+    if (touched.current) return;
+    if (active) {
+      setOpen(true);
+      return;
+    }
+    // 刚结束、而用户正在往上读的时候不动布局；他滚回底部（autoCollapse 变真）后再收起。
+    if (startedRunning && !autoCollapse) return;
+    setOpen(!canAutoCollapse);
+  }, [active, autoCollapse, canAutoCollapse]);
+
+  const process = turn.process.map((entry) => renderTimelineEntry(entry, context));
+  return <>
+    {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
+    {!foldable ? process : <section className={`turn-process ${open ? "expanded" : "collapsed"}${summary.failed === 0 ? "" : " failed"}`}>
+      <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => { touched.current = true; setOpen((value) => !value); }}>
+        <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
+        <span className="turn-process-label">过程</span>
+        {summary.operations === 0 ? null : <span className="turn-process-count">{summary.operations} 项操作</span>}
+        <TurnElapsed active={active} startedAt={processStartAt(turn)} durationMs={summary.durationMs} />
+        {summary.failed === 0 ? null : <span className="turn-process-failure">{summary.failed} 项失败</span>}
+      </button>
+      {!open ? null : <div className="turn-process-body">{process}</div>}
+    </section>}
+    {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, context)}
+  </>;
+}
+
+function renderTimelineTurns(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], editingMessageId: string | undefined, setEditingMessageId: (id: string | undefined) => void, workspaceCwd: string | undefined, highlightedMessageId: string | undefined, autoCollapse: boolean): ReactNode[] {
+  const turns = groupTimelineTurns(items);
+  const activeActivityId = hasActiveActivity(items, status) ? lastActivityGroupId(items) : undefined;
+  const activeTurnKey = status.runState === "idle" ? undefined : turns.at(-1)?.key;
+  const context: TurnRenderContext = { streamingMessageId, status, activeActivityId, editingMessageId, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage, setEditingMessageId };
+  // 全部属性都显式传：TurnRenderContext 的键名与组件 props 一致，展开时不会漏项。
+  return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} active={turn.key === activeTurnKey} autoCollapse={autoCollapse} {...context} />);
 }
 
 function ThinkingItem({ item, baseDir }: { item: ThinkingTimelineItem; baseDir?: string }) {
