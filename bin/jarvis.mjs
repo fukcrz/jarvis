@@ -29,9 +29,9 @@ Options:
 
 Requires Node.js >= 24 and a configured Pi profile (~/.pi/agent).
 
-Security: jarvis has no authentication and can operate Pi sessions.
-Run it only on your local machine or a trusted LAN — never expose it
-to the public internet.
+Security: set an access password under Settings -> 安全 to require a login.
+Until then every request is allowed, so keep the port private (LAN or
+--host 127.0.0.1) or use a tunnel only after setting a password.
 `);
 }
 

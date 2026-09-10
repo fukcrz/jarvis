@@ -26,10 +26,37 @@ npx https://pkg.pr.new/fukcrz/jarvis/jarvis@<commit-sha>
 Once running, open `http://<machine-ip>:9528` from any reachable device. Use
 `jarvis --help` after install for options (`--port`, `--host`, `--open`).
 
-> **Security warning**: Jarvis has **no authentication** and can operate Pi
-> sessions. Only run it on your local machine or a trusted LAN — never expose
-> it to the public internet. It binds to `0.0.0.0` by default; use
-> `--host 127.0.0.1` to restrict it to the local machine.
+> **Security**: Jarvis ships with a single-password login (Settings → 安全).
+> **Until you set a password, every request is allowed** — that is the default
+> for local development. Because it can operate Pi sessions and delete files,
+> set a password before exposing it beyond your own machine (LAN or tunnel),
+> or bind to the local machine only with `--host 127.0.0.1`.
+
+## Authentication
+
+Settings → **安全** sets a single access password. With a password in place every
+API route, file response and WebSocket handshake requires a logged-in browser;
+without one Jarvis behaves exactly as before (open, no login screen).
+
+- **Session** — login returns an `HttpOnly` `SameSite=Lax` cookie that lasts 7
+days and is renewed on use, so a device you keep working from stays signed in.
+- **No loopback exemption** — cloudflared, sish and frp all forward traffic from
+`127.0.0.1`, so trusting the loopback address would hand the tunnel a free pass.
+Login is required for local, LAN and tunnel requests alike.
+- **Storage** — `~/.jarvis/auth.json` holds a salted scrypt hash (N=2¹⁵) plus an
+HMAC signing secret; the password itself is never written to disk. Sessions are
+stateless signed tokens, so they survive a restart.
+- **Revocation** — changing or clearing the password invalidates every existing
+session; *退出所有设备* does the same on demand, while *退出登录* only clears the
+current browser.
+- **Brute force** — after 3 failed attempts a client is asked to wait (5s, then
+doubling, capped at 15 minutes). All tunnel traffic shares one client address,
+so a hostile visitor can also delay logins by up to 15 minutes at a time.
+- **WebSocket** — an unauthenticated handshake is closed with code `4401`; the
+client drops back to the login page instead of reconnecting in a loop.
+
+Clearing the password in Settings → 安全 (the *关闭认证* button) turns
+authentication off again.
 
 ## Development
 
