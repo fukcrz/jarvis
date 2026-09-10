@@ -1,3 +1,4 @@
+import { createReadStream } from "node:fs";
 import { lstat, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { platform } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
@@ -303,11 +304,24 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
       const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
       reply.header("content-disposition", `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`);
     }
-    const data = await readFile(resolved);
-    return reply
+    // 流式返回 + Range：视频/音频需要 206 才能拖进度，也避免大文件一次性读进内存。
+    const size = metadata.size;
+    reply
       .type(FILE_MIME_TYPES[ext] ?? "application/octet-stream")
       .header("cache-control", "private, max-age=3600")
-      .send(data);
+      .header("accept-ranges", "bytes");
+    const range = parseByteRange(request.headers.range, size);
+    if (range === "unsatisfiable") {
+      return reply.code(416).header("content-range", `bytes */${String(size)}`).send();
+    }
+    if (range === undefined) {
+      return reply.header("content-length", String(size)).send(createReadStream(resolved));
+    }
+    return reply
+      .code(206)
+      .header("content-range", `bytes ${String(range.start)}-${String(range.end)}/${String(size)}`)
+      .header("content-length", String(range.end - range.start + 1))
+      .send(createReadStream(resolved, { start: range.start, end: range.end }));
   });
 
   app.get("/api/workspaces", async () => ({ workspaces: workspaces.list() }));
@@ -588,6 +602,27 @@ async function removeWorkspaceEntry(cwd: string, requestedPath: string): Promise
     if (isRecord(error) && error["code"] === "ENOENT") throw new AppError("FILE_NOT_FOUND", "File or directory not found", 404);
     throw new AppError("FILE_DELETE_FAILED", "Unable to delete file or directory", 500);
   }
+}
+
+/**
+ * 解析单段 Range 头（`bytes=start-end` / `bytes=start-` / `bytes=-suffix`）。
+ * 返回 undefined 表示按整档返回（无头、或浏览器极少发的多段 Range）；
+ * 返回 "unsatisfiable" 表示范围超出文件，调用方应回 416。
+ */
+function parseByteRange(value: string | undefined, size: number): { start: number; end: number } | "unsatisfiable" | undefined {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(value?.trim() ?? "");
+  if (match === null) return undefined;
+  const [, rawStart, rawEnd] = match;
+  if (size === 0) return "unsatisfiable";
+  if (rawStart === "") {
+    const suffix = Number(rawEnd);
+    if (rawEnd === "" || suffix === 0) return "unsatisfiable";
+    return { start: Math.max(0, size - suffix), end: size - 1 };
+  }
+  const start = Number(rawStart);
+  if (start >= size) return "unsatisfiable";
+  const end = rawEnd === "" ? size - 1 : Math.min(Number(rawEnd), size - 1);
+  return end < start ? "unsatisfiable" : { start, end };
 }
 
 function isPathInside(root: string, candidate: string): boolean {

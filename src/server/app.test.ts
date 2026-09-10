@@ -637,6 +637,45 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(directory.json()).toMatchObject({ error: { code: "FILE_NOT_FOUND" } });
   });
 
+  it("streams files with byte range support so media can seek", async () => {
+    const workspaceRoot = join(jarvisHome, "range-workspace");
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeFile(join(workspaceRoot, "clip.mp4"), "01234567");
+    const url = (range?: string) => ({ method: "GET" as const, url: `/api/files?path=clip.mp4&cwd=${encodeURIComponent(workspaceRoot)}`, ...(range === undefined ? {} : { headers: { range } }) });
+
+    const full = await activeApp().inject(url());
+    expect(full.statusCode).toBe(200);
+    expect(full.headers["accept-ranges"]).toBe("bytes");
+    expect(full.headers["content-type"]).toContain("video/mp4");
+    expect(full.rawPayload.toString()).toBe("01234567");
+
+    const head = await activeApp().inject(url("bytes=0-3"));
+    expect(head.statusCode).toBe(206);
+    expect(head.headers["content-range"]).toBe("bytes 0-3/8");
+    expect(head.headers["content-length"]).toBe("4");
+    expect(head.rawPayload.toString()).toBe("0123");
+
+    const tail = await activeApp().inject(url("bytes=4-"));
+    expect(tail.statusCode).toBe(206);
+    expect(tail.headers["content-range"]).toBe("bytes 4-7/8");
+    expect(tail.rawPayload.toString()).toBe("4567");
+
+    const suffix = await activeApp().inject(url("bytes=-2"));
+    expect(suffix.statusCode).toBe(206);
+    expect(suffix.headers["content-range"]).toBe("bytes 6-7/8");
+    expect(suffix.rawPayload.toString()).toBe("67");
+
+    // 越界 → 416，并告知实际大小
+    const unsatisfiable = await activeApp().inject(url("bytes=99-"));
+    expect(unsatisfiable.statusCode).toBe(416);
+    expect(unsatisfiable.headers["content-range"]).toBe("bytes */8");
+
+    // 多段 Range（浏览器极少发）不做支持，退回整档返回
+    const multi = await activeApp().inject(url("bytes=0-1,3-4"));
+    expect(multi.statusCode).toBe(200);
+    expect(multi.rawPayload.toString()).toBe("01234567");
+  });
+
   it("deletes workspace files and recursively deletes directories without leaving the workspace", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "entry-delete-workspace");
