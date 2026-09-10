@@ -26,6 +26,15 @@ export interface AppSettings {
   assistantName: string;
 }
 
+/**
+ * 登录认证状态：required 表示已设置密码（启用认证），
+ * authenticated 表示当前请求已通过认证（未启用认证时恒为 true）。
+ */
+export interface AuthStatus {
+  required: boolean;
+  authenticated: boolean;
+}
+
 export interface ManagedModel {
   id: string;
   name?: string;

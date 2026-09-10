@@ -1,7 +1,7 @@
 import { lstat, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { platform } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import websocket from "@fastify/websocket";
@@ -9,6 +9,7 @@ import fastifyStatic from "@fastify/static";
 import { z } from "zod";
 import { THINKING_LEVELS, TUNNEL_METHODS } from "../shared/protocol.js";
 import type { ApiErrorBody, DirectoryListing, SessionRef, WorkspaceDirectoryListing, WorkspaceFile, WorkspaceFileContent } from "../shared/protocol.js";
+import { AUTH_COOKIE_NAME, AuthService, SESSION_TTL_MS } from "./auth-service.js";
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { SessionService } from "./session-service.js";
@@ -36,6 +37,8 @@ const bashInput = z.object({ command: z.string().min(1).max(40_000), excludeFrom
 const abortInput = z.object({ runId: z.string().uuid().optional() }).strict();
 const settingsInput = z.object({ assistantName: z.string().min(1).max(64) }).strict();
 const authLoginInput = z.object({ providerId: z.string().min(1).max(120), type: z.enum(["api_key", "oauth"]) }).strict();
+const loginInput = z.object({ password: z.string().min(1).max(200) }).strict();
+const passwordInput = z.object({ currentPassword: z.string().max(200).optional(), newPassword: z.string().max(200).nullable() }).strict();
 const authResponseInput = z.object({ value: z.string().max(200_000) }).strict();
 const enabledModelRefInput = z.object({ provider: z.string().min(1).max(120), id: z.string().min(1).max(320) }).strict();
 const enabledModelsInput = z.object({ models: z.array(enabledModelRefInput).max(5_000) }).strict();
@@ -134,6 +137,7 @@ export interface JarvisServices {
   sessions: SessionService;
   events: EventHub;
   tunnel: TunnelService;
+  auth: AuthService;
 }
 
 export async function buildApp(options: { serveStatic?: boolean; staticRoot?: string } = {}): Promise<FastifyInstance> {
@@ -145,7 +149,9 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   const sessions = new SessionService(workspaces, events);
   const settings = new SettingsService(() => sessions.globalModelRuntime(), () => sessions.refreshModelConfiguration());
   await settings.initialize();
-  const services: JarvisServices = { workspaces, sessions, events, tunnel: new TunnelService((message) => app.log.info({ tunnel: message })) };
+  const auth = new AuthService();
+  await auth.initialize();
+  const services: JarvisServices = { workspaces, sessions, events, tunnel: new TunnelService((message) => app.log.info({ tunnel: message })), auth };
 
   await app.register(cors, { origin: production ? [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] : true });
   await app.register(helmet, { contentSecurityPolicy: false });
@@ -154,7 +160,60 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.decorate("jarvis", services);
   app.addHook("onClose", async () => { await sessions.dispose(); await services.tunnel.dispose(); });
 
+  // 登录认证（仅在设置了密码时生效）：
+  // - 静态资源与 SPA 页面放行，否则登录页自身无法加载；
+  // - /api/auth/status、/api/auth/login、/api/health 放行；
+  // - WebSocket 由各自 handler 校验，才能用 close(4401) 通知客户端已登出；
+  // - 一律不区分来源地址：穿透（frp/cloudflared/sish）都从 127.0.0.1 连入，
+  //   对回环地址免登录等于给公网流量开后门。
+  const publicApiPaths = new Set(["/api/auth/status", "/api/auth/login", "/api/health"]);
+  app.addHook("onRequest", async (request, reply) => {
+    if (!auth.enabled()) return;
+    if (request.headers.upgrade?.toLowerCase() === "websocket") return;
+    const path = request.url.split("?")[0] ?? "";
+    if (!path.startsWith("/api/") || publicApiPaths.has(path)) return;
+    const state = auth.verifyToken(readAuthCookie(request.headers.cookie));
+    if (state.state === "invalid") {
+      const response: ApiErrorBody = { error: { code: "UNAUTHENTICATED", message: "请先登录", requestId: request.id } };
+      await reply.status(401).send(response);
+      return;
+    }
+    if (state.token !== undefined) applyAuthCookie(reply, state.token, request);
+  });
+
   app.get("/api/health", async () => ({ ok: true, version: 1 }));
+
+  app.get("/api/auth/status", async (request) => ({ auth: auth.status(readAuthCookie(request.headers.cookie)), assistantName: settings.getSettings().assistantName }));
+  app.post("/api/auth/login", async (request, reply) => {
+    const body = loginInput.parse(request.body);
+    const outcome = await auth.login(body.password, request.ip);
+    if (!outcome.ok) {
+      if (outcome.reason === "locked") {
+        const seconds = Math.ceil(outcome.retryAfterMs / 1_000);
+        reply.header("retry-after", String(seconds));
+        throw new AppError("AUTH_LOCKED", `密码错误次数过多，请 ${String(seconds)} 秒后重试`, 429);
+      }
+      throw new AppError("AUTH_INVALID_PASSWORD", "密码不正确", 401);
+    }
+    applyAuthCookie(reply, outcome.session.token, request);
+    return { auth: { required: auth.enabled(), authenticated: true } };
+  });
+  app.post("/api/auth/logout", async (request, reply) => {
+    clearAuthCookie(reply);
+    return { auth: auth.status(undefined) };
+  });
+  app.post("/api/auth/logout-all", async (request, reply) => {
+    await auth.revokeAllSessions();
+    clearAuthCookie(reply);
+    return { auth: auth.status(undefined) };
+  });
+  app.put("/api/auth/password", async (request, reply) => {
+    const body = passwordInput.parse(request.body);
+    const result = await auth.setPassword(body.newPassword, body.currentPassword);
+    if (result.token === undefined) clearAuthCookie(reply);
+    else applyAuthCookie(reply, result.token, request);
+    return { auth: auth.status(result.token) };
+  });
 
   registerSelfRestart(app, events);
 
@@ -399,11 +458,13 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   });
 
   app.get("/api/workspaces/:workspaceId/events", { websocket: true }, (socket, request) => {
+    if (!authorizeSocket(auth, request, socket)) return;
     const params = z.object({ workspaceId: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return socket.close(1008, "Invalid workspace id");
     events.addWorkspace(params.data.workspaceId, socket);
   });
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/events", { websocket: true }, (socket, request) => {
+    if (!authorizeSocket(auth, request, socket)) return;
     const parsed = safeSessionRef(request.params);
     if (parsed === undefined) return socket.close(1008, "Invalid session ref");
     events.addSession(parsed, socket);
@@ -641,6 +702,36 @@ function formatValidationError(error: z.ZodError): string {
 function safeSessionRef(value: unknown): SessionRef | undefined {
   const parsed = z.object({ workspaceId: z.string().uuid(), sessionId: z.string().uuid() }).safeParse(value);
   return parsed.success ? parsed.data : undefined;
+}
+
+function readAuthCookie(header: string | undefined): string | undefined {
+  if (header === undefined) return undefined;
+  for (const part of header.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    if (part.slice(0, separator).trim() !== AUTH_COOKIE_NAME) continue;
+    return decodeURIComponent(part.slice(separator + 1).trim());
+  }
+  return undefined;
+}
+
+/** 下发/续期会话 Cookie；仅当连接本身是 HTTPS 时加 Secure（frp tcp 与局域网都是 HTTP）。 */
+function applyAuthCookie(reply: FastifyReply, token: string, request: FastifyRequest): void {
+  const secure = request.protocol === "https" ? "; Secure" : "";
+  reply.header("set-cookie", `${AUTH_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${String(SESSION_TTL_MS / 1_000)}${secure}`);
+}
+
+function clearAuthCookie(reply: FastifyReply): void {
+  reply.header("set-cookie", `${AUTH_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+}
+
+interface CloseableSocket { close(code?: number, reason?: string): void }
+
+/** WebSocket 握手鉴权：失败用 4401 关闭，客户端据此回到登录页而不是无限重连。 */
+function authorizeSocket(auth: AuthService, request: FastifyRequest, socket: CloseableSocket): boolean {
+  if (auth.status(readAuthCookie(request.headers.cookie)).authenticated) return true;
+  socket.close(4401, "Unauthorized");
+  return false;
 }
 
 function errorStatusCode(error: unknown): number | undefined {

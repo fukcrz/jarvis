@@ -88,6 +88,25 @@ function nextJsonMessage(socket: TestSocket): Promise<unknown> {
   });
 }
 
+/** 会话 Cookie：从 login/password 响应的 set-cookie 头中取出 `name=value` 部分。 */
+function sessionCookie(response: { headers: Record<string, unknown> }): string {
+  const header = response.headers["set-cookie"];
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (typeof raw !== "string") throw new Error("Expected a session cookie in the response");
+  return raw.split(";")[0] ?? "";
+}
+
+interface InjectSocket { on(event: string, listener: (...args: unknown[]) => void): unknown; close(): void }
+
+/** 等待注入的 WebSocket 关闭，返回关闭码（未认证时为 4401）。 */
+function nextInjectSocketClose(socket: InjectSocket): Promise<number> {
+  return new Promise((resolve) => { socket.on("close", (...args: unknown[]) => { resolve(Number(args[0])); }); });
+}
+
+function nextInjectSocketMessage(socket: InjectSocket): Promise<unknown> {
+  return new Promise((resolve) => { socket.on("message", (...args: unknown[]) => { resolve(JSON.parse(String(args[0]))); }); });
+}
+
 async function writeConversationSession(workspacePath: string): Promise<{ id: string; user1: string; assistant1: string; user2: string; assistant2: string }> {
   const id = randomUUID();
   const timestamp = new Date("2026-08-09T00:00:00.000Z");
@@ -1386,5 +1405,106 @@ describe("tunnel entries", () => {
     const persisted = JSON.parse(await readFile(join(jarvisHome, "tunnel.json"), "utf8")) as { version: number; tunnels: unknown[] };
     expect(persisted.version).toBe(2);
     expect(persisted.tunnels).toHaveLength(1);
+  });
+
+  it("keeps the API open until a password is set, then requires the session cookie", async () => {
+    const server = activeApp();
+
+    // 未设置密码：认证未启用，一切照旧。
+    expect((await server.inject({ method: "GET", url: "/api/workspaces" })).statusCode).toBe(200);
+    expect((await server.inject({ method: "GET", url: "/api/auth/status" })).json()).toMatchObject({ auth: { required: false, authenticated: true } });
+
+    const configured = await server.inject({ method: "PUT", url: "/api/auth/password", payload: { newPassword: "jarvis-long-password" } });
+    expect(configured.statusCode).toBe(200);
+    const session = sessionCookie(configured);
+
+    // 设置密码后：无 Cookie 一律 401，只有公开路由例外。
+    const blocked = await server.inject({ method: "GET", url: "/api/workspaces" });
+    expect(blocked.statusCode).toBe(401);
+    expect(blocked.json()).toMatchObject({ error: { code: "UNAUTHENTICATED" } });
+    expect((await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: jarvisHome } })).statusCode).toBe(401);
+    expect((await server.inject({ method: "GET", url: "/api/health" })).statusCode).toBe(200);
+    expect((await server.inject({ method: "GET", url: "/api/auth/status" })).json()).toMatchObject({ auth: { required: true, authenticated: false } });
+
+    // 登录：错误密码 401，正确密码换新 Cookie。
+    expect((await server.inject({ method: "POST", url: "/api/auth/login", payload: { password: "not-the-password" } })).statusCode).toBe(401);
+    const login = await server.inject({ method: "POST", url: "/api/auth/login", payload: { password: "jarvis-long-password" } });
+    expect(login.statusCode).toBe(200);
+    const cookie = sessionCookie(login);
+    expect(cookie).toContain("jarvis_auth=");
+    expect(login.headers["set-cookie"]).toContain("HttpOnly");
+    expect(login.headers["set-cookie"]).toContain("SameSite=Lax");
+    expect((await server.inject({ method: "GET", url: "/api/workspaces", headers: { cookie } })).statusCode).toBe(200);
+    expect(cookie).not.toBe(session);
+
+    // 磁盘上只存 scrypt 哈希。
+    const stored = await readFile(join(jarvisHome, "auth.json"), "utf8");
+    expect(stored).not.toContain("jarvis-long-password");
+    expect(JSON.parse(stored)).toMatchObject({ version: 1, password: { hash: expect.any(String), salt: expect.any(String) } });
+  });
+
+  it("closes unauthenticated WebSocket upgrades with 4401", async () => {
+    const server = activeApp();
+    const configured = await server.inject({ method: "PUT", url: "/api/auth/password", payload: { newPassword: "socket-password-value" } });
+    const cookie = sessionCookie(configured);
+    const workspaces = (await server.inject({ method: "GET", url: "/api/workspaces", headers: { cookie } })).json<{ workspaces: Array<{ id: string }> }>().workspaces;
+    const workspace = workspaces[0];
+    if (workspace === undefined) throw new Error("Expected default workspace");
+    const path = `/api/workspaces/${workspace.id}/events`;
+
+    const anonymous = await server.injectWS(path);
+    await expect(nextInjectSocketClose(anonymous)).resolves.toBe(4401);
+
+    const authorized = await server.injectWS(path, { headers: { cookie } });
+    const received = nextInjectSocketMessage(authorized);
+    server.jarvis.events.publishWorkspace(workspace.id, {
+      version: 1,
+      type: "session.deleted",
+      workspaceId: workspace.id,
+      sessionId: "5f6c305e-d51a-447f-a62a-d0f4835c946f",
+    });
+    await expect(received).resolves.toMatchObject({ type: "session.deleted" });
+    authorized.close();
+  });
+
+  it("keeps sessions across a restart and revokes them on password change", async () => {
+    const server = activeApp();
+    const configured = await server.inject({ method: "PUT", url: "/api/auth/password", payload: { newPassword: "first-password-value" } });
+    const first = sessionCookie(configured);
+    expect((await server.inject({ method: "GET", url: "/api/workspaces", headers: { cookie: first } })).statusCode).toBe(200);
+
+    // 重启后仍然有效：会话是 HMAC 签名 token，密钥持久化在 auth.json。
+    await app?.close();
+    app = await buildApp();
+    const restarted = activeApp();
+    expect((await restarted.inject({ method: "GET", url: "/api/workspaces", headers: { cookie: first } })).statusCode).toBe(200);
+
+    // 改密码必须提供当前密码，成功后所有旧会话失效。
+    expect((await restarted.inject({ method: "PUT", url: "/api/auth/password", headers: { cookie: first }, payload: { newPassword: "second-password-value" } })).statusCode).toBe(401);
+    const changed = await restarted.inject({ method: "PUT", url: "/api/auth/password", headers: { cookie: first }, payload: { currentPassword: "first-password-value", newPassword: "second-password-value" } });
+    expect(changed.statusCode).toBe(200);
+    const second = sessionCookie(changed);
+    expect((await restarted.inject({ method: "GET", url: "/api/workspaces", headers: { cookie: first } })).statusCode).toBe(401);
+    expect((await restarted.inject({ method: "GET", url: "/api/workspaces", headers: { cookie: second } })).statusCode).toBe(200);
+
+    // 退出登录只清本机 Cookie；退出所有设备让全部会话失效。
+    const loggedOut = await restarted.inject({ method: "POST", url: "/api/auth/logout", headers: { cookie: second }, payload: {} });
+    expect(loggedOut.statusCode).toBe(200);
+    expect(loggedOut.headers["set-cookie"]).toContain("Max-Age=0");
+    expect((await restarted.inject({ method: "GET", url: "/api/workspaces", headers: { cookie: second } })).statusCode).toBe(200);
+
+    const revoked = await restarted.inject({ method: "POST", url: "/api/auth/logout-all", headers: { cookie: second }, payload: {} });
+    expect(revoked.statusCode).toBe(200);
+    expect((await restarted.inject({ method: "GET", url: "/api/workspaces", headers: { cookie: second } })).statusCode).toBe(401);
+
+    // 关闭认证（newPassword = null）需要当前密码；关闭后恢复开放访问。
+    const loginAgain = await restarted.inject({ method: "POST", url: "/api/auth/login", payload: { password: "second-password-value" } });
+    expect(loginAgain.statusCode).toBe(200);
+    const third = sessionCookie(loginAgain);
+    expect((await restarted.inject({ method: "PUT", url: "/api/auth/password", headers: { cookie: third }, payload: { currentPassword: "wrong-value", newPassword: null } })).statusCode).toBe(401);
+    const cleared = await restarted.inject({ method: "PUT", url: "/api/auth/password", headers: { cookie: third }, payload: { currentPassword: "second-password-value", newPassword: null } });
+    expect(cleared.statusCode).toBe(200);
+    expect((await restarted.inject({ method: "GET", url: "/api/workspaces" })).statusCode).toBe(200);
+    expect((await restarted.inject({ method: "GET", url: "/api/auth/status" })).json()).toMatchObject({ auth: { required: false, authenticated: true } });
   });
 });
