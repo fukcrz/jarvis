@@ -18,6 +18,8 @@
 
 ## 其他注意事项
 
+- Pi 嵌在 Jarvis 服务进程里运行：派生 Pi 子进程的扩展（pi-subagent 等）用 `process.argv[1]` 推导子进程入口，会落到 `dist/server/server/index.js`。`src/server/pi-cli-forward.ts` 在启动服务前把这类 Pi CLI 调用（`--mode text|json|rpc`）转发给真正的 Pi CLI；改启动入口时不要绕过它。
+
 - 自举式开发：用 Jarvis 开发 Jarvis 的约定见 [BOOTSTRAP.md](BOOTSTRAP.md)（编译与重启分离；重启只由用户触发）。
 
 - 开发模式端口：Vite 前端 `28471`，Fastify 后端 `39130`（与生产端口 9528 不同，开发重启相对安全，但仍需确认用户意图）。

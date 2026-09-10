@@ -61,6 +61,20 @@ which builds `dist/` automatically).
 
 Jarvis stores only its Workspace registry in `~/.jarvis/workspaces.json`. Pi JSONL remains the authoritative conversation history. Do not write to the same Pi session concurrently from Jarvis and the Pi CLI.
 
+## Pi CLI compatibility
+
+Pi extensions that delegate work by spawning Pi sub-processes (`@mjakl/pi-subagent`,
+Pi's own subagent example, ...) derive the child command from `process.argv[1]`. Jarvis
+embeds Pi in its own server process, so that path points at
+`dist/server/server/index.js` and the child would be a second Jarvis server instead of
+a subagent.
+
+Jarvis therefore recognizes Pi CLI invocations (`--mode text|json|rpc` — a flag Jarvis
+never uses) and forwards them to the Pi CLI from the same
+`@earendil-works/pi-coding-agent` install before any server code runs, then exits with
+its status. `scripts/prod-foreground.mjs` applies the same check, so both production
+launch paths behave identically; `npm run dev` (`tsx watch`) does not.
+
 ## MVP Scope
 
 - Expandable project tree with existing and new Pi sessions
