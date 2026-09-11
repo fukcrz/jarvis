@@ -1,6 +1,0 @@
-{
-  "maxAgeDays": 15,
-  "autoRunOnStart": true,
-  "pruneEmptyDirs": true,
-  "dryRun": false
-}
