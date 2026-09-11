@@ -141,11 +141,11 @@ export interface JarvisServices {
   auth: AuthService;
 }
 
-export async function buildApp(options: { serveStatic?: boolean; staticRoot?: string; initialWorkspaceCwd?: string } = {}): Promise<FastifyInstance> {
+export async function buildApp(options: { serveStatic?: boolean; staticRoot?: string } = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: { level: process.env["LOG_LEVEL"] ?? "info" }, bodyLimit: 25 * 1024 * 1024 });
   const production = process.env["NODE_ENV"] === "production";
   const workspaces = new WorkspaceStore();
-  await workspaces.initialize(options.initialWorkspaceCwd ?? process.cwd());
+  await workspaces.initialize(process.cwd());
   const events = new EventHub();
   const sessions = new SessionService(workspaces, events);
   const settings = new SettingsService(() => sessions.globalModelRuntime(), () => sessions.refreshModelConfiguration());
@@ -287,7 +287,7 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   // 前端重写为 /api/files?path=...&cwd=...；文件浏览器也用它预览媒体与下载文件。
   app.get("/api/files", async (request, reply) => {
     const query = fileQuery.parse(request.query);
-    const resolved = await resolveFileRequestPath(workspaces, query.path, query.cwd);
+    const resolved = await resolveFileRequestPath(query.path, query.cwd);
     const metadata = await stat(resolved).catch(() => undefined);
     if (metadata === undefined || !metadata.isFile()) throw new AppError("FILE_NOT_FOUND", "File not found", 404);
     if (query.text !== undefined) return { file: await readTextFile(resolved, metadata, query.text !== "check") };
@@ -324,13 +324,6 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.get("/api/workspaces", async () => ({ workspaces: workspaces.list() }));
   app.post("/api/workspaces", async (request) => {
     const body = workspaceInput.parse(request.body);
-    // An unauthenticated request may organize a registered root into nested
-    // workspaces, but cannot turn an arbitrary filesystem parent into a new
-    // /api/files allowlist root. IP addresses are deliberately not trusted:
-    // every tunnel forwards to this process from loopback.
-    if (!auth.enabled() && !(await isInsideRegisteredWorkspaceRoot(workspaces, body.cwd))) {
-      throw new AppError("WORKSPACE_AUTH_REQUIRED", "Set a password before adding a workspace outside the registered roots", 403);
-    }
     return { workspace: await workspaces.add(body.cwd, body.label) };
   });
   app.patch("/api/workspaces/:workspaceId", async (request) => {
@@ -639,44 +632,13 @@ function isPathInside(root: string, candidate: string): boolean {
   return relativePath !== ".." && !relativePath.startsWith(`..${String.fromCharCode(47)}`) && !relativePath.startsWith(`..${String.fromCharCode(92)}`) && !isAbsolute(relativePath);
 }
 
-async function registeredWorkspaceRoots(workspaces: WorkspaceStore): Promise<string[]> {
-  const roots: string[] = [];
-  for (const workspace of workspaces.list()) {
-    const root = await realpath(workspace.cwd).catch(() => undefined);
-    if (root !== undefined && !roots.includes(root)) roots.push(root);
-  }
-  return roots;
-}
-
-async function isInsideRegisteredWorkspaceRoot(workspaces: WorkspaceStore, directory: string): Promise<boolean> {
-  const candidate = await realpath(directory).catch(() => undefined);
-  if (candidate === undefined) return true; // Let WorkspaceStore return its existing validation error.
-  const roots = await registeredWorkspaceRoots(workspaces);
-  return roots.some((root) => isPathInside(root, candidate));
-}
-
-async function resolveFileRequestPath(workspaces: WorkspaceStore, requestedPath: string, cwd: string | undefined): Promise<string> {
-  const roots = await registeredWorkspaceRoots(workspaces);
-  if (roots.length === 0) throw new AppError("FILE_ACCESS_DENIED", "File access is not available", 403);
-
-  let candidate: string;
-  if (isAbsoluteFilePath(requestedPath)) {
-    candidate = requestedPath;
-  } else {
-    const base = await realpath(cwd ?? process.cwd()).catch(() => undefined);
-    if (base === undefined) throw new AppError("FILE_NOT_FOUND", "File not found", 404);
-    if (!roots.some((root) => isPathInside(root, base))) throw new AppError("FILE_ACCESS_DENIED", "File is outside a registered workspace", 403);
-    candidate = resolve(base, requestedPath);
-  }
-
-  let resolved: string;
+async function resolveFileRequestPath(requestedPath: string, cwd: string | undefined): Promise<string> {
+  const candidate = isAbsoluteFilePath(requestedPath) ? requestedPath : resolve(cwd ?? process.cwd(), requestedPath);
   try {
-    resolved = await realpath(candidate);
+    return await realpath(candidate);
   } catch {
     throw new AppError("FILE_NOT_FOUND", "File not found", 404);
   }
-  if (!roots.some((root) => isPathInside(root, resolved))) throw new AppError("FILE_ACCESS_DENIED", "File is outside a registered workspace", 403);
-  return resolved;
 }
 
 function fileResponseMimeType(ext: string): string {
