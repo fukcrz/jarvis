@@ -42,6 +42,18 @@ describe("API client", () => {
     expect(new Headers(init?.headers).has("content-type")).toBe(false);
   });
 
+  it("requests text file previews with an optional workspace cwd and check mode", async () => {
+    const file = { path: "/workspace/src/app.ts", name: "app.ts", content: "export {};", size: 10, truncated: false };
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ file }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.textFile("src/hello world.ts", "C:\\workspace", true)).resolves.toEqual(file);
+
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe("/api/files?path=src%2Fhello+world.ts&text=check&cwd=C%3A%5Cworkspace");
+    expect(init?.method).toBeUndefined();
+  });
+
   it("does not send a JSON content type when deleting a session", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ removed: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

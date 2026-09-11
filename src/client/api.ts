@@ -201,6 +201,11 @@ export const api = {
     const params = new URLSearchParams({ path });
     return (await request<{ file: WorkspaceFileContent }>(`/api/workspaces/${workspaceId}/file?${params.toString()}`)).file;
   },
+  textFile: async (path: string, cwd?: string, check = false): Promise<WorkspaceFileContent> => {
+    const params = new URLSearchParams({ path, text: check ? "check" : "1" });
+    if (cwd !== undefined && cwd !== "") params.set("cwd", cwd);
+    return (await request<{ file: WorkspaceFileContent }>(`/api/files?${params.toString()}`)).file;
+  },
   removeWorkspaceEntry: async (workspaceId: string, path: string): Promise<void> => {
     const params = new URLSearchParams({ path });
     await request(`/api/workspaces/${workspaceId}/entry?${params.toString()}`, { method: "DELETE" });

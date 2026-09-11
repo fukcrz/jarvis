@@ -140,6 +140,21 @@ describe("MarkdownMessage", () => {
     expect(markup.match(/target="_blank" rel="noreferrer"/g)).toHaveLength(2);
   });
 
+  it("keeps non-text local links as downloads when interactive previews are enabled", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "打开 [源码](src/app.ts) 和 [设计稿](docs/design.pdf)",
+      baseDir: "/ws",
+      interactiveFiles: true,
+    }));
+
+    // 文本引用先走资格探测，静态渲染时尚未确认可预览。
+    expect(markup).toContain('class="local-file-reference"');
+    expect(markup).toContain(">源码<");
+    expect(markup).not.toContain('href="/api/files?path=src%2Fapp.ts');
+    expect(markup).toContain('href="/api/files?path=docs%2Fdesign.pdf&amp;cwd=%2Fws"');
+    expect(markup).toContain('class="local-file-link"');
+  });
+
   it("leaves remote, anchor, mailto, and existing /api/ links untouched", () => {
     const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
       text: "[官网](https://example.com) [锚点](#section) [邮件](mailto:a@b.c) [已服务](/api/files?path=z.png)",

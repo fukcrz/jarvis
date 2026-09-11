@@ -24,6 +24,10 @@ let previousJarvisHome: string | undefined;
 let previousAgentDir: string | undefined;
 let previousSessionDir: string | undefined;
 
+function buildTestApp(): Promise<FastifyInstance> {
+  return buildApp({ initialWorkspaceCwd: jarvisHome });
+}
+
 beforeEach(async () => {
   previousJarvisHome = process.env["JARVIS_HOME"];
   previousAgentDir = process.env["PI_CODING_AGENT_DIR"];
@@ -33,7 +37,7 @@ beforeEach(async () => {
   process.env["JARVIS_HOME"] = jarvisHome;
   process.env["PI_CODING_AGENT_DIR"] = join(jarvisHome, "agent");
   process.env["PI_CODING_AGENT_SESSION_DIR"] = sessionDir;
-  app = await buildApp();
+  app = await buildTestApp();
 });
 
 afterEach(async () => {
@@ -159,7 +163,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
   it("loads settings and persists an assistant name update", async () => {
     await app?.close();
     await writeFile(join(jarvisHome, "settings.json"), JSON.stringify({ version: 1, assistantName: "Legacy Jarvis", uiMode: "beautiful" }));
-    app = await buildApp();
+    app = await buildTestApp();
     const server = activeApp();
 
     const initial = await server.inject({ method: "GET", url: "/api/settings" });
@@ -564,7 +568,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     await writeFile(join(staticRoot, "assets", "app.js"), "window.jarvis = true;");
 
     await activeApp().close();
-    app = await buildApp({ serveStatic: true, staticRoot });
+    app = await buildApp({ serveStatic: true, staticRoot, initialWorkspaceCwd: jarvisHome });
     const server = activeApp();
 
     const asset = await server.inject({ method: "GET", url: "/assets/app.js" });
@@ -583,9 +587,11 @@ describe("Jarvis HTTP and WebSocket API", () => {
 
   it("serves local files via absolute and workspace-relative paths, with download support", async () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
-    const absolutePath = join(jarvisHome, "demo.png");
     const workspaceRoot = join(jarvisHome, "workspace");
     await mkdir(workspaceRoot, { recursive: true });
+    const registered = await activeApp().inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspaceRoot } });
+    expect(registered.statusCode).toBe(200);
+    const absolutePath = join(workspaceRoot, "demo.png");
     await writeFile(absolutePath, png);
     await writeFile(join(workspaceRoot, "shot.png"), png);
     await writeFile(join(workspaceRoot, "notes.pdf"), "%PDF-1.4");
@@ -603,16 +609,39 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(relative.headers["content-type"]).toContain("image/png");
     expect(relative.rawPayload).toEqual(png);
 
-    // 相对路径无 cwd 时回退到进程 cwd：找不到 → 404
+    // 相对路径无 cwd 时使用进程 cwd；该目录未注册时不能读取。
     const missing = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("nope.png")}` });
-    expect(missing.statusCode).toBe(404);
-    expect(missing.json()).toMatchObject({ error: { code: "FILE_NOT_FOUND" } });
+    expect(missing.statusCode).toBe(403);
+    expect(missing.json()).toMatchObject({ error: { code: "FILE_ACCESS_DENIED" } });
 
     // 非图片扩展名不再拒绝：文本文件按 text/plain 返回
     const textFile = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("secret.txt")}&cwd=${encodeURIComponent(workspaceRoot)}` });
     expect(textFile.statusCode).toBe(200);
     expect(textFile.headers["content-type"]).toContain("text/plain");
     expect(textFile.rawPayload.toString()).toBe("private");
+
+    const checkedText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("secret.txt")}&cwd=${encodeURIComponent(workspaceRoot)}&text=check` });
+    expect(checkedText.statusCode).toBe(200);
+    expect(checkedText.json()).toEqual({ file: { path: join(workspaceRoot, "secret.txt"), name: "secret.txt", content: "", size: 7, truncated: false } });
+
+    const previewText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("secret.txt")}&cwd=${encodeURIComponent(workspaceRoot)}&text=1` });
+    expect(previewText.statusCode).toBe(200);
+    expect(previewText.json()).toEqual({ file: { path: join(workspaceRoot, "secret.txt"), name: "secret.txt", content: "private", size: 7, truncated: false } });
+
+    await writeFile(join(workspaceRoot, "invalid.txt"), Buffer.from([0xff, 0xfe, 0xfd]));
+    const invalidText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("invalid.txt")}&cwd=${encodeURIComponent(workspaceRoot)}&text=1` });
+    expect(invalidText.statusCode).toBe(415);
+    expect(invalidText.json()).toMatchObject({ error: { code: "FILE_BINARY" } });
+
+    await writeFile(join(workspaceRoot, "binary.txt"), Buffer.from([0x61, 0x00, 0x62]));
+    const binaryText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("binary.txt")}&cwd=${encodeURIComponent(workspaceRoot)}&text=check` });
+    expect(binaryText.statusCode).toBe(415);
+    expect(binaryText.json()).toMatchObject({ error: { code: "FILE_BINARY" } });
+
+    await writeFile(join(workspaceRoot, "page.html"), "<script>alert(1)</script>");
+    const htmlText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("page.html")}&cwd=${encodeURIComponent(workspaceRoot)}&text=1` });
+    expect(htmlText.statusCode).toBe(200);
+    expect(htmlText.json()).toMatchObject({ file: { content: "<script>alert(1)</script>" } });
 
     // PDF 按 application/pdf 返回
     const pdf = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("notes.pdf")}&cwd=${encodeURIComponent(workspaceRoot)}` });
@@ -626,10 +655,24 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(download.headers["content-disposition"]).toContain("notes.pdf");
 
     // 未知扩展名回退到 octet-stream
-    await writeFile(join(jarvisHome, "blob.unknownext"), "data");
-    const unknown = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(join(jarvisHome, "blob.unknownext"))}` });
+    const unknownPath = join(workspaceRoot, "blob.unknownext");
+    await writeFile(unknownPath, "data");
+    const unknown = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(unknownPath)}` });
     expect(unknown.statusCode).toBe(200);
     expect(unknown.headers["content-type"]).toContain("application/octet-stream");
+
+    // 已注册工作区之外的绝对路径不能借由 /api/files 读取。
+    // jarvisHome 是测试夹具注册的初始根，越界文件必须放在它的同级目录。
+    const outsideDir = await mkdtemp(join(tmpdir(), "jarvis-outside-"));
+    try {
+      const outsidePath = join(outsideDir, "outside.txt");
+      await writeFile(outsidePath, "outside");
+      const denied = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(outsidePath)}` });
+      expect(denied.statusCode).toBe(403);
+      expect(denied.json()).toMatchObject({ error: { code: "FILE_ACCESS_DENIED" } });
+    } finally {
+      await rm(outsideDir, { force: true, recursive: true });
+    }
 
     // 目录 → 404
     const directory = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(workspaceRoot)}` });
@@ -640,6 +683,8 @@ describe("Jarvis HTTP and WebSocket API", () => {
   it("streams files with byte range support so media can seek", async () => {
     const workspaceRoot = join(jarvisHome, "range-workspace");
     await mkdir(workspaceRoot, { recursive: true });
+    const registered = await activeApp().inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspaceRoot } });
+    expect(registered.statusCode).toBe(200);
     await writeFile(join(workspaceRoot, "clip.mp4"), "01234567");
     const url = (range?: string) => ({ method: "GET" as const, url: `/api/files?path=clip.mp4&cwd=${encodeURIComponent(workspaceRoot)}`, ...(range === undefined ? {} : { headers: { range } }) });
 
@@ -1430,7 +1475,7 @@ describe("tunnel entries", () => {
   it("migrates legacy single-tunnel config into an entry with auto-start off", async () => {
     await app?.close();
     await writeFile(join(jarvisHome, "tunnel.json"), JSON.stringify({ version: 1, enabled: true, method: "sish", port: 9528, sish: { server: "user@tun.example.com", subdomain: "jarvis" } }));
-    app = await buildApp();
+    app = await buildTestApp();
     await app.jarvis.tunnel.initialize(9528);
     const server = activeApp();
 
@@ -1444,6 +1489,23 @@ describe("tunnel entries", () => {
     const persisted = JSON.parse(await readFile(join(jarvisHome, "tunnel.json"), "utf8")) as { version: number; tunnels: unknown[] };
     expect(persisted.version).toBe(2);
     expect(persisted.tunnels).toHaveLength(1);
+  });
+
+  it("requires authentication before an unregistered workspace can expand file access", async () => {
+    const server = activeApp();
+    const nestedPath = join(jarvisHome, "nested");
+    await mkdir(nestedPath);
+    const nested = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: nestedPath } });
+    expect(nested.statusCode).toBe(200);
+
+    const unregistered = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: process.cwd() } });
+    expect(unregistered.statusCode).toBe(403);
+    expect(unregistered.json()).toMatchObject({ error: { code: "WORKSPACE_AUTH_REQUIRED" } });
+
+    const configured = await server.inject({ method: "PUT", url: "/api/auth/password", payload: { newPassword: "workspace-access-password" } });
+    const cookie = sessionCookie(configured);
+    const allowed = await server.inject({ method: "POST", url: "/api/workspaces", headers: { cookie }, payload: { cwd: process.cwd() } });
+    expect(allowed.statusCode).toBe(200);
   });
 
   it("keeps the API open until a password is set, then requires the session cookie", async () => {
@@ -1514,7 +1576,7 @@ describe("tunnel entries", () => {
 
     // 重启后仍然有效：会话是 HMAC 签名 token，密钥持久化在 auth.json。
     await app?.close();
-    app = await buildApp();
+    app = await buildTestApp();
     const restarted = activeApp();
     expect((await restarted.inject({ method: "GET", url: "/api/workspaces", headers: { cookie: first } })).statusCode).toBe(200);
 

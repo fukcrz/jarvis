@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ComponentProps } from "react";
+import { createContext, useContext, useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
 import { renderMermaidDiagram } from "../lib/mermaid";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -7,6 +7,7 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { PluggableList } from "unified";
+import { isTextFilePreviewPath, localFilePathFromHref, localFileReferenceFromHref, looksLikeFileReference } from "../lib/file-preview";
 
 const remarkPlugins: PluggableList = [remarkGfm];
 // 注意顺序：sanitize 先跑、highlight 后跑。
@@ -19,6 +20,9 @@ const sanitizeSchema: Schema = {
   ...defaultSchema,
   protocols: {
     ...defaultProtocols,
+    // URL safety is applied by urlTransform after sanitization. Keeping href's
+    // protocol list empty is required for Windows drive-letter paths (C:\\...).
+    href: [],
     src: [...(defaultProtocols.src ?? []), "data"],
   },
   attributes: {
@@ -31,15 +35,18 @@ const rehypePlugins: PluggableList = [[rehypeSanitize, sanitizeSchema], rehypeHi
 // react-markdown 默认的 urlTransform 只放行 http/https 等协议，data URI 会被替换成空串；
 // 这里只放行 data:image/*（base64 内嵌图），其余 URL 行为保持默认（javascript: 等仍被拦截）。
 const urlTransform = (url: string): string =>
-  /^data:image\//i.test(url) ? url : defaultUrlTransform(url);
+  /^data:image\//i.test(url) || localFilePathFromHref(url) !== undefined ? url : defaultUrlTransform(url);
 
 import { ImagePreview } from "./image-lightbox";
+import { LocalTextFileLink } from "./text-file-preview";
 
 interface MarkdownMessageProps {
   text: string;
   streaming?: boolean;
   /** 工作区根目录：用于把 AI 回复里的相对路径图片解析为本地文件。 */
   baseDir?: string;
+  /** 只在完整的 AI 回复中开启文本文件链接预览。 */
+  interactiveFiles?: boolean;
 }
 
 const IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)]+)\)/g;
@@ -48,15 +55,14 @@ const FENCE_PATTERN = /^\s{0,3}(`{3,}|~{3,})/;
 /** 重写正文里的单个图片引用；下划线由调用方保证不在代码里。 */
 function rewriteImageReference(whole: string, alt: string, target: string, cwd: string | undefined): string {
   const trimmed = target.trim();
-  if (/^(https?:\/\/|data:|blob:|mailto:)/i.test(trimmed)) return whole;
   if (trimmed.startsWith("/api/")) return whole;
-  const withoutScheme = trimmed.startsWith("file://") ? trimmed.slice("file://".length) : trimmed;
   // 路径与可选标题（"title" / 'title' / (title)）以空白+引号分隔；路径本身允许含空格。
-  const titleIndex = withoutScheme.search(/\s+["'(]/);
-  const path = titleIndex === -1 ? withoutScheme : withoutScheme.slice(0, titleIndex);
-  const rest = titleIndex === -1 ? "" : withoutScheme.slice(titleIndex);
-  if (path === "") return whole;
-  const query = `path=${encodeURIComponent(path)}${path.startsWith("/") || cwd === undefined || cwd === "" ? "" : `&cwd=${encodeURIComponent(cwd)}`}`;
+  const titleIndex = trimmed.search(/\s+["'(]/);
+  const rawPath = titleIndex === -1 ? trimmed : trimmed.slice(0, titleIndex);
+  const rest = titleIndex === -1 ? "" : trimmed.slice(titleIndex);
+  const path = localFilePathFromHref(rawPath);
+  if (path === undefined || path === "") return whole;
+  const query = `path=${encodeURIComponent(path)}${isAbsoluteLocalPath(path) || cwd === undefined || cwd === "" ? "" : `&cwd=${encodeURIComponent(cwd)}`}`;
   return `![${alt}](/api/files?${query}${rest})`;
 }
 
@@ -96,23 +102,30 @@ export function rewriteLocalImageUrls(markdown: string, cwd: string | undefined)
  */
 export function rewriteLocalLinkHref(href: string | undefined, cwd: string | undefined): string | undefined {
   if (href === undefined || href === "") return href;
-  if (/^(https?:\/\/|data:|blob:|mailto:|#)/i.test(href)) return href;
   if (href.startsWith("/api/")) return href;
-  const withoutScheme = href.startsWith("file://") ? href.slice("file://".length) : href;
-  const query = `path=${encodeURIComponent(withoutScheme)}${withoutScheme.startsWith("/") || cwd === undefined || cwd === "" ? "" : `&cwd=${encodeURIComponent(cwd)}`}`;
+  const path = localFilePathFromHref(href);
+  if (path === undefined) return href;
+  const query = `path=${encodeURIComponent(path)}${isAbsoluteLocalPath(path) || cwd === undefined || cwd === "" ? "" : `&cwd=${encodeURIComponent(cwd)}`}`;
   return `/api/files?${query}`;
 }
 
 const LocalFileCwdContext = createContext<string | undefined>(undefined);
+const InteractiveFilesContext = createContext(false);
+const CodeBlockContext = createContext(false);
 /** 流式输出中：mermaid 块只显示源码，等这一轮结束再渲染图形。 */
 const MarkdownStreamingContext = createContext(false);
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- node 是 react-markdown 注入的 hast 节点，需从 DOM 属性中剥离。
 function LocalLink({ node: _node, href, className, children, ...rest }: ComponentProps<"a"> & { node?: HastNode }) {
   const cwd = useContext(LocalFileCwdContext);
+  const interactive = useContext(InteractiveFilesContext);
+  const reference = interactive ? localFileReferenceFromHref(href) : undefined;
+  if (reference !== undefined && isTextFilePreviewPath(reference.path)) {
+    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line} column={reference.column} className={className}>{children}</LocalTextFileLink>;
+  }
   const resolved = rewriteLocalLinkHref(href, cwd);
   if (resolved === href) return <a href={href} className={className} {...rest}>{children}</a>;
-  // 本地文件链接标类名，便于与站外链接区分（站外链接加外开标记）。
+  // 媒体、压缩包和未开启交互预览时保留现有行为：本地文件链接在新标签打开。
   return <a href={resolved} className={className === undefined ? "local-file-link" : `local-file-link ${className}`} target="_blank" rel="noreferrer" {...rest}>{children}</a>;
 }
 
@@ -196,10 +209,33 @@ interface HastNode {
   children?: HastNode[];
 }
 
+function isAbsoluteLocalPath(path: string): boolean {
+  return path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith("\\\\");
+}
+
+function textFromReactNode(value: ReactNode): string {
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (Array.isArray(value)) return value.map(textFromReactNode).join("");
+  return "";
+}
+
 function extractText(node: HastNode | undefined): string {
   if (!node) return "";
   if (node.type === "text") return node.value ?? "";
   return (node.children ?? []).map(extractText).join("");
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- node is react-markdown's hast node, not a DOM prop.
+function MarkdownCode({ node: _node, children, className, ...rest }: ComponentProps<"code"> & { node?: HastNode }) {
+  const cwd = useContext(LocalFileCwdContext);
+  const interactive = useContext(InteractiveFilesContext);
+  const isBlock = useContext(CodeBlockContext);
+  const text = textFromReactNode(children).trim();
+  const reference = localFileReferenceFromHref(text);
+  if (interactive && !isBlock && reference !== undefined && looksLikeFileReference(text) && isTextFilePreviewPath(reference.path)) {
+    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line} column={reference.column}><code className={className} {...rest}>{children}</code></LocalTextFileLink>;
+  }
+  return <code className={className} {...rest}>{children}</code>;
 }
 
 function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & { node?: HastNode }) {
@@ -218,15 +254,17 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & { node?:
   };
   if (lang === "mermaid") return <MermaidBlock code={code} />;
   return (
-    <div className="code-block">
-      <div className="code-block-bar">
-        <span className="code-block-lang">{lang ?? "text"}</span>
-        <button type="button" className={`code-block-copy${copied ? " copied" : ""}`} onClick={handleCopy} disabled={code === ""}>
-          {copied ? "已复制" : "复制"}
-        </button>
+    <CodeBlockContext.Provider value={true}>
+      <div className="code-block">
+        <div className="code-block-bar">
+          <span className="code-block-lang">{lang ?? "text"}</span>
+          <button type="button" className={`code-block-copy${copied ? " copied" : ""}`} onClick={handleCopy} disabled={code === ""}>
+            {copied ? "已复制" : "复制"}
+          </button>
+        </div>
+        <pre {...rest}>{children}</pre>
       </div>
-      <pre {...rest}>{children}</pre>
-    </div>
+    </CodeBlockContext.Provider>
   );
 }
 
@@ -272,13 +310,16 @@ function MermaidBlock({ code }: { code: string }) {
   </div>;
 }
 
-const components = { pre: CodeBlock, a: LocalLink, img: MarkdownMedia };
+const components = { pre: CodeBlock, code: MarkdownCode, a: LocalLink, img: MarkdownMedia };
 
-export function MarkdownMessage({ text, streaming = false, baseDir }: MarkdownMessageProps) {
+export function MarkdownMessage({ text, streaming = false, baseDir, interactiveFiles = false }: MarkdownMessageProps) {
   const content = baseDir === undefined ? text : rewriteLocalImageUrls(text, baseDir);
   return <LocalFileCwdContext.Provider value={baseDir}>
-    <MarkdownStreamingContext.Provider value={streaming}>
-    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={components}>{content}</ReactMarkdown>
-    {streaming ? <span className="streaming-cursor" aria-hidden="true" /> : null}
-  </MarkdownStreamingContext.Provider></LocalFileCwdContext.Provider>;
+    <InteractiveFilesContext.Provider value={interactiveFiles}>
+      <MarkdownStreamingContext.Provider value={streaming}>
+        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={components}>{content}</ReactMarkdown>
+        {streaming ? <span className="streaming-cursor" aria-hidden="true" /> : null}
+      </MarkdownStreamingContext.Provider>
+    </InteractiveFilesContext.Provider>
+  </LocalFileCwdContext.Provider>;
 }

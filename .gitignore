@@ -12,5 +12,8 @@ test-results/
 .DS_Store
 NUL
 .runtime/
+.tmp/
+tmp-*.mjs
+tmp-*.ps1
 logs/prod-*.log
 logs/watch-flash.ps1

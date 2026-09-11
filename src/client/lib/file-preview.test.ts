@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_TABLE_ROWS, parseDelimited, previewKindForPath } from "./file-preview";
+import { isTextFilePreviewPath, localFilePathFromHref, looksLikeFileReference, MAX_TABLE_ROWS, parseDelimited, previewKindForPath } from "./file-preview";
 
 describe("previewKindForPath", () => {
   it("maps common extensions to preview kinds", () => {
@@ -28,6 +28,49 @@ describe("previewKindForPath", () => {
     expect(previewKindForPath("notes.txt")).toBe("text");
     expect(previewKindForPath("debug.log")).toBe("text");
     expect(previewKindForPath("archive.unknownext")).toBe("text");
+  });
+
+  it("only treats text-like files as clickable message previews", () => {
+    expect(isTextFilePreviewPath("src/app.ts")).toBe(true);
+    expect(isTextFilePreviewPath("README.md")).toBe(true);
+    expect(isTextFilePreviewPath("data.csv")).toBe(true);
+    expect(isTextFilePreviewPath("docs/design.pdf")).toBe(false);
+    expect(isTextFilePreviewPath("archive.zip")).toBe(false);
+    expect(isTextFilePreviewPath("shot.png")).toBe(false);
+  });
+});
+
+describe("localFilePathFromHref", () => {
+  it("accepts relative, absolute, Windows, and file URLs", () => {
+    expect(localFilePathFromHref("src/index.ts")).toBe("src/index.ts");
+    expect(localFilePathFromHref("/tmp/my%20file.ts")).toBe("/tmp/my file.ts");
+    expect(localFilePathFromHref(String.raw`C:\work\src\main.ts`)).toBe(String.raw`C:\work\src\main.ts`);
+    expect(localFilePathFromHref("file:///C:/work/src/main.ts")).toBe("C:/work/src/main.ts");
+    expect(localFilePathFromHref("file://server/share/src/main.ts")).toBe(String.raw`\\server\share\src\main.ts`);
+    expect(localFilePathFromHref("file:///tmp/app.ts?line=2#L2")).toBe("/tmp/app.ts");
+  });
+
+  it("removes line suffixes without confusing Windows drive letters", () => {
+    expect(localFilePathFromHref("src/app.ts:12")).toBe("src/app.ts");
+    expect(localFilePathFromHref("src/app.ts:12:4")).toBe("src/app.ts");
+    expect(localFilePathFromHref(String.raw`C:\src\app.ts:12`)).toBe(String.raw`C:\src\app.ts`);
+  });
+
+  it("rejects remote, dangerous, and already-served URLs", () => {
+    expect(localFilePathFromHref("https://example.com/app.ts")).toBeUndefined();
+    expect(localFilePathFromHref("mailto:a@example.com")).toBeUndefined();
+    expect(localFilePathFromHref("javascript:alert(1)")).toBeUndefined();
+    expect(localFilePathFromHref("/api/files?path=app.ts")).toBeUndefined();
+    expect(localFilePathFromHref("//example.com/app.ts")).toBeUndefined();
+  });
+});
+
+describe("looksLikeFileReference", () => {
+  it("requires a path separator or a short file extension", () => {
+    expect(looksLikeFileReference("src/app.ts")).toBe(true);
+    expect(looksLikeFileReference("README.md")).toBe(true);
+    expect(looksLikeFileReference("ordinary")).toBe(false);
+    expect(looksLikeFileReference("https://example.com/app.ts")).toBe(false);
   });
 });
 
