@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { lstat, readdir, realpath, rm, stat } from "node:fs/promises";
 import { platform } from "node:os";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
@@ -565,35 +565,30 @@ const MAX_TEXT_FILE_BYTES = MAX_BROWSER_FILE_BYTES * 8;
 
 async function listWorkspaceDirectory(cwd: string, requestedPath: string): Promise<WorkspaceDirectoryListing> {
   const root = await realpath(cwd).catch(() => { throw new AppError("WORKSPACE_UNAVAILABLE", "Workspace is unavailable", 404); });
-  const directory = await resolveWorkspacePath(root, requestedPath, "DIRECTORY_UNAVAILABLE");
+  const directory = await resolveExistingPath(root, requestedPath, "DIRECTORY_UNAVAILABLE");
   const metadata = await stat(directory).catch(() => undefined);
   if (metadata === undefined || !metadata.isDirectory()) throw new AppError("DIRECTORY_INVALID", "Path must be a directory", 400);
   const entries = await readdir(directory, { withFileTypes: true });
   const visible = entries
-    .filter((entry) => !(entry.isDirectory() && IGNORED_SEARCH_DIRECTORIES.has(entry.name)))
     .filter((entry) => entry.isDirectory() || entry.isFile())
-    .map((entry) => ({ name: entry.name, path: relative(root, join(directory, entry.name)).replaceAll("\\", "/"), kind: entry.isDirectory() ? "directory" as const : "file" as const }))
+    .map((entry) => ({ name: entry.name, path: publicPath(join(directory, entry.name)), kind: entry.isDirectory() ? "directory" as const : "file" as const }))
     .sort((left, right) => Number(right.kind === "directory") - Number(left.kind === "directory") || left.name.localeCompare(right.name));
-  const relativePath = relative(root, directory).replaceAll("\\", "/");
-  const parent = relativePath === "" ? undefined : relative(root, dirname(directory)).replaceAll("\\", "/");
-  return { path: relativePath, name: basename(directory) || root, ...(parent === undefined ? {} : { parent }), entries: visible, isGitRepository: await pathExists(join(directory, ".git")) };
+  const parentDir = dirname(directory);
+  const parent = parentDir === directory ? undefined : publicPath(parentDir);
+  return { path: publicPath(directory), name: basename(directory) || directory, ...(parent === undefined ? {} : { parent }), entries: visible, isGitRepository: await pathExists(join(directory, ".git")) };
 }
 
 async function removeWorkspaceEntry(cwd: string, requestedPath: string): Promise<void> {
   const root = await realpath(cwd).catch(() => { throw new AppError("WORKSPACE_UNAVAILABLE", "Workspace is unavailable", 404); });
-  const normalized = requestedPath.replaceAll("\\", "/");
-  if (normalized === "" || normalized.startsWith("/") || isAbsolute(normalized) || normalized.split("/").some((part) => part === "..")) {
-    throw new AppError("FILE_DELETE_INVALID", "Path is outside the workspace", 400);
-  }
-  const candidate = resolve(root, normalized);
+  if (requestedPath.trim() === ".") throw new AppError("FILE_DELETE_INVALID", "The current directory cannot be deleted", 400);
+  const candidate = resolveExistingCandidate(root, requestedPath);
   const parent = await realpath(dirname(candidate)).catch(() => { throw new AppError("FILE_NOT_FOUND", "File or directory not found", 404); });
-  if (!isPathInside(root, parent)) throw new AppError("FILE_DELETE_INVALID", "Path is outside the workspace", 400);
   const metadata = await lstat(candidate).catch(() => undefined);
   if (metadata === undefined) throw new AppError("FILE_NOT_FOUND", "File or directory not found", 404);
   if (metadata.isSymbolicLink()) throw new AppError("FILE_DELETE_INVALID", "Symbolic links cannot be deleted from the file browser", 400);
   if (!metadata.isFile() && !metadata.isDirectory()) throw new AppError("FILE_DELETE_INVALID", "Only files and directories can be deleted", 400);
   const resolved = await realpath(candidate).catch(() => { throw new AppError("FILE_NOT_FOUND", "File or directory not found", 404); });
-  if (!isPathInside(root, resolved) || resolved === root) throw new AppError("FILE_DELETE_INVALID", "Path is outside the workspace", 400);
+  if (resolved === parent) throw new AppError("FILE_DELETE_INVALID", "The current directory cannot be deleted", 400);
   try {
     await rm(candidate, { recursive: metadata.isDirectory(), force: false });
   } catch (error) {
@@ -627,11 +622,6 @@ function isAbsoluteFilePath(value: string): boolean {
   return value.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }
 
-function isPathInside(root: string, candidate: string): boolean {
-  const relativePath = relative(root, candidate);
-  return relativePath !== ".." && !relativePath.startsWith(`..${String.fromCharCode(47)}`) && !relativePath.startsWith(`..${String.fromCharCode(92)}`) && !isAbsolute(relativePath);
-}
-
 async function resolveFileRequestPath(requestedPath: string, cwd: string | undefined): Promise<string> {
   const candidate = isAbsoluteFilePath(requestedPath) ? requestedPath : resolve(cwd ?? process.cwd(), requestedPath);
   try {
@@ -649,11 +639,11 @@ function fileResponseMimeType(ext: string): string {
 
 async function readWorkspaceFile(cwd: string, requestedPath: string): Promise<WorkspaceFileContent> {
   const root = await realpath(cwd).catch(() => { throw new AppError("WORKSPACE_UNAVAILABLE", "Workspace is unavailable", 404); });
-  const filePath = await resolveWorkspacePath(root, requestedPath, "FILE_NOT_FOUND");
+  const filePath = await resolveExistingPath(root, requestedPath, "FILE_NOT_FOUND");
   const metadata = await stat(filePath).catch(() => undefined);
   if (metadata === undefined || !metadata.isFile()) throw new AppError("FILE_NOT_FOUND", "File not found", 404);
   const content = await readTextFile(filePath, metadata);
-  return { ...content, path: relative(root, filePath).replaceAll("\\", "/") };
+  return { ...content, path: publicPath(filePath) };
 }
 
 async function readTextFile(filePath: string, metadata: { size: number }, includeContent = true): Promise<WorkspaceFileContent> {
@@ -717,14 +707,22 @@ async function readTextFile(filePath: string, metadata: { size: number }, includ
   };
 }
 
-async function resolveWorkspacePath(root: string, requestedPath: string, errorCode: string): Promise<string> {
-  const normalized = requestedPath.replaceAll("\\", "/");
-  if (normalized.startsWith("/") || normalized.split("/").some((part) => part === "..")) throw new AppError(errorCode, "Path is outside the workspace", 400);
-  const candidate = join(root, normalized);
-  const resolved = await realpath(candidate).catch(() => { throw new AppError(errorCode, "Path not found", 404); });
-  const relativePath = relative(root, resolved);
-  if (relativePath === ".." || relativePath.startsWith(`..${String.fromCharCode(47)}`) || isAbsolute(relativePath)) throw new AppError(errorCode, "Path is outside the workspace", 400);
-  return resolved;
+function publicPath(value: string): string {
+  return value.replaceAll("\\", "/");
+}
+
+function resolveExistingCandidate(root: string, requestedPath: string): string {
+  const trimmed = requestedPath.trim();
+  if (trimmed === "" || trimmed === ".") return root;
+  return isAbsoluteFilePath(trimmed) ? trimmed : resolve(root, trimmed);
+}
+
+async function resolveExistingPath(root: string, requestedPath: string, errorCode: string): Promise<string> {
+  try {
+    return await realpath(resolveExistingCandidate(root, requestedPath));
+  } catch {
+    throw new AppError(errorCode, "Path not found", 404);
+  }
 }
 
 async function searchWorkspaceFiles(cwd: string, query: string): Promise<WorkspaceFile[]> {

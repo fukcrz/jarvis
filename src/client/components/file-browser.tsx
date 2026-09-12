@@ -31,7 +31,7 @@ interface FilePreviewState {
 
 export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack }: FileBrowserProps) {
   const [entriesByPath, setEntriesByPath] = useState<Record<string, WorkspaceDirectoryListing>>({});
-  const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({ "": true });
+  const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FilePreviewState>();
   const [error, setError] = useState<string>();
@@ -40,6 +40,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
   const [deleteTarget, setDeleteTarget] = useState<FileContextMenuTarget>();
   const [deletePending, setDeletePending] = useState(false);
   const [focusedPath, setFocusedPath] = useState("");
+  const [rootPath, setRootPath] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth());
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
@@ -62,15 +63,17 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     try {
       const next = await api.workspaceDirectory(targetWorkspaceId, targetPath);
       if (workspaceRef.current !== targetWorkspaceId) return next;
-      loadedDirectoryPathsRef.current.add(targetPath);
+      loadedDirectoryPathsRef.current.delete(targetPath);
+      loadedDirectoryPathsRef.current.add(next.path);
       setEntriesByPath((current) => {
-        const stalePaths = [...loadedDirectoryPathsRef.current].filter((path) => path !== "" && directoryPath(path) === targetPath && next.entries.every((entry) => entry.path !== path || entry.kind !== "directory"));
-        if (stalePaths.length === 0 && sameDirectoryListing(current[targetPath], next)) return current;
-        const updated = { ...current, [targetPath]: next };
+        const stalePaths = [...loadedDirectoryPathsRef.current].filter((path) => path !== next.path && directoryPath(path) === next.path && next.entries.every((entry) => entry.path !== path || entry.kind !== "directory"));
+        if (stalePaths.length === 0 && sameDirectoryListing(current[next.path], next) && (targetPath === next.path || current[targetPath] === undefined)) return current;
+        const updated = { ...current, [next.path]: next };
+        if (targetPath !== next.path) delete updated[targetPath];
         for (const stalePath of stalePaths) {
           loadedDirectoryPathsRef.current.delete(stalePath);
           for (const cachedPath of Object.keys(updated)) {
-            if (cachedPath === stalePath || cachedPath.startsWith(`${stalePath}/`)) delete updated[cachedPath];
+            if (cachedPath === stalePath || isPathPrefix(stalePath, cachedPath)) delete updated[cachedPath];
           }
         }
         return updated;
@@ -94,7 +97,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
 
   useEffect(() => {
     setEntriesByPath({});
-    setExpandedPaths({ "": true });
+    setExpandedPaths({});
     setLoadingPaths({});
     loadedDirectoryPathsRef.current.clear();
     loadingDirectoryPathsRef.current.clear();
@@ -105,15 +108,22 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     deleteRequestRef.current += 1;
     setDeletePending(false);
     setFocusedPath("");
+    setRootPath("");
     setWorkspacePickerOpen(false);
-    if (workspaceId !== undefined) void loadDirectory("");
+    if (workspaceId === undefined) return;
+    void loadDirectory("").then((listing) => {
+      if (listing === undefined) return;
+      setRootPath(listing.path);
+      setExpandedPaths({ [listing.path]: true });
+      setFocusedPath(listing.path);
+    });
   }, [loadDirectory, workspaceId]);
 
   useEffect(() => {
-    if (workspaceId === undefined) return;
-    if (entriesByPath[""] !== undefined || loadingPaths[""] === true) return;
-    void loadDirectory("");
-  }, [entriesByPath, loadDirectory, loadingPaths, workspaceId]);
+    if (workspaceId === undefined || rootPath === "") return;
+    if (entriesByPath[rootPath] !== undefined || loadingPaths[rootPath] === true) return;
+    void loadDirectory(rootPath);
+  }, [entriesByPath, loadDirectory, loadingPaths, rootPath, workspaceId]);
 
   // Keep the visible tree in sync with Pi or external edits without replacing
   // the file currently open in the preview pane.
@@ -233,16 +243,16 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
       if (workspaceRef.current !== targetWorkspaceId || deleteRequestRef.current !== requestId) return;
       setDeleteTarget(undefined);
       setContextMenu(undefined);
-      if (preview?.path === target.path || (target.kind === "directory" && preview?.path.startsWith(`${target.path}/`))) setPreview(undefined);
-      const parentPath = directoryPath(target.path);
+      if (preview?.path === target.path || (target.kind === "directory" && preview !== undefined && isPathPrefix(target.path, preview.path))) setPreview(undefined);
+      const parentPath = directoryPath(target.path) || rootPath;
       loadedDirectoryPathsRef.current.delete(target.path);
       for (const cachedPath of [...loadedDirectoryPathsRef.current]) {
-        if (cachedPath.startsWith(`${target.path}/`)) loadedDirectoryPathsRef.current.delete(cachedPath);
+        if (isPathPrefix(target.path, cachedPath)) loadedDirectoryPathsRef.current.delete(cachedPath);
       }
       setEntriesByPath((current) => {
         const next = { ...current };
         delete next[target.path];
-        for (const cachedPath of Object.keys(next)) if (cachedPath.startsWith(`${target.path}/`)) delete next[cachedPath];
+        for (const cachedPath of Object.keys(next)) if (isPathPrefix(target.path, cachedPath)) delete next[cachedPath];
         return next;
       });
       await loadDirectory(parentPath);
@@ -255,8 +265,21 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     }
   };
 
-  const rootListing = entriesByPath[""];
+  const rootListing = rootPath === "" ? undefined : entriesByPath[rootPath];
   const treeEntries = rootListing?.entries ?? [];
+  const parentPath = rootListing?.parent;
+
+  const openParent = async () => {
+    if (parentPath === undefined) return;
+    setPreview(undefined);
+    setError(undefined);
+    setContextMenu(undefined);
+    const listing = await loadDirectory(parentPath);
+    if (listing === undefined) return;
+    setRootPath(listing.path);
+    setExpandedPaths({ [listing.path]: true });
+    setFocusedPath(listing.path);
+  };
 
   if (workspace === undefined) return <section className="file-browser-page"><div className="file-browser-empty"><FolderOpen size={28} /><h2>暂无工作区</h2><Button onClick={onBack}>返回会话</Button></div></section>;
 
@@ -270,6 +293,10 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
       <aside className="file-browser-sidebar">
         <div className="file-browser-sidebar-header">
           {error === undefined ? null : <div className="file-browser-error" role="alert">{error}</div>}
+          <div className="file-browser-location">
+            {parentPath === undefined ? null : <Button variant="secondary" size="sm" onClick={() => { void openParent(); }} disabled={loadingPaths[parentPath] === true}>上一级</Button>}
+            <span className="file-browser-path" title={rootListing?.path}>{rootListing?.path ?? workspace.cwd}</span>
+          </div>
         </div>
         <div className="file-browser-tree" ref={treeRef} aria-label="文件树">
           {rootListing === undefined ? <p className="file-browser-status">正在读取…</p> : treeEntries.map((entry) => renderTreeNode(entry, 0, { entriesByPath, expandedPaths, focusedPath, loadingPaths, selectedFilePath: preview?.path, onToggleDirectory: (path) => { void toggleDirectory(path); }, onOpenFile: (path) => { void openFile(path); }, onContextMenu: (entry, event) => { event.preventDefault(); setFocusedPath(entry.path); setContextMenu({ ...entry, x: event.clientX, y: event.clientY }); } }))}
@@ -283,7 +310,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
         document.body.classList.add("file-browser-resizing");
       }} />
       <main className="file-browser-main">
-        {preview !== undefined ? <FilePreview state={preview} cwd={workspace.cwd} onBack={closePreview} onCopy={(value, message) => { void copy(value, message); }} /> : <div className="file-browser-empty file-browser-preview-empty"><FileCode2 size={30} /><h2>选择一个文件</h2><p>左侧目录中的文件会在这里预览。</p></div>}
+        {preview !== undefined ? <FilePreview state={preview} onBack={closePreview} onCopy={(value, message) => { void copy(value, message); }} /> : <div className="file-browser-empty file-browser-preview-empty"><FileCode2 size={30} /><h2>选择一个文件</h2><p>左侧目录中的文件会在这里预览。</p></div>}
       </main>
     </div>
     <Dialog open={workspacePickerOpen} onOpenChange={setWorkspacePickerOpen}>
@@ -293,7 +320,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
         </div>
       </DialogContent>
     </Dialog>
-    {contextMenu === undefined ? null : <FileContextMenu target={contextMenu} fullPath={joinWorkspacePath(workspace.cwd, contextMenu.path)} onClose={() => setContextMenu(undefined)} onCopy={(value, message) => { setContextMenu(undefined); void copy(value, message); }} onDelete={(target) => { setContextMenu(undefined); setDeleteTarget(target); }} />}
+    {contextMenu === undefined ? null : <FileContextMenu target={contextMenu} fullPath={nativePath(contextMenu.path)} onClose={() => setContextMenu(undefined)} onCopy={(value, message) => { setContextMenu(undefined); void copy(value, message); }} onDelete={(target) => { setContextMenu(undefined); setDeleteTarget(target); }} />}
     <Dialog open={deleteTarget !== undefined} onOpenChange={(open) => { if (!open && !deletePending) setDeleteTarget(undefined); }}>
       <DialogContent title={deleteTarget?.kind === "directory" ? "删除目录" : "删除文件"}>
         <p className="delete-session-message"><strong>{deleteTarget?.name ?? ""}</strong>{deleteTarget?.kind === "directory" ? "及其全部内容将被递归删除。" : "将被永久删除。"}</p>
@@ -343,18 +370,18 @@ function renderTreeNode(
   </div>;
 }
 
-function FilePreview({ state, cwd, onBack, onCopy }: { state: FilePreviewState; cwd: string; onBack: () => void; onCopy: (value: string, message: string) => void }) {
-  const url = workspaceFileUrl(cwd, state.path);
-  const downloadUrl = workspaceFileUrl(cwd, state.path, { download: true });
+function FilePreview({ state, onBack, onCopy }: { state: FilePreviewState; onBack: () => void; onCopy: (value: string, message: string) => void }) {
+  const url = workspaceFileUrl("", state.path);
+  const downloadUrl = workspaceFileUrl("", state.path, { download: true });
   const copyable = state.content !== undefined && (state.kind === "text" || state.kind === "markdown" || state.kind === "table");
   return <article className={`file-preview file-preview-${state.kind}`}>
     <header className="file-preview-header"><Button variant="ghost" size="sm" className="file-preview-back" title={state.content === undefined ? kindLabel(state.kind) : `${formatBytes(state.content.size)}${state.content.truncated ? " · 已截断" : ""}`} onClick={onBack}><ArrowLeft size={15} /><span className="file-preview-back-name">{state.name}</span></Button><div className="file-preview-actions">{copyable ? <Button variant="ghost" size="sm" onClick={() => onCopy(state.content!.content, "已复制文件内容")}>复制</Button> : null}<a className="button button-ghost button-sm" href={url} target="_blank" rel="noreferrer">打开</a><a className="button button-ghost button-sm" href={downloadUrl} download>下载</a></div></header>
     {state.content?.truncated === true ? <div className="file-preview-notice">文件较大，仅显示前 512 KB。</div> : null}
-    <div className="file-preview-body"><FilePreviewBody state={state} cwd={cwd} url={url} /></div>
+    <div className="file-preview-body"><FilePreviewBody state={state} url={url} /></div>
   </article>;
 }
 
-function FilePreviewBody({ state, cwd, url }: { state: FilePreviewState; cwd: string; url: string }) {
+function FilePreviewBody({ state, url }: { state: FilePreviewState; url: string }) {
   switch (state.kind) {
     case "image":
       return <div className="file-preview-media"><img src={url} alt={state.name} /></div>;
@@ -365,7 +392,7 @@ function FilePreviewBody({ state, cwd, url }: { state: FilePreviewState; cwd: st
     case "video":
       return <div className="file-preview-media"><video controls playsInline src={url} /></div>;
     case "markdown":
-      return <div className="message-content file-preview-markdown"><MarkdownMessage text={state.content?.content ?? ""} baseDir={cwd} /></div>;
+      return <div className="message-content file-preview-markdown"><MarkdownMessage text={state.content?.content ?? ""} baseDir={directoryPath(state.path)} /></div>;
     case "table":
       return <TablePreview text={state.content?.content ?? ""} name={state.name} />;
     case "unsupported":
@@ -394,10 +421,13 @@ function TablePreview({ text, name }: { text: string; name: string }) {
   </div>;
 }
 
-function joinWorkspacePath(cwd: string, path: string): string {
-  if (path === "") return cwd;
-  const separator = cwd.includes("\\") ? "\\" : "/";
-  return `${cwd.replace(/[\\/]+$/, "")}${separator}${path.replaceAll("/", separator)}`;
+function nativePath(path: string): string {
+  return path.includes("/") && !path.startsWith("/") ? path.replaceAll("/", "\\") : path;
+}
+
+function isPathPrefix(prefix: string, path: string): boolean {
+  const normalized = prefix.endsWith("/") && prefix !== "/" ? prefix.slice(0, -1) : prefix;
+  return path === prefix || path === normalized || path.startsWith(`${normalized}/`) || (normalized === "/" && path.startsWith("/"));
 }
 
 function kindLabel(kind: PreviewKind): string {
@@ -422,13 +452,15 @@ function sameDirectoryListing(current: WorkspaceDirectoryListing | undefined, ne
 }
 
 function isPathInBranch(current: string, ancestor: string): boolean {
-  if (ancestor === "") return true;
-  return current === ancestor || current.startsWith(`${ancestor}/`);
+  return ancestor !== "" && isPathPrefix(ancestor, current);
 }
 
 function directoryPath(path: string): string {
+  if (/^[a-zA-Z]:$/.test(path) || path === "/") return path;
   const index = path.lastIndexOf("/");
-  return index === -1 ? "" : path.slice(0, index);
+  if (index <= 0) return index === 0 ? "/" : "";
+  const parent = path.slice(0, index);
+  return /^[a-zA-Z]:$/.test(parent) ? `${parent}/` : parent;
 }
 
 function readSidebarWidth(): number {

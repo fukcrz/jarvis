@@ -51,7 +51,7 @@ export function FileContextMenu({ target, onClose, onCopy, onDelete, fullPath }:
   return <div ref={menuRef} className="context-menu file-context-menu" role="menu" aria-label="文件操作" tabIndex={-1} style={{ left, top }} onContextMenu={(event) => event.preventDefault()}>
     <div className="file-context-menu-target"><Icon size={14} /><span title={target.path}>{target.name}</span></div>
     <button className="context-menu-item" type="button" role="menuitem" onClick={() => onCopy(target.name, "已复制文件名")}><Copy size={14} /><span>复制文件名</span></button>
-    <button className="context-menu-item" type="button" role="menuitem" onClick={() => onCopy(target.path, "已复制相对路径")}><Copy size={14} /><span>复制相对路径</span></button>
+    <button className="context-menu-item" type="button" role="menuitem" onClick={() => onCopy(target.path, "已复制路径")}><Copy size={14} /><span>复制路径</span></button>
     <button className="context-menu-item" type="button" role="menuitem" onClick={() => onCopy(fullPath, "已复制全路径")}><Copy size={14} /><span>复制全路径</span></button>
     <button className="context-menu-item danger" type="button" role="menuitem" onClick={() => onDelete(target)}><Trash2 size={14} /><span>{target.kind === "directory" ? "删除目录" : "删除文件"}</span></button>
   </div>;

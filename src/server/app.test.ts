@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -182,6 +182,42 @@ describe("Jarvis HTTP and WebSocket API", () => {
     } else {
       expect(roots.json()).toMatchObject({ directory: { name: "/", path: "/", isRootPicker: false } });
     }
+  });
+
+  it("lists directories with absolute paths and does not hide or confine them to the workspace", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "directory-workspace");
+    await mkdir(join(workspacePath, "src"), { recursive: true });
+    await mkdir(join(workspacePath, ".git"));
+    await mkdir(join(workspacePath, "node_modules", "hidden"), { recursive: true });
+    await writeFile(join(workspacePath, "README.md"), "# Test");
+    await writeFile(join(jarvisHome, "sibling.txt"), "outside");
+    const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } });
+    const workspace = created.json() as { workspace: { id: string } };
+    const posix = (value: string) => value.replaceAll("\\", "/");
+
+    const listing = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/directory` });
+    expect(listing.statusCode).toBe(200);
+    const directory = (listing.json() as { directory: { path: string; parent?: string; entries: Array<{ name: string; kind: string }> } }).directory;
+    expect(posix(directory.path)).toBe(posix(workspacePath));
+    expect(directory.parent === undefined ? undefined : posix(directory.parent)).toBe(posix(dirname(workspacePath)));
+    expect(directory.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: ".git", kind: "directory" }),
+      expect.objectContaining({ name: "node_modules", kind: "directory" }),
+      expect.objectContaining({ name: "README.md", kind: "file" }),
+      expect.objectContaining({ name: "src", kind: "directory" }),
+    ]));
+
+    const parent = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/directory?path=${encodeURIComponent("..")}` });
+    expect(parent.statusCode).toBe(200);
+    expect((parent.json() as { directory: { entries: Array<{ name: string }> } }).directory.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "directory-workspace" }),
+      expect.objectContaining({ name: "sibling.txt" }),
+    ]));
+
+    const file = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/file?path=${encodeURIComponent(join(jarvisHome, "sibling.txt"))}` });
+    expect(file.statusCode).toBe(200);
+    expect(file.json()).toMatchObject({ file: { name: "sibling.txt", content: "outside" } });
   });
 
   it("searches workspace files for composer references without exposing ignored directories", async () => {
@@ -716,13 +752,14 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(multi.rawPayload.toString()).toBe("01234567");
   });
 
-  it("deletes workspace files and recursively deletes directories without leaving the workspace", async () => {
+  it("deletes files and recursively deletes directories, including paths outside the workspace", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "entry-delete-workspace");
     const nestedPath = join(workspacePath, "src", "nested");
     await mkdir(nestedPath, { recursive: true });
     await writeFile(join(workspacePath, "remove.txt"), "remove");
     await writeFile(join(nestedPath, "keep.txt"), "remove");
+    await writeFile(join(jarvisHome, "outside.txt"), "outside");
     const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } });
     const workspace = created.json() as { workspace: { id: string } };
 
@@ -751,8 +788,8 @@ describe("Jarvis HTTP and WebSocket API", () => {
     }
 
     const outside = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.workspace.id}/entry?path=..%2Foutside.txt` });
-    expect(outside.statusCode).toBe(400);
-    expect(outside.json()).toMatchObject({ error: { code: "FILE_DELETE_INVALID" } });
+    expect(outside.statusCode).toBe(200);
+    expect(existsSync(join(jarvisHome, "outside.txt"))).toBe(false);
   });
 
   it("deletes a session JSONL file and broadcasts a workspace event", async () => {

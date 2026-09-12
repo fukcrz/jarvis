@@ -261,7 +261,7 @@ export function sessionPath(ref: SessionRef): string {
   return `/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}`;
 }
 
-/** 构造 /api/files 的 URL：内联预览或下载工作区内的文件（相对路径以 cwd 为基准）。 */
+/** 构造 /api/files 的 URL：内联预览或下载本地文件（相对路径以 cwd 为基准）。 */
 export function workspaceFileUrl(cwd: string, path: string, options: { download?: boolean } = {}): string {
   const params = new URLSearchParams({ path });
   if (cwd !== "") params.set("cwd", cwd);
