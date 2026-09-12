@@ -15,7 +15,7 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
       themeVariables: {
         darkMode: true,
         background: "#0e1012",
-        primaryColor: "#1a2e2c",
+        primaryColor: "#162321",
         primaryTextColor: "#f1f3f4",
         primaryBorderColor: "#3a444c",
         secondaryColor: "#1e2327",
@@ -29,7 +29,7 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
         noteBkgColor: "#302e20",
         noteTextColor: "#f4be70",
         noteBorderColor: "#4a4128",
-        actorBkg: "#1a2e2c",
+        actorBkg: "#162321",
         actorTextColor: "#f1f3f4",
         actorBorder: "#3a444c",
         signalColor: "#c9c9d1",
