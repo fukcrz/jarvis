@@ -14,28 +14,28 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
       fontFamily: "system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei UI', sans-serif",
       themeVariables: {
         darkMode: true,
-        background: "#121212",
-        primaryColor: "#2b2838",
-        primaryTextColor: "#f1f1f4",
-        primaryBorderColor: "#504c61",
-        secondaryColor: "#242428",
-        secondaryTextColor: "#e1e1e6",
-        secondaryBorderColor: "#42424a",
-        tertiaryColor: "#1b1b1e",
-        tertiaryTextColor: "#e1e1e6",
-        tertiaryBorderColor: "#303036",
-        lineColor: "#8b8b96",
-        textColor: "#e1e1e6",
+        background: "#0e1012",
+        primaryColor: "#1a2e2c",
+        primaryTextColor: "#f1f3f4",
+        primaryBorderColor: "#3a444c",
+        secondaryColor: "#1e2327",
+        secondaryTextColor: "#e8eef0",
+        secondaryBorderColor: "#3a444c",
+        tertiaryColor: "#16181c",
+        tertiaryTextColor: "#e8eef0",
+        tertiaryBorderColor: "#2a3238",
+        lineColor: "#8b959a",
+        textColor: "#e8eef0",
         noteBkgColor: "#302e20",
         noteTextColor: "#f4be70",
         noteBorderColor: "#4a4128",
-        actorBkg: "#2b2838",
-        actorTextColor: "#f1f1f4",
-        actorBorder: "#504c61",
+        actorBkg: "#1a2e2c",
+        actorTextColor: "#f1f3f4",
+        actorBorder: "#3a444c",
         signalColor: "#c9c9d1",
         signalTextColor: "#c9c9d1",
-        labelTextColor: "#f1f1f4",
-        edgeLabelBackground: "#1b1b1e",
+        labelTextColor: "#f1f3f4",
+        edgeLabelBackground: "#16181c",
       },
     });
     return mermaid;
@@ -47,7 +47,7 @@ let diagramCounter = 0;
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const XLINK_NS = "http://www.w3.org/1999/xlink";
-const EXPORT_BACKGROUND = "#121212";
+const EXPORT_BACKGROUND = "#0e1012";
 const MAX_EXPORT_EDGE = 4096;
 
 /** 把 mermaid 源码渲染成 SVG 字符串；源码非法时抛错，交由调用方退回源码展示。 */
