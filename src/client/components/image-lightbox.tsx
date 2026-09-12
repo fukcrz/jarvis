@@ -49,6 +49,7 @@ export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const drag = useRef<DragState | undefined>(undefined);
   /** 抬手时判定为「点空白」的点击，等 click 事件到达时再关闭（见 handleStageClick）。 */
@@ -93,7 +94,7 @@ export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    event.currentTarget.setPointerCapture(event.pointerId);
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.setPointerCapture(event.pointerId);
     tapPending.current = false;
     if (pointers.current.size === 1) {
       drag.current = {
@@ -135,6 +136,7 @@ export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
   };
 
   const handlePointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     pointers.current.delete(event.pointerId);
     if (pointers.current.size < 2) pinchDistance.current = undefined;
     const current = drag.current;
@@ -142,6 +144,17 @@ export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
     setDragging(false);
     tapPending.current = current !== undefined && !current.moved && current.fromBackdrop;
   };
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    return () => {
+      if (stage === null) return;
+      for (const pointerId of pointers.current.keys()) {
+        if (stage.hasPointerCapture(pointerId)) stage.releasePointerCapture(pointerId);
+      }
+      pointers.current.clear();
+    };
+  }, []);
 
   /**
    * 关闭放在 click 而不是 pointerup：触屏下抬手会紧跟一个兼容 click，
@@ -156,6 +169,7 @@ export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
   return createPortal(
     <div ref={overlayRef} className="image-lightbox" role="dialog" aria-modal="true" aria-label={alt === "" ? "图片预览" : alt} tabIndex={-1}>
       <div
+        ref={stageRef}
         className="image-lightbox-stage"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

@@ -119,13 +119,18 @@ export function Sidebar(props: SidebarProps) {
       if (drag === undefined || event.pointerId !== drag.pointerId) return;
       finishWorkspaceDrag(false);
     };
+    const onBlur = () => finishWorkspaceDrag(false);
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onBlur);
     return () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onBlur);
       document.body.classList.remove("project-reordering");
     };
   }, []);

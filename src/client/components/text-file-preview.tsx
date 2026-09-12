@@ -88,18 +88,18 @@ export function LocalTextFileLink({ path, cwd, line, column, children, className
   if (available !== true) return <span className="local-file-reference">{children}</span>;
   return <>
     <button type="button" className={`local-file-preview-trigger${className === undefined ? "" : ` ${className}`}`} onClick={openPreview} disabled={loading} aria-busy={loading}>{children}</button>
-    {open && file !== undefined ? <TextFilePreviewDialog file={file} line={line} column={column} onClose={() => setOpen(false)} /> : null}
+    {file === undefined ? null : <TextFilePreviewDialog file={file} line={line} column={column} open={open} onClose={() => setOpen(false)} />}
   </>;
 }
 
-export function TextFilePreviewDialog({ file, line, column, onClose }: { file: WorkspaceFileContent; line?: number; column?: number; onClose: () => void }) {
+export function TextFilePreviewDialog({ file, line, column, open = true, onClose }: { file: WorkspaceFileContent; line?: number; column?: number; open?: boolean; onClose: () => void }) {
   const codeRef = useRef<HTMLPreElement>(null);
   useEffect(() => {
-    if (line === undefined || codeRef.current === null) return;
+    if (!open || line === undefined || codeRef.current === null) return;
     const target = codeRef.current.querySelector<HTMLElement>(`[data-line="${String(line)}"]`);
     target?.scrollIntoView({ block: "center" });
-  }, [file, line]);
-  return <Dialog open onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
+  }, [file, line, open]);
+  return <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
     <DialogContent className="text-file-preview-dialog" overlayClassName="text-file-preview-overlay" title={file.name} description={`${file.path}${line === undefined ? "" : `:${String(line)}${column === undefined ? "" : `:${String(column)}`}`}`}>
       <div className="text-file-preview-shell">
         {file.truncated ? <div className="text-file-preview-notice" role="status">文件较大，仅显示前 512 KB。</div> : null}
