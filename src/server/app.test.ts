@@ -598,6 +598,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     await mkdir(join(staticRoot, "assets"), { recursive: true });
     await writeFile(join(staticRoot, "index.html"), "<main>Jarvis shell</main>");
     await writeFile(join(staticRoot, "assets", "app.js"), "window.jarvis = true;");
+    await writeFile(join(staticRoot, "favicon.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
 
     await activeApp().close();
     app = await buildApp({ serveStatic: true, staticRoot });
@@ -608,9 +609,18 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(asset.headers["content-type"]).toContain("application/javascript");
     expect(asset.body).toBe("window.jarvis = true;");
 
+    const favicon = await server.inject({ method: "GET", url: "/favicon.svg" });
+    expect(favicon.statusCode).toBe(200);
+    expect(favicon.headers["content-type"]).toContain("image/svg+xml");
+    expect(favicon.body).toBe("<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+
     const fallback = await server.inject({ method: "GET", url: "/sessions/example" });
     expect(fallback.statusCode).toBe(200);
     expect(fallback.body).toBe("<main>Jarvis shell</main>");
+
+    const missingRootFile = await server.inject({ method: "GET", url: "/missing.ico" });
+    expect(missingRootFile.statusCode).toBe(200);
+    expect(missingRootFile.body).toBe("<main>Jarvis shell</main>");
 
     const missingApi = await server.inject({ method: "GET", url: "/api/not-a-route" });
     expect(missingApi.statusCode).toBe(404);

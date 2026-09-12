@@ -126,7 +126,11 @@ function showRunNotification(info: RunNotificationInfo): void {
   if (typeof window === "undefined" || typeof window.Notification === "undefined") return;
   if (!document.hidden) return; // 等待窗口期间用户回到前台，不再打扰
   const { title, body } = runNotificationContent(info);
-  const notification = new window.Notification(title, { body, tag: `jarvis-run:${info.runId}` });
+  const notification = new window.Notification(title, {
+    body,
+    tag: `jarvis-run:${info.runId}`,
+    icon: new URL("/apple-touch-icon.png", window.location.href).href,
+  });
   notification.addEventListener("click", () => {
     window.focus();
     notification.close();

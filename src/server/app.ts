@@ -495,9 +495,18 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     // prefix separately prevents those requests from falling through to HTML.
     await app.register(fastifyStatic, { root: join(staticRoot, "assets"), prefix: "/assets/", decorateReply: false });
     app.get("/*", async (request, reply) => {
-      if (request.url === "/api" || request.url.startsWith("/api/")) {
+      const path = request.url.split("?")[0] ?? "";
+      if (path === "/api" || path.startsWith("/api/")) {
         const response: ApiErrorBody = { error: { code: "NOT_FOUND", message: "Route not found", requestId: request.id } };
         return reply.status(404).send(response);
+      }
+      const rootFile = rootStaticFileName(staticRoot, path);
+      if (rootFile !== undefined) {
+        try {
+          if ((await stat(join(staticRoot, rootFile))).isFile()) return reply.sendFile(rootFile);
+        } catch {
+          // Fall through to the SPA shell for unknown root paths.
+        }
       }
       return reply.sendFile("index.html");
     });
@@ -789,6 +798,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function sessionRef(value: unknown): SessionRef {
   const parsed = z.object({ workspaceId: z.string().uuid(), sessionId: z.string().uuid() }).parse(value);
   return parsed;
+}
+
+/** Root-level files copied from Vite public/ (favicon, apple-touch-icon). Nested paths stay on the SPA fallback. */
+function rootStaticFileName(staticRoot: string, requestPath: string): string | undefined {
+  const name = requestPath.startsWith("/") ? requestPath.slice(1) : requestPath;
+  if (name === "" || name === "." || name === "..") return undefined;
+  if (name.includes("/") || name.includes("\\") || name.includes("\0")) return undefined;
+  if (dirname(resolve(staticRoot, name)) !== resolve(staticRoot)) return undefined;
+  return name;
 }
 
 function formatValidationError(error: z.ZodError): string {
