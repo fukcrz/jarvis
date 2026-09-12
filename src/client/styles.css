@@ -506,7 +506,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-row-chevron { margin-left: auto; color: var(--subtle); }
 .mobile-project-select .sidebar-activity { margin-right: 0; }
 .mobile-session-copy { display: flex; min-width: 0; flex: 1; align-items: baseline; justify-content: space-between; gap: 10px; }
-.mobile-session-copy strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 550; }
+.mobile-session-copy strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 550; }
 .mobile-session-copy small { flex: 0 0 auto; color: var(--subtle); font-size: 11px; }
 .mobile-page-empty { padding: 40px 16px; color: var(--subtle); text-align: center; font-size: 13px; }
 .mobile-search-spin { animation: mobile-search-spin 0.9s linear infinite; }
