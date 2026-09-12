@@ -106,6 +106,9 @@ export function App() {
   const [compactionPending, setCompactionPending] = useState(false);
   const [compactionRequest, setCompactionRequest] = useState<{ runId: string; baselineSeq: number }>();
   const [drafts, setDrafts] = useState<Record<string, string>>(() => readDrafts());
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
+  const [draftNonce, setDraftNonce] = useState(0);
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, ImageAttachment[]>>({});
   const [forkTarget, setForkTarget] = useState<Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>>();
   const [forkPending, setForkPending] = useState(false);
@@ -135,11 +138,13 @@ export function App() {
   }, [focusMode, focusNow, sessionsByWorkspace]);
   const selectedComposerCommands = composerCommands !== undefined && composerCommands.sessionKey === selectedRefKey ? composerCommands.items : EMPTY_COMPOSER_COMMANDS;
   const selectedDraft = selectedSessionId === undefined ? "" : drafts[selectedSessionId] ?? "";
-  const updateDraft = useCallback((id: string, value: string) => {
+  const updateDraft = useCallback((id: string, value: string, external = false) => {
+    if (draftsRef.current[id] === value) return;
     setDrafts((current) => current[id] === value ? current : { ...current, [id]: value });
+    if (external) setDraftNonce((nonce) => nonce + 1);
   }, []);
-  const updateSelectedDraft = useCallback((value: string) => {
-    if (selectedSessionId !== undefined) updateDraft(selectedSessionId, value);
+  const updateSelectedDraft = useCallback((value: string, external = false) => {
+    if (selectedSessionId !== undefined) updateDraft(selectedSessionId, value, external);
   }, [selectedSessionId, updateDraft]);
   const selectedAttachments = selectedSessionId === undefined ? [] : attachmentsBySession[selectedSessionId] ?? [];
   const updateSelectedAttachments = useCallback((value: ImageAttachment[]) => {
@@ -797,7 +802,7 @@ export function App() {
       const { steering, followUp } = await api.dequeueQueue(selectedRef);
       const texts = [...steering, ...followUp].map((message) => message.text);
       if (texts.length === 0) return;
-      updateSelectedDraft([texts.join("\n\n"), selectedDraft].filter((value) => value.trim() !== "").join("\n\n"));
+      updateSelectedDraft([texts.join("\n\n"), selectedDraft].filter((value) => value.trim() !== "").join("\n\n"), true);
       setPageError(undefined);
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "无法取回排队消息");
@@ -810,7 +815,7 @@ export function App() {
     try {
       const { removed } = await api.removeQueued(selectedRef, messageId);
       if (restore && removed !== undefined) {
-        updateSelectedDraft([removed.text, selectedDraft].filter((value) => value.trim() !== "").join("\n\n"));
+        updateSelectedDraft([removed.text, selectedDraft].filter((value) => value.trim() !== "").join("\n\n"), true);
       }
       setPageError(undefined);
     } catch (error) {
@@ -909,7 +914,7 @@ export function App() {
       const dequeued = result.dequeued;
       if (dequeued !== undefined && (dequeued.steering.length > 0 || dequeued.followUp.length > 0)) {
         const texts = [...dequeued.steering, ...dequeued.followUp].map((message) => message.text);
-        updateSelectedDraft([...texts, selectedDraft].filter((value) => value.trim() !== "").join("\n\n"));
+        updateSelectedDraft([...texts, selectedDraft].filter((value) => value.trim() !== "").join("\n\n"), true);
       }
     } catch (error) {
       if (await recoverSessionConflict(error)) return;
@@ -1044,7 +1049,7 @@ export function App() {
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
       <Timeline key={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} />
       <ExtensionPanels panels={stream.extensionPanels} />
-      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
+      <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />

@@ -4,6 +4,7 @@ import { EditorView as CodeMirrorView } from "@codemirror/view";
 import { ArrowUp, Command, FileCode2, History, LoaderCircle, MessageSquare, Plus, RotateCcw, Square, X, Zap } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionFileReference, SessionQueue, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
+import { composerDraftSyncAction } from "../lib/composer-draft";
 import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { ImagePreview } from "./image-lightbox";
@@ -22,6 +23,8 @@ type Completion =
 
 interface PromptEditorProps {
   initialValue: string;
+  /** 外部改草稿（取回排队消息等）时递增；普通打字回环不递增。 */
+  draftNonce?: number;
   busy: boolean;
   commands: ComposerCommand[];
   searchFiles: (query: string) => Promise<WorkspaceFile[]>;
@@ -61,13 +64,16 @@ interface PromptEditorProps {
   onAutoFocusConsumed?: () => void;
 }
 
-export function PromptEditor({ initialValue, busy, commands, searchFiles, searchSessionFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, onCollapsedClick, focusRequestRef, autoFocus = false, onAutoFocusConsumed }: PromptEditorProps) {
+export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, searchFiles, searchSessionFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, onCollapsedClick, focusRequestRef, autoFocus = false, onAutoFocusConsumed }: PromptEditorProps) {
   const isMobile = useIsMobile();
   // 挂载时捕获 autoFocus：视图创建可能比挂载晚一个提交（容器 ref 回调触发
   // 的二次渲染），而 App 可能在被动效果里已清除标记；用 ref 保存挂载快照。
   const autoFocusOnMountRef = useRef(autoFocus);
   const initialValueRef = useRef(initialValue);
   const valueRef = useRef(initialValue);
+  const composingRef = useRef(false);
+  const pendingExternalDraftRef = useRef<string | undefined>(undefined);
+  const appliedDraftNonceRef = useRef(draftNonce);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const busyRef = useRef(busy);
   const submittingRef = useRef(false);
@@ -134,6 +140,8 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
     setCompletion(undefined);
     setSelectedIndex(0);
   }, []);
+  const onDraftChangeRef = useRef(onDraftChange);
+  onDraftChangeRef.current = onDraftChange;
 
   const refreshCompletion = useCallback((view: EditorView) => {
     const context = completionContextFor(view.state.doc.toString(), view.state.selection.main.head);
@@ -163,52 +171,91 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
       if (request === searchRequestRef.current) closeCompletion();
     });
   }, [closeCompletion]);
+  const refreshCompletionRef = useRef(refreshCompletion);
+  refreshCompletionRef.current = refreshCompletion;
 
+  // 组字期间既不回写 App、也不刷新补全：父组件重渲染会让 useCodeMirror
+  // 重配扩展，Firefox + ibus 会把刚确认的词再提交一次。
   const change = useCallback((next: string, update: ViewUpdate) => {
     valueRef.current = next;
+    if (composingRef.current || update.view.composing || update.transactions.some((transaction) => transaction.isUserEvent("input.type.compose"))) return;
     setHasDraft(next.trim() !== "");
-    onDraftChange(next);
-    refreshCompletion(update.view);
-  }, [onDraftChange, refreshCompletion]);
+    onDraftChangeRef.current(next);
+    refreshCompletionRef.current(update.view);
+  }, []);
 
   const update = useCallback((viewUpdate: ViewUpdate) => {
-    if (!viewUpdate.docChanged && viewUpdate.selectionSet) refreshCompletion(viewUpdate.view);
-  }, [refreshCompletion]);
+    if (composingRef.current || viewUpdate.view.composing) return;
+    if (!viewUpdate.docChanged && viewUpdate.selectionSet) refreshCompletionRef.current(viewUpdate.view);
+  }, []);
+
+  const applyExtensionTextRef = useRef(applyExtensionText);
+  applyExtensionTextRef.current = applyExtensionText;
+  const applyInjectedTextRef = useRef(applyInjectedText);
+  applyInjectedTextRef.current = applyInjectedText;
+  const onAutoFocusConsumedRef = useRef(onAutoFocusConsumed);
+  onAutoFocusConsumedRef.current = onAutoFocusConsumed;
+  const isMobileRef = useRef(isMobile);
+  isMobileRef.current = isMobile;
 
   const createEditor = useCallback((view: EditorView) => {
     viewRef.current = view;
     const initial = initialValueRef.current;
     if (initial !== "") view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: initial } });
-    applyExtensionText(view, injectedTextRef.current);
-    applyInjectedText(view, draftInjectionRef.current);
-    refreshCompletion(view);
+    applyExtensionTextRef.current(view, injectedTextRef.current);
+    applyInjectedTextRef.current(view, draftInjectionRef.current);
+    refreshCompletionRef.current(view);
     // 新建会话后自动聚焦（移动端聚焦会弹出键盘，忽略）。
-    if (autoFocusOnMountRef.current && !isMobile) {
+    if (autoFocusOnMountRef.current && !isMobileRef.current) {
       view.focus();
-      onAutoFocusConsumed?.();
+      onAutoFocusConsumedRef.current?.();
     }
-  }, [applyExtensionText, applyInjectedText, refreshCompletion, isMobile, onAutoFocusConsumed]);
+  }, []);
 
-  // App 的 drafts 是草稿的唯一上游：外部变更（取回排队消息、停止恢复等）
-  // 只更新 App 状态，而编辑器非受控（initialValue 仅挂载时读取），
-  // 这里把后续的外部变更同步进编辑器，光标置尾并聚焦。
-  // 与当前文档一致时跳过，避免覆盖用户正在输入的内容：
-  // 输入回环（change → drafts → prop）比较相等后即为无操作。
+  // 只有 App 显式改草稿（draftNonce 递增：取回排队、停止恢复）才写回编辑器。
+  // 普通打字回环和 IME 组字绝不能写文档：Firefox + ibus 会把刚确认的词再提交一次。
+  const applyExternalDraft = useCallback((view: EditorView, incoming: string) => {
+    pendingExternalDraftRef.current = undefined;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: incoming }, selection: { anchor: incoming.length } });
+    valueRef.current = incoming;
+    setHasDraft(incoming.trim() !== "");
+    view.focus();
+  }, []);
+
+  const syncDraftFromApp = useCallback((view: EditorView, incoming: string, nonceChanged: boolean, force = false) => {
+    const action = composerDraftSyncAction({
+      nonceChanged,
+      current: view.state.doc.toString(),
+      incoming,
+      composing: !force && (composingRef.current || view.composing),
+    });
+    if (action === "defer") {
+      pendingExternalDraftRef.current = incoming;
+      return;
+    }
+    if (action === "skip") {
+      if (force) pendingExternalDraftRef.current = undefined;
+      return;
+    }
+    applyExternalDraft(view, incoming);
+  }, [applyExternalDraft]);
+
   useEffect(() => {
+    initialValueRef.current = initialValue;
     const view = viewRef.current;
     if (view === undefined) return;
-    const current = view.state.doc.toString();
-    if (current === initialValue) return;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: initialValue }, selection: { anchor: initialValue.length } });
-    view.focus();
-  }, [initialValue]);
+    const nonceChanged = appliedDraftNonceRef.current !== draftNonce;
+    appliedDraftNonceRef.current = draftNonce;
+    syncDraftFromApp(view, initialValue, nonceChanged);
+  }, [draftNonce, initialValue, syncDraftFromApp]);
 
   // Command resources arrive asynchronously. Re-run completion against the
   // current document even when the user has not typed another character.
   useEffect(() => {
     commandsRef.current = commands;
     const view = viewRef.current;
-    if (view !== undefined) refreshCompletion(view);
+    if (view === undefined || composingRef.current || view.composing) return;
+    refreshCompletion(view);
   }, [commands, refreshCompletion]);
 
   useEffect(() => { searchFilesRef.current = searchFiles; }, [searchFiles]);
@@ -240,9 +287,11 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
 
   const handleFilesRef = useRef(handleFiles);
   useEffect(() => { handleFilesRef.current = handleFiles; }, [handleFiles]);
+  const syncDraftFromAppRef = useRef(syncDraftFromApp);
+  useEffect(() => { syncDraftFromAppRef.current = syncDraftFromApp; }, [syncDraftFromApp]);
 
-  // Created once with an empty dependency list: the handler reads the latest
-  // handleFiles through a ref so the paste extension stays referentially
+  // Created once with an empty dependency list: handlers read the latest
+  // callbacks through refs so the extensions array stays referentially
   // stable and useCodeMirror never reconfigures the editor mid-typing.
   const pasteExtension = useMemo(() => CodeMirrorView.domEventHandlers({
     paste: (event) => {
@@ -255,6 +304,30 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
       handleFilesRef.current(files);
       return true;
     },
+    compositionstart: () => {
+      composingRef.current = true;
+      return false;
+    },
+    compositionupdate: () => {
+      composingRef.current = true;
+      return false;
+    },
+    compositionend: () => {
+      composingRef.current = false;
+      const view = viewRef.current;
+      if (view === undefined) return false;
+      const pending = pendingExternalDraftRef.current;
+      // compositionend 时 view.composing 可能还没清掉；只刷真正的外部草稿。
+      if (pending !== undefined) {
+        syncDraftFromAppRef.current(view, pending, true, true);
+        return false;
+      }
+      const next = view.state.doc.toString();
+      valueRef.current = next;
+      setHasDraft(next.trim() !== "");
+      onDraftChangeRef.current(next);
+      return false;
+    },
   }), []);
   const extensions = useMemo(() => [...editorExtensions, pasteExtension], [pasteExtension]);
 
@@ -263,8 +336,8 @@ export function PromptEditor({ initialValue, busy, commands, searchFiles, search
     onChange: change,
     onUpdate: update,
     onCreateEditor: createEditor,
-    minHeight: isMobile ? "48px" : "76px",
-    maxHeight: isMobile ? "168px" : "220px",
+    minHeight: "76px",
+    maxHeight: "220px",
     theme: "dark",
     basicSetup,
     extensions,

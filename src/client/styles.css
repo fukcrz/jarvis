@@ -592,7 +592,9 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
   .timeline { -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   .timeline::-webkit-scrollbar { display: none; }
   .composer { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
-  .composer-editor .cm-content { min-height: 48px; padding-top: 10px; padding-bottom: 5px; }
+  .composer-editor .cm-editor { min-height: 48px !important; max-height: 168px !important; }
+  .composer-editor .cm-scroller { min-height: 48px !important; max-height: 168px !important; }
+  .composer-editor .cm-content { min-height: 48px !important; max-height: 168px !important; padding-top: 10px; padding-bottom: 5px; }
   .composer-footer { min-height: 46px; padding-bottom: 6px; }
   .composer-options { flex: 1 1 auto; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
   .composer-options::-webkit-scrollbar { display: none; }
