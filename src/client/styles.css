@@ -519,6 +519,13 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-session-projects::-webkit-scrollbar { display: none; }
 .mobile-session-projects button { display: inline-flex; align-items: center; flex: 0 0 auto; min-height: 32px; gap: 6px; border: 1px solid #303035; border-radius: 999px; background: #202023; padding: 4px 13px; color: #a5a4ad; font-size: 11px; white-space: nowrap; }
 .mobile-session-projects button.selected { border-color: var(--accent); background: #292535; color: var(--accent-strong); }
+.mobile-session-projects button:has(.mobile-project-status.attention-running) { --project-chip-tone: var(--accent); --project-chip-ink: var(--accent-strong); }
+.mobile-session-projects button:has(.mobile-project-status.attention-running.stopping),
+.mobile-session-projects button:has(.mobile-project-status.attention-waiting_interaction) { --project-chip-tone: var(--warm); --project-chip-ink: var(--warm); }
+.mobile-session-projects button:has(.mobile-project-status.attention-failed) { --project-chip-tone: var(--danger); --project-chip-ink: var(--danger); }
+.mobile-session-projects button:has(.mobile-project-status.attention-completed_unread) { --project-chip-tone: var(--success); --project-chip-ink: var(--success); }
+.mobile-session-projects button:has(.mobile-project-status) { border-color: color-mix(in srgb, var(--project-chip-tone) 62%, #303035); background: color-mix(in srgb, var(--project-chip-tone) 14%, #202023); }
+.mobile-session-projects button.selected:has(.mobile-project-status) { border-color: var(--project-chip-tone); background: color-mix(in srgb, var(--project-chip-tone) 22%, #202023); color: var(--project-chip-ink); }
 .mobile-project-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-project-status { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 13px; height: 13px; }
 .mobile-session-projects .mobile-project-status.attention-running { color: var(--accent-strong); }
