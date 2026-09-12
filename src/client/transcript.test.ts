@@ -95,6 +95,73 @@ describe("transcript reducer", () => {
     expect(result.items).toEqual([expect.objectContaining({ id: "user", images: [image] })]);
   });
 
+  it("trims optimistic user text and replaces it even when the server message is trimmed", () => {
+    const optimistic = addOptimisticUserMessage(emptyTranscript, "request-1", "Hello from the composer\n");
+    expect(optimistic.items).toEqual([expect.objectContaining({ id: "optimistic:user:request-1", text: "Hello from the composer" })]);
+    const result = applySessionEvents(optimistic, [{
+      version: 1,
+      sessionId: "session",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "message.created",
+      payload: { message: { kind: "message", id: "user", role: "user", createdAt: "2026-08-09T00:00:00.000Z", text: "Hello from the composer" } },
+    }]);
+    expect(result.items).toEqual([expect.objectContaining({ id: "user", text: "Hello from the composer" })]);
+  });
+
+  it("drops every optimistic user bubble when the server message arrives", () => {
+    const optimistic = addOptimisticUserMessage(emptyTranscript, "request-1", "Queued then sent");
+    const result = applySessionEvents(optimistic, [{
+      version: 1,
+      sessionId: "session",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "message.created",
+      payload: { message: { kind: "message", id: "user", role: "user", createdAt: "2026-08-09T00:00:00.000Z", text: "Something else" } },
+    }]);
+    expect(result.items).toEqual([expect.objectContaining({ id: "user", text: "Something else" })]);
+  });
+
+  it("keeps an unconfirmed optimistic user message across hydrate", () => {
+    const previous = addOptimisticUserMessage({
+      ...emptyTranscript,
+      items: [{ kind: "message", id: "old", role: "user", createdAt: "2026-08-09T00:00:00.000Z", text: "Earlier" }],
+      seq: 3,
+    }, "request-1", "Just sent");
+    const hydrated = hydrateTranscript(previous, {
+      items: [{ kind: "message", id: "old", role: "user", createdAt: "2026-08-09T00:00:00.000Z", text: "Earlier" }],
+      start: 0,
+      total: 1,
+      hasMore: false,
+    }, {
+      seq: 4,
+      status: { sessionId: "session", runState: "running" },
+      model: { available: [] },
+      thinking: { current: "off", available: ["off"] },
+      liveMessages: [],
+      activeTools: [],
+    });
+    expect(hydrated.items.map((item) => item.id)).toEqual(["old", "optimistic:user:request-1"]);
+  });
+
+  it("drops a confirmed optimistic user message when hydrating the persisted copy", () => {
+    const previous = addOptimisticUserMessage(emptyTranscript, "request-1", "Just sent\n");
+    const hydrated = hydrateTranscript(previous, {
+      items: [{ kind: "message", id: "user", role: "user", createdAt: "2026-08-09T00:00:01.000Z", text: "Just sent" }],
+      start: 0,
+      total: 1,
+      hasMore: false,
+    }, {
+      seq: 4,
+      status: { sessionId: "session", runState: "running" },
+      model: { available: [] },
+      thinking: { current: "off", available: ["off"] },
+      liveMessages: [],
+      activeTools: [],
+    });
+    expect(hydrated.items).toEqual([expect.objectContaining({ id: "user", text: "Just sent" })]);
+  });
+
   it("adds the server message.created payload without relying on an optimistic echo", () => {
     const result = applySessionEvents(emptyTranscript, [{
       version: 1,

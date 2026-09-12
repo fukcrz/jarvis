@@ -31,10 +31,14 @@ export const emptyTranscript: TranscriptState = {
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
   const extensionItems: ExtensionUiTimelineItem[] = snapshot.extensionUi?.cards ?? (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }));
   const live = [...snapshot.liveMessages, ...(snapshot.liveErrors ?? []), ...(snapshot.partialThinking === undefined ? [] : [snapshot.partialThinking]), ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial]), ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
+  // History and the snapshot are authoritative after a reconnect. Keeping an
+  // old in-memory tail here can resurrect an already-settled partial/tool.
+  // Unconfirmed optimistic user messages are the exception: drop them only
+  // once a matching persisted/live user message is present, otherwise a
+  // mobile resync would make the just-sent bubble vanish.
+  const authoritative = mergeTimeline(page.items, live, extensionItems);
   return {
-    // History and the snapshot are authoritative after a reconnect. Keeping an
-    // old in-memory tail here can resurrect an already-settled partial/tool.
-    items: sortTimelineByCreatedAt(mergeTimeline(page.items, live, extensionItems)),
+    items: sortTimelineByCreatedAt(mergeTimeline(authoritative, unmatchedOptimisticUserMessages(previous.items, authoritative))),
     start: page.start,
     total: page.total,
     hasMore: page.hasMore,
@@ -49,8 +53,7 @@ export function hydrateTranscript(previous: TranscriptState, page: TimelinePage,
 }
 
 export function addOptimisticUserMessage(state: TranscriptState, id: string, text: string, images: MessageTimelineItem["images"] = []): TranscriptState {
-  const item: MessageTimelineItem = { kind: "message", id: `optimistic:user:${id}`, role: "user", createdAt: new Date().toISOString(), text, ...(images.length === 0 ? {} : { images }) };
-  return { ...state, items: mergeTimeline(state.items, [item]) };
+  return { ...state, items: mergeTimeline(state.items, [optimisticUserMessage(id, text, images)]) };
 }
 
 export function removeOptimisticUserMessage(state: TranscriptState, id: string): TranscriptState {
@@ -61,8 +64,7 @@ export function removeOptimisticUserMessage(state: TranscriptState, id: string):
 export function replaceUserMessageWithOptimistic(state: TranscriptState, messageId: string, optimisticId: string, text: string, images: MessageTimelineItem["images"] = []): TranscriptState {
   const target = state.items.findIndex((item) => item.kind === "message" && item.id === messageId && item.role === "user");
   if (target === -1) return addOptimisticUserMessage(state, optimisticId, text, images);
-  const item: MessageTimelineItem = { kind: "message", id: `optimistic:user:${optimisticId}`, role: "user", createdAt: new Date().toISOString(), text, ...(images.length === 0 ? {} : { images }) };
-  return { ...state, items: [...state.items.slice(0, target), item] };
+  return { ...state, items: [...state.items.slice(0, target), optimisticUserMessage(optimisticId, text, images)] };
 }
 
 export function prependTranscript(state: TranscriptState, page: TimelinePage): TranscriptState {
@@ -108,8 +110,11 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const message = recordMessage(payload?.["message"]);
     if (message === undefined) return next;
-    const withoutMatchingOptimistic = next.items.filter((item) => item.kind !== "message" || item.role !== "user" || !item.id.startsWith("optimistic:user:") || !sameUserMessage(item, message));
-    return { ...next, items: mergeTimeline(withoutMatchingOptimistic, [message]) };
+    // One in-flight send owns at most one optimistic bubble. Matching by exact
+    // text fails when the composer still has a trailing newline and the server
+    // trims before persisting, so drop every optimistic user message here.
+    const items = message.role === "user" ? withoutOptimisticUserMessages(next.items) : next.items;
+    return { ...next, items: mergeTimeline(items, [message]) };
   }
   if (event.type === "assistant.delta") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -285,6 +290,24 @@ function recordTimelineItem(value: unknown): TimelineItem[] {
   return summary === undefined ? [] : [summary];
 }
 
+function optimisticUserMessage(id: string, text: string, images: MessageTimelineItem["images"] = []): MessageTimelineItem {
+  return { kind: "message", id: `optimistic:user:${id}`, role: "user", createdAt: new Date().toISOString(), text: text.trim(), ...(images.length === 0 ? {} : { images }) };
+}
+
+function isOptimisticUserMessage(item: TimelineItem): item is MessageTimelineItem {
+  return item.kind === "message" && item.role === "user" && item.id.startsWith("optimistic:user:");
+}
+
+function withoutOptimisticUserMessages(items: TimelineItem[]): TimelineItem[] {
+  return items.filter((item) => !isOptimisticUserMessage(item));
+}
+
+function unmatchedOptimisticUserMessages(previous: TimelineItem[], authoritative: TimelineItem[]): MessageTimelineItem[] {
+  const previousIds = new Set(previous.map((item) => item.id));
+  const newlyConfirmed = authoritative.filter((item): item is MessageTimelineItem => item.kind === "message" && item.role === "user" && !item.id.startsWith("optimistic:user:") && !previousIds.has(item.id));
+  return previous.filter((item): item is MessageTimelineItem => isOptimisticUserMessage(item) && !newlyConfirmed.some((message) => sameUserMessage(item, message)));
+}
+
 function recordMessage(value: unknown): MessageTimelineItem | undefined {
   if (!isRecord(value) || value["kind"] !== "message") return undefined;
   if ((value["role"] !== "user" && value["role"] !== "assistant") || typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["text"] !== "string") return undefined;
@@ -295,7 +318,7 @@ function recordMessage(value: unknown): MessageTimelineItem | undefined {
 }
 
 function sameUserMessage(a: MessageTimelineItem, b: MessageTimelineItem): boolean {
-  if (a.role !== "user" || b.role !== "user" || a.text !== b.text) return false;
+  if (a.role !== "user" || b.role !== "user" || a.text.trim() !== b.text.trim()) return false;
   const aImages = a.images ?? [];
   const bImages = b.images ?? [];
   return aImages.length === bImages.length && aImages.every((image, index) => image.mimeType === bImages[index]?.mimeType && image.data === bImages[index]?.data);
