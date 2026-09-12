@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { chromium } from "playwright";
 
 // 回合过程折叠冒烟：运行中展开 → 回合结束自动收起 → 手动展开不被覆盖；
-// 失败回合与等待响应的扩展交互、用户 !cmd 所在的回合保持展开。
+// 失败回合把末尾错误留在折叠外；等待响应的扩展交互、用户 !cmd 所在的回合保持展开。
 const baseUrl = (process.env["JARVIS_URL"] ?? "http://127.0.0.1:28471").replace(/\/$/, "");
 const screenshotDir = process.env["JARVIS_SMOKE_SHOTS"] ?? tmpdir();
 const failures = [];
@@ -107,21 +107,23 @@ try {
   if ((await foldState(page, 0)).expanded !== "true") failures.push("manual: a manually expanded turn was collapsed again");
   await page.screenshot({ path: join(screenshotDir, "jarvis-fold-expanded.png") });
 
-  // 没有最终汇报、且以失败收尾的回合不折叠：过程与错误卡片保持原样可见。
+  // 没有最终汇报、且以失败收尾：过程可折，末尾失败卡留在折叠外。
   await emit("message.created", { message: { kind: "message", id: "u2", role: "user", createdAt: at(20), text: "再跑一次测试。" } });
   await emit("assistant.delta", { messageId: "m3", delta: "正在运行测试。" });
   await emit("tool.upsert", { tool: { kind: "tool", id: "call_3", createdAt: at(21), name: "bash", title: "Run command", state: "failed", inputPreview: "npm test", error: "1 failed" } });
-  await emit("timeline.upsert", { item: { kind: "error", id: "e1", createdAt: at(22), code: "PI_RUNTIME_ERROR", message: "HTTP 503", state: "failed" } });
+  await emit("timeline.upsert", { item: { kind: "error", id: "e1", createdAt: at(22), code: "PI_RUNTIME_ERROR", message: "HTTP 503", state: "failed", groupId: "run-a" } });
+  await emit("timeline.upsert", { item: { kind: "error", id: "e2", createdAt: at(23), code: "PI_RUNTIME_ERROR", message: "HTTP 403", state: "failed", groupId: "run-b" } });
   await page.waitForTimeout(400);
-  if (await page.locator(".turn-process").count() !== 1) failures.push("failed: a failing turn was folded away");
   if (await page.locator(".timeline-error").isVisible() !== true) failures.push("failed: the failure entry is not visible");
+  if (await page.locator(".timeline-error").count() !== 1) failures.push("failed: consecutive failures were not merged");
+  if (await page.locator(".turn-process").count() !== 2) failures.push("failed: the failing turn did not keep a process fold");
 
   // 等待响应的扩展交互不能被关进折叠里。
   await emit("message.created", { message: { kind: "message", id: "u3", role: "user", createdAt: at(30), text: "删除这个文件。" } });
   await emit("assistant.delta", { messageId: "m4", delta: "需要你确认。" });
   await emit("extension.uiRequest", { request: { id: "c0ffee00-0000-4000-8000-00000000000f", method: "confirm", title: "允许删除文件", message: "将删除构建缓存。" } });
   await page.waitForTimeout(400);
-  if (await page.locator(".turn-process").count() !== 1) failures.push("pending: a turn waiting for user input was folded away");
+  if (await page.locator(".turn-process").count() !== 2) failures.push("pending: a turn waiting for user input was folded away");
   if (await page.locator(".extension-operation.pending").count() !== 1) failures.push("pending: the pending interaction is not rendered");
 
   // 用户 !cmd（`bash:` 前缀）所在回合不折叠，命令输出直接可见。
@@ -130,7 +132,7 @@ try {
   await emit("thinking.completed", { thinkingId: "t3", text: "先看看仓库状态。", createdAt: at(41) });
   await emit("tool.upsert", { tool: { kind: "tool", id: "bash:run-9", createdAt: at(42), name: "bash", title: "Run command", state: "completed", inputPreview: "git status", output: "clean" } });
   await page.waitForTimeout(400);
-  if (await page.locator(".turn-process").count() !== 1) failures.push("command: a turn containing a user !cmd was folded away");
+  if (await page.locator(".turn-process").count() !== 2) failures.push("command: a turn containing a user !cmd was folded away");
   if (await page.locator(".command-summary").filter({ hasText: "git status" }).isVisible() !== true) failures.push("command: the user !cmd output is not visible");
   await page.screenshot({ path: join(screenshotDir, "jarvis-fold-pinned.png") });
 

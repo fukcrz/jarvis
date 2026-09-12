@@ -399,11 +399,15 @@ function ErrorItem({ items, retrying }: { items: ErrorTimelineItem[]; retrying: 
   if (retrying && latest.state === "retrying") return null;
   const stateLabel = latest.state === "retrying" ? "正在重试" : latest.state === "recovered" ? "已恢复" : "操作未完成";
   const retryLabel = latest.attempt === undefined || latest.maxAttempts === undefined ? undefined : `第 ${String(latest.attempt)} / ${String(latest.maxAttempts)} 次尝试`;
+  const attemptCount = items.length > 1 ? `${String(items.length)} 次尝试` : undefined;
   const details = items.length > 1 || latest.diagnostics !== undefined;
+  const summary = retryLabel === undefined
+    ? (attemptCount === undefined ? errorSummary(latest.message) : `${attemptCount}：${errorSummary(latest.message)}`)
+    : `${retryLabel}：${errorSummary(latest.message)}`;
   return <article className={`timeline-event timeline-error ${latest.state}`} role={latest.state === "failed" ? "alert" : "status"}>
     <button className="timeline-event-summary timeline-error-header" type="button" aria-expanded={open} onClick={() => setOpen((value) => details ? !value : value)}>
       {latest.state === "recovered" ? <Check size={15} /> : latest.state === "retrying" ? <LoaderCircle className="spin" size={15} /> : <CircleAlert size={15} />}
-      <div className="timeline-error-copy"><strong>{stateLabel}</strong><span>{retryLabel === undefined ? errorSummary(latest.message) : `${retryLabel}：${errorSummary(latest.message)}`}</span></div>
+      <div className="timeline-error-copy"><strong>{stateLabel}</strong><span>{summary}</span></div>
     </button>
     {!open ? null : <div className="timeline-error-details">{items.map((item, index) => <ErrorDetails key={item.id} item={item} showAttempt={items.length > 1} index={index} />)}</div>}
   </article>;
@@ -700,8 +704,7 @@ export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] 
       if (item.kind === "message") result.push({ kind: "message", item });
       else if (item.kind === "error") {
         const previous = result.at(-1);
-        const groupId = item.groupId ?? item.id;
-        if (previous?.kind === "error" && (previous.items[0]?.groupId ?? previous.items[0]?.id) === groupId) previous.items.push(item);
+        if (previous?.kind === "error") previous.items.push(item);
         else result.push({ kind: "error", items: [item] });
       } else if (item.kind === "extension-ui") result.push({ kind: "extension-ui", item });
       else if (item.kind === "thinking") result.push({ kind: "thinking", item });
@@ -736,9 +739,11 @@ export interface TimelineTurn {
   process: TimelineRenderItem[];
   /** 留在折叠外作为最终汇报的 assistant 文本。 */
   final?: MessageTimelineItem;
+  /** 回合末尾未恢复的错误，留在过程折叠外。 */
+  finalError?: ErrorTimelineItem[];
 }
 
-/** 以用户消息为界把渲染条目组成回合，并把回合最后一条 assistant 文本提为最终汇报。 */
+/** 以用户消息为界把渲染条目组成回合，并把回合最后一条 assistant 文本或末尾失败卡提到折叠外。 */
 export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
   const turns: TimelineTurn[] = [];
   let current: TimelineTurn | undefined;
@@ -761,6 +766,9 @@ export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
     const last = turn.process.at(-1);
     if (last?.kind === "message" && last.item.role === "assistant") {
       turn.final = last.item;
+      turn.process.pop();
+    } else if (last?.kind === "error" && last.items.some((item) => item.state === "failed")) {
+      turn.finalError = last.items;
       turn.process.pop();
     }
   }
@@ -816,8 +824,9 @@ export function isTurnPinned(turn: TimelineTurn): boolean {
     || (entry.kind === "activity" && entry.items.some((item) => item.id.startsWith("bash:"))));
 }
 
-/** 回合以未恢复的错误收尾时保持展开。 */
+/** 回合以未恢复的错误收尾。末尾失败卡会提到折叠外，过程里也可能还留着未恢复错误。 */
 export function turnEndedInFailure(turn: TimelineTurn): boolean {
+  if (turn.finalError?.some((item) => item.state === "failed")) return true;
   return turn.process.some((entry) => entry.kind === "error" && entry.items.some((item) => item.state === "failed"));
 }
 
@@ -864,10 +873,9 @@ function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderConte
 function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRenderContext & { turn: TimelineTurn; active: boolean; autoCollapse: boolean }) {
   const foldable = shouldFoldTurnProcess(turn);
   const summary = summarizeTurnProcess(turn);
-  // 只有拿到最终汇报、且不需要人工介入、也没有以失败收尾的回合才收起过程。
+  // 最终汇报或末尾失败卡会留在折叠外；过程本身可以收起。等待交互或 !cmd 仍钉住。
   const pinned = isTurnPinned(turn);
-  const failed = turnEndedInFailure(turn);
-  const canAutoCollapse = turn.final !== undefined && !pinned && !failed;
+  const canAutoCollapse = (turn.final !== undefined || turn.finalError !== undefined) && !pinned;
   // 运行中不出现折叠行：过程和以前一样直接铺在时间线上。
   const collapsible = foldable && canAutoCollapse && !active;
   const [open, setOpen] = useState(() => active || !canAutoCollapse);
@@ -901,6 +909,7 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
       {!open ? null : <div className="turn-process-body">{process}</div>}
     </section>}
     {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, context)}
+    {turn.finalError === undefined ? null : renderTimelineEntry({ kind: "error", items: turn.finalError }, context)}
   </>;
 }
 

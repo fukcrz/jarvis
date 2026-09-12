@@ -126,6 +126,12 @@ describe("groupTimelineItems", () => {
     ]);
   });
 
+  it("merges consecutive errors even when group ids differ", () => {
+    const first = { ...error("e1"), groupId: "run-a" };
+    const second = { ...error("e2"), groupId: "run-b", message: "HTTP 403" };
+    expect(groupTimelineItems([first, second])).toEqual([{ kind: "error", items: [first, second] }]);
+  });
+
   it("keeps thinking cards as their own entries and splits tool runs around them", () => {
     const result = groupTimelineItems([tool("a"), thinking("t"), message("m"), tool("c")]);
 
@@ -168,6 +174,25 @@ describe("groupTimelineTurns", () => {
   it("returns an empty list for an empty timeline", () => {
     expect(groupTimelineTurns([])).toEqual([]);
   });
+
+  it("lifts a trailing unrecovered error out of the process", () => {
+    const first = { ...error("e1"), groupId: "a" };
+    const second = { ...error("e2"), groupId: "b", message: "HTTP 403" };
+    const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), first, second]);
+
+    expect(turn?.process).toEqual([{ kind: "thinking", item: thinking("t1") }]);
+    expect(turn?.finalError).toEqual([first, second]);
+    expect(turn?.final).toBeUndefined();
+  });
+
+  it("keeps recovered trailing errors inside the process", () => {
+    const recovered = { ...error("e1"), state: "recovered" as const };
+    const [turn] = groupTimelineTurns([user("u1"), recovered, message("m1")]);
+
+    expect(turn?.finalError).toBeUndefined();
+    expect(turn?.final).toEqual(message("m1"));
+    expect(turn?.process).toEqual([{ kind: "error", items: [recovered] }]);
+  });
 });
 
 describe("summarizeTurnProcess", () => {
@@ -194,6 +219,7 @@ describe("shouldFoldTurnProcess", () => {
   it("folds multi-entry processes and single process messages", () => {
     expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }] })).toBe(true);
     expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "message", item: message("m1") }] })).toBe(true);
+    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }], finalError: [error("e1")] })).toBe(true);
   });
 
   it("does not fold a single summary row or an empty process", () => {
@@ -219,5 +245,6 @@ describe("turnEndedInFailure", () => {
   it("flags unrecovered errors and ignores recovered attempts", () => {
     expect(turnEndedInFailure({ key: "t", process: [{ kind: "error", items: [{ ...error("e1"), state: "recovered" }] }] })).toBe(false);
     expect(turnEndedInFailure({ key: "t", process: [{ kind: "error", items: [error("e1")] }] })).toBe(true);
+    expect(turnEndedInFailure({ key: "t", process: [], finalError: [error("e1")] })).toBe(true);
   });
 });
