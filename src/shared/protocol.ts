@@ -300,6 +300,16 @@ export interface SessionSummary {
   matchSnippet?: string;
 }
 
+export interface SessionCleanupSkipped {
+  id: string;
+  reason: "busy" | "error";
+}
+
+export interface SessionCleanupResult {
+  removed: string[];
+  skipped: SessionCleanupSkipped[];
+}
+
 export interface ImageAttachment {
   mimeType: string;
   /** Base64-encoded image data. */

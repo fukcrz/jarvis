@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { MessageSquarePlus, Pencil, Trash2 } from "lucide-react";
+import { Eraser, MessageSquarePlus, Pencil, Trash2 } from "lucide-react";
 import type { Workspace } from "../../shared/protocol";
 
 export interface ProjectContextMenuTarget {
@@ -12,15 +12,17 @@ interface ProjectContextMenuProps {
   target: ProjectContextMenuTarget;
   onClose: () => void;
   onCreateSession: (workspace: Workspace) => void;
+  onCleanupSessions: (workspace: Workspace) => void;
   onRename: (workspace: Workspace) => void;
   onRemove: (workspace: Workspace) => void;
+  cleanupDisabled?: boolean;
 }
 
 const MENU_WIDTH = 196;
-const MENU_HEIGHT = 114;
+const MENU_HEIGHT = 148;
 const VIEWPORT_GUTTER = 8;
 
-export function ProjectContextMenu({ target, onClose, onCreateSession, onRename, onRemove }: ProjectContextMenuProps) {
+export function ProjectContextMenu({ target, onClose, onCreateSession, onCleanupSessions, onRename, onRemove, cleanupDisabled = false }: ProjectContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const left = Math.max(VIEWPORT_GUTTER, Math.min(target.x, window.innerWidth - MENU_WIDTH - VIEWPORT_GUTTER));
   const top = Math.max(VIEWPORT_GUTTER, Math.min(target.y, window.innerHeight - MENU_HEIGHT - VIEWPORT_GUTTER));
@@ -48,6 +50,7 @@ export function ProjectContextMenu({ target, onClose, onCreateSession, onRename,
 
   return <div ref={menuRef} className="context-menu" role="menu" aria-label="项目操作" tabIndex={-1} style={{ left, top }} onContextMenu={(event) => event.preventDefault()}>
     <button className="context-menu-item" type="button" role="menuitem" onClick={() => onCreateSession(target.workspace)}><MessageSquarePlus size={14} /><span>新建会话</span></button>
+    <button className="context-menu-item danger" type="button" role="menuitem" disabled={cleanupDisabled} onClick={() => onCleanupSessions(target.workspace)}><Eraser size={14} /><span>清理会话</span></button>
     <button className="context-menu-item" type="button" role="menuitem" onClick={() => onRename(target.workspace)}><Pencil size={14} /><span>重命名项目</span></button>
     <button className="context-menu-item danger" type="button" role="menuitem" onClick={() => onRemove(target.workspace)}><Trash2 size={14} /><span>移除项目</span></button>
   </div>;

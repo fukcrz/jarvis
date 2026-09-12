@@ -876,6 +876,39 @@ describe("Jarvis HTTP and WebSocket API", () => {
     socket.close();
   });
 
+  it("cleans idle project sessions while keeping the current and busy ones", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "cleanup-sessions-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath, label: "Cleanup sessions" } })).json<{ workspace: { id: string } }>().workspace;
+    const keep = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const idle = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const busy = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const promptSpy = vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${busy.id}/prompt`, payload: { text: "keep running", clientRequestId: randomUUID() } });
+    await vi.waitFor(() => expect(promptSpy).toHaveBeenCalled());
+
+    const address = await server.listen({ host: "127.0.0.1", port: 0 });
+    const endpoint = new URL(`/api/workspaces/${workspace.id}/events`, address);
+    endpoint.protocol = "ws:";
+    const socket = createSocket(endpoint.toString());
+    await waitForOpen(socket);
+    const received = nextJsonMessage(socket);
+
+    const cleaned = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/cleanup`, payload: { keepSessionId: keep.id } });
+    expect(cleaned.statusCode).toBe(200);
+    const body = cleaned.json() as { removed: string[]; skipped: Array<{ id: string; reason: string }> };
+    expect(body.removed).toEqual([idle.id]);
+    expect(body.skipped).toEqual([{ id: busy.id, reason: "busy" }]);
+    await expect(received).resolves.toEqual({ version: 1, type: "session.deleted", workspaceId: workspace.id, sessionId: idle.id });
+
+    const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` });
+    expect(listed.statusCode).toBe(200);
+    const remaining = (listed.json() as { sessions: Array<{ id: string }> }).sessions.map((session) => session.id).sort();
+    expect(remaining).toEqual([busy.id, keep.id].sort());
+    socket.close();
+  });
+
   it("forks user and assistant message history into independent sessions", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "fork-workspace");

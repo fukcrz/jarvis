@@ -34,6 +34,7 @@ import type {
   SessionRef,
   SessionStatus,
   SessionStreamSnapshot,
+  SessionCleanupResult,
   SessionSummary,
   SessionThinkingSnapshot,
   ThinkingLevel,
@@ -359,6 +360,30 @@ export class SessionService {
         this.deleting.delete(key);
       }
     });
+  }
+
+  async cleanup(workspaceId: string, keepSessionId?: string): Promise<SessionCleanupResult> {
+    const summaries = await this.list(workspaceId);
+    const removed: string[] = [];
+    const skipped: SessionCleanupResult["skipped"] = [];
+    for (const summary of summaries) {
+      if (summary.id === keepSessionId) continue;
+      try {
+        await this.remove({ workspaceId, sessionId: summary.id });
+        removed.push(summary.id);
+      } catch (error) {
+        if (error instanceof AppError && error.code === "SESSION_BUSY") {
+          skipped.push({ id: summary.id, reason: "busy" });
+          continue;
+        }
+        if (error instanceof AppError && error.code === "SESSION_NOT_FOUND") {
+          removed.push(summary.id);
+          continue;
+        }
+        skipped.push({ id: summary.id, reason: "error" });
+      }
+    }
+    return { removed, skipped };
   }
 
   async timeline(ref: SessionRef, before?: number, limit = PAGE_LIMIT): Promise<TimelinePage> {

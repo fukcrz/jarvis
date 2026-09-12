@@ -27,6 +27,7 @@ const fileSearchQuery = z.object({ query: z.string().max(160).optional() }).stri
 const workspacePathQuery = z.object({ path: z.string().max(2000).optional() }).strict();
 const workspaceEntryQuery = z.object({ path: z.string().min(1).max(2000) }).strict();
 const sessionNameInput = z.object({ name: z.string().min(1).max(120) }).strict();
+const sessionCleanupInput = z.object({ keepSessionId: z.string().uuid().optional() }).strict();
 const modelInput = z.object({ provider: z.string().min(1).max(160), modelId: z.string().min(1).max(320) }).strict();
 const thinkingInput = z.object({ level: z.enum(THINKING_LEVELS) }).strict();
 const imageInput = z.object({ mimeType: z.string().min(1).max(120), data: z.string().min(1) }).strict();
@@ -352,6 +353,11 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.post("/api/workspaces/:workspaceId/sessions", async (request) => {
     const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
     return { session: await sessions.create(params.workspaceId) };
+  });
+  app.post("/api/workspaces/:workspaceId/sessions/cleanup", async (request) => {
+    const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
+    const body = sessionCleanupInput.parse(request.body ?? {});
+    return sessions.cleanup(params.workspaceId, body.keepSessionId);
   });
   app.patch("/api/workspaces/:workspaceId/sessions/:sessionId", async (request) => {
     const ref = sessionRef(request.params);

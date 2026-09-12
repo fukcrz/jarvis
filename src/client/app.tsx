@@ -23,7 +23,7 @@ import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
 import { installBodyPointerEventsGuard } from "./lib/pointer-events";
-import { isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionLabel } from "./lib/utils";
+import { isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { extensionToastDuration, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
 
@@ -67,6 +67,8 @@ export function App() {
   const [projectRenameValue, setProjectRenameValue] = useState("");
   const [projectRemoveTarget, setProjectRemoveTarget] = useState<Workspace | undefined>();
   const [projectRemovePending, setProjectRemovePending] = useState(false);
+  const [sessionCleanupTarget, setSessionCleanupTarget] = useState<Workspace | undefined>();
+  const [sessionCleanupPending, setSessionCleanupPending] = useState(false);
   const [workspaceOrderPending, setWorkspaceOrderPending] = useState(false);
   const workspaceOrderRequestRef = useRef<number | undefined>(undefined);
   const workspaceOrderSequenceRef = useRef(0);
@@ -693,6 +695,39 @@ export function App() {
     }
   };
 
+  const keepSessionIdFor = (projectId: string): string | undefined => selectedRef?.workspaceId === projectId ? selectedRef.sessionId : undefined;
+
+  const openSessionCleanup = (workspace: Workspace) => {
+    if (sessionCleanupTargets(sessionsByWorkspace[workspace.id] ?? [], keepSessionIdFor(workspace.id)).length === 0) return;
+    setSessionCleanupTarget(workspace);
+  };
+
+  const cleanupProjectSessions = async () => {
+    const target = sessionCleanupTarget;
+    if (target === undefined || sessionCleanupPending) return;
+    setSessionCleanupPending(true);
+    const keepSessionId = keepSessionIdFor(target.id);
+    try {
+      const result = await api.cleanupSessions(target.id, keepSessionId);
+      setSessionsByWorkspace((current) => {
+        let sessions = current[target.id] ?? [];
+        for (const id of result.removed) sessions = withoutSession(sessions, id);
+        return sessions === (current[target.id] ?? []) ? current : { ...current, [target.id]: sessions };
+      });
+      setDrafts((current) => {
+        let next = current;
+        for (const id of result.removed) next = withoutDraft(next, id);
+        return next;
+      });
+      setSessionCleanupTarget(undefined);
+      setPageError(undefined);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "无法清理会话");
+    } finally {
+      setSessionCleanupPending(false);
+    }
+  };
+
   /** 会话级分支：从该会话最新一条 user 消息处复制上下文。 */
   const forkSessionFromTarget = async (target: { workspaceId: string; sessionId: string }) => {
     try {
@@ -1032,7 +1067,7 @@ export function App() {
         {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : isFilesPage ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "files" ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={visibleSessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onRenameSession={(targetWorkspaceId, session) => { setRenameTarget({ workspaceId: targetWorkspaceId, session }); setRenameValue(session.name ?? sessionLabel(session.name, session.preview)); }} onForkSession={(targetWorkspaceId, session) => { void forkSessionFromTarget({ workspaceId: targetWorkspaceId, sessionId: session.id }); }} onDeleteSession={(targetWorkspaceId, session) => { void deleteSession({ workspaceId: targetWorkspaceId, session }); }} onOpenSearch={() => setSearchOpen(true)} focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)} /> : <section className="mobile-chat-page">
+        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "files" ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={visibleSessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onRenameSession={(targetWorkspaceId, session) => { setRenameTarget({ workspaceId: targetWorkspaceId, session }); setRenameValue(session.name ?? sessionLabel(session.name, session.preview)); }} onForkSession={(targetWorkspaceId, session) => { void forkSessionFromTarget({ workspaceId: targetWorkspaceId, sessionId: session.id }); }} onDeleteSession={(targetWorkspaceId, session) => { void deleteSession({ workspaceId: targetWorkspaceId, session }); }} onOpenProjectMenu={(workspace) => setMobileActionTarget({ kind: "project", workspace })} onOpenSearch={() => setSearchOpen(true)} focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
             <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate("/projects", { replace: true })}><ArrowLeft size={19} /></Button>
             <div className="mobile-chat-session">{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</div>
@@ -1056,6 +1091,9 @@ export function App() {
       {projectMenu === undefined ? null : <ProjectContextMenu target={projectMenu} onClose={closeProjectMenu} onCreateSession={(workspace) => {
         setProjectMenu(undefined);
         void createSession(workspace.id);
+      }} onCleanupSessions={(workspace) => {
+        setProjectMenu(undefined);
+        openSessionCleanup(workspace);
       }} onRename={(workspace) => {
         setProjectMenu(undefined);
         setProjectRenameTarget(workspace);
@@ -1063,16 +1101,19 @@ export function App() {
       }} onRemove={(workspace) => {
         setProjectMenu(undefined);
         setProjectRemoveTarget(workspace);
-      }} />}
+      }} cleanupDisabled={sessionCleanupTargets(sessionsByWorkspace[projectMenu.workspace.id] ?? [], keepSessionIdFor(projectMenu.workspace.id)).length === 0} />}
       <SessionSearchDialog open={searchOpen} onOpenChange={setSearchOpen} workspaces={workspaces} searchSessions={searchSessions} onSelectSession={(workspaceId, sessionId) => { chooseSession(workspaceId, sessionId); }} />
       <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onRenameProject={(workspace) => {
         setMobileActionTarget(undefined);
         setProjectRenameTarget(workspace);
         setProjectRenameValue(workspace.label);
+      }} onCleanupSessions={(workspace) => {
+        setMobileActionTarget(undefined);
+        openSessionCleanup(workspace);
       }} onRemoveProject={(workspace) => {
         setMobileActionTarget(undefined);
         setProjectRemoveTarget(workspace);
-      }} onRenameSession={(targetWorkspaceId, session) => {
+      }} cleanupDisabled={mobileActionTarget?.kind === "project" && sessionCleanupTargets(sessionsByWorkspace[mobileActionTarget.workspace.id] ?? [], keepSessionIdFor(mobileActionTarget.workspace.id)).length === 0} onRenameSession={(targetWorkspaceId, session) => {
         setMobileActionTarget(undefined);
         setRenameTarget({ workspaceId: targetWorkspaceId, session });
         setRenameValue(session.name ?? sessionLabel(session.name, session.preview));
@@ -1102,6 +1143,12 @@ export function App() {
           <div className="dialog-actions"><Button variant="secondary" onClick={() => setProjectRemoveTarget(undefined)} disabled={projectRemovePending}>取消</Button><Button variant="danger" onClick={() => { void removeProject(); }} disabled={projectRemovePending}>{projectRemovePending ? "正在移除…" : "移除项目"}</Button></div>
         </DialogContent>
       </Dialog>
+      <Dialog open={sessionCleanupTarget !== undefined} onOpenChange={(open) => { if (!open && !sessionCleanupPending) setSessionCleanupTarget(undefined); }}>
+        <DialogContent title="清理会话">
+          <p className="delete-session-message">{sessionCleanupConfirmMessage(sessionCleanupTarget, sessionsByWorkspace[sessionCleanupTarget?.id ?? ""] ?? [], sessionCleanupTarget === undefined ? undefined : keepSessionIdFor(sessionCleanupTarget.id))}</p>
+          <div className="dialog-actions"><Button variant="secondary" onClick={() => setSessionCleanupTarget(undefined)} disabled={sessionCleanupPending}>取消</Button><Button variant="danger" onClick={() => { void cleanupProjectSessions(); }} disabled={sessionCleanupPending}>{sessionCleanupPending ? "正在清理…" : "清理会话"}</Button></div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={forkTarget !== undefined} onOpenChange={(open) => { if (!open && !forkPending) setForkTarget(undefined); }}>
         <DialogContent title="创建会话分支" description="将从选中的消息处复制上下文并创建一个新的会话。">
@@ -1119,6 +1166,13 @@ export function App() {
 function withoutSession(current: SessionSummary[], sessionId: string): SessionSummary[] {
   const next = current.filter((session) => session.id !== sessionId);
   return next.length === current.length ? current : next;
+}
+
+function sessionCleanupConfirmMessage(workspace: Workspace | undefined, sessions: SessionSummary[], keepSessionId?: string): string {
+  const count = sessionCleanupTargets(sessions, keepSessionId).length;
+  const label = workspace?.label ?? "";
+  if (keepSessionId !== undefined) return `「${label}」将永久删除 ${String(count)} 个闲置会话，当前会话与执行中的会话会保留。不可恢复。`;
+  return `「${label}」将永久删除 ${String(count)} 个闲置会话，执行中的会话会保留。不可恢复。`;
 }
 
 function withoutDraft(current: Record<string, string>, sessionId: string): Record<string, string> {

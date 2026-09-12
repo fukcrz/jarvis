@@ -84,6 +84,11 @@ export function isSessionRunning(session: SessionSummary): boolean {
   return session.runState === "running" || session.runState === "stopping";
 }
 
+/** 项目清理会删除的闲置会话：排除当前保留项与执行中的会话。 */
+export function sessionCleanupTargets(sessions: SessionSummary[], keepSessionId?: string): SessionSummary[] {
+  return sessions.filter((session) => session.id !== keepSessionId && !isSessionRunning(session));
+}
+
 export function sessionAttentionState(session: SessionSummary): SessionAttentionState {
   if (isSessionRunning(session)) return session.runState === "stopping" ? "running" : (session.attentionState === "waiting_interaction" ? "waiting_interaction" : "running");
   return session.attentionState ?? "idle";

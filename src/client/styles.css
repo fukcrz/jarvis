@@ -485,7 +485,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-session-group-chevron { flex: 0 0 auto; color: var(--muted); transition: transform 0.18s ease; }
 .mobile-session-group.expanded .mobile-session-group-chevron { transform: rotate(90deg); }
 .mobile-session-group-count { flex: 0 0 auto; margin-left: auto; color: var(--subtle); font-size: 11px; }
-.mobile-session-group-new { margin-left: auto; }
+.mobile-session-group-menu { margin-left: auto; }.mobile-session-group-new { margin-left: 0; }
 .mobile-session-window-action { display: flex; align-items: center; gap: 5px; width: 100%; border: 0; border-radius: 6px; background: transparent; padding: 12px 10px 14px; color: var(--subtle); font-size: 12px; text-align: left; }
 .mobile-session-window-action:active { background: var(--surface-hover); }
 .mobile-session-window-action svg { flex: 0 0 auto; }

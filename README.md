@@ -105,7 +105,7 @@ launch paths behave identically; `npm run dev` (`tsx watch`) does not.
 ## MVP Scope
 
 - Expandable project tree with existing and new Pi sessions
-- Project registration, session rename, filtering, and permanent session deletion
+- Project registration, session rename, filtering, permanent session deletion, and one-click idle-session cleanup
 - Authenticated Pi model selection and per-session thinking levels, persisted as Pi history
 - Text-only streaming prompts
 - Tool execution status and output

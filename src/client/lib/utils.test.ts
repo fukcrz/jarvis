@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSummary } from "../../shared/protocol";
-import { isSessionInFocusWindow, matchesSessionQuery, normalizeSessionSearch, parseBashCommand, reorderById, sessionLabel, sessionListWindow, workspaceDropTarget, SESSION_FOCUS_WINDOW_MS, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
+import { isSessionInFocusWindow, matchesSessionQuery, normalizeSessionSearch, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sessionListWindow, workspaceDropTarget, SESSION_FOCUS_WINDOW_MS, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
 
 const session: SessionSummary = {
   id: "session-1",
@@ -76,6 +76,18 @@ describe("session search", () => {
   it("uses the displayed fallback title when a session is unnamed", () => {
     expect(sessionLabel(null, "  First user message  ")).toBe("First user message");
     expect(matchesSessionQuery({ ...session, name: null, preview: "First user message" }, "FIRST")).toBe(true);
+  });
+});
+
+describe("session cleanup targets", () => {
+  it("drops the current session and running sessions", () => {
+    const items = [idle("keep"), idle("idle-1"), running("run-1"), stopping("stop-1")];
+    expect(ids(sessionCleanupTargets(items, "keep"))).toEqual(["idle-1"]);
+  });
+
+  it("treats an absent keep id as deleting every idle session", () => {
+    const items = [idle("idle-1"), running("run-1"), idle("idle-2")];
+    expect(ids(sessionCleanupTargets(items))).toEqual(["idle-1", "idle-2"]);
   });
 });
 

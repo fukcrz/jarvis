@@ -67,6 +67,20 @@ describe("API client", () => {
     expect(new Headers(init?.headers).has("content-type")).toBe(false);
   });
 
+  it("sends an optional keepSessionId when cleaning project sessions", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ removed: ["c2f73ddd-cfc6-464f-acb3-c8f425cea7f0"], skipped: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const workspaceId = "da69b38d-f132-4c84-8c4f-6174015e9c5e";
+    const keepSessionId = "c2f73ddd-cfc6-464f-acb3-c8f425cea7f0";
+
+    await expect(api.cleanupSessions(workspaceId, keepSessionId)).resolves.toEqual({ removed: [keepSessionId], skipped: [] });
+
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe(`/api/workspaces/${workspaceId}/sessions/cleanup`);
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(JSON.stringify({ keepSessionId }));
+  });
+
   it("sends workspace ids to the reorder endpoint", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ workspaces: [] }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
