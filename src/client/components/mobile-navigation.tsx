@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleDot, Focus, Folder, GitBranch, LoaderCircle, MoreVertical, Pencil, Plus, Search, Settings2, Trash2 } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionAttentionState, sessionLabel, sessionListWindow } from "../lib/utils";
+import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionAttentionState, sessionLabel, sessionListWindow, sortSessionSummaries } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 
@@ -34,32 +34,33 @@ interface MobileSessionGroup {
 const SWIPE_ACTION_WIDTH = 132;
 const MOBILE_EXPANDED_GROUPS_STORAGE_KEY = "jarvis.mobile.projects.expanded";
 
-/** 项目排序权重：组内最紧急的会话决定该项目的优先级。 */
 function projectAttentionRank(sessions: SessionSummary[]): number {
   return sessions.reduce((rank, session) => Math.min(rank, sessionAttentionRank(session)), 4);
 }
 
-/** 项目最近一次会话活动时间。 */
-function projectLatestUpdatedAt(sessions: SessionSummary[]): string {
-  return sessions.reduce((latest, session) => (session.updatedAt.localeCompare(latest) > 0 ? session.updatedAt : latest), "");
+function projectLatestAttentionAt(sessions: SessionSummary[]): string {
+  return sessions.reduce((latest, session) => {
+    const at = session.attentionAt ?? "";
+    return at.localeCompare(latest) > 0 ? at : latest;
+  }, "");
 }
 
-/** 分组排序权重：组内最紧急的会话决定该组的优先级。 */
-function groupAttentionRank(group: MobileSessionGroup): number {
-  return projectAttentionRank(group.sessions);
+function projectLatestUserMessageAt(sessions: SessionSummary[]): string {
+  return sessions.reduce((latest, session) => {
+    const at = session.lastUserMessageAt ?? session.createdAt;
+    return at.localeCompare(latest) > 0 ? at : latest;
+  }, "");
 }
 
-/** 组内最近一次活动时间。 */
-function groupLatestUpdatedAt(group: MobileSessionGroup): string {
-  return projectLatestUpdatedAt(group.sessions);
-}
-
-/** 项目芯片顺序：关注状态优先，同优先级再按最近活动。 */
+/** 项目芯片顺序：关注状态优先，同档按进入该档的时间，再按用户上次发送。 */
 export function sortWorkspacesByAttention(workspaces: Workspace[], sessionsByWorkspace: Record<string, SessionSummary[]>): Workspace[] {
   return [...workspaces].sort((a, b) => {
     const aSessions = sessionsByWorkspace[a.id] ?? [];
     const bSessions = sessionsByWorkspace[b.id] ?? [];
-    return projectAttentionRank(aSessions) - projectAttentionRank(bSessions) || projectLatestUpdatedAt(bSessions).localeCompare(projectLatestUpdatedAt(aSessions));
+    return projectAttentionRank(aSessions) - projectAttentionRank(bSessions)
+      || projectLatestAttentionAt(bSessions).localeCompare(projectLatestAttentionAt(aSessions))
+      || projectLatestUserMessageAt(bSessions).localeCompare(projectLatestUserMessageAt(aSessions))
+      || a.sortOrder - b.sortOrder;
   });
 }
 
@@ -68,7 +69,7 @@ export function shouldShowMobileSessionGroup(sessionCount: number, focusMode: bo
 }
 
 export function projectAttentionSession(sessions: SessionSummary[]): SessionSummary | undefined {
-  const session = [...sessions].sort((a, b) => sessionAttentionRank(a) - sessionAttentionRank(b) || b.updatedAt.localeCompare(a.updatedAt))[0];
+  const session = sortSessionSummaries(sessions)[0];
   return session === undefined || sessionAttentionLabel(session) === undefined ? undefined : session;
 }
 
@@ -97,18 +98,15 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
     }
     props.onCreateSession(workspaceFilter);
   };
-  // 按项目分桶：筛选 + 组内排序（attentionRank 优先，再按最近更新）。
+  // 按项目分桶：组顺序跟 PC 侧栏一致；组内按关注档、进入该档时间、用户发送时间排。
   const groups = useMemo<MobileSessionGroup[]>(() => {
     const result: MobileSessionGroup[] = [];
     for (const workspace of props.workspaces) {
       if (workspaceFilter !== "all" && workspace.id !== workspaceFilter) continue;
-      const sessions = (props.sessionsByWorkspace[workspace.id] ?? [])
-        .sort((a, b) => sessionAttentionRank(a) - sessionAttentionRank(b) || b.updatedAt.localeCompare(a.updatedAt));
+      const sessions = sortSessionSummaries(props.sessionsByWorkspace[workspace.id] ?? []);
       if (!shouldShowMobileSessionGroup(sessions.length, props.focusMode)) continue;
       result.push({ workspace, sessions });
     }
-    // 组排序：有需要关注的会话的组优先，再按组内最近活动（活跃项目靠前）。
-    result.sort((a, b) => groupAttentionRank(a) - groupAttentionRank(b) || groupLatestUpdatedAt(b).localeCompare(groupLatestUpdatedAt(a)));
     return result;
   }, [props.workspaces, props.sessionsByWorkspace, workspaceFilter]);
   const projectChips = useMemo(() => sortWorkspacesByAttention(props.workspaces, props.sessionsByWorkspace), [props.workspaces, props.sessionsByWorkspace]);

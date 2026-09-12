@@ -296,6 +296,10 @@ export interface SessionSummary {
   runState: RunState;
   /** Omitted only by older servers; clients should treat it as idle. */
   attentionState?: SessionAttentionState;
+  /** When the session entered the current attention state. Absent while idle. */
+  attentionAt?: string;
+  /** Last time the user sent a prompt, queued a prompt, ran bash, or edited-and-resent. */
+  lastUserMessageAt?: string;
   /** 全文搜索命中片段（仅搜索响应附带），用于展示命中上下文。 */
   matchSnippet?: string;
 }

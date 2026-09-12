@@ -23,7 +23,7 @@ import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
 import { installBodyPointerEventsGuard } from "./lib/pointer-events";
-import { isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel } from "./lib/utils";
+import { isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sortSessionSummaries } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { extensionToastDuration, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
 
@@ -353,7 +353,7 @@ export function App() {
           for (const session of sessions[workspace.id] ?? []) {
             if (!byId.has(session.id) && deleted?.has(session.id) !== true) byId.set(session.id, session);
           }
-          next[workspace.id] = [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+          next[workspace.id] = sortSessionSummaries([...byId.values()]);
         }
         return next;
       });
@@ -781,9 +781,7 @@ export function App() {
       }
       setSessionsByWorkspace((current) => ({
         ...current,
-        [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
-          ? { ...session, runState: "running", attentionState: "running", updatedAt: new Date().toISOString() }
-          : session) ?? [],
+        [selectedRef.workspaceId]: markSessionUserActivity(current[selectedRef.workspaceId] ?? [], selectedRef.sessionId),
       }));
       setPageError(undefined);
       return true;
@@ -845,9 +843,7 @@ export function App() {
       await api.editAndResend(selectedRef, message.id, text, clientRequestId, images);
       setSessionsByWorkspace((current) => ({
         ...current,
-        [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
-          ? { ...session, runState: "running", attentionState: "running", updatedAt: new Date().toISOString() }
-          : session) ?? [],
+        [selectedRef.workspaceId]: markSessionUserActivity(current[selectedRef.workspaceId] ?? [], selectedRef.sessionId),
       }));
       setPageError(undefined);
       return true;
@@ -893,9 +889,7 @@ export function App() {
       await api.bash(selectedRef, command, excludeFromContext, randomUUID());
       setSessionsByWorkspace((current) => ({
         ...current,
-        [selectedRef.workspaceId]: current[selectedRef.workspaceId]?.map((session) => session.id === selectedRef.sessionId
-          ? { ...session, runState: "running", attentionState: "running", updatedAt: new Date().toISOString() }
-          : session) ?? [],
+        [selectedRef.workspaceId]: markSessionUserActivity(current[selectedRef.workspaceId] ?? [], selectedRef.sessionId),
       }));
       setPageError(undefined);
       return true;
@@ -1187,12 +1181,19 @@ function withoutDraft(current: Record<string, string>, sessionId: string): Recor
   return next;
 }
 
+function markSessionUserActivity(sessions: SessionSummary[], sessionId: string): SessionSummary[] {
+  const at = new Date().toISOString();
+  return sortSessionSummaries(sessions.map((session) => session.id === sessionId
+    ? { ...session, runState: "running" as const, attentionState: "running" as const, attentionAt: at, lastUserMessageAt: at, updatedAt: at }
+    : session));
+}
+
 function mergeSession(current: SessionSummary[], next: SessionSummary): SessionSummary[] {
   const existing = current.findIndex((session) => session.id === next.id);
-  if (existing === -1) return [next, ...current].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  if (existing === -1) return sortSessionSummaries([next, ...current]);
   const copy = [...current];
   copy[existing] = { ...copy[existing], ...next };
-  return copy.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return sortSessionSummaries(copy);
 }
 
 function mergeWorkspace(current: Workspace[], next: Workspace): Workspace[] {

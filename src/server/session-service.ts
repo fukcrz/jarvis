@@ -45,13 +45,14 @@ import type {
   Workspace,
 } from "../shared/protocol.js";
 import { emptySessionQueue, PROTOCOL_VERSION } from "../shared/protocol.js";
+import { sortSessionSummaries } from "../shared/session-sort.js";
 import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
 import { projectModelSnapshot } from "./model-projection.js";
 import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, errorFromPi, messageFromPi, projectHistory, thinkingTextFromContent, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
-import { SessionAttentionStore } from "./session-attention-store.js";
+import { SessionAttentionStore, type SessionSortMeta } from "./session-attention-store.js";
 
 interface ActiveRun {
   id: string;
@@ -71,6 +72,8 @@ interface ActiveSession {
   unsubscribe: () => void;
   state: SessionStatus;
   attentionState: SessionAttentionState;
+  attentionAt?: string;
+  lastUserMessageAt?: string;
   requestRuns: Map<string, RunAccepted>;
   liveMessages: Map<string, MessageTimelineItem>;
   /** Retry attempts which have not yet been reconciled with persisted history. */
@@ -161,13 +164,13 @@ export class SessionService {
     const listed = sessionDir === undefined
       ? await SessionManager.list(workspace.cwd)
       : await SessionManager.list(workspace.cwd, sessionDir);
-    const attention = await this.attention.list(workspaceId);
+    const sortMeta = await this.attention.list(workspaceId);
     const needle = query?.trim().toLocaleLowerCase();
     // SessionInfo.allMessagesText 已包含会话全部 user/assistant 消息文本（list 时读入），
     // 全文搜索在此直接命中，不增加额外磁盘开销。
     const listedMatches = listed
       .map((entry) => ({
-        summary: this.summaryFromList(workspace, entry, attention.get(entry.id)),
+        summary: this.summaryFromList(workspace, entry, sortMeta.get(entry.id)),
         searchText: `${entry.name ?? ""}\n${entry.firstMessage ?? ""}\n${entry.allMessagesText}`,
       }))
       .filter(({ searchText }) => needle === undefined || needle === "" || searchText.toLocaleLowerCase().includes(needle));
@@ -181,7 +184,7 @@ export class SessionService {
       summaries.unshift(attachSearchSnippet(summary, searchText, needle));
     }
 
-    return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return sortSessionSummaries(summaries);
   }
 
   async markViewed(ref: SessionRef): Promise<SessionSummary> {
@@ -617,7 +620,8 @@ export class SessionService {
 
     const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
     active.state = { sessionId: ref.sessionId, runState: "running", activeRun: run };
-    this.setAttention(active, "running");
+    this.setAttention(active, "running", run.startedAt);
+    this.markUserMessage(active, run.startedAt);
     active.updatedAt = run.startedAt;
     active.liveMessages.clear();
     active.liveErrors.clear();
@@ -642,6 +646,8 @@ export class SessionService {
 
   /** 把消息排入 Pi 的 steering/follow-up 队列；Pi 同步发出 queue_update 驱动镜像。 */
   private async enqueuePrompt(active: ActiveSession, kind: "steer" | "followUp", text: string, images: ImageAttachment[]): Promise<void> {
+    this.markUserMessage(active, new Date().toISOString());
+    this.publishSummary(active);
     const imageContent = images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType }));
     if (kind === "followUp") {
       await active.session.followUp(text, imageContent);
@@ -764,7 +770,8 @@ export class SessionService {
       output: "",
     };
     active.state = { sessionId: ref.sessionId, runState: "running", activeRun: run };
-    this.setAttention(active, "running");
+    this.setAttention(active, "running", run.startedAt);
+    this.markUserMessage(active, run.startedAt);
     active.updatedAt = run.startedAt;
     active.liveMessages.clear();
     active.liveErrors.clear();
@@ -1198,6 +1205,7 @@ export class SessionService {
     const now = new Date().toISOString();
     const headerTimestamp = manager.getHeader()?.timestamp;
     const createdAt = typeof headerTimestamp === "string" && Number.isFinite(Date.parse(headerTimestamp)) ? new Date(headerTimestamp).toISOString() : now;
+    const sortMeta = await this.attention.get(actualRef);
     const active: ActiveSession = {
       ref: actualRef,
       cwd: workspace.cwd,
@@ -1208,7 +1216,9 @@ export class SessionService {
       extensionReady: Promise.resolve(),
       unsubscribe: () => undefined,
       state: { sessionId: session.sessionId, runState: "idle" },
-      attentionState: await this.attention.get(actualRef),
+      attentionState: sortMeta.attentionState,
+      ...(sortMeta.attentionAt === undefined ? {} : { attentionAt: sortMeta.attentionAt }),
+      ...(sortMeta.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: sortMeta.lastUserMessageAt }),
       requestRuns: new Map(),
       liveMessages: new Map(),
       liveErrors: new Map(),
@@ -1749,10 +1759,17 @@ export class SessionService {
     active.settlementTimer = undefined;
   }
 
-  private setAttention(active: ActiveSession, state: SessionAttentionState): void {
+  private setAttention(active: ActiveSession, state: SessionAttentionState, at = new Date().toISOString()): void {
     if (active.attentionState === state) return;
     active.attentionState = state;
-    void this.attention.set(active.ref, state).catch((error: unknown) => console.warn("Could not persist session attention state", error));
+    if (state === "idle") delete active.attentionAt;
+    else active.attentionAt = at;
+    void this.attention.setAttention(active.ref, state, at).catch((error: unknown) => console.warn("Could not persist session attention state", error));
+  }
+
+  private markUserMessage(active: ActiveSession, at: string): void {
+    active.lastUserMessageAt = at;
+    void this.attention.setLastUserMessageAt(active.ref, at).catch((error: unknown) => console.warn("Could not persist last user message time", error));
   }
 
   private publishSummary(active: ActiveSession, supplied?: SessionSummary): void {
@@ -1761,8 +1778,11 @@ export class SessionService {
     this.events.publishWorkspace(active.ref.workspaceId, { version: 1, type: "session.updated", workspaceId: active.ref.workspaceId, session: summary });
   }
 
-  private summaryFromList(workspace: Workspace, entry: { id: string; name?: string; firstMessage: string; created: Date; modified: Date }, persistedAttention?: SessionAttentionState): SessionSummary {
+  private summaryFromList(workspace: Workspace, entry: { id: string; name?: string; firstMessage: string; created: Date; modified: Date }, persisted?: SessionSortMeta): SessionSummary {
     const active = this.active.get(activeKey({ workspaceId: workspace.id, sessionId: entry.id }));
+    const attentionState = active?.attentionState ?? persisted?.attentionState ?? "idle";
+    const attentionAt = active?.attentionAt ?? persisted?.attentionAt;
+    const lastUserMessageAt = active?.lastUserMessageAt ?? persisted?.lastUserMessageAt;
     return {
       id: entry.id,
       workspaceId: workspace.id,
@@ -1771,7 +1791,9 @@ export class SessionService {
       createdAt: entry.created.toISOString(),
       updatedAt: entry.modified.toISOString(),
       runState: active?.state.runState ?? "idle",
-      attentionState: active?.attentionState ?? persistedAttention ?? "idle",
+      attentionState,
+      ...(attentionState === "idle" || attentionAt === undefined ? {} : { attentionAt }),
+      ...(lastUserMessageAt === undefined ? {} : { lastUserMessageAt }),
     };
   }
 
@@ -1785,6 +1807,8 @@ export class SessionService {
       updatedAt: active.updatedAt,
       runState: active.state.runState,
       attentionState: active.attentionState,
+      ...(active.attentionState === "idle" || active.attentionAt === undefined ? {} : { attentionAt: active.attentionAt }),
+      ...(active.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: active.lastUserMessageAt }),
     };
   }
 }

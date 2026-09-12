@@ -1,6 +1,9 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { SessionAttentionState, SessionSummary } from "../../shared/protocol";
+import type { SessionSummary } from "../../shared/protocol";
+import { isSessionRunning, sessionAttentionRank, sessionAttentionState, sortSessionSummaries } from "../../shared/session-sort";
+
+export { isSessionRunning, sessionAttentionRank, sessionAttentionState, sortSessionSummaries };
 
 export function cn(...values: ClassValue[]): string {
   return twMerge(clsx(values));
@@ -79,19 +82,9 @@ export const SESSIONS_PAGE_SIZE = 5;
 /** 聚焦模式中，普通会话保持可见的最近活动时间窗口。 */
 export const SESSION_FOCUS_WINDOW_MS = 10 * 60_000;
 
-/** 会话是否处于执行中（运行中或正在停止）。 */
-export function isSessionRunning(session: SessionSummary): boolean {
-  return session.runState === "running" || session.runState === "stopping";
-}
-
 /** 项目清理会删除的闲置会话：排除当前保留项与执行中的会话。 */
 export function sessionCleanupTargets(sessions: SessionSummary[], keepSessionId?: string): SessionSummary[] {
   return sessions.filter((session) => session.id !== keepSessionId && !isSessionRunning(session));
-}
-
-export function sessionAttentionState(session: SessionSummary): SessionAttentionState {
-  if (isSessionRunning(session)) return session.runState === "stopping" ? "running" : (session.attentionState === "waiting_interaction" ? "waiting_interaction" : "running");
-  return session.attentionState ?? "idle";
 }
 
 export function sessionAttentionLabel(session: SessionSummary): string | undefined {
@@ -101,16 +94,6 @@ export function sessionAttentionLabel(session: SessionSummary): string | undefin
   if (state === "failed") return "出错失败";
   if (state === "waiting_interaction") return "待交互";
   return undefined;
-}
-
-/** Higher-priority attention states are kept visible before ordinary sessions. */
-export function sessionAttentionRank(session: SessionSummary): number {
-  const state = sessionAttentionState(session);
-  if (state === "waiting_interaction") return 0;
-  if (state === "running") return 1;
-  if (state === "failed") return 2;
-  if (state === "completed_unread") return 3;
-  return 4;
 }
 
 /** 聚焦模式保留需要处理的会话，以及最近十分钟内有活动的普通会话。 */
@@ -138,7 +121,7 @@ export interface SessionListWindow {
  * - 收起（expandSteps 归零）后回到默认状态。
  */
 export function sessionListWindow(sessions: SessionSummary[], expandSteps: number): SessionListWindow {
-  const ordered = [...sessions].sort((a, b) => sessionAttentionRank(a) - sessionAttentionRank(b));
+  const ordered = sortSessionSummaries(sessions);
   const attentionCount = sessions.filter((s) => sessionAttentionRank(s) < 4).length;
   const collapsedCount = Math.max(SESSIONS_COLLAPSED_LIMIT, attentionCount);
   const visibleCount = collapsedCount + Math.max(0, expandSteps) * SESSIONS_PAGE_SIZE;

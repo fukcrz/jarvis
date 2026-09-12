@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, Files, Focus, Folder, FolderPlus, MessageSquarePlus, Search, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionLabel, sessionListWindow, workspaceDropTarget } from "../lib/utils";
+import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionLabel, sessionListWindow, sortSessionSummaries, workspaceDropTarget } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
@@ -147,7 +147,7 @@ export function Sidebar(props: SidebarProps) {
           // 默认窗口展示（执行中的会话始终显示，默认最多 5 个，可展开更多）。
           const window = sessionListWindow(sessions, sessionExpands[workspace.id] ?? 0);
           const expanded = props.expandedWorkspaceIds[workspace.id] === true;
-          const activeSession = [...sessions].sort((a, b) => sessionAttentionRank(a) - sessionAttentionRank(b))[0];
+          const activeSession = sortSessionSummaries(sessions)[0];
           const toggleLabel = `${expanded ? "收起" : "展开"}${workspace.label}的会话`;
 
           return (

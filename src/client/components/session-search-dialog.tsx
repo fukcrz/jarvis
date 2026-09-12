@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Folder, Loader2, Search, X } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { formatRelativeTime, sessionAttentionRank, sessionLabel } from "../lib/utils";
+import { formatRelativeTime, sessionLabel, sortSessionSummaries } from "../lib/utils";
 import { Dialog, DialogContent } from "./ui/dialog";
 
 interface SessionSearchDialogProps {
@@ -59,7 +59,11 @@ export function SessionSearchDialog(props: SessionSearchDialogProps) {
 
   const entries = useMemo<SearchEntry[]>(() => {
     const flat = props.workspaces.flatMap((workspace) => (results?.[workspace.id] ?? []).map((session) => ({ workspace, session })));
-    return flat.sort((a, b) => sessionAttentionRank(a.session) - sessionAttentionRank(b.session) || b.session.updatedAt.localeCompare(a.session.updatedAt));
+    const byId = new Map(flat.map((entry) => [entry.session.id, entry]));
+    return sortSessionSummaries(flat.map((entry) => entry.session)).flatMap((session) => {
+      const entry = byId.get(session.id);
+      return entry === undefined ? [] : [entry];
+    });
   }, [props.workspaces, results]);
 
   const select = (workspaceId: string, sessionId: string) => {
