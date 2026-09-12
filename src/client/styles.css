@@ -1,41 +1,41 @@
 @import "tailwindcss";
 :root {
-  color: #eef2f3;
-  background: #0e1012;
+  color: #f5efea;
+  background: #0b0d14;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --canvas: #0e1012;
-  --sidebar: #14181b;
-  --surface: #161b1e;
-  --surface-raised: #1c2226;
-  --surface-hover: #242b30;
-  --line: #2a3238;
-  --line-strong: #3a444c;
-  --ink: #eef2f3;
-  --muted: #9aa3a8;
-  --subtle: #6e777c;
-  --accent: #5d8f88;
-  --accent-soft: #14201e;
-  --accent-strong: #7eaea7;
+  --canvas: #0b0d14;
+  --sidebar: #121624;
+  --surface: #171c2c;
+  --surface-raised: #1c2436;
+  --surface-hover: #242c40;
+  --line: #2a3248;
+  --line-strong: #3a4460;
+  --ink: #f5efea;
+  --muted: #9aa3b8;
+  --subtle: #6e778c;
+  --accent: #3d5cb8;
+  --accent-soft: #151a2c;
+  --accent-strong: #8aa0d8;
   --warm: #f4be70;
   --warm-soft: #3a2e20;
   --danger: #ef8f93;
   --danger-soft: #3d2428;
   --success: #8fcea9;
-  --code: #0e1012;
-  --scrollbar-track: #15181b;
-  --scrollbar-thumb: #445056;
-  --scrollbar-thumb-hover: #627078;
-  --glass: rgb(28 34 38 / .52);
-  --glass-strong: rgb(24 30 34 / .78);
+  --code: #0b0d14;
+  --scrollbar-track: #121624;
+  --scrollbar-thumb: #3a4460;
+  --scrollbar-thumb-hover: #5a6680;
+  --glass: rgb(22 28 44 / .52);
+  --glass-strong: rgb(18 24 40 / .78);
   --glass-border: rgb(255 255 255 / .08);
   --glass-highlight: inset 0 1px 0 rgb(255 255 255 / .07);
   --glass-blur: blur(22px) saturate(1.2);
   --glass-blur-soft: blur(14px) saturate(1.12);
   --atmosphere:
-    radial-gradient(920px 560px at 12% -12%, rgb(93 143 136 / .16), transparent 58%),
-    radial-gradient(780px 520px at 108% 112%, rgb(64 96 102 / .12), transparent 54%);
+    radial-gradient(920px 560px at 12% -12%, rgb(61 92 184 / .18), transparent 58%),
+    radial-gradient(780px 520px at 108% 112%, rgb(18 46 138 / .14), transparent 54%);
 }
 * { box-sizing: border-box; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); scrollbar-width: thin; }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -275,7 +275,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 :is(.message-content, .code-preview) .hljs-string, :is(.message-content, .code-preview) .hljs-regexp, :is(.message-content, .code-preview) .hljs-addition, :is(.message-content, .code-preview) .hljs-meta .hljs-string { color: #9ecbff; }
 :is(.message-content, .code-preview) .hljs-number, :is(.message-content, .code-preview) .hljs-literal, :is(.message-content, .code-preview) .hljs-symbol, :is(.message-content, .code-preview) .hljs-bullet { color: #7cc0ff; }
 :is(.message-content, .code-preview) .hljs-built_in, :is(.message-content, .code-preview) .hljs-variable, :is(.message-content, .code-preview) .hljs-template-variable, :is(.message-content, .code-preview) .hljs-attr, :is(.message-content, .code-preview) .hljs-attribute { color: #ffc680; }
-:is(.message-content, .code-preview) .hljs-title, :is(.message-content, .code-preview) .hljs-title.function_, :is(.message-content, .code-preview) .hljs-section, :is(.message-content, .code-preview) .hljs-selector-pseudo, :is(.message-content, .code-preview) .hljs-selector-attr { color: #7eaea7; }
+:is(.message-content, .code-preview) .hljs-title, :is(.message-content, .code-preview) .hljs-title.function_, :is(.message-content, .code-preview) .hljs-section, :is(.message-content, .code-preview) .hljs-selector-pseudo, :is(.message-content, .code-preview) .hljs-selector-attr { color: #8aa0d8; }
 :is(.message-content, .code-preview) .hljs-type, :is(.message-content, .code-preview) .hljs-class .hljs-title, :is(.message-content, .code-preview) .hljs-title.class_ { color: #8fd3a8; }
 :is(.message-content, .code-preview) .hljs-tag, :is(.message-content, .code-preview) .hljs-name, :is(.message-content, .code-preview) .hljs-selector-id, :is(.message-content, .code-preview) .hljs-selector-class { color: #7ee787; }
 :is(.message-content, .code-preview) .hljs-meta, :is(.message-content, .code-preview) .hljs-punctuation { color: #8a8a94; }
@@ -445,7 +445,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 }
 @media (prefers-reduced-motion: no-preference) { .spin { animation: spin 1s linear infinite; } .streaming-cursor { animation: stream-cursor .9s steps(1) infinite; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes stream-cursor { 50% { opacity: 0; } } }
 @media (prefers-reduced-transparency: reduce) {
-  :root { --glass: rgb(24 30 34 / .96); --glass-strong: rgb(24 30 34 / .98); --glass-blur: none; --glass-blur-soft: none; }
+  :root { --glass: rgb(18 24 40 / .96); --glass-strong: rgb(18 24 40 / .98); --glass-blur: none; --glass-blur-soft: none; }
 }
 @media (max-width: 760px) {
   /* 状态位于模型/思考等级上方，发送按钮始终保留固定空间。 */

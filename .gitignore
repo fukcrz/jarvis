@@ -15,5 +15,6 @@ NUL
 .tmp/
 tmp-*.mjs
 tmp-*.ps1
+tmp/
 logs/prod-*.log
 logs/watch-flash.ps1

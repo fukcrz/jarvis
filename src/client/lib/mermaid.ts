@@ -14,24 +14,24 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
       fontFamily: "system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei UI', sans-serif",
       themeVariables: {
         darkMode: true,
-        background: "#0e1012",
-        primaryColor: "#162321",
-        primaryTextColor: "#f1f3f4",
-        primaryBorderColor: "#3a444c",
-        secondaryColor: "#1e2327",
-        secondaryTextColor: "#e8eef0",
-        secondaryBorderColor: "#3a444c",
-        tertiaryColor: "#16181c",
-        tertiaryTextColor: "#e8eef0",
-        tertiaryBorderColor: "#2a3238",
-        lineColor: "#8b959a",
-        textColor: "#e8eef0",
+        background: "#0b0d14",
+        primaryColor: "#151a2c",
+        primaryTextColor: "#f5efea",
+        primaryBorderColor: "#3a4460",
+        secondaryColor: "#1c2436",
+        secondaryTextColor: "#f5efea",
+        secondaryBorderColor: "#3a4460",
+        tertiaryColor: "#121624",
+        tertiaryTextColor: "#f5efea",
+        tertiaryBorderColor: "#2a3248",
+        lineColor: "#8aa0d8",
+        textColor: "#f5efea",
         noteBkgColor: "#302e20",
         noteTextColor: "#f4be70",
         noteBorderColor: "#4a4128",
-        actorBkg: "#162321",
-        actorTextColor: "#f1f3f4",
-        actorBorder: "#3a444c",
+        actorBkg: "#151a2c",
+        actorTextColor: "#f5efea",
+        actorBorder: "#3a4460",
         signalColor: "#c9c9d1",
         signalTextColor: "#c9c9d1",
         labelTextColor: "#f1f3f4",
@@ -47,7 +47,7 @@ let diagramCounter = 0;
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const XLINK_NS = "http://www.w3.org/1999/xlink";
-const EXPORT_BACKGROUND = "#0e1012";
+const EXPORT_BACKGROUND = "#0b0d14";
 const MAX_EXPORT_EDGE = 4096;
 
 /** 把 mermaid 源码渲染成 SVG 字符串；源码非法时抛错，交由调用方退回源码展示。 */
