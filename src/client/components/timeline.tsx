@@ -54,6 +54,11 @@ export function shouldLoadEarlierAtTop(element: Pick<HTMLElement, "scrollTop">, 
   return hasMore && !loadingMore && element.scrollTop <= HISTORY_LOAD_TOP_PX;
 }
 
+/** True when the viewport is close enough to the latest content to resume auto-follow. */
+export function isFollowingLatest(element: Pick<HTMLElement, "clientHeight" | "scrollHeight" | "scrollTop">, thresholdPx = NEAR_BOTTOM_PX): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight < thresholdPx;
+}
+
 function stopFollowingOnGesture(element: HTMLDivElement, setFollowing: (value: boolean) => void, deltaY: number) {
   if (shouldStopFollowingOnGesture(element, deltaY)) setFollowing(false);
 }
@@ -85,6 +90,8 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   const activeNavigationTimerRef = useRef<number | undefined>(undefined);
   const activeNavigationIdRef = useRef<string | undefined>(undefined);
   const [following, setFollowing] = useState(true);
+  const followingRef = useRef(following);
+  followingRef.current = following;
   const [editingMessageId, setEditingMessageId] = useState<string>();
   const [activeUserMessageId, setActiveUserMessageId] = useState<string>();
   const [highlightedMessageId, setHighlightedMessageId] = useState<string>();
@@ -160,9 +167,11 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
-    if (element === null || !following) return;
+    // Pin only when content/status changes while already following. Entering the
+    // near-bottom zone via user scroll must not jump the remaining distance.
+    if (element === null || !followingRef.current) return;
     element.scrollTop = element.scrollHeight;
-  }, [items, streamingMessageId, feedback?.label, following, statusIndicatorKey]);
+  }, [items, streamingMessageId, feedback?.label, statusIndicatorKey]);
 
   const loadEarlier = async () => {
     if (!hasMore || loadingEarlierRef.current) return;
@@ -245,7 +254,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
     <section className="timeline-shell">
       <div className="timeline" ref={scrollRef} onScroll={(event) => {
         const element = event.currentTarget;
-        setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX);
+        setFollowing(isFollowingLatest(element));
         updateActiveUserMessage();
         loadWhenNearTop(element);
       }} onWheel={(event) => {

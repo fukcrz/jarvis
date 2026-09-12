@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { groupTimelineItems, groupTimelineTurns, isTurnPinned, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
+import { groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnPinned, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -82,6 +82,15 @@ describe("shouldStopFollowingOnGesture", () => {
 
   it("stops following when an upward gesture can move away from the latest messages", () => {
     expect(shouldStopFollowingOnGesture({ scrollTop: 600, scrollHeight: 1_200, clientHeight: 600 }, -100)).toBe(true);
+  });
+});
+
+describe("isFollowingLatest", () => {
+  it("is true only inside the near-bottom threshold", () => {
+    const viewport = { scrollHeight: 1_200, clientHeight: 600 };
+    expect(isFollowingLatest({ ...viewport, scrollTop: 528 })).toBe(false);
+    expect(isFollowingLatest({ ...viewport, scrollTop: 529 })).toBe(true);
+    expect(isFollowingLatest({ ...viewport, scrollTop: 600 })).toBe(true);
   });
 });
 
