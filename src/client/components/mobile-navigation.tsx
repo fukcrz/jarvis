@@ -181,7 +181,7 @@ function MobileProjectStatus({ session }: { session: SessionSummary | undefined 
   const label = sessionAttentionLabel(session);
   if (label === undefined) return null;
   const Icon = state === "running" ? LoaderCircle : state === "failed" ? CircleAlert : state === "completed_unread" ? CheckCircle2 : CircleDot;
-  return <span className={`mobile-project-status attention-${state}${session.runState === "stopping" ? " stopping" : ""}`} title={label} aria-hidden="true"><Icon size={13} className={state === "running" ? "spin" : undefined} /></span>;
+  return <span className={`mobile-project-status attention-${state}${session.runState === "stopping" ? " stopping" : ""}`} title={label} aria-hidden="true"><Icon size={11} className={state === "running" ? "spin" : undefined} /></span>;
 }
 
 interface MobileSessionRowProps {
