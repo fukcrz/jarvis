@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { SessionSummary } from "./protocol";
-import { compareSessionSummaries, sortSessionSummaries } from "./session-sort";
+import type { SessionSummary } from "./protocol.js";
+import { compareSessionSummaries, sortSessionSummaries } from "./session-sort.js";
 
 const base: SessionSummary = {
   id: "session-1",
