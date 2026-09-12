@@ -7,19 +7,25 @@ import "./styles.css";
 
 let lastCoarseAt = 0;
 
-function setPointerMode(pointerType: string): void {
-  if (pointerType === "touch" || pointerType === "pen") {
-    lastCoarseAt = Date.now();
-    document.documentElement.dataset.pointer = "coarse";
-    return;
-  }
-  if (Date.now() - lastCoarseAt < 1200) return;
-  document.documentElement.dataset.pointer = "fine";
+function setHoverAllowed(allowed: boolean): void {
+  document.documentElement.classList.toggle("allow-hover", allowed);
+  document.documentElement.dataset.pointer = allowed ? "fine" : "coarse";
 }
 
-setPointerMode(window.matchMedia("(pointer: coarse)").matches || window.matchMedia("(hover: none)").matches ? "touch" : "mouse");
+setHoverAllowed(false);
+function lockCoarsePointer(): void {
+  lastCoarseAt = Date.now();
+  setHoverAllowed(false);
+}
 window.addEventListener("pointerdown", (event) => {
-  setPointerMode(event.pointerType);
+  if (event.pointerType === "touch" || event.pointerType === "pen") lockCoarsePointer();
+}, { capture: true, passive: true });
+window.addEventListener("touchstart", lockCoarsePointer, { capture: true, passive: true });
+window.addEventListener("pointermove", (event) => {
+  if (event.pointerType !== "mouse" || event.buttons !== 0) return;
+  if (Math.abs(event.movementX) + Math.abs(event.movementY) < 2) return;
+  if (Date.now() - lastCoarseAt < 1200) return;
+  setHoverAllowed(true);
 }, { capture: true, passive: true });
 
 createRoot(document.getElementById("root")!).render(

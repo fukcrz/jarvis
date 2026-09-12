@@ -46,18 +46,19 @@
 html, body, #root { width: 100%; min-width: 0; min-height: 100%; margin: 0; }
 html { background: var(--canvas); }
 body { min-height: 100vh; overflow: hidden; background: var(--canvas) var(--atmosphere); background-attachment: fixed; }
-button, a, input, textarea { -webkit-tap-highlight-color: transparent; }
-@media (pointer: coarse) {
-  button { touch-action: manipulation; }
+button, a, input, textarea, summary {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
+button { touch-action: manipulation; appearance: none; -webkit-appearance: none; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .42; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-@media (pointer: coarse) {
-  button { cursor: default; }
-  button:focus, button:focus-visible { outline: none; }
-}
+html[data-pointer="coarse"] button,
+html[data-pointer="coarse"] [role="button"] { cursor: default; }
+html[data-pointer="coarse"] button:focus,
+html[data-pointer="coarse"] button:focus-visible { outline: none; }
 .app-loading, .empty-workspace { display: grid; place-content: center; min-height: 100vh; gap: 12px; color: var(--muted); text-align: center; }
 .app-shell { display: grid; grid-template-columns: 316px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100vh; background: transparent; }
 .desktop-sidebar { min-width: 0; overflow: hidden; border-right: 1px solid var(--glass-border); background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
@@ -469,7 +470,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-page-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px; }
 .mobile-session-list { padding-top: 0; }
 .mobile-project-row { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--glass-border); }
-.mobile-session-row { position: relative; z-index: 1; display: flex; align-items: center; gap: 4px; background: var(--canvas); touch-action: pan-y; transition: transform 0.18s ease, background .16s ease; will-change: transform; }
+.mobile-session-row { position: relative; z-index: 1; display: flex; align-items: center; gap: 4px; background: var(--canvas); touch-action: pan-y; transition: transform 0.18s ease; will-change: transform; }
 .mobile-session-row.swipe-open { transform: translateX(-132px); }
 .mobile-session-swipe { position: relative; overflow: hidden; border-bottom: 1px solid var(--glass-border); }
 .mobile-session-actions { position: absolute; z-index: 0; inset: 0 0 0 auto; display: flex; width: 132px; }
@@ -493,6 +494,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-all-sessions-page button {
   cursor: default;
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
 .mobile-all-sessions-page button:hover,
 .mobile-all-sessions-page button:active,
@@ -500,21 +502,36 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-all-sessions-page button:focus-visible {
   outline: none;
   box-shadow: none;
+  filter: none;
 }
-.mobile-all-sessions-page .button-ghost:hover:not(:disabled):not(.active),
-.mobile-all-sessions-page .button-ghost:active:not(.active),
-.mobile-all-sessions-page .button-ghost:focus:not(.active),
-.mobile-all-sessions-page .button-ghost:focus-visible:not(.active) {
+.mobile-all-sessions-page .button-ghost:hover:not(:disabled),
+.mobile-all-sessions-page .button-ghost:active,
+.mobile-all-sessions-page .button-ghost:focus,
+.mobile-all-sessions-page .button-ghost:focus-visible {
   background: transparent;
   color: var(--muted);
 }
+.mobile-all-sessions-page .button.session-focus-toggle.active:hover,
+.mobile-all-sessions-page .button.session-focus-toggle.active:active,
+.mobile-all-sessions-page .button.session-focus-toggle.active:focus,
+.mobile-all-sessions-page .button.session-focus-toggle.active:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
 .mobile-session-group-toggle:hover,
 .mobile-session-group-toggle:active,
+.mobile-session-group-toggle:focus,
+.mobile-session-group-toggle:focus-visible,
 .mobile-session-window-action:hover,
 .mobile-session-window-action:active,
+.mobile-session-window-action:focus,
+.mobile-session-window-action:focus-visible,
 .mobile-session-select:hover,
-.mobile-session-select:active {
+.mobile-session-select:active,
+.mobile-session-select:focus,
+.mobile-session-select:focus-visible {
   background: transparent;
+  color: inherit;
 }
 .mobile-project-select span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
 .mobile-row-chevron { margin-left: auto; color: var(--subtle); }
@@ -570,9 +587,9 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-project-picker button svg:first-child { color: var(--warm); }
 .mobile-project-picker button svg:last-child { color: var(--subtle); }
 .mobile-project-picker button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-/* 触屏点击会把 :hover 粘住。媒体查询不可靠（平板常谎报精细指针），以最后一次指针类型为准。 */
+/* 默认无 hover。触屏会把 :hover 粘住，且媒体查询常谎报精细指针。用 class 正选，避免压缩器把 [data-pointer=fine] 反写成 :not([data-pointer=coarse])。 */
 @media (hover: hover) and (pointer: fine) {
-  html:not([data-pointer="coarse"]) {
+  html.allow-hover {
     .button-default:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 28%, var(--surface-raised)); }
   .button-secondary:hover:not(:disabled) { border-color: #55555e; background: var(--surface-hover); }
   .button-ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
