@@ -5,6 +5,7 @@ import type { Workspace, WorkspaceDirectoryListing, WorkspaceFileContent } from 
 import { api, ApiError, workspaceFileUrl } from "../api";
 import { MAX_TABLE_ROWS, parseDelimited, previewKindForPath, type PreviewKind } from "../lib/file-preview";
 import { MarkdownMessage } from "./markdown-message";
+import { CodePreview } from "./code-preview";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 import { FileContextMenu, type FileContextMenuTarget } from "./file-context-menu";
@@ -48,6 +49,8 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
   const loadedDirectoryPathsRef = useRef(new Set<string>());
   const loadingDirectoryPathsRef = useRef(new Set<string>());
   const deleteRequestRef = useRef(0);
+  const previewRequestRef = useRef(0);
+  const previewLoadingPathRef = useRef<string | undefined>(undefined);
   const workspaceRef = useRef(workspaceId);
   const workspace = workspaces.find((item) => item.id === workspaceId);
   workspaceRef.current = workspaceId;
@@ -106,6 +109,8 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     setContextMenu(undefined);
     setDeleteTarget(undefined);
     deleteRequestRef.current += 1;
+    previewRequestRef.current += 1;
+    previewLoadingPathRef.current = undefined;
     setDeletePending(false);
     setFocusedPath("");
     setRootPath("");
@@ -164,7 +169,22 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     };
   }, [sidebarWidth]);
 
+  const invalidatePreviewRequest = () => {
+    previewRequestRef.current += 1;
+    const loadingPath = previewLoadingPathRef.current;
+    previewLoadingPathRef.current = undefined;
+    if (loadingPath !== undefined) {
+      setLoadingPaths((current) => {
+        if (current[loadingPath] !== true) return current;
+        const next = { ...current };
+        delete next[loadingPath];
+        return next;
+      });
+    }
+  };
+
   const closePreview = () => {
+    invalidatePreviewRequest();
     setPreview(undefined);
     setError(undefined);
     requestAnimationFrame(() => {
@@ -176,6 +196,8 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
   const openFile = async (path: string) => {
     const targetWorkspaceId = workspaceRef.current;
     if (targetWorkspaceId === undefined) return;
+    invalidatePreviewRequest();
+    const requestId = previewRequestRef.current;
     treeScrollRef.current = treeRef.current?.scrollTop ?? 0;
     const name = path.split("/").pop() ?? path;
     const kind = previewKindForPath(path);
@@ -188,22 +210,24 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
       return;
     }
     if (preview?.path === path && preview.content !== undefined) return;
+    previewLoadingPathRef.current = path;
     setLoadingPaths((current) => ({ ...current, [path]: true }));
     setError(undefined);
     try {
       const file = await api.workspaceFile(targetWorkspaceId, path);
-      if (workspaceRef.current !== targetWorkspaceId) return;
+      if (workspaceRef.current !== targetWorkspaceId || previewRequestRef.current !== requestId) return;
       setPreview({ path, name, kind, content: file });
       setFocusedPath(directoryPath(path));
     } catch (reason: unknown) {
-      if (workspaceRef.current !== targetWorkspaceId) return;
+      if (workspaceRef.current !== targetWorkspaceId || previewRequestRef.current !== requestId) return;
       if (reason instanceof ApiError && reason.code === "FILE_BINARY") {
         setPreview({ path, name, kind: "unsupported" });
         return;
       }
       setError(reason instanceof Error ? reason.message : "无法预览文件");
     } finally {
-      if (workspaceRef.current === targetWorkspaceId) {
+      if (workspaceRef.current === targetWorkspaceId && previewRequestRef.current === requestId && previewLoadingPathRef.current === path) {
+        previewLoadingPathRef.current = undefined;
         setLoadingPaths((current) => {
           if (current[path] !== true) return current;
           const next = { ...current };
@@ -243,7 +267,15 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
       if (workspaceRef.current !== targetWorkspaceId || deleteRequestRef.current !== requestId) return;
       setDeleteTarget(undefined);
       setContextMenu(undefined);
-      if (preview?.path === target.path || (target.kind === "directory" && preview !== undefined && isPathPrefix(target.path, preview.path))) setPreview(undefined);
+      const pendingPreviewPath = previewLoadingPathRef.current;
+      const deletesPreview = preview?.path === target.path
+        || (target.kind === "directory" && preview !== undefined && isPathPrefix(target.path, preview.path));
+      const deletesPendingPreview = pendingPreviewPath === target.path
+        || (target.kind === "directory" && pendingPreviewPath !== undefined && isPathPrefix(target.path, pendingPreviewPath));
+      if (deletesPreview || deletesPendingPreview) {
+        invalidatePreviewRequest();
+        setPreview(undefined);
+      }
       const parentPath = directoryPath(target.path) || rootPath;
       loadedDirectoryPathsRef.current.delete(target.path);
       for (const cachedPath of [...loadedDirectoryPathsRef.current]) {
@@ -271,6 +303,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
 
   const openParent = async () => {
     if (parentPath === undefined) return;
+    invalidatePreviewRequest();
     setPreview(undefined);
     setError(undefined);
     setContextMenu(undefined);
@@ -398,13 +431,8 @@ function FilePreviewBody({ state, url }: { state: FilePreviewState; url: string 
     case "unsupported":
       return <div className="file-browser-empty file-preview-unsupported"><FileQuestion size={30} /><h2>暂不支持预览</h2><p>该文件类型无法在浏览器中直接展示，可以下载后使用本机应用打开。</p></div>;
     default:
-      return <TextPreview text={state.content?.content ?? ""} />;
+      return <CodePreview text={state.content?.content ?? ""} path={state.path} className="file-preview-code" lineClassName="file-preview-line" />;
   }
-}
-
-function TextPreview({ text }: { text: string }) {
-  const lines = text.split("\n");
-  return <pre className="file-preview-code" aria-label="文件内容"><code>{lines.map((line, index) => <span className="file-preview-line" key={index}><span className="file-preview-line-number">{index + 1}</span><span>{line || " "}</span>{index === lines.length - 1 ? null : "\n"}</span>)}</code></pre>;
 }
 
 function TablePreview({ text, name }: { text: string; name: string }) {

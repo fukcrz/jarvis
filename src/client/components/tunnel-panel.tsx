@@ -111,12 +111,7 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
   };
 
   return <section className="settings-section">
-    <div className="settings-section-heading">
-      <h2>内网穿透</h2>
-      <Button size="sm" onClick={() => { setEditing(undefined); setEditorOpen(true); }}><Plus size={14} />添加穿透</Button>
-    </div>
-    <p className="settings-muted">把本机 Jarvis 暴露到公网，适合临时演示或远程访问。可同时启用多个穿透（比如 Cloudflare + FRP）。当前无访问鉴权，公网地址泄露即任何人可操作。</p>
-    {tunnels.length === 0 ? <div className="model-empty">尚未添加穿透，点击「添加穿透」选择类型（Cloudflare / sish / frp）。</div> : <div className="tunnel-entry-list">
+    {tunnels.length === 0 ? <div className="model-empty">尚未添加穿透。</div> : <div className="tunnel-entry-list">
       {tunnels.map((tunnel) => {
         const stateMeta = STATE_META[tunnel.state];
         const detailOpen = detailId === tunnel.id;
@@ -170,12 +165,12 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
           ...(tunnel.sish === undefined ? {} : { sish: tunnel.sish }),
           ...(tunnel.frp === undefined ? {} : { frp: tunnel.frp }),
         })); }} /><span>自动启动（服务启动时自动连接，默认关闭）</span></label>
-            <p className="settings-muted">当前穿透固定指向本机服务端口（生产默认 9528）。</p>
             {tunnel.logs.length === 0 ? null : <TunnelLogView logs={tunnel.logs} />}
           </div> : null}
         </article>;
       })}
     </div>}
+    <div className="dialog-actions tunnel-add-action"><Button variant="secondary" onClick={() => { setEditing(undefined); setEditorOpen(true); }}><Plus size={14} />添加穿透</Button></div>
     <TunnelEditor open={editorOpen} tunnel={editing} busy={busy === "editor"} onClose={() => setEditorOpen(false)} onSave={addOrUpdate} />
     <Dialog open={removeTarget !== undefined} onOpenChange={(open) => { if (!open && busy === undefined) setRemoveTarget(undefined); }}><DialogContent title="删除穿透"><p className="delete-session-message"><strong>{removeTarget === undefined ? "" : removeTarget.name ?? methodName(removeTarget.method)}</strong>的配置将被删除；正在运行的穿透会先停止。此操作不可撤销。</p><div className="dialog-actions"><Button variant="secondary" onClick={() => setRemoveTarget(undefined)} disabled={busy !== undefined}>取消</Button><Button variant="danger" onClick={() => { void remove(); }} disabled={busy !== undefined}>删除</Button></div></DialogContent></Dialog>
   </section>;

@@ -1,0 +1,462 @@
+import { useMemo, useState } from "react";
+import { Boxes, Check, ExternalLink, KeyRound, LogOut, Pencil, Plus, RotateCw, Save, Search, Trash2, X } from "lucide-react";
+import type { AuthLoginOperation, EnabledModelsStatus, FetchedModel, ManagedModel, ManagedProvider, ProviderStatus } from "../../shared/protocol";
+import { displayModelName } from "../model-display";
+import { Button } from "./ui/button";
+import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsSubpage, SettingsSwitch } from "./settings-ui";
+
+export const EMPTY_PROVIDER: ManagedProvider = { id: "", baseUrl: "", api: "openai-completions", authHeader: true, models: [] };
+
+const API_OPTIONS: Array<{ id: ManagedProvider["api"]; label: string; description: string }> = [
+  { id: "openai-completions", label: "OpenAI Completions", description: "兼容 OpenAI Chat Completions 接口" },
+  { id: "openai-responses", label: "OpenAI Responses", description: "使用 OpenAI Responses 接口" },
+  { id: "anthropic-messages", label: "Anthropic Messages", description: "兼容 Anthropic Messages 接口" },
+  { id: "google-generative-ai", label: "Google Generative AI", description: "使用 Google Generative AI 接口" },
+];
+
+type ProviderStage =
+  | { kind: "pick" }
+  | { kind: "known"; provider: ProviderStatus }
+  | { kind: "custom-protocol" }
+  | { kind: "custom-connection" };
+
+export function modelKey(provider: string, id: string): string {
+  return `${provider}\u0000${id}`;
+}
+
+export function splitModelKey(key: string): { provider: string; id: string } {
+  const separator = key.indexOf("\u0000");
+  return { provider: key.slice(0, separator), id: key.slice(separator + 1) };
+}
+
+export function isProviderUsable(provider: ProviderStatus): boolean {
+  return provider.authConfigured || provider.custom;
+}
+
+export function initializeDraft(providers: ProviderStatus[], enabled: EnabledModelsStatus): Set<string> {
+  const usable = providers.filter(isProviderUsable);
+  const usableKeys = usable.flatMap((provider) => provider.models.map((model) => modelKey(provider.id, model.id)));
+  if (enabled.patterns.length === 0) return new Set(usableKeys);
+  const allowed = new Set(usableKeys);
+  return new Set(enabled.resolved.map((ref) => modelKey(ref.provider, ref.id)).filter((key) => allowed.has(key)));
+}
+
+function providerAvatarStyle(id: string): { background: string } {
+  let hash = 0;
+  for (let index = 0; index < id.length; index += 1) hash = (hash * 31 + id.charCodeAt(index)) % 360;
+  return { background: `linear-gradient(135deg, hsl(${String(hash)} 62% 46%), hsl(${String((hash + 40) % 360)} 58% 38%))` };
+}
+
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function apiLabel(api: string): string {
+  return API_OPTIONS.find((option) => option.id === api)?.label ?? api;
+}
+
+export function ProviderAvatar({ id, name }: { id: string; name?: string }) {
+  return <span aria-hidden className="provider-avatar" style={providerAvatarStyle(id)}>{(name ?? id).slice(0, 1).toUpperCase()}</span>;
+}
+
+function ProviderStatusChip({ provider, custom }: { provider: ProviderStatus; custom?: ManagedProvider }) {
+  return <span className={`provider-chip ${provider.authConfigured ? "ready" : "unset"}`}>
+    {provider.authConfigured ? <><Check size={12} />{provider.authSource ?? "已配置"}</> : custom !== undefined ? "仅配置" : "未登录"}
+  </span>;
+}
+
+interface ProvidersListPageProps {
+  providers: ProviderStatus[];
+  customProviders: ManagedProvider[];
+  customById: Map<string, ManagedProvider>;
+  enabledDraft: Set<string>;
+  loading: boolean;
+  showAll: boolean;
+  unrestricted: boolean;
+  onShowAllChange: (value: boolean) => void;
+  onOpenScope: () => void;
+  onOpenProvider: (providerId: string) => void;
+  onEditCustom: (provider: ManagedProvider) => void;
+  onAddProvider: () => void;
+  onBack: () => void;
+}
+
+/** 供应商总览：范围控制 + 供应商分组行，详情进入子页。 */
+export function ProvidersListPage({ providers, customProviders, customById, enabledDraft, loading, showAll, unrestricted, onShowAllChange, onOpenScope, onOpenProvider, onEditCustom, onAddProvider, onBack }: ProvidersListPageProps) {
+  const visibleProviders = useMemo(() => {
+    const enabled = providers.filter(isProviderUsable);
+    return showAll ? providers : enabled;
+  }, [providers, showAll]);
+  const orphanedProviders = useMemo(() => customProviders.filter((provider) => !providers.some((status) => status.id === provider.id)), [customProviders, providers]);
+  const providerEnabledCounts = useMemo(() => new Map(providers.map((provider) => [provider.id, provider.models.filter((model) => enabledDraft.has(modelKey(provider.id, model.id))).length])), [providers, enabledDraft]);
+  const empty = visibleProviders.length === 0 && orphanedProviders.length === 0;
+
+  return <SettingsSubpage title="供应商与账号" onBack={onBack}>
+    <div className="settings-stack">
+      {loading ? <p className="settings-page-note">正在读取供应商…</p> : <>
+        <SettingsGroup>
+          <SettingsRow icon={Boxes} label="模型范围" value={unrestricted ? "全部可用" : `已启用 ${String(enabledDraft.size)}`} chevron onClick={onOpenScope} />
+          <SettingsRow icon={Boxes} label="显示全部供应商" control={<SettingsSwitch checked={showAll} onChange={onShowAllChange} label="显示全部供应商" />} />
+        </SettingsGroup>
+        {empty ? <SettingsEmpty icon={KeyRound} title="还没有供应商" actionLabel="添加供应商" onAction={onAddProvider} /> : <SettingsGroup>
+          {visibleProviders.map((provider) => <ProviderListRow key={provider.id} provider={provider} custom={customById.get(provider.id)} enabledCount={providerEnabledCounts.get(provider.id) ?? 0} onOpen={() => onOpenProvider(provider.id)} />)}
+          {orphanedProviders.map((provider) => <button type="button" className="settings-row settings-provider-row" key={provider.id} onClick={() => onEditCustom(provider)}>
+            <ProviderAvatar id={provider.id} name={provider.name} />
+            <span className="settings-row-main"><strong>{provider.name ?? provider.id}</strong><small>{provider.models.length} 个模型 · 未加载</small></span>
+            <span className="settings-row-value">编辑</span>
+          </button>)}
+          <SettingsRow icon={Plus} label="添加供应商" accent chevron onClick={onAddProvider} />
+        </SettingsGroup>}
+      </>}
+    </div>
+  </SettingsSubpage>;
+}
+
+function ProviderListRow({ provider, custom, enabledCount, onOpen }: { provider: ProviderStatus; custom?: ManagedProvider; enabledCount: number; onOpen: () => void }) {
+  const configuredCount = custom?.models.length ?? 0;
+  const modelCount = configuredCount > 0 ? configuredCount : provider.models.length;
+  const summary = modelCount === 0
+    ? "未加载"
+    : custom !== undefined
+      ? `${String(modelCount)} 个模型`
+      : enabledCount >= modelCount ? `全部 ${String(modelCount)} 个模型可用` : `${String(enabledCount)}/${String(modelCount)} 个模型已启用`;
+  return <button type="button" className="settings-row settings-provider-row" onClick={onOpen}>
+    <ProviderAvatar id={provider.id} name={custom?.name ?? provider.name} />
+    <span className="settings-row-main"><strong>{custom?.name ?? provider.name}</strong><small>{summary}{custom?.baseUrl === undefined ? "" : ` · ${custom.baseUrl.replace(/^https?:\/\//u, "")}`}</small></span>
+    <ProviderStatusChip provider={provider} custom={custom} />
+  </button>;
+}
+
+interface ProviderDetailPageProps {
+  provider: ProviderStatus;
+  custom?: ManagedProvider;
+  draft: Set<string>;
+  busy?: string;
+  onToggleModel: (providerId: string, modelId: string) => void;
+  onEnableModels: (providerId: string, modelIds: string[]) => void;
+  onCustomModels: (providerId: string, models: ManagedModel[]) => Promise<boolean>;
+  onLogin: (provider: ProviderStatus, type: "api_key" | "oauth") => void;
+  onLogout: (provider: ProviderStatus) => void;
+  onEdit: (provider: ManagedProvider) => void;
+  onFetch: (providerId: string) => Promise<FetchedModel[]>;
+  onBack: () => void;
+}
+
+/** 单个供应商子页，模型添加/编辑在本页的次级视图内完成。 */
+export function ProviderDetailPage({ provider, custom, draft, busy, onToggleModel, onEnableModels, onCustomModels, onLogin, onLogout, onEdit, onFetch, onBack }: ProviderDetailPageProps) {
+  const [view, setView] = useState<"list" | "add" | "edit">("list");
+  const [editModel, setEditModel] = useState<ManagedModel | undefined>();
+  const [addSearch, setAddSearch] = useState("");
+  const [addSelected, setAddSelected] = useState<Set<string>>(new Set());
+  const [fetched, setFetched] = useState<FetchedModel[] | undefined>();
+  const [fetching, setFetching] = useState(false);
+  const [manualId, setManualId] = useState("");
+  const [manualName, setManualName] = useState("");
+  const [manualIdError, setManualIdError] = useState<string | undefined>();
+  const modelBusy = busy === "model-manager";
+  const accountBusy = busy === provider.id;
+
+  const addedModels = useMemo(() => (custom?.models ?? provider.models)
+    .filter((model) => custom !== undefined || draft.has(modelKey(provider.id, model.id)))
+    .sort((left, right) => (left.name ?? left.id).localeCompare(right.name ?? right.id)), [provider, custom, draft]);
+  const addCandidates = useMemo(() => {
+    if (custom !== undefined) {
+      if (fetched === undefined) return [];
+      const configuredIds = new Set(custom.models.map((model) => model.id));
+      return fetched.filter((model) => !configuredIds.has(model.id));
+    }
+    const needle = addSearch.trim().toLocaleLowerCase();
+    return provider.models
+      .filter((model) => !draft.has(modelKey(provider.id, model.id)))
+      .filter((model) => needle === "" || `${model.name ?? ""}\n${model.id}`.toLocaleLowerCase().includes(needle))
+      .sort((left, right) => (left.name ?? left.id).localeCompare(right.name ?? right.id));
+  }, [provider, custom, fetched, draft, addSearch]);
+  const customModelById = useMemo(() => new Map(custom?.models.map((model) => [model.id, model]) ?? []), [custom]);
+
+  const openAddModels = () => {
+    setAddSelected(new Set());
+    setFetched(undefined);
+    setAddSearch("");
+    setView("add");
+  };
+  const applyFetched = (models: FetchedModel[]) => {
+    setFetched(models);
+    const configuredIds = new Set(custom?.models.map((model) => model.id) ?? []);
+    setAddSelected(new Set(models.filter((model) => !configuredIds.has(model.id)).map((model) => modelKey(provider.id, model.id))));
+  };
+  const addSelectedModels = () => {
+    const additions = fetched?.filter((model) => addSelected.has(modelKey(provider.id, model.id))) ?? [];
+    const apply = async (): Promise<boolean> => {
+      if (custom !== undefined && additions.length > 0) {
+        const existing = new Set(custom.models.map((model) => model.id));
+        const merged = [...custom.models, ...additions.filter((model) => !existing.has(model.id)).map((model) => ({ id: model.id, name: model.name, reasoning: false, vision: false }))];
+        return onCustomModels(provider.id, merged);
+      }
+      return true;
+    };
+    void apply().then((ok) => {
+      if (!ok) return;
+      onEnableModels(provider.id, additions.map((model) => model.id));
+      setView("list");
+      setAddSelected(new Set());
+      setFetched(undefined);
+      setAddSearch("");
+    });
+  };
+  const addManualModel = () => {
+    const id = manualId.trim();
+    if (id === "" || custom === undefined) return;
+    if (custom.models.some((model) => model.id === id)) {
+      setManualIdError(`模型 "${id}" 已存在`);
+      return;
+    }
+    void onCustomModels(provider.id, [...custom.models, { id, ...(manualName.trim() ? { name: manualName.trim() } : {}), reasoning: false, vision: false }]).then((ok) => {
+      if (!ok) return;
+      onEnableModels(provider.id, [id]);
+      setManualId("");
+      setManualName("");
+    });
+  };
+  const removeModel = (modelId: string) => {
+    if (custom !== undefined) void onCustomModels(provider.id, custom.models.filter((model) => model.id !== modelId));
+    else onToggleModel(provider.id, modelId);
+  };
+  const saveEdit = (next: ManagedModel) => {
+    if (custom === undefined || editModel === undefined) return;
+    void onCustomModels(provider.id, custom.models.map((model) => model.id === editModel.id ? next : model)).then((ok) => {
+      if (ok) {
+        setEditModel(undefined);
+        setView("list");
+      }
+    });
+  };
+
+  const title = view === "add" ? "添加模型" : view === "edit" ? "编辑模型" : custom?.name ?? provider.name;
+  const handleBack = view === "list" ? onBack : () => { setEditModel(undefined); setView("list"); };
+  const modelTitle = custom === undefined
+    ? `模型 · 已启用 ${String(addedModels.length)}/${String(provider.models.length)}`
+    : `模型 · 已配置 ${String(addedModels.length)}`;
+
+  return <SettingsSubpage title={title} onBack={handleBack}>
+    {view === "list" ? <div className="settings-stack">
+      <SettingsGroup>
+        <div className="settings-account">
+          <ProviderAvatar id={provider.id} name={custom?.name ?? provider.name} />
+          <div className="settings-account-main"><strong>{custom?.name ?? provider.name}</strong><small>{custom?.baseUrl === undefined ? provider.id : `${custom.baseUrl} · ${apiLabel(custom.api)}`}</small></div>
+          <ProviderStatusChip provider={provider} custom={custom} />
+        </div>
+      </SettingsGroup>
+      {provider.authConfigured || provider.supportsApiKey || provider.supportsOAuth || custom !== undefined ? <SettingsGroup>
+        {provider.authConfigured ? <SettingsRow icon={LogOut} label="退出登录" danger disabled={accountBusy} onClick={() => onLogout(provider)} /> : <>
+          {provider.supportsApiKey ? <SettingsRow icon={KeyRound} label="使用 API Key 登录" disabled={accountBusy} onClick={() => onLogin(provider, "api_key")} /> : null}
+          {provider.supportsOAuth ? <SettingsRow icon={ExternalLink} label="账号授权登录" disabled={accountBusy} onClick={() => onLogin(provider, "oauth")} /> : null}
+        </>}
+        {custom === undefined ? null : <SettingsRow icon={Pencil} label="编辑连接" chevron onClick={() => onEdit(custom)} />}
+      </SettingsGroup> : null}
+      <SettingsGroup title={modelTitle}>
+        {addedModels.length === 0 ? <div className="settings-model-empty">尚未添加模型</div> : addedModels.map((model) => {
+          const configured = customModelById.get(model.id);
+          const detail = `${model.id}${model.reasoning ? " · 思考" : ""}${model.vision ? " · 图片" : ""}`;
+          return custom === undefined ? <div className="settings-row settings-model-row" key={model.id}>
+            <span className="settings-row-main"><strong>{displayModelName(model.name ?? model.id)}</strong><small>{detail}</small></span>
+            <SettingsSwitch checked={draft.has(modelKey(provider.id, model.id))} disabled={modelBusy} onChange={() => onToggleModel(provider.id, model.id)} label={`启用 ${model.id}`} />
+          </div> : <div className="settings-row settings-model-row" key={model.id}>
+            <button type="button" className="settings-row-main settings-row-main-button" onClick={() => { setEditModel(configured ?? { ...model }); setView("edit"); }}>
+              <strong>{displayModelName(model.name ?? model.id)}</strong><small>{detail}</small>
+            </button>
+            <Button variant="ghost" size="icon" aria-label={`移除 ${model.id}`} title="移除模型" disabled={modelBusy} onClick={() => removeModel(model.id)}><Trash2 size={15} /></Button>
+          </div>;
+        })}
+        <SettingsRow icon={Plus} label="添加模型" accent disabled={modelBusy || (custom === undefined && provider.models.length === 0)} onClick={openAddModels} />
+      </SettingsGroup>
+    </div> : null}
+    {view === "add" && custom === undefined ? <div className="settings-stack">
+      <label className="provider-picker-search"><Search size={14} /><input autoFocus value={addSearch} onChange={(event) => setAddSearch(event.target.value)} placeholder="搜索模型" /></label>
+      {addCandidates.length === 0 ? <div className="model-empty">没有可添加的模型</div> : <div className="pick-model-list model-manage-addable">
+        {addCandidates.map((model) => {
+          const key = modelKey(provider.id, model.id);
+          const selected = addSelected.has(key);
+          return <label className="settings-checkbox pick-model-item" key={key}><input type="checkbox" checked={selected} onChange={() => setAddSelected((current) => {
+            const next = new Set(current);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            return next;
+          })} /><span><strong>{displayModelName(model.name ?? model.id)}</strong>{model.name === undefined || model.name === model.id ? null : <small>{model.id}</small>}</span></label>;
+        })}
+      </div>}
+      <div className="dialog-actions"><Button variant="secondary" onClick={() => setView("list")}>返回</Button>{addSelected.size === 0 ? null : <Button disabled={modelBusy} onClick={() => {
+        onEnableModels(provider.id, [...addSelected].map((key) => splitModelKey(key).id));
+        setView("list");
+      }}>启用所选（{String(addSelected.size)}）</Button>}</div>
+    </div> : null}
+    {view === "add" && custom !== undefined ? <div className="settings-stack">
+      <div className="settings-fetch-models"><span>{fetched === undefined ? "" : `已获取 ${String(fetched.length)} 个模型`}</span><Button variant="secondary" size="sm" disabled={fetching || modelBusy} onClick={() => {
+        setFetching(true);
+        void onFetch(provider.id).then(applyFetched).catch(() => { setFetched(undefined); }).finally(() => setFetching(false));
+      }}><RotateCw size={13} />{fetching ? "获取中…" : "从接口获取模型"}</Button></div>
+      {fetched === undefined ? null : <div className="pick-model-list model-manage-addable">
+        {addCandidates.length === 0 ? <div className="model-empty">获取到的模型都已添加</div> : addCandidates.map((model) => {
+          const key = modelKey(provider.id, model.id);
+          const selected = addSelected.has(key);
+          return <label className="settings-checkbox pick-model-item" key={key}><input type="checkbox" checked={selected} onChange={() => setAddSelected((current) => {
+            const next = new Set(current);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            return next;
+          })} /><span><strong>{displayModelName(model.name ?? model.id)}</strong>{model.name === undefined || model.name === model.id ? null : <small>{model.id}</small>}</span></label>;
+        })}
+      </div>}
+      <div className="model-manage-manual">
+        <label><span>模型 ID</span><input value={manualId} aria-invalid={manualIdError !== undefined} onChange={(event) => { setManualId(event.target.value); setManualIdError(undefined); }} placeholder="例如 gpt-4o" />{manualIdError === undefined ? null : <small className="field-error">{manualIdError}</small>}</label>
+        <label><span>显示名称</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} placeholder="例如 GPT-4o" /></label>
+        <Button variant="secondary" size="sm" disabled={manualId.trim() === "" || modelBusy} onClick={addManualModel}><Plus size={13} />添加</Button>
+      </div>
+      <div className="dialog-actions"><Button variant="secondary" onClick={() => setView("list")}>返回</Button>{fetched === undefined || addSelected.size === 0 ? null : <Button disabled={modelBusy} onClick={addSelectedModels}>添加所选（{String(addSelected.size)}）</Button>}</div>
+    </div> : null}
+    {view === "edit" && editModel !== undefined ? <EditModelForm model={editModel} onSave={saveEdit} onCancel={() => setView("list")} /> : null}
+  </SettingsSubpage>;
+}
+
+function EditModelForm({ model, onSave, onCancel }: { model: ManagedModel; onSave: (model: ManagedModel) => void; onCancel: () => void }) {
+  const [draft, setDraft] = useState<ManagedModel>({ ...model });
+  return <div className="settings-stack">
+    <div className="model-config-fields">
+      <label><span>模型 ID</span><input value={draft.id} disabled /></label>
+      <label><span>显示名称</span><input value={draft.name ?? ""} onChange={(event) => setDraft({ ...draft, name: event.target.value || undefined })} placeholder="例如 GPT-4o" /></label>
+      <label><span>上下文窗口</span><input type="number" min={1} value={draft.contextWindow ?? ""} onChange={(event) => setDraft({ ...draft, contextWindow: event.target.value ? Number(event.target.value) : undefined })} placeholder="自动" /></label>
+      <label><span>最大输出 token</span><input type="number" min={1} value={draft.maxTokens ?? ""} onChange={(event) => setDraft({ ...draft, maxTokens: event.target.value ? Number(event.target.value) : undefined })} placeholder="自动" /></label>
+    </div>
+    <div className="model-config-options">
+      <label className="settings-checkbox"><input type="checkbox" checked={draft.reasoning} onChange={(event) => setDraft({ ...draft, reasoning: event.target.checked })} />支持思考</label>
+      <label className="settings-checkbox"><input type="checkbox" checked={draft.vision} onChange={(event) => setDraft({ ...draft, vision: event.target.checked })} />支持图片</label>
+    </div>
+    <div className="dialog-actions"><Button variant="secondary" onClick={onCancel}>取消</Button><Button onClick={() => onSave(draft)}><Save size={14} />保存</Button></div>
+  </div>;
+}
+
+interface ModelScopePageProps {
+  providers: ProviderStatus[];
+  customById: Map<string, ManagedProvider>;
+  draft: Set<string>;
+  busy: boolean;
+  onToggleModel: (providerId: string, modelId: string) => void;
+  onBack: () => void;
+}
+
+/** 跨供应商模型白名单页；所有切换即时保存。 */
+export function ModelScopePage({ providers, customById, draft, busy, onToggleModel, onBack }: ModelScopePageProps) {
+  const [search, setSearch] = useState("");
+  const groups = useMemo(() => providers.filter(isProviderUsable).map((provider) => ({
+    provider,
+    models: provider.models.filter((model) => search.trim() === "" || `${model.name ?? ""}\n${model.id}\n${provider.name}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())),
+  })).filter((group) => group.models.length > 0), [providers, search]);
+
+  return <SettingsSubpage title="模型范围" onBack={onBack}>
+    <div className="settings-stack">
+      <label className="provider-picker-search"><Search size={14} /><input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索供应商或模型" /></label>
+      {groups.length === 0 ? <div className="model-empty">没有匹配的模型</div> : groups.map((group) => <SettingsGroup key={group.provider.id} title={customById.get(group.provider.id)?.name ?? group.provider.name}>
+        {group.models.map((model) => <div className="settings-row settings-model-row" key={model.id}>
+          <span className="settings-row-main"><strong>{displayModelName(model.name ?? model.id)}</strong>{model.name === undefined || model.name === model.id ? null : <small>{model.id}</small>}</span>
+          <SettingsSwitch checked={draft.has(modelKey(group.provider.id, model.id))} disabled={busy} onChange={() => onToggleModel(group.provider.id, model.id)} label={`启用 ${model.id}`} />
+        </div>)}
+      </SettingsGroup>)}
+    </div>
+  </SettingsSubpage>;
+}
+
+interface ProviderWizardPageProps {
+  providers: ProviderStatus[];
+  editing?: ManagedProvider;
+  busy: boolean;
+  onSave: (provider: ManagedProvider, openModelsAfterSave: boolean) => Promise<void>;
+  onDelete?: (provider: ManagedProvider) => void;
+  onLogin: (provider: ProviderStatus, type: "api_key" | "oauth") => void;
+  onBack: () => void;
+}
+
+/** 添加/编辑供应商：保留原有步骤，但不再使用对话框。 */
+export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete, onLogin, onBack }: ProviderWizardPageProps) {
+  const [provider, setProvider] = useState<ManagedProvider>(() => editing === undefined
+    ? { ...EMPTY_PROVIDER, models: [] }
+    : { ...editing, models: editing.models.map((model) => ({ ...model })) });
+  const [stage, setStage] = useState<ProviderStage>(() => editing === undefined ? { kind: "pick" } : { kind: "custom-connection" });
+  const [search, setSearch] = useState("");
+  const detailsValid = provider.id.trim() !== "" && isValidHttpUrl(provider.baseUrl);
+  const idAvailable = editing !== undefined || !providers.some((item) => item.id === provider.id.trim());
+  const pickerProviders = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase();
+    return providers.filter((item) => needle === "" || `${item.name}\n${item.id}`.toLocaleLowerCase().includes(needle));
+  }, [providers, search]);
+  const title = editing !== undefined ? "编辑供应商" : stage.kind === "pick" ? "添加供应商" : stage.kind === "known" ? "登录供应商" : stage.kind === "custom-protocol" ? "选择接口" : "连接信息";
+  const goBack = () => {
+    if (editing !== undefined || stage.kind === "pick") {
+      onBack();
+      return;
+    }
+    if (stage.kind === "known" || stage.kind === "custom-protocol") setStage({ kind: "pick" });
+    else setStage({ kind: "custom-protocol" });
+  };
+
+  return <SettingsSubpage title={title} onBack={goBack}>
+    {stage.kind === "pick" ? <div className="settings-stack">
+      <label className="provider-picker-search"><Search size={14} /><input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索供应商" /></label>
+      <div className="api-choice-list provider-picker-list">
+        <button type="button" className="api-choice provider-picker-custom" onClick={() => setStage({ kind: "custom-protocol" })}><span><strong>自定义供应商</strong><small>兼容接口</small></span><Plus size={16} /></button>
+        {pickerProviders.map((item) => {
+          const configured = item.authConfigured || item.custom;
+          return <button type="button" key={item.id} className={`api-choice ${configured ? "provider-picker-configured" : ""}`} onClick={() => setStage({ kind: "known", provider: item })}>
+            <span><strong>{item.name}</strong><small>{item.id} · {String(item.models.length)} 个模型{configured ? " · 已配置" : ""}</small></span>
+            {configured ? <span className="status-ready"><Check size={13} />已配置</span> : null}
+          </button>;
+        })}
+      </div>
+    </div> : null}
+    {stage.kind === "known" ? <div className="settings-stack">
+      <div className="api-choice provider-known-head"><span><strong>{stage.provider.name}</strong><small>{stage.provider.id} · {String(stage.provider.models.length)} 个模型</small></span></div>
+      <div className="dialog-actions">
+        {stage.provider.supportsApiKey ? <Button disabled={busy} onClick={() => { onLogin(stage.provider, "api_key"); onBack(); }}><KeyRound size={14} />API Key</Button> : null}
+        {stage.provider.supportsOAuth ? <Button disabled={busy} onClick={() => { onLogin(stage.provider, "oauth"); onBack(); }}><ExternalLink size={14} />登录</Button> : null}
+      </div>
+    </div> : null}
+    {stage.kind === "custom-protocol" ? <div className="settings-stack">
+      <div className="api-choice-list">{API_OPTIONS.map((option) => <button type="button" key={option.id} className={`api-choice ${provider.api === option.id ? "selected" : ""}`} onClick={() => setProvider({ ...provider, api: option.id })}>
+        <span><strong>{option.label}</strong><small>{option.description}</small></span>{provider.api === option.id ? <Check size={16} /> : null}
+      </button>)}</div>
+      <div className="dialog-actions"><Button onClick={() => setStage({ kind: "custom-connection" })}>下一步</Button></div>
+    </div> : null}
+    {stage.kind === "custom-connection" ? <div className="settings-stack">
+      <div className="provider-editor-grid">
+        <label><span>ID</span><input value={provider.id} disabled={editing !== undefined} autoFocus={editing === undefined} onChange={(event) => setProvider({ ...provider, id: event.target.value })} placeholder="例如 my-provider" aria-invalid={!idAvailable} />{idAvailable ? null : <small className="field-error">该 ID 已被使用</small>}</label>
+        <label><span>显示名称</span><input value={provider.name ?? ""} onChange={(event) => setProvider({ ...provider, name: event.target.value || undefined })} placeholder="例如 我的模型服务" /></label>
+        <label className="provider-editor-wide"><span>Base URL</span><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" aria-invalid={provider.baseUrl.trim() !== "" && !isValidHttpUrl(provider.baseUrl)} />{provider.baseUrl.trim() === "" || isValidHttpUrl(provider.baseUrl) ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
+        <label className="provider-editor-wide"><span>接口协议</span><select value={provider.api} onChange={(event) => setProvider({ ...provider, api: event.target.value as ManagedProvider["api"] })}>{API_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+        <label className="settings-checkbox"><input type="checkbox" checked={provider.authHeader} onChange={(event) => setProvider({ ...provider, authHeader: event.target.checked })} /><span>发送 Bearer Authorization</span></label>
+      </div>
+      <div className="dialog-actions"><Button variant="secondary" onClick={goBack}>取消</Button><Button disabled={busy || !detailsValid || !idAvailable} onClick={() => { void onSave(provider, editing === undefined); }}><Save size={14} />{busy ? "保存中…" : editing === undefined ? "保存并添加模型" : "保存"}</Button></div>
+      {editing === undefined || onDelete === undefined ? null : <SettingsGroup><SettingsRow icon={Trash2} label="删除供应商" danger onClick={() => onDelete(editing)} /></SettingsGroup>}
+    </div> : null}
+  </SettingsSubpage>;
+}
+
+/** OAuth/API Key 登录过程必须覆盖在当前页之上。 */
+export function AuthOperation({ operation, prompt, event, onRespond, onCancel, onClose }: { operation: AuthLoginOperation; prompt: AuthLoginOperation["prompt"]; event: AuthLoginOperation["event"]; onRespond: (value: string) => void; onCancel: () => void; onClose: () => void }) {
+  const [value, setValue] = useState("");
+  const options = useMemo(() => prompt?.options ?? [], [prompt?.options]);
+  return <div className="auth-operation-overlay"><div className="auth-operation">
+    <div className="settings-section-heading"><h2>{operation.state === "completed" ? "登录完成" : operation.state === "failed" ? "登录失败" : operation.state === "cancelled" ? "登录已取消" : "正在登录"}</h2><Button variant="ghost" size="icon" aria-label="取消登录" title="取消登录" onClick={operation.state === "running" ? onCancel : onClose}><X size={17} /></Button></div>
+    {event?.message ? <p className="auth-event">{event.message}</p> : null}
+    {event?.url ? <a className="auth-link" href={event.url} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开授权页面</a> : null}
+    {operation.error ? <p className="settings-error">{operation.error}</p> : null}
+    {operation.state === "running" && prompt ? <form className="auth-prompt" onSubmit={(submitEvent) => {
+      submitEvent.preventDefault();
+      if (value.trim() !== "") {
+        onRespond(value);
+        setValue("");
+      }
+    }}>{prompt.type === "select" ? <div className="auth-options">{options.map((option) => <button type="button" key={option.id} onClick={() => onRespond(option.id)}><strong>{option.label}</strong>{option.description ? <small>{option.description}</small> : null}</button>)}</div> : <><label>{prompt.message}<input autoFocus type={prompt.type === "secret" ? "password" : "text"} placeholder={prompt.placeholder} value={value} onChange={(inputEvent) => setValue(inputEvent.target.value)} /></label><Button type="submit" disabled={value.trim() === ""}>提交</Button></>}</form> : null}
+    {operation.state === "completed" || operation.state === "failed" || operation.state === "cancelled" ? <Button onClick={onClose}>关闭</Button> : null}
+  </div></div>;
+}

@@ -7,10 +7,10 @@ export const Dialog = DialogPrimitive.Root;
 export const DialogTrigger = DialogPrimitive.Trigger;
 export const DialogClose = DialogPrimitive.Close;
 
-export function DialogContent({ children, title, description, className, ...props }: ComponentProps<typeof DialogPrimitive.Content> & { title: string; description?: string; children: ReactNode }) {
+export function DialogContent({ children, title, description, className, overlayClassName, ...props }: ComponentProps<typeof DialogPrimitive.Content> & { title: string; description?: string; children: ReactNode; overlayClassName?: string }) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="dialog-overlay" />
+      <DialogPrimitive.Overlay className={overlayClassName === undefined ? "dialog-overlay" : `dialog-overlay ${overlayClassName}`} />
       <DialogPrimitive.Content className={`dialog-content ${className ?? ""}`} {...props}>
         <div className="dialog-header">
           <div>
