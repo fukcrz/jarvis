@@ -15,9 +15,9 @@
   --ink: #f5efea;
   --muted: #9aa3b8;
   --subtle: #6e778c;
-  --accent: #3d5cb8;
-  --accent-soft: #151a2c;
-  --accent-strong: #8aa0d8;
+  --accent: #b6a8ff;
+  --accent-soft: #302d42;
+  --accent-strong: #d0c7ff;
   --warm: #f4be70;
   --warm-soft: #3a2e20;
   --danger: #ef8f93;
@@ -34,8 +34,8 @@
   --glass-blur: blur(22px) saturate(1.2);
   --glass-blur-soft: blur(14px) saturate(1.12);
   --atmosphere:
-    radial-gradient(920px 560px at 12% -12%, rgb(61 92 184 / .18), transparent 58%),
-    radial-gradient(780px 520px at 108% 112%, rgb(18 46 138 / .14), transparent 54%);
+    radial-gradient(920px 560px at 12% -12%, rgb(182 168 255 / .18), transparent 58%),
+    radial-gradient(780px 520px at 108% 112%, rgb(72 56 140 / .14), transparent 54%);
 }
 * { box-sizing: border-box; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); scrollbar-width: thin; }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -269,7 +269,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 :is(.message-content, .code-preview) .hljs-string, :is(.message-content, .code-preview) .hljs-regexp, :is(.message-content, .code-preview) .hljs-addition, :is(.message-content, .code-preview) .hljs-meta .hljs-string { color: #9ecbff; }
 :is(.message-content, .code-preview) .hljs-number, :is(.message-content, .code-preview) .hljs-literal, :is(.message-content, .code-preview) .hljs-symbol, :is(.message-content, .code-preview) .hljs-bullet { color: #7cc0ff; }
 :is(.message-content, .code-preview) .hljs-built_in, :is(.message-content, .code-preview) .hljs-variable, :is(.message-content, .code-preview) .hljs-template-variable, :is(.message-content, .code-preview) .hljs-attr, :is(.message-content, .code-preview) .hljs-attribute { color: #ffc680; }
-:is(.message-content, .code-preview) .hljs-title, :is(.message-content, .code-preview) .hljs-title.function_, :is(.message-content, .code-preview) .hljs-section, :is(.message-content, .code-preview) .hljs-selector-pseudo, :is(.message-content, .code-preview) .hljs-selector-attr { color: #8aa0d8; }
+:is(.message-content, .code-preview) .hljs-title, :is(.message-content, .code-preview) .hljs-title.function_, :is(.message-content, .code-preview) .hljs-section, :is(.message-content, .code-preview) .hljs-selector-pseudo, :is(.message-content, .code-preview) .hljs-selector-attr { color: #d2a8ff; }
 :is(.message-content, .code-preview) .hljs-type, :is(.message-content, .code-preview) .hljs-class .hljs-title, :is(.message-content, .code-preview) .hljs-title.class_ { color: #8fd3a8; }
 :is(.message-content, .code-preview) .hljs-tag, :is(.message-content, .code-preview) .hljs-name, :is(.message-content, .code-preview) .hljs-selector-id, :is(.message-content, .code-preview) .hljs-selector-class { color: #7ee787; }
 :is(.message-content, .code-preview) .hljs-meta, :is(.message-content, .code-preview) .hljs-punctuation { color: #8a8a94; }
@@ -475,7 +475,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-session-actions { position: absolute; z-index: 0; inset: 0 0 0 auto; display: flex; width: 132px; }
 .mobile-session-actions button { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 0; padding: 0; font-size: 11px; font-weight: 600; }
 .mobile-session-action-rename { background: #2a3248; color: #d3d2dc; }
-.mobile-session-action-fork { background: #1c2a48; color: #8aa0d8; }
+.mobile-session-action-fork { background: #2a2448; color: #d0c7ff; }
 .mobile-session-action-delete { background: #4a1f28; color: #ff9d9d; }
 .mobile-session-action-delete:disabled { opacity: 0.45; }
 .mobile-session-group-header { display: flex; align-items: center; gap: 2px; position: sticky; top: 0; z-index: 2; padding: 8px 12px 4px; background: var(--glass); color: var(--subtle); -webkit-backdrop-filter: var(--glass-blur-soft); backdrop-filter: var(--glass-blur-soft); }
@@ -792,7 +792,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 }
 
 /* --- 登录认证：登录页与设置页「安全」 --- */
-.login-page { display: grid; min-height: 100vh; min-height: 100dvh; overflow-y: auto; background: radial-gradient(120% 90% at 50% 0%, rgb(61 92 184 / .16), var(--canvas) 58%); padding: 24px; }
+.login-page { display: grid; min-height: 100vh; min-height: 100dvh; overflow-y: auto; background: radial-gradient(120% 90% at 50% 0%, rgb(182 168 255 / .16), var(--canvas) 58%); padding: 24px; }
 /* margin: auto 而非 place-content：内容超出时从顶部开始且可滚动（横屏手机不会截断顶部） */
 .login-card { display: grid; justify-items: center; width: min(360px, 100%); margin: auto; gap: 16px; border: 1px solid var(--glass-border); border-radius: 18px; background: var(--glass-strong); box-shadow: 0 28px 70px rgb(0 0 0 / .45), var(--glass-highlight); padding: 28px 26px 22px; -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
 .login-mark { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-strong); }
