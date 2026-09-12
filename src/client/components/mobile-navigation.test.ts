@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionSummary } from "../../shared/protocol";
-import { projectAttentionSession, readMobileExpandedGroups, saveMobileExpandedGroups, shouldShowMobileSessionGroup } from "./mobile-navigation.js";
+import type { SessionSummary, Workspace } from "../../shared/protocol";
+import { projectAttentionSession, readMobileExpandedGroups, saveMobileExpandedGroups, shouldShowMobileSessionGroup, sortWorkspacesByAttention } from "./mobile-navigation.js";
 
 const storage = new Map<string, string>();
 
@@ -13,6 +13,18 @@ const session: SessionSummary = {
   updatedAt: "2026-01-02T00:00:00.000Z",
   runState: "idle",
 };
+
+function workspace(id: string, sortOrder: number): Workspace {
+  return {
+    id,
+    cwd: `/tmp/${id}`,
+    label: id,
+    sortOrder,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    lastOpenedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
 
 beforeEach(() => {
   storage.clear();
@@ -54,6 +66,22 @@ describe("mobile project status", () => {
       { ...session, id: "old", attentionState: "failed", updatedAt: "2026-01-01T00:00:00.000Z" },
       { ...session, id: "new", attentionState: "failed", updatedAt: "2026-01-03T00:00:00.000Z" },
     ])?.id).toBe("new");
+  });
+});
+
+describe("mobile project chip order", () => {
+  it("puts attention projects first, then the most recently updated", () => {
+    const idle = workspace("idle", 0);
+    const failed = workspace("failed", 1);
+    const waiting = workspace("waiting", 2);
+    const olderIdle = workspace("older-idle", 3);
+    const ordered = sortWorkspacesByAttention([idle, failed, waiting, olderIdle], {
+      idle: [{ ...session, id: "idle-new", workspaceId: idle.id, updatedAt: "2026-01-04T00:00:00.000Z" }],
+      failed: [{ ...session, id: "failed", workspaceId: failed.id, attentionState: "failed" }],
+      waiting: [{ ...session, id: "waiting", workspaceId: waiting.id, attentionState: "waiting_interaction" }],
+      "older-idle": [{ ...session, id: "idle-old", workspaceId: olderIdle.id, updatedAt: "2026-01-01T00:00:00.000Z" }],
+    });
+    expect(ordered.map((item) => item.id)).toEqual(["waiting", "failed", "idle", "older-idle"]);
   });
 });
 

@@ -34,14 +34,33 @@ interface MobileSessionGroup {
 const SWIPE_ACTION_WIDTH = 132;
 const MOBILE_EXPANDED_GROUPS_STORAGE_KEY = "jarvis.mobile.projects.expanded";
 
+/** 项目排序权重：组内最紧急的会话决定该项目的优先级。 */
+function projectAttentionRank(sessions: SessionSummary[]): number {
+  return sessions.reduce((rank, session) => Math.min(rank, sessionAttentionRank(session)), 4);
+}
+
+/** 项目最近一次会话活动时间。 */
+function projectLatestUpdatedAt(sessions: SessionSummary[]): string {
+  return sessions.reduce((latest, session) => (session.updatedAt.localeCompare(latest) > 0 ? session.updatedAt : latest), "");
+}
+
 /** 分组排序权重：组内最紧急的会话决定该组的优先级。 */
 function groupAttentionRank(group: MobileSessionGroup): number {
-  return group.sessions.reduce((rank, session) => Math.min(rank, sessionAttentionRank(session)), 4);
+  return projectAttentionRank(group.sessions);
 }
 
 /** 组内最近一次活动时间。 */
 function groupLatestUpdatedAt(group: MobileSessionGroup): string {
-  return group.sessions.reduce((latest, session) => (session.updatedAt.localeCompare(latest) > 0 ? session.updatedAt : latest), "");
+  return projectLatestUpdatedAt(group.sessions);
+}
+
+/** 项目芯片顺序：关注状态优先，同优先级再按最近活动。 */
+export function sortWorkspacesByAttention(workspaces: Workspace[], sessionsByWorkspace: Record<string, SessionSummary[]>): Workspace[] {
+  return [...workspaces].sort((a, b) => {
+    const aSessions = sessionsByWorkspace[a.id] ?? [];
+    const bSessions = sessionsByWorkspace[b.id] ?? [];
+    return projectAttentionRank(aSessions) - projectAttentionRank(bSessions) || projectLatestUpdatedAt(bSessions).localeCompare(projectLatestUpdatedAt(aSessions));
+  });
 }
 
 export function shouldShowMobileSessionGroup(sessionCount: number, focusMode: boolean): boolean {
@@ -92,6 +111,7 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
     result.sort((a, b) => groupAttentionRank(a) - groupAttentionRank(b) || groupLatestUpdatedAt(b).localeCompare(groupLatestUpdatedAt(a)));
     return result;
   }, [props.workspaces, props.sessionsByWorkspace, workspaceFilter]);
+  const projectChips = useMemo(() => sortWorkspacesByAttention(props.workspaces, props.sessionsByWorkspace), [props.workspaces, props.sessionsByWorkspace]);
   const setSwipeOpen = (key: string, open: boolean) => {
     setOpenSwipeKey((current) => (open ? key : current === key ? null : current));
   };
@@ -110,7 +130,7 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
   });
   return <section className="mobile-page mobile-all-sessions-page" aria-label="全部会话">
     <header className="mobile-switcher-header"><strong>{props.assistantName}</strong><div className="mobile-switcher-actions"><Button variant="ghost" size="icon" aria-label="搜索会话" title="搜索会话" onClick={props.onOpenSearch}><Search size={18} /></Button><Button variant="ghost" size="icon" className={`session-focus-toggle${props.focusMode ? " active" : ""}`} aria-label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} aria-pressed={props.focusMode} title={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} onClick={props.onToggleFocusMode}><Focus size={18} /></Button><Button variant="ghost" size="icon" aria-label="查看文件" title="文件" onClick={props.onOpenFiles}><Folder size={18} /></Button><Button variant="ghost" size="icon" aria-label="打开设置" title="设置" onClick={props.onOpenSettings}><Settings2 size={18} /></Button><Button variant="ghost" size="icon" aria-label="新建会话" onClick={requestCreateSession} disabled={props.workspaces.length === 0}><Plus size={20} /></Button></div></header>
-    <nav className="mobile-session-projects" aria-label="按项目筛选会话"><button type="button" className={workspaceFilter === "all" ? "selected" : ""} onClick={() => setWorkspaceFilter("all")}>全部</button>{props.workspaces.map((workspace) => {
+    <nav className="mobile-session-projects" aria-label="按项目筛选会话"><button type="button" className={workspaceFilter === "all" ? "selected" : ""} onClick={() => setWorkspaceFilter("all")}>全部</button>{projectChips.map((workspace) => {
       const attentionSession = projectAttentionSession(props.sessionsByWorkspace[workspace.id] ?? []);
       return <button type="button" key={workspace.id} className={workspaceFilter === workspace.id ? "selected" : ""} aria-label={`${workspace.label}${attentionSession === undefined ? "" : `，${sessionAttentionLabel(attentionSession)}`}`} onClick={() => { if (!consumeLongPress()) setWorkspaceFilter(workspace.id); }} onContextMenu={(event) => { event.preventDefault(); props.onOpenProjectMenu(workspace); }} onPointerDown={(event) => startLongPress(event, () => props.onOpenProjectMenu(workspace))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress}><span className="mobile-project-label">{workspace.label}</span><MobileProjectStatus session={attentionSession} /></button>;
     })}<button type="button" className="mobile-add-project" aria-label="添加项目" onClick={props.onAddProject}><Plus size={15} /></button></nav>
