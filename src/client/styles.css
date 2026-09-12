@@ -570,9 +570,10 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-project-picker button svg:first-child { color: var(--warm); }
 .mobile-project-picker button svg:last-child { color: var(--subtle); }
 .mobile-project-picker button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-/* 触屏点击会把 :hover 粘住，hover 高亮只给精确指针。 */
+/* 触屏点击会把 :hover 粘住。媒体查询不可靠（平板常谎报精细指针），以最后一次指针类型为准。 */
 @media (hover: hover) and (pointer: fine) {
-  .button-default:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 28%, var(--surface-raised)); }
+  html:not([data-pointer="coarse"]) {
+    .button-default:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 28%, var(--surface-raised)); }
   .button-secondary:hover:not(:disabled) { border-color: #55555e; background: var(--surface-hover); }
   .button-ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
   .session-search-row:hover { background: var(--surface-hover); outline: none; }
@@ -652,6 +653,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
   .extension-select-choice:hover:not(:disabled) .extension-select-label { color: var(--accent-strong); }
   .extension-select-preview-toggle:hover:not(:disabled) { color: var(--muted); }
   .extension-select-list .extension-select-plain:hover:not(:disabled) { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--accent-strong); }
+  }
 }
 @media (max-width: 760px) {
   .settings-shell { padding: 12px 12px 36px; }.settings-section { gap: 12px; }.settings-section-heading { align-items: center; gap: 8px; }.settings-section-heading .button { flex: 0 0 auto; }
