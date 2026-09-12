@@ -209,6 +209,8 @@ describe("MarkdownMessage", () => {
     // 静态渲染（尚未执行副作用）时显示源码，不当作普通代码块高亮
     expect(markup).toContain("A[开始] --&gt; B[结束]");
     expect(markup).toContain("code-block-copy");
+    expect(markup).toContain("复制");
+    expect(markup).not.toContain("复制图");
     expect(markup).not.toContain("mermaid-block-diagram");
 
     const streaming = renderToStaticMarkup(createElement(MarkdownMessage, { text: "```mermaid\nflowchart LR\n  A --> B\n```", streaming: true }));
