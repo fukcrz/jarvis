@@ -126,7 +126,10 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
     const rowKey = `${workspaceId}:${session.id}`;
     return <MobileSessionRow key={rowKey} rowKey={rowKey} session={session} selected={session.id === props.selectedSessionId} open={openSwipeKey === rowKey} onOpenChange={setSwipeOpen} onSelect={() => props.onSelectSession(workspaceId, session.id)} onMenu={() => props.onOpenSessionMenu(workspaceId, session)} onRename={() => props.onRenameSession(workspaceId, session)} onFork={() => props.onForkSession(workspaceId, session)} onDelete={() => props.onDeleteSession(workspaceId, session)} />;
   });
-  return <section className="mobile-page mobile-all-sessions-page" aria-label="全部会话">
+  return <section className="mobile-page mobile-all-sessions-page" aria-label="全部会话" onPointerUp={(event) => {
+    const button = (event.target as Element).closest("button");
+    if (button instanceof HTMLElement) button.blur();
+  }}>
     <header className="mobile-switcher-header"><strong>{props.assistantName}</strong><div className="mobile-switcher-actions"><Button variant="ghost" size="icon" aria-label="搜索会话" title="搜索会话" onClick={props.onOpenSearch}><Search size={18} /></Button><Button variant="ghost" size="icon" className={`session-focus-toggle${props.focusMode ? " active" : ""}`} aria-label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} aria-pressed={props.focusMode} title={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} onClick={props.onToggleFocusMode}><Focus size={18} /></Button><Button variant="ghost" size="icon" aria-label="查看文件" title="文件" onClick={props.onOpenFiles}><Folder size={18} /></Button><Button variant="ghost" size="icon" aria-label="打开设置" title="设置" onClick={props.onOpenSettings}><Settings2 size={18} /></Button><Button variant="ghost" size="icon" aria-label="新建会话" onClick={requestCreateSession} disabled={props.workspaces.length === 0}><Plus size={20} /></Button></div></header>
     <nav className="mobile-session-projects" aria-label="按项目筛选会话"><button type="button" className={workspaceFilter === "all" ? "selected" : ""} onClick={() => setWorkspaceFilter("all")}>全部</button>{projectChips.map((workspace) => {
       const attentionSession = projectAttentionSession(props.sessionsByWorkspace[workspace.id] ?? []);
