@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSummary } from "../../shared/protocol";
-import { isSessionInFocusWindow, matchesSessionQuery, normalizeSessionSearch, parseBashCommand, reorderById, sessionLabel, sessionListWindow, SESSION_FOCUS_WINDOW_MS, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
+import { isSessionInFocusWindow, matchesSessionQuery, normalizeSessionSearch, parseBashCommand, reorderById, sessionLabel, sessionListWindow, workspaceDropTarget, SESSION_FOCUS_WINDOW_MS, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
 
 const session: SessionSummary = {
   id: "session-1",
@@ -39,6 +39,25 @@ describe("workspace ordering", () => {
   it("returns undefined for an invalid or unchanged move", () => {
     expect(reorderById(items, "missing", "b", false)).toBeUndefined();
     expect(reorderById(items, "a", "a", false)).toBeUndefined();
+  });
+});
+
+describe("workspace drop target", () => {
+  const nodes = [
+    { id: "a", top: 0, height: 40 },
+    { id: "b", top: 50, height: 40 },
+    { id: "c", top: 100, height: 40 },
+  ];
+
+  it("places before or after the nearest row", () => {
+    expect(workspaceDropTarget("a", 55, nodes)).toEqual({ id: "b", placeAfter: false });
+    expect(workspaceDropTarget("a", 80, nodes)).toEqual({ id: "b", placeAfter: true });
+    expect(workspaceDropTarget("c", 10, nodes)).toEqual({ id: "a", placeAfter: false });
+  });
+
+  it("ignores the source row and empty lists", () => {
+    expect(workspaceDropTarget("b", 70, nodes)).toBeUndefined();
+    expect(workspaceDropTarget("a", 0, [])).toBeUndefined();
   });
 });
 

@@ -38,6 +38,26 @@ export function reorderById<T extends { id: string }>(items: T[], sourceId: stri
   return next;
 }
 
+export interface WorkspaceDropNode {
+  id: string;
+  top: number;
+  height: number;
+}
+
+/** 按光标 Y 找最近的项目行，并判断放在其上方还是下方。 */
+export function workspaceDropTarget(sourceId: string, clientY: number, nodes: WorkspaceDropNode[]): { id: string; placeAfter: boolean } | undefined {
+  if (nodes.length === 0) return undefined;
+  let chosen = nodes[0];
+  if (chosen === undefined) return undefined;
+  for (const node of nodes) {
+    const mid = node.top + node.height / 2;
+    const chosenMid = chosen.top + chosen.height / 2;
+    if (Math.abs(clientY - mid) < Math.abs(clientY - chosenMid)) chosen = node;
+  }
+  if (chosen.id === sourceId) return undefined;
+  return { id: chosen.id, placeAfter: clientY >= chosen.top + chosen.height / 2 };
+}
+
 /**
  * 解析输入框里的 bang 命令：`!cmd` 输出进上下文，`!!cmd` 不进。
  * 返回 undefined 表示这不是一条命令（与 Pi TUI 一致：单独的 `!` 按普通消息发送）。

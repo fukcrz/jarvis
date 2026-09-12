@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, Files, Focus, Folder, FolderPlus, MessageSquarePlus, Search, Settings2 } from "lucide-react";
-import { useRef, useState, type DragEvent, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionLabel, sessionListWindow } from "../lib/utils";
+import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionLabel, sessionListWindow, workspaceDropTarget } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
@@ -29,12 +29,28 @@ interface SidebarProps {
   workspaceOrderPending: boolean;
 }
 
+const WORKSPACE_DRAG_THRESHOLD_PX = 6;
+
+interface WorkspacePointerDrag {
+  pointerId: number;
+  sourceId: string;
+  startX: number;
+  startY: number;
+  moved: boolean;
+}
+
 export function Sidebar(props: SidebarProps) {
   /** 每个项目展开会话的步数（0 = 默认收起状态，每展开一次 +1）。 */
   const [sessionExpands, setSessionExpands] = useState<Record<string, number>>({});
   const [draggingWorkspaceId, setDraggingWorkspaceId] = useState<string | undefined>();
-  const draggingWorkspaceIdRef = useRef<string | undefined>(undefined);
   const [dropTarget, setDropTarget] = useState<{ id: string; placeAfter: boolean } | undefined>();
+  const treeRef = useRef<HTMLElement>(null);
+  const pointerDragRef = useRef<WorkspacePointerDrag | undefined>(undefined);
+  const dropTargetRef = useRef<{ id: string; placeAfter: boolean } | undefined>(undefined);
+  const orderPendingRef = useRef(props.workspaceOrderPending);
+  const reorderRef = useRef(props.onReorderWorkspaces);
+  orderPendingRef.current = props.workspaceOrderPending;
+  reorderRef.current = props.onReorderWorkspaces;
 
   function expandSessions(workspaceId: string): void {
     setSessionExpands((prev) => ({ ...prev, [workspaceId]: (prev[workspaceId] ?? 0) + 1 }));
@@ -44,38 +60,75 @@ export function Sidebar(props: SidebarProps) {
     setSessionExpands((prev) => ({ ...prev, [workspaceId]: 0 }));
   }
 
-  function startWorkspaceDrag(event: DragEvent<HTMLElement>, workspaceId: string): void {
-    if (event.dataTransfer === null) return;
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", workspaceId);
-    draggingWorkspaceIdRef.current = workspaceId;
-    setDraggingWorkspaceId(workspaceId);
+  function readDropNodes(): Array<{ id: string; top: number; height: number }> {
+    const tree = treeRef.current;
+    if (tree === null) return [];
+    return [...tree.querySelectorAll<HTMLElement>(".project-node[data-workspace-id]")].flatMap((node) => {
+      const id = node.dataset.workspaceId;
+      const row = node.querySelector<HTMLElement>(".project-row");
+      if (id === undefined || row === null) return [];
+      const bounds = row.getBoundingClientRect();
+      return [{ id, top: bounds.top, height: bounds.height }];
+    });
   }
 
-  function updateDropTarget(event: DragEvent<HTMLElement>, workspaceId: string): void {
-    const sourceId = draggingWorkspaceIdRef.current;
-    if (sourceId === undefined || sourceId === workspaceId) return;
-    event.preventDefault();
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const placeAfter = event.clientY >= bounds.top + bounds.height / 2;
-    setDropTarget((current) => current?.id === workspaceId && current.placeAfter === placeAfter ? current : { id: workspaceId, placeAfter });
+  function setDropHint(next: { id: string; placeAfter: boolean } | undefined): void {
+    dropTargetRef.current = next;
+    setDropTarget((current) => current?.id === next?.id && current?.placeAfter === next?.placeAfter ? current : next);
   }
 
-  function finishWorkspaceDrag(): void {
-    draggingWorkspaceIdRef.current = undefined;
+  function finishWorkspaceDrag(commit: boolean): void {
+    const drag = pointerDragRef.current;
+    pointerDragRef.current = undefined;
+    const target = dropTargetRef.current;
     setDraggingWorkspaceId(undefined);
-    setDropTarget(undefined);
+    setDropHint(undefined);
+    document.body.classList.remove("project-reordering");
+    if (drag?.moved === true) window.setTimeout(() => { suppressNextClick = false; }, 0);
+    if (!commit || drag === undefined || !drag.moved || target === undefined) return;
+    reorderRef.current(drag.sourceId, target.id, target.placeAfter);
   }
 
-  function dropWorkspace(event: DragEvent<HTMLElement>, workspaceId: string): void {
-    event.preventDefault();
-    const sourceId = draggingWorkspaceIdRef.current;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const placeAfter = event.clientY >= bounds.top + bounds.height / 2;
-    finishWorkspaceDrag();
-    if (sourceId === undefined || sourceId === workspaceId) return;
-    props.onReorderWorkspaces(sourceId, workspaceId, placeAfter);
+  function startWorkspacePointerDrag(event: PointerEvent<HTMLElement>, workspaceId: string): void {
+    if (event.pointerType !== "mouse" || event.button !== 0 || orderPendingRef.current) return;
+    if ((event.target as HTMLElement | null)?.closest(".project-new-session") !== null) return;
+    pointerDragRef.current = { pointerId: event.pointerId, sourceId: workspaceId, startX: event.clientX, startY: event.clientY, moved: false };
   }
+
+  useEffect(() => {
+    const onMove = (event: globalThis.PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (drag === undefined || event.pointerId !== drag.pointerId) return;
+      if (!drag.moved) {
+        if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < WORKSPACE_DRAG_THRESHOLD_PX) return;
+        drag.moved = true;
+        suppressNextClick = true;
+        setDraggingWorkspaceId(drag.sourceId);
+        document.body.classList.add("project-reordering");
+      }
+      event.preventDefault();
+      setDropHint(workspaceDropTarget(drag.sourceId, event.clientY, readDropNodes()));
+    };
+    const onUp = (event: globalThis.PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (drag === undefined || event.pointerId !== drag.pointerId) return;
+      finishWorkspaceDrag(true);
+    };
+    const onCancel = (event: globalThis.PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (drag === undefined || event.pointerId !== drag.pointerId) return;
+      finishWorkspaceDrag(false);
+    };
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      document.body.classList.remove("project-reordering");
+    };
+  }, []);
 
   return (
     <aside className="sidebar">
@@ -83,7 +136,7 @@ export function Sidebar(props: SidebarProps) {
         <span>项目</span>
         <div className="sidebar-toolbar-actions"><Tooltip label="搜索会话"><Button variant="ghost" size="icon" aria-label="搜索会话" onClick={props.onOpenSearch}><Search size={15} /></Button></Tooltip><Tooltip label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"}><Button variant="ghost" size="icon" className={`session-focus-toggle${props.focusMode ? " active" : ""}`} aria-label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} aria-pressed={props.focusMode} onClick={props.onToggleFocusMode}><Focus size={15} /></Button></Tooltip><Tooltip label="查看文件"><Button variant="ghost" size="icon" aria-label="查看文件" onClick={props.onOpenFiles}><Files size={16} /></Button></Tooltip><Tooltip label="添加项目"><Button variant="ghost" size="icon" aria-label="添加项目" onClick={props.onOpenWorkspaceDialog}><FolderPlus size={16} /></Button></Tooltip></div>
       </div>
-      <nav className="project-tree" aria-label="项目列表">
+      <nav ref={treeRef} className="project-tree" aria-label="项目列表">
         {props.workspaces.map((workspace) => {
           const sessions = props.sessionsByWorkspace[workspace.id] ?? [];
           // 默认窗口展示（执行中的会话始终显示，默认最多 5 个，可展开更多）。
@@ -93,8 +146,8 @@ export function Sidebar(props: SidebarProps) {
           const toggleLabel = `${expanded ? "收起" : "展开"}${workspace.label}的会话`;
 
           return (
-            <section className={`project-node${draggingWorkspaceId === workspace.id ? " dragging" : ""}${dropTarget?.id === workspace.id && dropTarget.placeAfter ? " drop-after" : ""}${dropTarget?.id === workspace.id && !dropTarget.placeAfter ? " drop-before" : ""}`} key={workspace.id}>
-              <div className="project-row" draggable={!props.workspaceOrderPending} onDragStart={(event) => startWorkspaceDrag(event, workspace.id)} onDragOver={(event) => updateDropTarget(event, workspace.id)} onDragLeave={(event) => { if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return; setDropTarget((current) => current?.id === workspace.id ? undefined : current); }} onDrop={(event) => dropWorkspace(event, workspace.id)} onDragEnd={finishWorkspaceDrag}>
+            <section className={`project-node${draggingWorkspaceId === workspace.id ? " dragging" : ""}${dropTarget?.id === workspace.id && dropTarget.placeAfter ? " drop-after" : ""}${dropTarget?.id === workspace.id && !dropTarget.placeAfter ? " drop-before" : ""}`} data-workspace-id={workspace.id} key={workspace.id}>
+              <div className="project-row" onPointerDown={(event) => startWorkspacePointerDrag(event, workspace.id)}>
                 <button className="project-toggle" type="button" aria-label={toggleLabel} aria-expanded={expanded} onClick={() => { if (!consumeLongPress()) props.onToggleWorkspace(workspace.id); }} onContextMenu={(event) => {
                   event.preventDefault();
                   const bounds = event.currentTarget.getBoundingClientRect();
