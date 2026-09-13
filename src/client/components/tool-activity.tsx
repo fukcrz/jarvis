@@ -10,13 +10,14 @@ interface ToolActivityProps {
   active: boolean;
   startedAt?: string;
   stopping: boolean;
-  /** 旁白已经说明这组工具，不再画「已执行 N 项操作」。 */
-  hideSummary?: boolean;
+  /** 短旁白：当折叠标题，点开才露出工具列表。 */
+  narration?: string;
 }
 
 /** Renders Pi tool activity as compact, inline timeline rows. */
-export function ToolActivity({ items, active, startedAt, stopping, hideSummary = false }: ToolActivityProps) {
-  const defaultOpen = isActivityOpenByDefault(items);
+export function ToolActivity({ items, active, startedAt, stopping, narration }: ToolActivityProps) {
+  const narrated = narration !== undefined && narration.trim() !== "";
+  const defaultOpen = narrated ? active : isActivityOpenByDefault(items);
   const [open, setOpen] = useState(defaultOpen);
   const touched = useRef(false);
   const [openToolId, setOpenToolId] = useState<string>();
@@ -24,7 +25,6 @@ export function ToolActivity({ items, active, startedAt, stopping, hideSummary =
   const state = activityState(items, active);
   const summary = activitySummary(items, state, stopping);
   const elapsed = active ? formatRunElapsed(startedAt, now) : undefined;
-  const showItems = hideSummary || open;
 
   useEffect(() => {
     if (!active || startedAt === undefined) return;
@@ -34,18 +34,19 @@ export function ToolActivity({ items, active, startedAt, stopping, hideSummary =
   }, [active, startedAt]);
 
   useEffect(() => {
-    if (!touched.current) setOpen(defaultOpen);
-  }, [defaultOpen]);
+    if (!touched.current) setOpen(narrated ? active : defaultOpen);
+  }, [active, defaultOpen, narrated]);
 
+  const toggle = () => { touched.current = true; setOpen((value) => !value); };
   return (
-    <article className={`activity-group ${state}${hideSummary ? " narrated" : ""}`}>
-      {hideSummary ? null : <button className="activity-summary" type="button" onClick={() => { touched.current = true; setOpen((value) => !value); }} aria-expanded={open}>
+    <article className={`activity-group ${state}${narrated ? " narrated" : ""}`}>
+      {narrated ? <button className="activity-narration" type="button" onClick={toggle} aria-expanded={open}>{narration?.trim()}</button> : <button className="activity-summary" type="button" onClick={toggle} aria-expanded={open}>
         <span className="activity-state-icon">{toolIcon(state)}</span>
         {summary.label === undefined ? null : <span className="activity-label">{summary.label}</span>}
         {summary.detail === undefined ? null : <span className="activity-detail">{summary.detail}</span>}
         {elapsed === undefined ? null : <time className="activity-elapsed">{elapsed}</time>}
       </button>}
-      {showItems ? <div className="activity-items">{items.map((item) => <ToolRow key={item.id} item={item} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
+      {open ? <div className="activity-items">{items.map((item) => <ToolRow key={item.id} item={item} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
     </article>
   );
 }

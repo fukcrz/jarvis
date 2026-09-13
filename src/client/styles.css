@@ -406,6 +406,8 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .activity-group { min-width: 0; color: var(--muted); }
 .activity-summary { display: flex; align-items: center; width: 100%; min-width: 0; gap: 7px; border: 0; border-radius: 4px; background: transparent; padding: 4px 0; color: var(--subtle); text-align: left; }
 .activity-summary:focus-visible { color: var(--muted); }
+.activity-narration { display: block; width: 100%; min-width: 0; border: 0; border-radius: 4px; background: transparent; padding: 6px 0; color: var(--ink); font-size: 14px; font-weight: 500; line-height: 1.68; text-align: left; overflow-wrap: anywhere; }
+.activity-narration:focus-visible { color: var(--muted); outline: none; }
 .activity-state-icon { display: grid; flex: 0 0 auto; color: var(--subtle); }
 .activity-group.running .activity-state-icon { color: var(--warm); }
 .activity-group.completed .activity-state-icon { color: var(--subtle); }
@@ -720,6 +722,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
   .code-block-copy:hover:not(:disabled) { background: rgb(255 255 255 / .05); color: var(--ink); }
   .message-image-frame:hover { border-color: var(--line-strong); }
   .activity-summary:hover { color: var(--muted); }
+  .activity-narration:hover { color: var(--muted); }
   .activity-items .tool-list-item .tool-summary:hover { color: var(--ink); }
   .turn-process-summary:hover { color: var(--muted); outline: none; }
   .thinking-summary:hover { color: var(--ink); }
@@ -892,6 +895,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 @media (hover: none) {
   .thinking-summary:hover { color: var(--muted); }
   .activity-summary:hover { color: var(--subtle); }
+  .activity-narration:hover { color: var(--ink); }
   .tool-summary:hover { color: var(--ink); }
   .activity-items .tool-list-item .tool-summary:hover { color: var(--muted); }
 }

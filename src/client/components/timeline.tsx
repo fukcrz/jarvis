@@ -806,8 +806,8 @@ export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
   return turns;
 }
 
-/** 一两句以内的过程旁白；更长的助手文本不当旁白，避免把整段汇报收进工具组。 */
-export const ACTIVITY_NARRATION_MAX_CHARS = 80;
+/** 短过程旁白；更长的助手文本不当旁白，避免把整段汇报收进工具组。 */
+export const ACTIVITY_NARRATION_MAX_CHARS = 40;
 
 export function isShortAssistantNarration(item: MessageTimelineItem): boolean {
   if (item.role !== "assistant") return false;
@@ -907,13 +907,24 @@ interface TurnRenderContext {
   setEditingMessageId: (id: string | undefined) => void;
 }
 
-function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, hideActivitySummary = false): ReactNode {
+function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, narration?: string): ReactNode {
   if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} editing={entry.item.id === context.editingMessageId} highlighted={entry.item.id === context.highlightedMessageId} onStartEdit={() => context.setEditingMessageId(entry.item.id)} onCancelEdit={() => context.setEditingMessageId(undefined)} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} retrying={context.status.retrying !== undefined} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} />;
   if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
-  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={entry.items[0]?.id === context.activeActivityId} startedAt={context.status.activeRun?.startedAt} stopping={context.status.runState === "stopping"} hideSummary={hideActivitySummary} />;
+  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={entry.items[0]?.id === context.activeActivityId} startedAt={context.status.activeRun?.startedAt} stopping={context.status.runState === "stopping"} narration={narration} />;
+}
+
+/** 短旁白并进工具组：旁白当折叠标题，不再单独画一条消息。 */
+function renderProcessEntries(process: TimelineRenderItem[], context: TurnRenderContext): ReactNode[] {
+  return process.flatMap((entry, index) => {
+    const next = process[index + 1];
+    if (next !== undefined && isActivityNarratedBy(entry, next)) return [];
+    const previous = process[index - 1];
+    const narration = previous?.kind === "message" && isActivityNarratedBy(previous, entry) ? previous.item.text : undefined;
+    return [renderTimelineEntry(entry, context, narration)];
+  });
 }
 
 function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRenderContext & { turn: TimelineTurn; active: boolean; autoCollapse: boolean }) {
@@ -942,7 +953,7 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
   }, [active, autoCollapse, canAutoCollapse]);
 
   const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
-  const process = turn.process.map((entry, index) => renderTimelineEntry(entry, context, isActivityNarratedBy(turn.process[index - 1], entry)));
+  const process = renderProcessEntries(turn.process, context);
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
     {!collapsible ? process : <section className={`turn-process ${open ? "expanded" : "collapsed"}`}>
