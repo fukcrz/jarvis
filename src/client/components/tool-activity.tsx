@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { LoaderCircle, Quote } from "lucide-react";
+import { CircleAlert, LoaderCircle, Quote } from "lucide-react";
 import type { ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
 import { ImagePreview } from "./image-lightbox";
@@ -115,7 +115,7 @@ function CommandToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open
 
 function compactToolStateIcon(state: ToolTimelineItem["state"]) {
   if (state === "running" || state === "queued") return <LoaderCircle size={14} className="spin" />;
-  if (state === "failed") return <span className="tool-subtle-failure" aria-label="操作未完成">!</span>;
+  if (state === "failed") return <CircleAlert size={14} aria-label="操作未完成" />;
   if (state === "cancelled") return <span className="tool-subtle-failure" aria-label="操作已停止">·</span>;
   return undefined;
 }
