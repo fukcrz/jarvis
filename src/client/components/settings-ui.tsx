@@ -17,7 +17,7 @@ export function SettingsTopBar({ title, onBack, home }: { title: string; onBack:
   return <header className="settings-topbar">
     <span className="settings-topbar-side">
       <button type="button" className="settings-topbar-back" onClick={onBack} aria-label={home === true ? "返回会话" : "返回"} title={home === true ? "返回会话" : "返回"}>
-        {home === true ? <X size={18} /> : <><ChevronLeft size={19} /><span>返回</span></>}
+        {home === true ? <X size={16} /> : <><ChevronLeft size={16} /><span>返回</span></>}
       </button>
     </span>
     <h1 className="settings-topbar-title">{title}</h1>
@@ -71,7 +71,7 @@ export function SettingsSwitch({ checked, disabled, onChange, label }: { checked
 /** 空状态：图标 + 一句话 + 直达按钮。 */
 export function SettingsEmpty({ icon: Icon, title, actionLabel, onAction }: { icon: LucideIcon; title: string; actionLabel?: string; onAction?: () => void }) {
   return <div className="settings-empty">
-    <span className="settings-empty-icon"><Icon size={22} /></span>
+    <span className="settings-empty-icon"><Icon size={16} /></span>
     <strong>{title}</strong>
     {actionLabel === undefined || onAction === undefined ? null : <Button size="sm" onClick={onAction}><Plus size={14} />{actionLabel}</Button>}
   </div>;

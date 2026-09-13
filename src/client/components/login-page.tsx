@@ -30,7 +30,7 @@ export function LoginPage({ assistantName, onAuthenticated }: LoginPageProps) {
 
   return <main className="login-page">
     <form className="login-card" onSubmit={submit}>
-      <span className="login-mark"><ShieldCheck size={22} /></span>
+      <span className="login-mark"><ShieldCheck size={16} /></span>
       <div className="login-heading">
         <h1>{assistantName}</h1>
         <p>请输入访问密码继续</p>

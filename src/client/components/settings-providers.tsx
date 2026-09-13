@@ -446,7 +446,7 @@ export function AuthOperation({ operation, prompt, event, onRespond, onCancel, o
   const [value, setValue] = useState("");
   const options = useMemo(() => prompt?.options ?? [], [prompt?.options]);
   return <div className="auth-operation-overlay"><div className="auth-operation">
-    <div className="settings-section-heading"><h2>{operation.state === "completed" ? "登录完成" : operation.state === "failed" ? "登录失败" : operation.state === "cancelled" ? "登录已取消" : "正在登录"}</h2><Button variant="ghost" size="icon" aria-label="取消登录" title="取消登录" onClick={operation.state === "running" ? onCancel : onClose}><X size={17} /></Button></div>
+    <div className="settings-section-heading"><h2>{operation.state === "completed" ? "登录完成" : operation.state === "failed" ? "登录失败" : operation.state === "cancelled" ? "登录已取消" : "正在登录"}</h2><Button variant="ghost" size="icon" aria-label="取消登录" title="取消登录" onClick={operation.state === "running" ? onCancel : onClose}><X size={15} /></Button></div>
     {event?.message ? <p className="auth-event">{event.message}</p> : null}
     {event?.url ? <a className="auth-link" href={event.url} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开授权页面</a> : null}
     {operation.error ? <p className="settings-error">{operation.error}</p> : null}

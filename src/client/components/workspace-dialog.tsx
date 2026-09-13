@@ -60,7 +60,7 @@ export function WorkspaceDialog(props: WorkspaceDialogProps) {
         </div>
         <div className="directory-list" aria-label="目录列表">
           {directory?.entries.map((entry) => <button type="button" className="directory-row" key={entry.path} onClick={() => { void browse(entry.path); }} disabled={pending}>
-            {directory?.isRootPicker === true ? <HardDrive size={18} /> : <Folder size={18} />}<span>{entry.name}</span><ChevronRight size={17} />
+            {directory?.isRootPicker === true ? <HardDrive size={16} /> : <Folder size={16} />}<span>{entry.name}</span><ChevronRight size={15} />
           </button>)}
           {directory !== undefined && directory.entries.length === 0 ? <p className="directory-empty">没有子目录</p> : null}
         </div>

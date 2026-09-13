@@ -319,7 +319,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
 
   return <section className={`file-browser-page${preview !== undefined ? " file-browser-previewing" : ""}`} style={{ "--file-browser-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
     <header className="file-browser-header">
-      <Button variant="ghost" size="icon" aria-label="返回会话" title="返回会话" onClick={onBack}><ArrowLeft size={18} /></Button>
+      <Button variant="ghost" size="icon" aria-label="返回会话" title="返回会话" onClick={onBack}><ArrowLeft size={16} /></Button>
       <div className="file-browser-heading"><h1>文件</h1></div>
       <button type="button" className="file-browser-project-trigger" aria-label="切换项目" onClick={() => setWorkspacePickerOpen(true)}><FolderOpen size={16} /><span>{workspace.label}</span><ChevronDown size={16} /></button>
     </header>
@@ -350,7 +350,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
     <Dialog open={workspacePickerOpen} onOpenChange={setWorkspacePickerOpen}>
       <DialogContent title="选择项目" description={`${workspaces.length} 个项目`} className="file-browser-project-dialog">
         <div className="file-browser-project-list">
-          {workspaces.map((item) => <button type="button" className={`file-browser-project-option ${item.id === workspace.id ? "selected" : ""}`} key={item.id} onClick={() => { onWorkspaceChange(item.id); setWorkspacePickerOpen(false); }}><Folder size={17} /><span className="file-browser-project-option-copy"><strong>{item.label}</strong><small>{item.cwd}</small></span>{item.id === workspace.id ? <Check size={16} /> : null}</button>)}
+          {workspaces.map((item) => <button type="button" className={`file-browser-project-option ${item.id === workspace.id ? "selected" : ""}`} key={item.id} onClick={() => { onWorkspaceChange(item.id); setWorkspacePickerOpen(false); }}><Folder size={16} /><span className="file-browser-project-option-copy"><strong>{item.label}</strong><small>{item.cwd}</small></span>{item.id === workspace.id ? <Check size={16} /> : null}</button>)}
         </div>
       </DialogContent>
     </Dialog>
