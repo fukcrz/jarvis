@@ -1,7 +1,7 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Eraser, Folder, GitBranch, Pencil, Star, Trash2 } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { sessionLabel } from "../lib/utils";
+import { isEmptySession, sessionLabel } from "../lib/utils";
 
 export type MobileActionTarget = { kind: "project"; workspace: Workspace } | { kind: "session"; workspaceId: string; workspaceLabel: string; session: SessionSummary };
 
@@ -31,9 +31,9 @@ export function MobileActionSheet(props: MobileActionSheetProps) {
           <button type="button" className="action-sheet-item danger" disabled={props.cleanupDisabled === true} onClick={() => props.onCleanupSessions(target.workspace)}><Eraser size={16} />清理会话</button>
           <button type="button" className="action-sheet-item danger" onClick={() => props.onRemoveProject(target.workspace)}><Trash2 size={16} />移除项目</button>
         </> : target?.kind === "session" ? <>
-          <button type="button" className="action-sheet-item" onClick={() => props.onStarSession(target.workspaceId, target.session)}><Star size={16} fill={target.session.starred === true ? "currentColor" : "none"} />{target.session.starred === true ? "取消收藏" : "收藏"}</button>
-          <button type="button" className="action-sheet-item" onClick={() => props.onRenameSession(target.workspaceId, target.session)}><Pencil size={16} />重命名会话</button>
-          <button type="button" className="action-sheet-item" onClick={() => props.onForkSession(target.workspaceId, target.session)}><GitBranch size={16} />创建分支</button>
+          {isEmptySession(target.session) ? null : <button type="button" className="action-sheet-item" onClick={() => props.onStarSession(target.workspaceId, target.session)}><Star size={16} fill={target.session.starred === true ? "currentColor" : "none"} />{target.session.starred === true ? "取消收藏" : "收藏"}</button>}
+          {isEmptySession(target.session) ? null : <button type="button" className="action-sheet-item" onClick={() => props.onRenameSession(target.workspaceId, target.session)}><Pencil size={16} />重命名会话</button>}
+          {isEmptySession(target.session) ? null : <button type="button" className="action-sheet-item" onClick={() => props.onForkSession(target.workspaceId, target.session)}><GitBranch size={16} />创建分支</button>}
           {props.onOpenFiles === undefined ? null : <button type="button" className="action-sheet-item" onClick={() => props.onOpenFiles?.(target.workspaceId)}><Folder size={16} />文件</button>}
           <button type="button" className="action-sheet-item danger" disabled={target.session.runState !== "idle"} onClick={() => props.onDeleteSession(target.workspaceId, target.session)}><Trash2 size={16} />删除会话</button>
         </> : null}

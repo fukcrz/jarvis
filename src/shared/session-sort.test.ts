@@ -23,8 +23,8 @@ describe("session summary order", () => {
       { ...base, id: "waiting", attentionState: "waiting_interaction", attentionAt: "2026-01-02T00:00:00.000Z" },
       { ...base, id: "failed", attentionState: "failed", attentionAt: "2026-01-07T00:00:00.000Z" },
       { ...base, id: "running", runState: "running", attentionState: "running", attentionAt: "2026-01-03T00:00:00.000Z" },
-      { ...base, id: "idle", lastUserMessageAt: "2026-01-09T00:00:00.000Z" },
-      { ...base, id: "starred", starred: true, lastUserMessageAt: "2026-01-01T00:00:00.000Z" },
+      { ...base, id: "idle", preview: "hello", lastUserMessageAt: "2026-01-09T00:00:00.000Z" },
+      { ...base, id: "starred", preview: "starred", starred: true, lastUserMessageAt: "2026-01-01T00:00:00.000Z" },
     ]);
     expect(ids(ordered)).toEqual(["waiting", "running", "failed", "completed", "idle", "starred"]);
   });
@@ -39,8 +39,8 @@ describe("session summary order", () => {
 
   it("ignores live updatedAt and uses last user send within a rank", () => {
     const ordered = sortSessionSummaries([
-      { ...base, id: "older-send", lastUserMessageAt: "2026-01-02T00:00:00.000Z", updatedAt: "2026-01-09T00:00:00.000Z" },
-      { ...base, id: "newer-send", lastUserMessageAt: "2026-01-04T00:00:00.000Z", updatedAt: "2026-01-03T00:00:00.000Z" },
+      { ...base, id: "older-send", preview: "hello", lastUserMessageAt: "2026-01-02T00:00:00.000Z", updatedAt: "2026-01-09T00:00:00.000Z" },
+      { ...base, id: "newer-send", preview: "hello", lastUserMessageAt: "2026-01-04T00:00:00.000Z", updatedAt: "2026-01-03T00:00:00.000Z" },
     ]);
     expect(ids(ordered)).toEqual(["newer-send", "older-send"]);
   });
@@ -54,5 +54,15 @@ describe("session summary order", () => {
       { ...base, id: "first", createdAt: "2026-01-01T00:00:00.000Z" },
       { ...base, id: "second", createdAt: "2026-01-01T00:00:00.000Z" },
     ]))).toEqual(["first", "second"]);
+  });
+
+  it("keeps empty sessions after attention and before ordinary history", () => {
+    const ordered = sortSessionSummaries([
+      { ...base, id: "idle", preview: "hello", lastUserMessageAt: "2026-01-09T00:00:00.000Z" },
+      { ...base, id: "empty-old", createdAt: "2026-01-02T00:00:00.000Z" },
+      { ...base, id: "empty-new", createdAt: "2026-01-08T00:00:00.000Z" },
+      { ...base, id: "running", runState: "running", attentionState: "running", attentionAt: "2026-01-03T00:00:00.000Z" },
+    ]);
+    expect(ids(ordered)).toEqual(["running", "empty-new", "empty-old", "idle"]);
   });
 });

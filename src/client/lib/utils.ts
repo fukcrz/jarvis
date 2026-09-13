@@ -1,9 +1,9 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import type { SessionSummary } from "../../shared/protocol";
-import { isSessionRunning, sessionAttentionRank, sessionAttentionState, sortSessionSummaries } from "../../shared/session-sort";
+import { isEmptySession, isSessionRunning, sessionAttentionRank, sessionAttentionState, sortSessionSummaries } from "../../shared/session-sort";
 
-export { isSessionRunning, sessionAttentionRank, sessionAttentionState, sortSessionSummaries };
+export { isEmptySession, isSessionRunning, sessionAttentionRank, sessionAttentionState, sortSessionSummaries };
 
 export function cn(...values: ClassValue[]): string {
   return twMerge(clsx(values));
@@ -116,14 +116,15 @@ export interface SessionListWindow {
 /**
  * 计算侧边栏中某个项目下的会话展示窗口：
  * - 需要关注的会话（待交互/执行中/失败/完成未查看）始终显示，且排在前面；
- * - 默认最多显示 SESSIONS_COLLAPSED_LIMIT 个，除非需要关注的会话超过该数量；
+ * - 空会话（新会话草稿槽）始终显示，紧随关注档之后；
+ * - 默认最多显示 SESSIONS_COLLAPSED_LIMIT 个，除非必须看见的会话超过该数量；
  * - 每次展开多显示 SESSIONS_PAGE_SIZE 个，可以多次展开直到全部显示；
  * - 收起（expandSteps 归零）后回到默认状态。
  */
 export function sessionListWindow(sessions: SessionSummary[], expandSteps: number): SessionListWindow {
   const ordered = sortSessionSummaries(sessions);
-  const attentionCount = sessions.filter((s) => sessionAttentionRank(s) < 4).length;
-  const collapsedCount = Math.max(SESSIONS_COLLAPSED_LIMIT, attentionCount);
+  const pinnedCount = sessions.filter((s) => sessionAttentionRank(s) < 4 || isEmptySession(s)).length;
+  const collapsedCount = Math.max(SESSIONS_COLLAPSED_LIMIT, pinnedCount);
   const visibleCount = collapsedCount + Math.max(0, expandSteps) * SESSIONS_PAGE_SIZE;
   return {
     sessions: ordered.slice(0, visibleCount),

@@ -23,7 +23,7 @@ import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
 import { installBodyPointerEventsGuard, installTouchFocusGuard } from "./lib/pointer-events";
-import { isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sortSessionSummaries } from "./lib/utils";
+import { isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sortSessionSummaries } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { extensionToastDuration, extensionToastSourceLabel, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
 
@@ -92,7 +92,7 @@ export function App() {
   const isSettingsPage = location.pathname === "/settings";
   const mobilePage: "sessions" | "chat" | "settings" = isSettingsPage ? "settings" : location.pathname.startsWith("/chat") ? "chat" : "sessions";
   const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | undefined>();
-  // Prevent repeated clicks from creating several unused sessions in the same workspace.
+  // Prevent repeated clicks from stacking unused sessions in the same workspace.
   const creatingSessionWorkspacesRef = useRef(new Set<string>());
   const previousSessionStatusRef = useRef<{ key?: string; runState?: string }>({});
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
@@ -668,25 +668,20 @@ export function App() {
   const createSession = async (targetWorkspaceId = workspaceId) => {
     if (targetWorkspaceId === undefined || creatingSessionWorkspacesRef.current.has(targetWorkspaceId)) return;
 
-    // An empty session is already a valid target for the next "new session"
-    // action. Reuse it instead of accumulating blank sessions on repeated clicks.
-    const existingEmpty = (sessionsByWorkspace[targetWorkspaceId] ?? []).find((session) => session.preview === null);
-    if (existingEmpty !== undefined) {
-      if (selectedRefKey === `${targetWorkspaceId}:${existingEmpty.id}`) {
-        // 已在该空会话上：无需导航，直接聚焦。
-        composerFocusRef.current?.();
-      } else {
-        setNewSessionFocusId(existingEmpty.id);
-        chooseSession(targetWorkspaceId, existingEmpty.id);
-      }
-      return;
-    }
+    const existingEmpties = (sessionsByWorkspace[targetWorkspaceId] ?? []).filter((session) => isEmptySession(session));
+    const draftSource = existingEmpties.find((session) => session.id === sessionId) ?? existingEmpties[0];
 
     creatingSessionWorkspacesRef.current.add(targetWorkspaceId);
     try {
       const session = await api.createSession(targetWorkspaceId);
+      if (draftSource !== undefined) {
+        setDrafts((current) => moveKeyedValue(current, draftSource.id, session.id));
+        setAttachmentsBySession((current) => moveKeyedValue(current, draftSource.id, session.id));
+      }
       setSessionsByWorkspace((current) => ({ ...current, [targetWorkspaceId]: mergeSession(current[targetWorkspaceId] ?? [], session) }));
       setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
+      setWorkspaceId(targetWorkspaceId);
+      setSessionId(session.id);
       setPageError(undefined);
       setNewSessionFocusId(session.id);
       const target = `/chat/${targetWorkspaceId}/${session.id}`;
@@ -697,6 +692,28 @@ export function App() {
         navigate(target);
       } else {
         navigate(target, { replace: true });
+      }
+      if (existingEmpties.length > 0) {
+        const removed: string[] = [];
+        let removeFailed = false;
+        for (const old of existingEmpties) {
+          try {
+            await api.removeSession({ workspaceId: targetWorkspaceId, sessionId: old.id });
+            removed.push(old.id);
+          } catch {
+            removeFailed = true;
+          }
+        }
+        if (removed.length > 0) {
+          const deleted = deletedSessionsRef.current[targetWorkspaceId] ??= new Set();
+          for (const id of removed) deleted.add(id);
+          setSessionsByWorkspace((current) => {
+            let sessions = current[targetWorkspaceId] ?? [];
+            for (const id of removed) sessions = withoutSession(sessions, id);
+            return { ...current, [targetWorkspaceId]: sessions };
+          });
+        }
+        if (removeFailed) setPageError("无法刷新会话");
       }
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "无法创建会话");
@@ -1197,7 +1214,7 @@ export function App() {
         {isSettingsPage ? null : <header className="chat-header">
           <div className="chat-title-wrap">
             <div className="chat-title">
-              <div><h1>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined || selectedWorkspace === undefined ? null : <Tooltip label="重命名会话"><Button variant="ghost" size="icon" aria-label="重命名会话" onClick={() => { setRenameTarget({ workspaceId: selectedWorkspace.id, session: selectedSession }); setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); }}><Pencil size={15} /></Button></Tooltip>}</div>
+              <div><h1>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined || selectedWorkspace === undefined || isEmptySession(selectedSession) ? null : <Tooltip label="重命名会话"><Button variant="ghost" size="icon" aria-label="重命名会话" onClick={() => { setRenameTarget({ workspaceId: selectedWorkspace.id, session: selectedSession }); setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); }}><Pencil size={15} /></Button></Tooltip>}</div>
             </div>
           </div>
           {selectedRef === undefined ? null : <Tooltip label="文件"><Button variant="ghost" size="icon" aria-label="文件" onClick={() => setFilesWorkspaceId(selectedRef.workspaceId)}><Folder size={16} /></Button></Tooltip>}
@@ -1324,6 +1341,13 @@ function withoutDraft(current: Record<string, string>, sessionId: string): Recor
   if (!(sessionId in current)) return current;
   const next = { ...current };
   delete next[sessionId];
+  return next;
+}
+
+function moveKeyedValue<T>(current: Record<string, T>, fromId: string, toId: string): Record<string, T> {
+  if (!(fromId in current) || fromId === toId) return current;
+  const next = { ...current, [toId]: current[fromId]! };
+  delete next[fromId];
   return next;
 }
 

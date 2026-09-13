@@ -121,6 +121,15 @@ describe("session list window", () => {
     expect(ids(window.sessions)).toEqual(["late-running", ...items.slice(0, 4).map((s) => s.id)]);
   });
 
+  it("keeps an empty session visible when attention already fills the collapsed limit", () => {
+    const runningItems = Array.from({ length: 5 }, (_, index) => running(`r-${index}`));
+    const empty = { ...idle("empty-1"), name: null, preview: null, createdAt: "2026-01-09T00:00:00.000Z" };
+    const extra = idle("s-0");
+    const window = sessionListWindow([...runningItems, extra, empty], 0);
+    expect(ids(window.sessions)).toEqual([...runningItems.map((s) => s.id), "empty-1"]);
+    expect(window.hasMore).toBe(true);
+  });
+
   it("reveals one page per expand step until everything is shown", () => {
     const items = Array.from({ length: 14 }, (_, index) => idle(`s-${index}`));
     const first = sessionListWindow(items, 1);
