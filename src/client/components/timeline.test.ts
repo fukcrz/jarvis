@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { activeUserMessageAnchor, ACTIVITY_NARRATION_MAX_CHARS, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isShortAssistantNarration, isTurnPinned, mobileUserMessageRows, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
+import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
+import { activeUserMessageAnchor, ACTIVITY_NARRATION_MAX_CHARS, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isShortAssistantNarration, isToolActivityRunning, isTurnPinned, mobileUserMessageRows, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -272,6 +272,18 @@ describe("isActivityNarratedBy", () => {
     expect(isActivityNarratedBy(undefined, { kind: "activity", items: [tool("a")] })).toBe(false);
     expect(isActivityNarratedBy({ kind: "message", item: message("m1") }, { kind: "thinking", item: thinking("t1") })).toBe(false);
     expect(isActivityNarratedBy({ kind: "message", item: user("u1") }, { kind: "activity", items: [tool("a")] })).toBe(false);
+  });
+});
+
+describe("isToolActivityRunning", () => {
+  const running: SessionStatus = { sessionId: "s", runState: "running" };
+  const idle: SessionStatus = { sessionId: "s", runState: "idle" };
+
+  it("stays running only while the last timeline item is still a tool", () => {
+    expect(isToolActivityRunning([tool("a")], running)).toBe(true);
+    expect(isToolActivityRunning([tool("a"), { ...thinking("t1"), state: "running" }], running)).toBe(false);
+    expect(isToolActivityRunning([tool("a"), message("m1")], running)).toBe(false);
+    expect(isToolActivityRunning([tool("a")], idle)).toBe(false);
   });
 });
 

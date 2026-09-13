@@ -107,13 +107,12 @@ function nextInjectSocketMessage(socket: InjectSocket): Promise<unknown> {
   return new Promise((resolve) => { socket.on("message", (...args: unknown[]) => { resolve(JSON.parse(String(args[0]))); }); });
 }
 
-async function writeToolImageSession(workspacePath: string, imageData: string): Promise<{ id: string; toolId: string }> {
+async function writeToolImageSession(workspacePath: string, imageData: string, toolId = "call_read_image"): Promise<{ id: string; toolId: string }> {
   const id = randomUUID();
   const timestamp = new Date("2026-08-09T00:00:00.000Z");
   const userId = randomUUID();
   const assistantId = randomUUID();
   const toolResultId = randomUUID();
-  const toolId = "call_read_image";
   const header = { type: "session", version: 3, id, timestamp: timestamp.toISOString(), cwd: workspacePath };
   const entries = [
     header,
@@ -1177,8 +1176,64 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(media.headers["content-type"]).toContain("image/png");
     expect(media.rawPayload).toEqual(png);
 
+    const runtime = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/runtime` });
+    expect(runtime.statusCode).toBe(200);
+    expect(JSON.stringify(runtime.json())).not.toContain(imageData);
+
     const missing = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/media/${source.toolId}/9` });
     expect(missing.statusCode).toBe(404);
+
+    const [opened, raced] = await Promise.all([
+      server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/timeline` }),
+      server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/media/${source.toolId}/0` }),
+    ]);
+    expect(opened.statusCode).toBe(200);
+    expect(raced.statusCode).toBe(200);
+    expect(raced.rawPayload).toEqual(png);
+    expect(media.headers["x-content-type-options"]).toBe("nosniff");
+    expect(media.headers["cache-control"]).toContain("private");
+  });
+
+  it("requires login for tool image media after a password is set", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "tool-image-auth-workspace");
+    await mkdir(workspacePath);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeToolImageSession(workspacePath, png.toString("base64"));
+    expect((await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/timeline` })).statusCode).toBe(200);
+
+    const configured = await server.inject({ method: "PUT", url: "/api/auth/password", payload: { newPassword: "jarvis-long-password" } });
+    expect(configured.statusCode).toBe(200);
+    const cookie = sessionCookie(configured);
+    const blocked = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/media/${source.toolId}/0` });
+    expect(blocked.statusCode).toBe(401);
+    const allowed = await server.inject({
+      method: "GET",
+      url: `/api/workspaces/${workspace.id}/sessions/${source.id}/media/${source.toolId}/0`,
+      headers: { cookie },
+    });
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.rawPayload).toEqual(png);
+  });
+
+  it("serves tool images whose ids need path encoding", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "tool-image-encoded-workspace");
+    await mkdir(workspacePath);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const toolId = "call:read/image";
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeToolImageSession(workspacePath, png.toString("base64"), toolId);
+    const timeline = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/timeline` });
+    expect(timeline.statusCode).toBe(200);
+    const items = (timeline.json() as { items: Array<{ kind: string; id: string; images?: Array<{ url?: string }> }> }).items;
+    const tool = items.find((item) => item.kind === "tool" && item.id === toolId);
+    const url = tool?.images?.[0]?.url;
+    expect(url).toBe(`/api/workspaces/${workspace.id}/sessions/${source.id}/media/${encodeURIComponent(toolId)}/0`);
+    const media = await server.inject({ method: "GET", url: url ?? "" });
+    expect(media.statusCode).toBe(200);
+    expect(media.rawPayload).toEqual(png);
   });
 
   it("forks user and assistant message history into independent sessions", async () => {

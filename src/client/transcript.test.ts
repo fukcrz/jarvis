@@ -79,6 +79,44 @@ describe("transcript reducer", () => {
     })]);
   });
 
+  it("hydrates url-only tool images from the timeline page and runtime snapshot", () => {
+    const image = { mimeType: "image/png", url: "/api/workspaces/ws/sessions/s/media/read-1/0" };
+    const result = hydrateTranscript(emptyTranscript, {
+      items: [{
+        kind: "tool",
+        id: "read-1",
+        createdAt: "2026-08-09T00:00:00.000Z",
+        name: "read",
+        title: "Read file",
+        state: "completed",
+        output: "Read image file [image/png]",
+        images: [image],
+      }],
+      start: 0,
+      total: 1,
+      hasMore: false,
+    }, {
+      seq: 2,
+      status: { sessionId: "session", runState: "idle" },
+      model: { available: [] },
+      thinking: { current: "off", available: ["off"] },
+      liveMessages: [],
+      activeTools: [{
+        kind: "tool",
+        id: "read-live",
+        createdAt: "2026-08-09T00:00:01.000Z",
+        name: "read",
+        title: "Read file",
+        state: "completed",
+        images: [{ mimeType: "image/png", url: "/api/workspaces/ws/sessions/s/media/read-live/0" }],
+      }],
+    });
+    expect(result.items).toEqual([
+      expect.objectContaining({ id: "read-1", images: [image] }),
+      expect.objectContaining({ id: "read-live", images: [{ mimeType: "image/png", url: "/api/workspaces/ws/sessions/s/media/read-live/0" }] }),
+    ]);
+  });
+
   it("replaces the transcript and resets pagination when history is rewritten", () => {
     const previous = {
       ...emptyTranscript,

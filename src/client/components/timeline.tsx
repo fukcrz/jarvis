@@ -752,6 +752,11 @@ function hasActiveActivity(items: TimelineItem[], status: SessionStatus): boolea
   return last?.kind === "tool" || (last?.kind === "thinking" && last.state === "running");
 }
 
+/** 旁白/工具组只在最后一条仍是工具时算执行中；后面已经在思考就停转圈。 */
+export function isToolActivityRunning(items: TimelineItem[], status: SessionStatus): boolean {
+  return status.runState !== "idle" && items.at(-1)?.kind === "tool";
+}
+
 /** 最后一段连续工具条目的首条 id：把运行中的耗时计时交给真正活跃的那一组。 */
 function lastActivityGroupId(items: TimelineItem[]): string | undefined {
   const lastToolIndex = items.reduce((last, item, index) => item.kind === "tool" ? index : last, -1);
@@ -975,7 +980,7 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
 
 function renderTimelineTurns(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], editingMessageId: string | undefined, setEditingMessageId: (id: string | undefined) => void, workspaceCwd: string | undefined, highlightedMessageId: string | undefined, autoCollapse: boolean): ReactNode[] {
   const turns = groupTimelineTurns(items);
-  const activeActivityId = hasActiveActivity(items, status) ? lastActivityGroupId(items) : undefined;
+  const activeActivityId = isToolActivityRunning(items, status) ? lastActivityGroupId(items) : undefined;
   const activeTurnKey = status.runState === "idle" ? undefined : turns.at(-1)?.key;
   const context: TurnRenderContext = { streamingMessageId, status, activeActivityId, editingMessageId, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage, setEditingMessageId };
   // 全部属性都显式传：TurnRenderContext 的键名与组件 props 一致，展开时不会漏项。

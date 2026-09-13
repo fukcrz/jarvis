@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectHistory, toExternalTimelineItems, toolFromCall, toolWithResult } from "./projection.js";
+import { encodeTimelineMediaItemId, projectHistory, toExternalTimelineItem, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, toolImageUrl } from "./projection.js";
 
 describe("projectHistory", () => {
   it("turns Pi messages and tool results into a stable linear timeline", () => {
@@ -91,6 +91,26 @@ describe("projectHistory", () => {
     });
   });
 
+  it("strips in-flight tool images the same way as persisted ones", () => {
+    const running = toolFromCall("read-live", "read", { path: "shot.png" }, "2026-08-09T00:00:00.000Z", "running");
+    const partial = toolWithPartial(running, {
+      content: [
+        { type: "text", text: "Read image file [image/png]" },
+        { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+      ],
+    });
+    const ref = { workspaceId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" };
+    const external = toExternalTimelineItem(partial, ref);
+    expect(external).toMatchObject({
+      kind: "tool",
+      id: "read-live",
+      state: "running",
+      images: [{ mimeType: "image/png", url: `/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}/media/read-live/0` }],
+    });
+    expect(external.kind === "tool" ? external.images?.[0] : undefined).not.toHaveProperty("data");
+    expect(partial.images?.[0]).toHaveProperty("data");
+  });
+
   it("replays image-bearing tool results from persisted history", () => {
     const items = projectHistory([
       {
@@ -125,6 +145,38 @@ describe("projectHistory", () => {
     });
     expect(external[0]?.kind === "tool" ? external[0].images?.[0] : undefined).not.toHaveProperty("data");
     expect(items[0]?.kind === "tool" ? items[0].images?.[0] : undefined).toHaveProperty("data");
+  });
+
+  it("leaves user-message attachments inlined when stripping tool images", () => {
+    const ref = { workspaceId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" };
+    const user = {
+      kind: "message" as const,
+      id: "message:user:1",
+      role: "user" as const,
+      createdAt: "2026-08-09T00:00:00.000Z",
+      text: "see this",
+      images: [{ mimeType: "image/png", data: "user-bytes" }],
+    };
+    const tool = {
+      kind: "tool" as const,
+      id: "call_1",
+      createdAt: "2026-08-09T00:00:01.000Z",
+      name: "read",
+      title: "Read file",
+      state: "completed" as const,
+      images: [{ mimeType: "image/png", data: "tool-bytes" }],
+    };
+    const [externalUser, externalTool] = toExternalTimelineItems([user, tool], ref);
+    expect(externalUser).toEqual(user);
+    expect(externalTool).toMatchObject({ kind: "tool", images: [{ mimeType: "image/png", url: `/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}/media/call_1/0` }] });
+    expect(externalTool?.kind === "tool" ? externalTool.images?.[0] : undefined).not.toHaveProperty("data");
+  });
+
+  it("percent-encodes tool ids in media urls", () => {
+    const ref = { workspaceId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" };
+    const toolId = "call:read/image";
+    expect(encodeTimelineMediaItemId(toolId)).toBe("call%3Aread%2Fimage");
+    expect(toolImageUrl(ref, toolId, 0)).toBe(`/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}/media/call%3Aread%2Fimage/0`);
   });
 
   it("drops oversized or non-image tool result parts", () => {
