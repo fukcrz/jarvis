@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowLeft, Bell, CircleAlert, FolderPlus, MoreVertical, Pencil, Plus, Puzzle, X } from "lucide-react";
+import { ArrowLeft, Bell, ChevronDown, CircleAlert, FolderPlus, MoreVertical, Pencil, Plus, Puzzle, X } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, isSessionConflict, notifyUnauthorized, socketUrl } from "./api";
@@ -115,6 +115,7 @@ export function App() {
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuTarget | undefined>();
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenuTarget | undefined>();
   const [mobileActionTarget, setMobileActionTarget] = useState<MobileActionTarget | undefined>();
+  const [userNavigatorOpen, setUserNavigatorOpen] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
   const [composerCommands, setComposerCommands] = useState<{ sessionKey: string; items: ComposerCommand[] } | undefined>();
   // 移动端：非底部输入框聚焦时，输入栏折叠为紧凑按钮（见 PromptEditor）。
@@ -528,6 +529,10 @@ export function App() {
       setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session) }));
     }).catch(() => undefined);
     return () => { disposed = true; };
+  }, [selectedRefKey]);
+
+  useEffect(() => {
+    setUserNavigatorOpen(false);
   }, [selectedRefKey]);
 
   useEffect(() => {
@@ -1048,7 +1053,7 @@ export function App() {
   const renderChatContent = () => <>
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <>
-      <Timeline key={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} />
+      <Timeline key={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState === "idle" ? editUserMessage : undefined} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} />
       <ExtensionPanels panels={stream.extensionPanels} />
       <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
@@ -1076,7 +1081,7 @@ export function App() {
         {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "files" ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={visibleSessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onRenameSession={(targetWorkspaceId, session) => { setRenameTarget({ workspaceId: targetWorkspaceId, session }); setRenameValue(session.name ?? sessionLabel(session.name, session.preview)); }} onForkSession={(targetWorkspaceId, session) => { void forkSessionFromTarget({ workspaceId: targetWorkspaceId, sessionId: session.id }); }} onDeleteSession={(targetWorkspaceId, session) => { void deleteSession({ workspaceId: targetWorkspaceId, session }); }} onOpenProjectMenu={(workspace) => setMobileActionTarget({ kind: "project", workspace })} onOpenSearch={() => setSearchOpen(true)} focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
             <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate("/projects", { replace: true })}><ArrowLeft size={19} /></Button>
-            <div className="mobile-chat-session">{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</div>
+            <button type="button" className="mobile-chat-session" aria-haspopup="dialog" aria-expanded={userNavigatorOpen} onClick={() => setUserNavigatorOpen(true)}><span>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</span><ChevronDown size={14} /></button>
             {selectedSession === undefined || selectedWorkspace === undefined ? null : <Button variant="ghost" size="icon" aria-label="当前会话操作" onClick={() => openMobileSessionMenu(selectedWorkspace.id, selectedSession)}><MoreVertical size={18} /></Button>}
           </header>
           <div className="mobile-chat-content">{renderChatContent()}</div>
