@@ -195,7 +195,7 @@ button.settings-row:disabled { opacity: .5; cursor: default; }
 .settings-form .model-empty { border: 0; border-radius: 0; padding: 8px 0; text-align: left; }
 .settings-form-section .settings-checkbox { align-self: stretch; min-height: 28px; }
 .settings-page-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.tunnel-add-action { justify-content: flex-start; }
+.dialog-actions.tunnel-add-action { justify-content: flex-start; }
 .provider-editor-grid input { width: 100%; min-height: 32px; border: 1px solid var(--line-strong); border-radius: 5px; background: rgb(12 14 16 / .55); padding: 6px 8px; color: var(--ink); font-size: 13px; }
 .provider-editor-grid input:focus { border-color: var(--accent); outline: none; }
 .settings-shell .provider-picker-list, .settings-shell .model-manage-addable { max-height: none; overflow: visible; padding-right: 0; }
@@ -775,8 +775,8 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
     .provider-avatar { width: 28px; height: 28px; font-size: 12px; }
     .settings-row, .settings-model-row, .settings-provider-row, .settings-form-switch { min-height: 44px; }
     .settings-empty { padding: 16px 12px; }.tunnel-methods { grid-template-columns: 1fr 1fr; }.tunnel-url { align-items: flex-start; flex-direction: column; }.tunnel-url-actions { width: 100%; justify-content: flex-end; }
-  /* 隧道行：URL 链接 + 4 个操作按钮在窄屏必须可换行，否则横向溢出导致布局变形 */
-  .tunnel-entry { min-width: 0; }.tunnel-entry-head { flex-wrap: wrap; row-gap: 6px; }.tunnel-entry-toggle { flex: 1 1 100%; }.tunnel-entry-actions { flex-wrap: wrap; justify-content: flex-start; row-gap: 6px; }.tunnel-entry-actions a.button, .tunnel-entry-actions .button { max-width: 100%; min-width: 0; }.tunnel-config-fields { padding: 10px; }.tunnel-caddy-head { flex-wrap: wrap; }
+  /* 隧道行：操作条吃满卡片宽度，URL 收缩省略，图标/启停不压缩，避免「停止」被顶出卡片 */
+  .tunnel-entry { min-width: 0; }.tunnel-entry-head { flex-wrap: wrap; row-gap: 6px; }.tunnel-entry-toggle { flex: 1 1 100%; }.tunnel-entry-actions { flex: 1 1 100%; width: 100%; min-width: 0; flex-wrap: wrap; justify-content: flex-start; row-gap: 6px; }.tunnel-entry-actions a.button { flex: 1 1 0; min-width: 0; max-width: 100%; }.tunnel-entry-actions .button-icon, .tunnel-entry-actions .button-sm { flex: 0 0 auto; min-width: auto; overflow: visible; }.tunnel-config-fields { padding: 10px; }.tunnel-caddy-head { flex-wrap: wrap; }
   .toast-surface { padding: 6px 8px; }
   .settings-toast { top: max(8px, env(safe-area-inset-top)); right: 8px; left: auto; width: min(280px, calc(100vw - 16px)); }.provider-editor-grid { grid-template-columns: 1fr; gap: 8px; }.model-config-fields { grid-template-columns: 1fr; gap: 8px; }.model-config-options { flex-wrap: wrap; gap: 8px; }.provider-editor-wide { grid-column: auto; }.settings-field, .provider-editor-grid label, .auth-prompt label { gap: 4px; font-size: 10px; }.settings-field input, .provider-editor input, .provider-editor select, .provider-editor-grid input, .provider-editor-grid select, .auth-prompt input { min-height: 30px; padding: 5px 7px; font-size: 12px; }.settings-checkbox { min-height: 28px; gap: 5px !important; font-size: 10px; }.button-default-size { min-height: var(--ui-control); padding: 5px 9px; font-size: 11px; }.button-sm { min-height: 26px; padding: 4px 7px; font-size: 10px; }.button-icon { width: 30px; height: 30px; }.auth-operation { padding: var(--ui-pad); gap: var(--ui-gap); }
   /* 模型管理/供应商向导对话框改为底部抽屉：避开软键盘遮挡 */
