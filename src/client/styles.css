@@ -241,7 +241,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .message-content a:focus-visible { border-radius: 2px; outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 站外链接加外开标记；本地文件链接（/api/files）不加，避免与「打开/下载」语义混淆 */
 .message-content a[href^="http"]::after { margin-left: 2px; font-size: .85em; line-height: 1; content: "↗"; }
-.message-content .local-file-preview-trigger { display: inline; border: 0; background: transparent; padding: 0; color: var(--accent-strong); font: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 42%, transparent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.message-content .local-file-preview-trigger { display: inline; border: 0; background: transparent; padding: 0; color: var(--accent-strong); font: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 42%, transparent); text-decoration-thickness: 1px; text-underline-offset: 2px; user-select: text; }
 .message-content .local-file-preview-trigger:focus-visible { border-radius: 2px; outline: 2px solid var(--accent); outline-offset: 2px; }
 .message-content .local-file-preview-trigger code { color: inherit; }
 .message-content .local-file-reference { color: inherit; }
