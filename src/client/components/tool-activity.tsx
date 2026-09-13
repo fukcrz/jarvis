@@ -28,7 +28,7 @@ export function ToolActivity({ items, active, narration }: ToolActivityProps) {
   return (
     <article className={`activity-group ${state}${narrated ? " narrated" : ""}`}>
       {narrated ? <button className="activity-narration" type="button" onClick={() => { touched.current = true; setOpen((value) => !value); }} aria-expanded={open}>
-        <span className="activity-narration-icon"><Quote size={14} /></span>
+        <span className="activity-narration-icon">{state === "running" ? <LoaderCircle size={14} className="spin" /> : <Quote size={14} />}</span>
         <span className="activity-narration-text">{text}</span>
       </button> : null}
       {!narrated || open ? <div className="activity-items">{items.map((item) => <ToolRow key={item.id} item={item} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
