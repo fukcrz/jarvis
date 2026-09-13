@@ -927,6 +927,6 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .text-file-preview-notice { border: 1px solid rgb(255 184 107 / .28); border-radius: 4px; background: rgb(255 184 107 / .1); padding: 5px 8px; color: var(--warm); font-size: 11px; }
 .text-file-preview-code { max-height: min(72vh, 700px); overflow: auto; margin: 0; padding: 6px 0; color: #e4e4e7; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; cursor: text; user-select: text; }
 .text-file-preview-code code { display: block; min-width: max-content; }
-.text-file-preview-line { display: inline-grid; grid-template-columns: 44px max-content; min-width: 100%; padding-right: 14px; }
-.text-file-preview-line-number { padding-right: 10px; color: #666671; text-align: right; user-select: none; }
+.text-file-preview-line { display: inline-grid; grid-template-columns: 38px max-content; min-width: 100%; padding-right: 14px; }
+.text-file-preview-line-number { padding-right: 8px; color: #666671; text-align: right; user-select: none; }
 .text-file-preview-line-content { display: block; position: relative; min-height: 1.45em; white-space: pre; }
