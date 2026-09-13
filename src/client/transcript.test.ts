@@ -53,6 +53,32 @@ describe("transcript reducer", () => {
     expect(result.items[1]).toMatchObject({ id: "t1", state: "completed", output: "done" });
   });
 
+  it("keeps tool images that only have a url", () => {
+    const result = applySessionEvents(emptyTranscript, [{
+      version: 1,
+      sessionId: "session",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "tool.upsert",
+      payload: {
+        tool: {
+          kind: "tool",
+          id: "read-1",
+          createdAt: "2026-08-09T00:00:00.000Z",
+          name: "read",
+          title: "Read file",
+          state: "completed",
+          output: "Read image file [image/png]",
+          images: [{ mimeType: "image/png", url: "/api/workspaces/ws/sessions/s/media/read-1/0" }],
+        },
+      },
+    }]);
+    expect(result.items).toEqual([expect.objectContaining({
+      id: "read-1",
+      images: [{ mimeType: "image/png", url: "/api/workspaces/ws/sessions/s/media/read-1/0" }],
+    })]);
+  });
+
   it("replaces the transcript and resets pagination when history is rewritten", () => {
     const previous = {
       ...emptyTranscript,

@@ -445,6 +445,17 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const query = timelineQuery.parse(request.query);
     return sessions.timeline(ref, query.before, query.limit);
   });
+  app.get("/api/workspaces/:workspaceId/sessions/:sessionId/media/:itemId/:index", async (request, reply) => {
+    const ref = sessionRef(request.params);
+    const params = z.object({ itemId: z.string().min(1).max(500), index: z.coerce.number().int().nonnegative().max(64) }).parse(request.params);
+    const image = sessions.toolImage(ref, params.itemId, params.index);
+    return reply
+      .type(image.mimeType)
+      .header("x-content-type-options", "nosniff")
+      .header("cache-control", "private, max-age=3600")
+      .header("content-length", String(image.bytes.length))
+      .send(image.bytes);
+  });
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/runtime", async (request) => sessions.runtime(sessionRef(request.params)));
   app.put("/api/workspaces/:workspaceId/sessions/:sessionId/model", async (request) => {
     const ref = sessionRef(request.params);

@@ -1,4 +1,4 @@
-import type { ContextSummaryTimelineItem, ErrorTimelineItem, ImageAttachment, MessageTimelineItem, ThinkingTimelineItem, TimelineItem, ToolState, ToolTimelineItem } from "../shared/protocol.js";
+import type { ContextSummaryTimelineItem, ErrorTimelineItem, ImageAttachment, MessageTimelineItem, SessionRef, ThinkingTimelineItem, TimelineItem, ToolState, ToolTimelineItem } from "../shared/protocol.js";
 
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
 
@@ -471,6 +471,45 @@ function toIso(value: unknown): string {
 
 function truncate(value: string): string {
   return value.length <= MAX_TOOL_OUTPUT_CHARS ? value : `${value.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n\n[Output truncated by Jarvis]`;
+}
+
+/** Encode a timeline item id so it can sit in a media URL path segment. */
+export function encodeTimelineMediaItemId(itemId: string): string {
+  return encodeURIComponent(itemId);
+}
+
+export function decodeTimelineMediaItemId(encoded: string): string {
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return encoded;
+  }
+}
+
+export function toolImageUrl(ref: SessionRef, toolId: string, index: number): string {
+  return `/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}/media/${encodeTimelineMediaItemId(toolId)}/${String(index)}`;
+}
+
+function withoutImageData(image: ImageAttachment, url: string): ImageAttachment {
+  return { mimeType: image.mimeType, url };
+}
+
+function withExternalToolImages(item: ToolTimelineItem, ref: SessionRef): ToolTimelineItem {
+  const images = item.images;
+  if (images === undefined || images.length === 0) return item;
+  return {
+    ...item,
+    images: images.map((image, index) => image.url === undefined ? withoutImageData(image, toolImageUrl(ref, item.id, index)) : image),
+  };
+}
+
+/** Drop inlined tool-image bytes from any outbound timeline item. User-message attachments stay as `data`. */
+export function toExternalTimelineItem(item: TimelineItem, ref: SessionRef): TimelineItem {
+  return item.kind === "tool" ? withExternalToolImages(item, ref) : item;
+}
+
+export function toExternalTimelineItems(items: readonly TimelineItem[], ref: SessionRef): TimelineItem[] {
+  return items.map((item) => toExternalTimelineItem(item, ref));
 }
 
 function stringValue(value: unknown): string {

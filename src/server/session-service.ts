@@ -50,7 +50,7 @@ import { AppError, asMessage } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
 import { projectModelSnapshot } from "./model-projection.js";
-import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, errorFromPi, messageFromPi, projectHistory, thinkingTextFromContent, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
+import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, decodeTimelineMediaItemId, errorFromPi, messageFromPi, projectHistory, thinkingTextFromContent, toExternalTimelineItem, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
 import { SessionAttentionStore, type SessionSortMeta } from "./session-attention-store.js";
 
@@ -304,7 +304,7 @@ export class SessionService {
       active.extensionUi.reset();
       this.events.publishSession(active.ref, {
         type: "session.rewritten",
-        payload: { items: projectHistory(active.session.sessionManager.getBranch()), status: { sessionId: active.ref.sessionId, runState: "idle" } },
+        payload: { items: toExternalTimelineItems(projectHistory(active.session.sessionManager.getBranch()), active.ref), status: { sessionId: active.ref.sessionId, runState: "idle" } },
       });
       await this.reopenAtCurrentBranch(active);
       return this.prompt(ref, text, clientRequestId, images, undefined, true) as Promise<PromptAccepted>;
@@ -413,7 +413,23 @@ export class SessionService {
     const end = clamp(before ?? items.length, 0, items.length);
     const requestedStart = Math.max(0, end - clamp(limit, 1, 500));
     const start = expandToUserBoundary(items, requestedStart);
-    return { items: items.slice(start, end), start, total: items.length, hasMore: start > 0 };
+    return { items: toExternalTimelineItems(items.slice(start, end), active.ref), start, total: items.length, hasMore: start > 0 };
+  }
+
+  /** Serve one tool-result image from an already-open session. Does not start AgentSession. */
+  toolImage(ref: SessionRef, encodedItemId: string, index: number): { mimeType: string; bytes: Buffer } {
+    if (!Number.isInteger(index) || index < 0) throw new AppError("MEDIA_NOT_FOUND", "Image not found", 404);
+    const itemId = decodeTimelineMediaItemId(encodedItemId);
+    if (itemId === "") throw new AppError("MEDIA_NOT_FOUND", "Image not found", 404);
+    const active = this.peekActive(ref);
+    if (active === undefined) throw new AppError("MEDIA_NOT_FOUND", "Image not found", 404);
+    const live = active.activeTools.get(itemId)?.images?.[index];
+    if (live?.data !== undefined && live.data !== "") return decodeImageData(live.mimeType, live.data);
+    const history = projectHistory(active.session.sessionManager.getBranch());
+    const item = history.find((entry): entry is ToolTimelineItem => entry.kind === "tool" && entry.id === itemId);
+    const image = item?.images?.[index];
+    if (image?.data === undefined || image.data === "") throw new AppError("MEDIA_NOT_FOUND", "Image not found", 404);
+    return decodeImageData(image.mimeType, image.data);
   }
 
   async commands(ref: SessionRef): Promise<ComposerCommand[]> {
@@ -541,7 +557,7 @@ export class SessionService {
       ...(active.liveErrors.size === 0 ? {} : { liveErrors: [...active.liveErrors.values()] }),
       ...(active.partial === undefined ? {} : { partial: active.partial }),
       ...(active.partialThinking === undefined ? {} : { partialThinking: active.partialThinking }),
-      activeTools: [...active.activeTools.values()],
+      activeTools: toExternalTimelineItems([...active.activeTools.values()], active.ref) as ToolTimelineItem[],
       ...(active.activeBash === undefined ? {} : { activeBash: active.activeBash }),
       ...(contextUsage === undefined ? {} : { contextUsage }),
       queue: active.queue,
@@ -663,7 +679,7 @@ export class SessionService {
   }
 
   /** 把消息排入 Pi 的 steering/follow-up 队列；Pi 同步发出 queue_update 驱动镜像。 */
-  private async enqueuePrompt(active: ActiveSession, kind: "steer" | "followUp", text: string, images: ImageAttachment[]): Promise<void> {
+  private async enqueuePrompt(active: ActiveSession, kind: "steer" | "followUp", text: string, images: Array<ImageAttachment & { data: string }>): Promise<void> {
     this.markUserMessage(active, new Date().toISOString());
     this.publishSummary(active);
     const imageContent = images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType }));
@@ -809,9 +825,10 @@ export class SessionService {
     return accepted;
   }
 
-  private validateAttachments(images: ImageAttachment[] | undefined): ImageAttachment[] {
+  private validateAttachments(images: ImageAttachment[] | undefined): Array<ImageAttachment & { data: string }> {
     const attachments = images ?? [];
     if (attachments.length > MAX_ATTACHMENTS) throw new AppError("ATTACHMENTS_TOO_MANY", `A message can include at most ${String(MAX_ATTACHMENTS)} images`);
+    const accepted: Array<ImageAttachment & { data: string }> = [];
     for (const image of attachments) {
       if (!ALLOWED_IMAGE_TYPES.has(image.mimeType)) {
         throw new AppError("ATTACHMENT_TYPE_UNSUPPORTED", `Image type ${image.mimeType} is not supported`);
@@ -819,8 +836,9 @@ export class SessionService {
       if (typeof image.data !== "string" || image.data === "" || image.data.length > MAX_ATTACHMENT_DATA_LENGTH) {
         throw new AppError("ATTACHMENT_TOO_LARGE", "One of the attached images is too large");
       }
+      accepted.push({ mimeType: image.mimeType, data: image.data });
     }
-    return attachments;
+    return accepted;
   }
 
   async compact(ref: SessionRef, customInstructions?: string, clientRequestId?: string): Promise<CompactAccepted> {
@@ -1010,7 +1028,7 @@ export class SessionService {
     await this.attention.flush();
   }
 
-  private async executePrompt(active: ActiveSession, prompt: string, runId: string, images: ImageAttachment[] = []): Promise<void> {
+  private async executePrompt(active: ActiveSession, prompt: string, runId: string, images: Array<ImageAttachment & { data: string }> = []): Promise<void> {
     try {
       await active.session.prompt(prompt, {
         source: "rpc",
@@ -1112,6 +1130,11 @@ export class SessionService {
       ...(runId === undefined ? {} : { runId }),
       payload: { contextUsage },
     });
+  }
+
+  /** Already-open session only. Media requests must not start AgentSession. */
+  private peekActive(ref: SessionRef): ActiveSession | undefined {
+    return this.active.get(activeKey(ref));
   }
 
   private async getActive(ref: SessionRef, waitForExtensions = true, waitForTransition = true): Promise<ActiveSession> {
@@ -1462,14 +1485,14 @@ export class SessionService {
           event.toolName === "bash" ? { cwd: active.cwd } : undefined,
         );
         active.activeTools.set(tool.id, tool);
-        this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool } });
+        this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool: toExternalTimelineItem(tool, active.ref) } });
         return;
       }
       case "tool_execution_update": {
         const previous = active.activeTools.get(event.toolCallId) ?? toolFromCall(event.toolCallId, event.toolName, event.args);
         const tool = toolWithPartial(previous, event.partialResult);
         active.activeTools.set(tool.id, tool);
-        this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool } });
+        this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool: toExternalTimelineItem(tool, active.ref) } });
         return;
       }
       case "tool_execution_end": {
@@ -1478,7 +1501,7 @@ export class SessionService {
         const durationMs = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : undefined;
         const tool = toolWithResult(previous, event.result, event.isError, durationMs);
         active.activeTools.set(tool.id, tool);
-        this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool } });
+        this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool: toExternalTimelineItem(tool, active.ref) } });
         return;
       }
       case "compaction_start": {
@@ -1642,7 +1665,7 @@ export class SessionService {
       if (tool.state !== "queued" && tool.state !== "running") continue;
       const cancelled = { ...tool, state: "cancelled" as const };
       active.activeTools.set(tool.id, cancelled);
-      this.events.publishSession(active.ref, { type: "tool.upsert", runId, payload: { tool: cancelled } });
+      this.events.publishSession(active.ref, { type: "tool.upsert", runId, payload: { tool: toExternalTimelineItem(cancelled, active.ref) } });
     }
     const lastError = active.state.lastError;
     active.state = {
@@ -1683,7 +1706,7 @@ export class SessionService {
       if (tool.state !== "queued" && tool.state !== "running") continue;
       const cancelled = { ...tool, state: "cancelled" as const };
       active.activeTools.set(tool.id, cancelled);
-      this.events.publishSession(active.ref, { type: "tool.upsert", runId, payload: { tool: cancelled } });
+      this.events.publishSession(active.ref, { type: "tool.upsert", runId, payload: { tool: toExternalTimelineItem(cancelled, active.ref) } });
     }
     active.liveMessages.clear();
     active.liveErrors.clear();
@@ -2023,6 +2046,12 @@ function isMissingFile(error: unknown): boolean {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function decodeImageData(mimeType: string, data: string): { mimeType: string; bytes: Buffer } {
+  const bytes = Buffer.from(data.includes(",") ? data.slice(data.indexOf(",") + 1) : data, "base64");
+  if (bytes.length === 0) throw new AppError("MEDIA_NOT_FOUND", "Image not found", 404);
+  return { mimeType, bytes };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

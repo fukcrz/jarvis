@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol";
+import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type ImageAttachment, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol";
 import { isRecord } from "../shared/protocol";
 
 export interface TranscriptState {
@@ -311,9 +311,7 @@ function unmatchedOptimisticUserMessages(previous: TimelineItem[], authoritative
 function recordMessage(value: unknown): MessageTimelineItem | undefined {
   if (!isRecord(value) || value["kind"] !== "message") return undefined;
   if ((value["role"] !== "user" && value["role"] !== "assistant") || typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["text"] !== "string") return undefined;
-  const images = Array.isArray(value["images"])
-    ? value["images"].flatMap((image) => isRecord(image) && typeof image["mimeType"] === "string" && typeof image["data"] === "string" ? [{ mimeType: image["mimeType"], data: image["data"] }] : [])
-    : [];
+  const images = Array.isArray(value["images"]) ? value["images"].flatMap(recordImageAttachment) : [];
   return { kind: "message", id: value["id"], role: value["role"], createdAt: value["createdAt"], text: value["text"], ...(images.length === 0 ? {} : { images }) };
 }
 
@@ -321,7 +319,23 @@ function sameUserMessage(a: MessageTimelineItem, b: MessageTimelineItem): boolea
   if (a.role !== "user" || b.role !== "user" || a.text.trim() !== b.text.trim()) return false;
   const aImages = a.images ?? [];
   const bImages = b.images ?? [];
-  return aImages.length === bImages.length && aImages.every((image, index) => image.mimeType === bImages[index]?.mimeType && image.data === bImages[index]?.data);
+  return aImages.length === bImages.length && aImages.every((image, index) => sameImageAttachment(image, bImages[index]));
+}
+
+function recordImageAttachment(value: unknown): ImageAttachment[] {
+  if (!isRecord(value) || typeof value["mimeType"] !== "string" || value["mimeType"] === "") return [];
+  const mimeType = value["mimeType"];
+  const data = typeof value["data"] === "string" && value["data"] !== "" ? value["data"] : undefined;
+  const url = typeof value["url"] === "string" && value["url"] !== "" ? value["url"] : undefined;
+  if (data === undefined && url === undefined) return [];
+  return [{ mimeType, ...(data === undefined ? {} : { data }), ...(url === undefined ? {} : { url }) }];
+}
+
+function sameImageAttachment(a: ImageAttachment, b: ImageAttachment | undefined): boolean {
+  if (b === undefined || a.mimeType !== b.mimeType) return false;
+  if (a.data !== undefined && b.data !== undefined) return a.data === b.data;
+  if (a.url !== undefined && b.url !== undefined) return a.url === b.url;
+  return a.data === b.data && a.url === b.url;
 }
 
 function recordError(value: unknown): ErrorTimelineItem | undefined {
@@ -376,7 +390,14 @@ function recordTool(value: unknown): ToolTimelineItem | undefined {
     ...(value["excludeFromContext"] === true ? { excludeFromContext: true } : {}),
     ...(typeof value["output"] === "string" ? { output: value["output"] } : {}),
     ...(typeof value["error"] === "string" ? { error: value["error"] } : {}),
+    ...toolImagesFromValue(value["images"]),
   };
+}
+
+function toolImagesFromValue(value: unknown): { images: ImageAttachment[] } | Record<string, never> {
+  if (!Array.isArray(value)) return {};
+  const images = value.flatMap(recordImageAttachment);
+  return images.length === 0 ? {} : { images };
 }
 
 function recordExtensionUiRequest(value: unknown): ExtensionUiRequest | undefined {

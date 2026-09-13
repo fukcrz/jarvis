@@ -348,8 +348,10 @@ export interface SessionCleanupResult {
 
 export interface ImageAttachment {
   mimeType: string;
-  /** Base64-encoded image data. */
-  data: string;
+  /** Base64-encoded image data. Composer attachments and user-message history still use this. */
+  data?: string;
+  /** Browser-fetchable URL for persisted tool images; timeline JSON omits `data` when this is set. */
+  url?: string;
 }
 
 export interface MessageTimelineItem {

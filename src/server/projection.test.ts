@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectHistory, toolFromCall, toolWithResult } from "./projection.js";
+import { projectHistory, toExternalTimelineItems, toolFromCall, toolWithResult } from "./projection.js";
 
 describe("projectHistory", () => {
   it("turns Pi messages and tool results into a stable linear timeline", () => {
@@ -115,6 +115,16 @@ describe("projectHistory", () => {
 
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "tool", name: "read", state: "completed", output: "Read image file [image/png]", images: [{ mimeType: "image/png", data: "iVBORw0KGgo=" }] });
+
+    const ref = { workspaceId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222" };
+    const external = toExternalTimelineItems(items, ref);
+    expect(external[0]).toMatchObject({
+      kind: "tool",
+      id: "call_1",
+      images: [{ mimeType: "image/png", url: `/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}/media/call_1/0` }],
+    });
+    expect(external[0]?.kind === "tool" ? external[0].images?.[0] : undefined).not.toHaveProperty("data");
+    expect(items[0]?.kind === "tool" ? items[0].images?.[0] : undefined).toHaveProperty("data");
   });
 
   it("drops oversized or non-image tool result parts", () => {

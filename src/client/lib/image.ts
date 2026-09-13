@@ -42,8 +42,9 @@ export async function prepareImage(file: File): Promise<ImageAttachment> {
       return { mimeType, data };
     }
     const encoded = await reencode(source, mimeType);
+    const encodedData = encoded.data ?? "";
     // Prefer the original when re-encoding did not shrink it and it is small.
-    if (encoded.data.length > data.length && file.size <= PASSTHROUGH_BYTES) return { mimeType, data };
+    if (encodedData.length > data.length && file.size <= PASSTHROUGH_BYTES) return { mimeType, data };
     return encoded;
   } finally {
     closeSource(source);
@@ -151,5 +152,6 @@ function stripDataUrlPrefix(value: string): string {
 }
 
 export function imageDataUrl(attachment: ImageAttachment): string {
-  return `data:${attachment.mimeType};base64,${attachment.data}`;
+  if (attachment.url !== undefined && attachment.url !== "") return attachment.url;
+  return `data:${attachment.mimeType};base64,${attachment.data ?? ""}`;
 }

@@ -107,6 +107,56 @@ function nextInjectSocketMessage(socket: InjectSocket): Promise<unknown> {
   return new Promise((resolve) => { socket.on("message", (...args: unknown[]) => { resolve(JSON.parse(String(args[0]))); }); });
 }
 
+async function writeToolImageSession(workspacePath: string, imageData: string): Promise<{ id: string; toolId: string }> {
+  const id = randomUUID();
+  const timestamp = new Date("2026-08-09T00:00:00.000Z");
+  const userId = randomUUID();
+  const assistantId = randomUUID();
+  const toolResultId = randomUUID();
+  const toolId = "call_read_image";
+  const header = { type: "session", version: 3, id, timestamp: timestamp.toISOString(), cwd: workspacePath };
+  const entries = [
+    header,
+    {
+      type: "message",
+      id: userId,
+      parentId: null,
+      timestamp: new Date(timestamp.getTime() + 1_000).toISOString(),
+      message: { role: "user", content: "Read the screenshot", timestamp: timestamp.getTime() + 1_000 },
+    },
+    {
+      type: "message",
+      id: assistantId,
+      parentId: userId,
+      timestamp: new Date(timestamp.getTime() + 2_000).toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: toolId, name: "read", arguments: { path: "shot.png" } }],
+        timestamp: timestamp.getTime() + 2_000,
+      },
+    },
+    {
+      type: "message",
+      id: toolResultId,
+      parentId: assistantId,
+      timestamp: new Date(timestamp.getTime() + 3_000).toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: toolId,
+        toolName: "read",
+        content: [
+          { type: "text", text: "Read image file [image/png]" },
+          { type: "image", data: imageData, mimeType: "image/png" },
+        ],
+        timestamp: timestamp.getTime() + 3_000,
+      },
+    },
+  ];
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(join(sessionDir, `${timestamp.toISOString().replace(/[:.]/g, "-")}_${id}.jsonl`), `${entries.map((value) => JSON.stringify(value)).join("\n")}\n`);
+  return { id, toolId };
+}
+
 async function writeConversationSession(workspacePath: string): Promise<{ id: string; user1: string; assistant1: string; user2: string; assistant2: string }> {
   const id = randomUUID();
   const timestamp = new Date("2026-08-09T00:00:00.000Z");
@@ -1102,6 +1152,33 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const remaining = (await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` })).json() as { sessions: Array<{ id: string; starred?: boolean }> };
     expect(remaining.sessions.map((session) => session.id).sort()).toEqual([keep.id, starred.id].sort());
     expect(remaining.sessions.find((session) => session.id === starred.id)?.starred).toBe(true);
+  });
+
+  it("serves tool images from an opened session without inlining bytes in the timeline", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "tool-image-workspace");
+    await mkdir(workspacePath);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const imageData = png.toString("base64");
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeToolImageSession(workspacePath, imageData);
+    const closed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/media/${source.toolId}/0` });
+    expect(closed.statusCode).toBe(404);
+
+    const timeline = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/timeline` });
+    expect(timeline.statusCode).toBe(200);
+    const items = (timeline.json() as { items: Array<{ kind: string; id: string; images?: Array<{ mimeType: string; data?: string; url?: string }> }> }).items;
+    const tool = items.find((item) => item.kind === "tool" && item.id === source.toolId);
+    expect(tool?.images).toEqual([{ mimeType: "image/png", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/media/${source.toolId}/0` }]);
+    expect(JSON.stringify(timeline.json())).not.toContain(imageData);
+
+    const media = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/media/${source.toolId}/0` });
+    expect(media.statusCode).toBe(200);
+    expect(media.headers["content-type"]).toContain("image/png");
+    expect(media.rawPayload).toEqual(png);
+
+    const missing = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/media/${source.toolId}/9` });
+    expect(missing.statusCode).toBe(404);
   });
 
   it("forks user and assistant message history into independent sessions", async () => {
