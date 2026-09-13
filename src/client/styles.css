@@ -33,7 +33,7 @@
   --glass-highlight: inset 0 1px 0 rgb(255 255 255 / .07);
   --glass-blur: blur(22px) saturate(1.2);
   --glass-blur-soft: blur(14px) saturate(1.12);
-  --glass-overlay: rgb(4 8 10 / .08);
+  --glass-overlay: rgb(4 8 10 / 0);
   --glass-dialog: rgb(18 24 40 / .32);
   --glass-overlay-blur: blur(8px) saturate(1.05);
   --atmosphere:
