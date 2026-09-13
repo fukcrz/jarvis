@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowLeft, Bell, ChevronDown, CircleAlert, FolderPlus, MoreVertical, Pencil, Plus, Puzzle, X } from "lucide-react";
+import { ArrowLeft, Bell, ChevronDown, CircleAlert, Folder, FolderPlus, MoreVertical, Pencil, Plus, Puzzle, X } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
 import { api, isSessionConflict, notifyUnauthorized, socketUrl } from "./api";
@@ -28,11 +28,11 @@ import { useSessionStream } from "./hooks/use-session-stream";
 import { extensionToastDuration, extensionToastSourceLabel, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
 
 /** Extract the entity ids carried by the current hash route. */
-function pathParams(pathname: string): { workspaceId?: string; sessionId?: string } {
+function pathParams(pathname: string): { workspaceId?: string; sessionId?: string; files?: boolean } {
   const parts = pathname.split("/").filter(Boolean);
   if (parts[0] === "chat" && parts.length >= 3) return { workspaceId: parts[1], sessionId: parts[2] };
   if (parts[0] === "sessions" && parts.length >= 2) return { workspaceId: parts[1] };
-  if (parts[0] === "files" && parts.length >= 2) return { workspaceId: parts[1] };
+  if (parts[0] === "files" && parts.length >= 2) return { workspaceId: parts[1], files: true };
   return {};
 }
 
@@ -90,8 +90,8 @@ export function App() {
   const workspaceOrderSequenceRef = useRef(0);
   // Mobile uses the global session list as its home: #/projects and #/chat/:workspaceId/:sessionId.
   const isSettingsPage = location.pathname === "/settings";
-  const isFilesPage = location.pathname.startsWith("/files");
-  const mobilePage: "sessions" | "chat" | "files" | "settings" = isSettingsPage ? "settings" : isFilesPage ? "files" : location.pathname.startsWith("/chat") ? "chat" : "sessions";
+  const mobilePage: "sessions" | "chat" | "settings" = isSettingsPage ? "settings" : location.pathname.startsWith("/chat") ? "chat" : "sessions";
+  const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | undefined>();
   // Prevent repeated clicks from creating several unused sessions in the same workspace.
   const creatingSessionWorkspacesRef = useRef(new Set<string>());
   const previousSessionStatusRef = useRef<{ key?: string; runState?: string }>({});
@@ -253,7 +253,12 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [focusMode]);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
-  const stream = useSessionStream(isSettingsPage || isFilesPage ? undefined : selectedRef, assistantName, selectedSession?.name ?? undefined);
+  const stream = useSessionStream(isSettingsPage ? undefined : selectedRef, assistantName, selectedSession?.name ?? undefined);
+  useEffect(() => {
+    if (isSettingsPage || (filesWorkspaceId !== undefined && !workspaces.some((workspace) => workspace.id === filesWorkspaceId))) {
+      setFilesWorkspaceId(undefined);
+    }
+  }, [filesWorkspaceId, isSettingsPage, workspaces]);
 
   const recoverSessionConflict = useCallback(async (error: unknown): Promise<boolean> => {
     if (!isSessionConflict(error)) return false;
@@ -453,7 +458,23 @@ export function App() {
   }, [workspaces, loadProjectSessions]);
 
   useEffect(() => {
-    const { workspaceId: pathWorkspaceId, sessionId: pathSessionId } = pathParams(location.pathname);
+    const { workspaceId: pathWorkspaceId, sessionId: pathSessionId, files: filesRoute } = pathParams(location.pathname);
+    if (filesRoute === true) {
+      if (loading) return;
+      const targetWorkspaceId = pathWorkspaceId ?? workspaceId ?? workspaces[0]?.id;
+      if (targetWorkspaceId === undefined || !workspaces.some((workspace) => workspace.id === targetWorkspaceId)) {
+        navigate("/projects", { replace: true });
+        return;
+      }
+      const sessions = sessionsByWorkspace[targetWorkspaceId];
+      if (sessions === undefined) return;
+      const targetSessionId = sessionId !== undefined && sessions.some((session) => session.id === sessionId)
+        ? sessionId
+        : sessions[0]?.id;
+      setFilesWorkspaceId(targetWorkspaceId);
+      navigate(targetSessionId === undefined ? `/sessions/${targetWorkspaceId}` : `/chat/${targetWorkspaceId}/${targetSessionId}`, { replace: true });
+      return;
+    }
     if (workspaces.length === 0) {
       if (!loading) {
         if (workspaceId !== undefined) setWorkspaceId(undefined);
@@ -475,7 +496,7 @@ export function App() {
       }
       return;
     }
-    if (isFilesPage) return;
+
     const sessions = sessionsByWorkspace[workspace.id];
     if (sessions === undefined) return;
     if (sessionId !== undefined && sessions.some((session) => session.id === sessionId)) return;
@@ -499,7 +520,7 @@ export function App() {
       // Desktop sidebar expansion is UI-only; never navigate for it.
       setSessionId(first);
     }
-  }, [workspaces, sessionsByWorkspace, workspaceId, sessionId, loading, location.pathname, navigate, isFilesPage]);
+  }, [workspaces, sessionsByWorkspace, workspaceId, sessionId, loading, location.pathname, navigate]);
 
   useEffect(() => {
     setExpandedWorkspaceIds((current) => {
@@ -1134,7 +1155,6 @@ export function App() {
     onToggleFocusMode={() => setFocusMode((current) => !current)}
     assistantName={assistantName}
     onOpenSettings={() => navigate("/settings")}
-    onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)}
     onReorderWorkspaces={reorderWorkspaces}
     workspaceOrderPending={workspaceOrderPending}
   />;
@@ -1173,18 +1193,19 @@ export function App() {
           onPointerDown={startSidebarResize}
         />
       </div>
-      {!isMobile ? <section className={isSettingsPage ? "main-pane settings-main-pane" : isFilesPage ? "main-pane files-main-pane" : "main-pane"}>
-        {isSettingsPage || isFilesPage ? null : <header className="chat-header">
+      {!isMobile ? <section className={isSettingsPage ? "main-pane settings-main-pane" : "main-pane"}>
+        {isSettingsPage ? null : <header className="chat-header">
           <div className="chat-title-wrap">
             <div className="chat-title">
               <div><h1>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined || selectedWorkspace === undefined ? null : <Tooltip label="重命名会话"><Button variant="ghost" size="icon" aria-label="重命名会话" onClick={() => { setRenameTarget({ workspaceId: selectedWorkspace.id, session: selectedSession }); setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); }}><Pencil size={15} /></Button></Tooltip>}</div>
             </div>
           </div>
-                  </header>}
-        {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : isFilesPage ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : renderChatContent()}
+          {selectedRef === undefined ? null : <Tooltip label="文件"><Button variant="ghost" size="icon" aria-label="文件" onClick={() => setFilesWorkspaceId(selectedRef.workspaceId)}><Folder size={16} /></Button></Tooltip>}
+        </header>}
+        {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "files" ? <FileBrowser workspaces={workspaces} workspaceId={workspaceId} onWorkspaceChange={(id) => navigate(`/files/${id}`, { replace: true })} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={visibleSessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onOpenProjectMenu={(workspace) => setMobileActionTarget({ kind: "project", workspace })} onOpenSearch={() => setSearchOpen(true)} focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} onOpenFiles={() => navigate(`/files/${workspaceId ?? workspaces[0]?.id ?? ""}`)} /> : <section className="mobile-chat-page">
+        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={visibleSessionsByWorkspace} selectedSessionId={sessionId} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onOpenProjectMenu={(workspace) => setMobileActionTarget({ kind: "project", workspace })} onOpenSearch={() => setSearchOpen(true)} focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
             <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate("/projects", { replace: true })}><ArrowLeft size={16} /></Button>
             <button type="button" className="mobile-chat-session" aria-haspopup="dialog" aria-expanded={userNavigatorOpen} onClick={() => setUserNavigatorOpen(true)}><span>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</span><ChevronDown size={14} /></button>
@@ -1223,7 +1244,8 @@ export function App() {
         setProjectRemoveTarget(workspace);
       }} cleanupDisabled={sessionCleanupTargets(sessionsByWorkspace[projectMenu.workspace.id] ?? [], keepSessionIdFor(projectMenu.workspace.id)).length === 0} />}
       <SessionSearchDialog open={searchOpen} onOpenChange={setSearchOpen} workspaces={workspaces} searchSessions={searchSessions} onSelectSession={(workspaceId, sessionId) => { chooseSession(workspaceId, sessionId); }} />
-      <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onRenameProject={(workspace) => {
+      {filesWorkspaceId !== undefined ? <FileBrowser key={filesWorkspaceId} workspaceId={filesWorkspaceId} onClose={() => setFilesWorkspaceId(undefined)} /> : null}
+      <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onOpenFiles={(targetWorkspaceId) => { setMobileActionTarget(undefined); setFilesWorkspaceId(targetWorkspaceId); }} onRenameProject={(workspace) => {
         setMobileActionTarget(undefined);
         setProjectRenameTarget(workspace);
         setProjectRenameValue(workspace.label);

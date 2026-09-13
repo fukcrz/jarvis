@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Files, Focus, Folder, FolderPlus, MessageSquarePlus, Search, Settings2, Star } from "lucide-react";
+import { ChevronDown, ChevronUp, Focus, Folder, FolderPlus, MessageSquarePlus, Search, Settings2, Star } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionLabel, sessionListWindow, sortSessionSummaries, workspaceDropTarget } from "../lib/utils";
@@ -24,7 +24,6 @@ interface SidebarProps {
   onToggleFocusMode: () => void;
   assistantName: string;
   onOpenSettings: () => void;
-  onOpenFiles: () => void;
   onReorderWorkspaces: (sourceId: string, targetId: string, placeAfter: boolean) => void;
   workspaceOrderPending: boolean;
 }
@@ -139,7 +138,7 @@ export function Sidebar(props: SidebarProps) {
     <aside className="sidebar">
       <div className="sidebar-toolbar">
         <span>项目</span>
-        <div className="sidebar-toolbar-actions"><Tooltip label="搜索会话"><Button variant="ghost" size="icon" aria-label="搜索会话" onClick={props.onOpenSearch}><Search size={15} /></Button></Tooltip><Tooltip label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"}><Button variant="ghost" size="icon" className={`session-focus-toggle${props.focusMode ? " active" : ""}`} aria-label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} aria-pressed={props.focusMode} onClick={props.onToggleFocusMode}><Focus size={15} /></Button></Tooltip><Tooltip label="查看文件"><Button variant="ghost" size="icon" aria-label="查看文件" onClick={props.onOpenFiles}><Files size={16} /></Button></Tooltip><Tooltip label="添加项目"><Button variant="ghost" size="icon" aria-label="添加项目" onClick={props.onOpenWorkspaceDialog}><FolderPlus size={16} /></Button></Tooltip></div>
+        <div className="sidebar-toolbar-actions"><Tooltip label="搜索会话"><Button variant="ghost" size="icon" aria-label="搜索会话" onClick={props.onOpenSearch}><Search size={15} /></Button></Tooltip><Tooltip label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"}><Button variant="ghost" size="icon" className={`session-focus-toggle${props.focusMode ? " active" : ""}`} aria-label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} aria-pressed={props.focusMode} onClick={props.onToggleFocusMode}><Focus size={15} /></Button></Tooltip><Tooltip label="添加项目"><Button variant="ghost" size="icon" aria-label="添加项目" onClick={props.onOpenWorkspaceDialog}><FolderPlus size={16} /></Button></Tooltip></div>
       </div>
       <nav ref={treeRef} className="project-tree" aria-label="项目列表">
         {props.workspaces.map((workspace) => {

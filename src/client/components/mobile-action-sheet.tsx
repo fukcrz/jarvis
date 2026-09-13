@@ -1,5 +1,5 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Eraser, GitBranch, Pencil, Star, Trash2 } from "lucide-react";
+import { Eraser, Folder, GitBranch, Pencil, Star, Trash2 } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { sessionLabel } from "../lib/utils";
 
@@ -15,6 +15,7 @@ interface MobileActionSheetProps {
   onRenameSession: (workspaceId: string, session: SessionSummary) => void;
   onForkSession: (workspaceId: string, session: SessionSummary) => void;
   onDeleteSession: (workspaceId: string, session: SessionSummary) => void;
+  onOpenFiles?: (workspaceId: string) => void;
   cleanupDisabled?: boolean;
 }
 
@@ -33,6 +34,7 @@ export function MobileActionSheet(props: MobileActionSheetProps) {
           <button type="button" className="action-sheet-item" onClick={() => props.onStarSession(target.workspaceId, target.session)}><Star size={16} fill={target.session.starred === true ? "currentColor" : "none"} />{target.session.starred === true ? "取消收藏" : "收藏"}</button>
           <button type="button" className="action-sheet-item" onClick={() => props.onRenameSession(target.workspaceId, target.session)}><Pencil size={16} />重命名会话</button>
           <button type="button" className="action-sheet-item" onClick={() => props.onForkSession(target.workspaceId, target.session)}><GitBranch size={16} />创建分支</button>
+          {props.onOpenFiles === undefined ? null : <button type="button" className="action-sheet-item" onClick={() => props.onOpenFiles?.(target.workspaceId)}><Folder size={16} />文件</button>}
           <button type="button" className="action-sheet-item danger" disabled={target.session.runState !== "idle"} onClick={() => props.onDeleteSession(target.workspaceId, target.session)}><Trash2 size={16} />删除会话</button>
         </> : null}
         <DialogPrimitive.Close asChild><button type="button" className="action-sheet-cancel">取消</button></DialogPrimitive.Close>

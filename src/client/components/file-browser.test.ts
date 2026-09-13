@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { FilePreviewBody } from "./file-browser";
+import { FilePreviewBody, parentDirectoryWithinRoot } from "./file-browser";
 
 describe("FilePreviewBody", () => {
   it("wraps images in ImagePreview without mounting the lightbox", () => {
@@ -36,5 +36,15 @@ describe("FilePreviewBody", () => {
     expect(video).toContain('src="/api/files?path=clip.mp4"');
     expect(audio).toContain("<audio");
     expect(audio).toContain('src="/api/files?path=track.mp3"');
+  });
+});
+
+describe("parentDirectoryWithinRoot", () => {
+  it("stays inside the project root", () => {
+    expect(parentDirectoryWithinRoot("/ws/src/app.ts", "/ws")).toBe("/ws/src");
+    expect(parentDirectoryWithinRoot("/ws/src", "/ws")).toBe("/ws");
+    expect(parentDirectoryWithinRoot("/ws", "/ws")).toBeUndefined();
+    expect(parentDirectoryWithinRoot("/other/app.ts", "/ws")).toBeUndefined();
+    expect(parentDirectoryWithinRoot("/ws-other/app.ts", "/ws")).toBeUndefined();
   });
 });
