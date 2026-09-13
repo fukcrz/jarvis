@@ -150,7 +150,7 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
       })}
     </div>
     <Dialog open={projectPickerOpen} onOpenChange={setProjectPickerOpen}>
-      <DialogContent title="选择项目" description="新会话将创建在所选项目中。">
+      <DialogContent title="选择项目">
         <div className="mobile-project-picker">
           {props.workspaces.map((workspace) => <button type="button" key={workspace.id} onClick={() => { setProjectPickerOpen(false); props.onCreateSession(workspace.id); }}><Folder size={16} /><span>{workspace.label}</span><ChevronRight size={16} /></button>)}
         </div>

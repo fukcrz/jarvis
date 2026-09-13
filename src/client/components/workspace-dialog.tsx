@@ -50,7 +50,7 @@ export function WorkspaceDialog(props: WorkspaceDialogProps) {
   };
 
   return <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-    <DialogContent title="选择项目目录" description="请选择运行 Jarvis 的设备上的目录。" className="workspace-dialog">
+    <DialogContent title="选择项目目录" className="workspace-dialog">
       {error === undefined ? null : <div className="workspace-error" role="alert">{error}</div>}
       <section className="directory-browser">
         <div className="directory-location">

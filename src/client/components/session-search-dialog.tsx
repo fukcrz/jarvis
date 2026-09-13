@@ -72,14 +72,14 @@ export function SessionSearchDialog(props: SessionSearchDialogProps) {
   };
 
   return <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-    <DialogContent title="搜索会话" description="搜索全部项目的会话消息内容" className="session-search-dialog" onOpenAutoFocus={(event) => { event.preventDefault(); inputRef.current?.focus(); }}>
+    <DialogContent title="搜索会话" className="session-search-dialog" onOpenAutoFocus={(event) => { event.preventDefault(); inputRef.current?.focus(); }}>
       <label className="session-search-input">
         <Search size={16} aria-hidden="true" />
         <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索消息内容…" aria-label="搜索消息内容" />
         {pending ? <Loader2 size={15} className="mobile-search-spin" aria-hidden="true" /> : query === "" ? null : <button type="button" aria-label="清除搜索" onClick={() => setQuery("")}><X size={15} /></button>}
       </label>
       <div className="session-search-results">
-        {query.trim() === "" ? <div className="session-search-placeholder">输入关键词，搜索所有项目会话的消息内容</div>
+        {query.trim() === "" ? null
           : entries.length === 0 ? <div className="session-search-placeholder">{pending ? "搜索中…" : "没有匹配的会话"}</div>
             : entries.map(({ workspace, session }) =>
               <button type="button" key={`${workspace.id}:${session.id}`} className="session-search-row" onClick={() => select(workspace.id, session.id)}>

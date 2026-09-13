@@ -1245,7 +1245,7 @@ export function App() {
         </DialogContent>
       </Dialog>
       <Dialog open={projectRemoveTarget !== undefined} onOpenChange={(open) => { if (!open && !projectRemovePending) setProjectRemoveTarget(undefined); }}>
-        <DialogContent title="移除项目" description="此操作只会将项目从 Jarvis 中移除。">
+        <DialogContent title="移除项目">
           <p className="delete-session-message"><strong>{projectRemoveTarget?.label ?? ""}</strong>及其会话历史将保留在磁盘上。</p>
           <div className="dialog-actions"><Button variant="secondary" onClick={() => setProjectRemoveTarget(undefined)} disabled={projectRemovePending}>取消</Button><Button variant="danger" onClick={() => { void removeProject(); }} disabled={projectRemovePending}>{projectRemovePending ? "正在移除…" : "移除项目"}</Button></div>
         </DialogContent>
@@ -1258,7 +1258,7 @@ export function App() {
       </Dialog>
 
       <Dialog open={forkTarget !== undefined} onOpenChange={(open) => { if (!open && !forkPending) setForkTarget(undefined); }}>
-        <DialogContent title="创建会话分支" description="将从选中的消息处复制上下文并创建一个新的会话。">
+        <DialogContent title="创建会话分支">
           <p className="delete-session-message">确定要从这条消息创建分支吗？原会话不会受到影响。</p>
           <div className="dialog-actions">
             <Button variant="secondary" onClick={() => setForkTarget(undefined)} disabled={forkPending}>取消</Button>

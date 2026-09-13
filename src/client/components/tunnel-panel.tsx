@@ -252,7 +252,7 @@ function TunnelEditor({ open, tunnel, busy, onClose, onSave }: { open: boolean; 
     ? `${frpDomain.trim()} {\n    reverse_proxy 127.0.0.1:${remotePort ?? "远程端口"}\n}`
     : "";
 
-  return <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }}><DialogContent className="provider-dialog tunnel-editor-dialog" title={tunnel === undefined ? "添加穿透" : "编辑穿透"} description="目标端口固定为本机服务端口（生产默认 9528）；自动启动默认关闭，需手动启动。">
+  return <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }}><DialogContent className="provider-dialog tunnel-editor-dialog" title={tunnel === undefined ? "添加穿透" : "编辑穿透"}>
     <div className="provider-wizard">
       <div className="tunnel-methods">
         {TUNNEL_METHODS.map((item) => <button type="button" key={item.id} className={`tunnel-method${method === item.id ? " selected" : ""}`} onClick={() => setMethod(item.id)}>

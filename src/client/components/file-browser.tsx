@@ -348,7 +348,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
       </main>
     </div>
     <Dialog open={workspacePickerOpen} onOpenChange={setWorkspacePickerOpen}>
-      <DialogContent title="选择项目" description={`${workspaces.length} 个项目`} className="file-browser-project-dialog">
+      <DialogContent title="选择项目" className="file-browser-project-dialog">
         <div className="file-browser-project-list">
           {workspaces.map((item) => <button type="button" className={`file-browser-project-option ${item.id === workspace.id ? "selected" : ""}`} key={item.id} onClick={() => { onWorkspaceChange(item.id); setWorkspacePickerOpen(false); }}><Folder size={16} /><span className="file-browser-project-option-copy"><strong>{item.label}</strong><small>{item.cwd}</small></span>{item.id === workspace.id ? <Check size={16} /> : null}</button>)}
         </div>
