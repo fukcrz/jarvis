@@ -1,18 +1,47 @@
 import { useMemo, useState } from "react";
-import { Boxes, Check, ExternalLink, KeyRound, LogOut, Pencil, Plus, RotateCw, Save, Search, Trash2, X } from "lucide-react";
-import type { AuthLoginOperation, EnabledModelsStatus, FetchedModel, ManagedModel, ManagedProvider, ProviderStatus } from "../../shared/protocol";
+import { Boxes, Check, ChevronDown, ChevronRight, ExternalLink, KeyRound, LogOut, Pencil, Plus, RotateCw, Save, Search, Trash2, X } from "lucide-react";
+import type { AuthLoginOperation, EnabledModelsStatus, FetchedModel, ManagedApi, ManagedCompat, ManagedMaxTokensField, ManagedModel, ManagedProvider, ManagedThinkingFormat, ProviderOverride, ProviderStatus } from "../../shared/protocol";
 import { displayModelName } from "../model-display";
 import { Button } from "./ui/button";
 import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsSubpage, SettingsSwitch } from "./settings-ui";
 
 export const EMPTY_PROVIDER: ManagedProvider = { id: "", baseUrl: "", api: "openai-completions", authHeader: true, models: [] };
 
-const API_OPTIONS: Array<{ id: ManagedProvider["api"]; label: string }> = [
+const API_OPTIONS: Array<{ id: ManagedApi; label: string }> = [
   { id: "openai-completions", label: "OpenAI Completions" },
   { id: "openai-responses", label: "OpenAI Responses" },
   { id: "anthropic-messages", label: "Anthropic Messages" },
   { id: "google-generative-ai", label: "Google Generative AI" },
 ];
+
+const THINKING_FORMAT_OPTIONS: Array<{ id: ManagedThinkingFormat; label: string }> = [
+  { id: "openai", label: "openai" },
+  { id: "openrouter", label: "openrouter" },
+  { id: "deepseek", label: "deepseek" },
+  { id: "together", label: "together" },
+  { id: "qwen", label: "qwen" },
+  { id: "qwen-chat-template", label: "qwen-chat-template" },
+];
+
+interface ConnectionPreset {
+  id: string;
+  label: string;
+  compat?: ManagedCompat;
+}
+
+const CONNECTION_PRESETS: ConnectionPreset[] = [
+  { id: "standard", label: "标准" },
+  { id: "local", label: "本地", compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, maxTokensField: "max_tokens" } },
+  { id: "openrouter", label: "OpenRouter", compat: { thinkingFormat: "openrouter" } },
+  { id: "deepseek", label: "DeepSeek", compat: { thinkingFormat: "deepseek" } },
+  { id: "qwen", label: "通义", compat: { thinkingFormat: "qwen" } },
+];
+
+interface HeaderRow {
+  id: string;
+  name: string;
+  value: string;
+}
 
 type ProviderStage =
   | { kind: "pick" }
@@ -58,6 +87,63 @@ function isValidHttpUrl(value: string): boolean {
 
 function apiLabel(api: string): string {
   return API_OPTIONS.find((option) => option.id === api)?.label ?? api;
+}
+
+function hostLabel(url: string | undefined): string | undefined {
+  if (url === undefined || url.trim() === "") return undefined;
+  return url.replace(/^https?:\/\//u, "");
+}
+
+function headersFromRecord(headers: Record<string, string> | undefined): HeaderRow[] {
+  if (headers === undefined) return [];
+  return Object.entries(headers).map(([name, value], index) => ({ id: `${name}-${String(index)}`, name, value }));
+}
+
+function recordFromHeaders(rows: HeaderRow[]): Record<string, string> | undefined {
+  const headers: Record<string, string> = {};
+  for (const row of rows) {
+    const name = row.name.trim();
+    if (name === "") continue;
+    headers[name] = row.value;
+  }
+  return Object.keys(headers).length === 0 ? undefined : headers;
+}
+
+function compactCompat(value: ManagedCompat | undefined): ManagedCompat | undefined {
+  if (value === undefined) return undefined;
+  const next: ManagedCompat = {};
+  if (value.supportsDeveloperRole !== undefined) next.supportsDeveloperRole = value.supportsDeveloperRole;
+  if (value.supportsReasoningEffort !== undefined) next.supportsReasoningEffort = value.supportsReasoningEffort;
+  if (value.supportsUsageInStreaming !== undefined) next.supportsUsageInStreaming = value.supportsUsageInStreaming;
+  if (value.maxTokensField !== undefined) next.maxTokensField = value.maxTokensField;
+  if (value.thinkingFormat !== undefined) next.thinkingFormat = value.thinkingFormat;
+  if (value.supportsEagerToolInputStreaming !== undefined) next.supportsEagerToolInputStreaming = value.supportsEagerToolInputStreaming;
+  if (value.allowEmptySignature !== undefined) next.allowEmptySignature = value.allowEmptySignature;
+  return Object.keys(next).length === 0 ? undefined : next;
+}
+
+function sameCompat(left: ManagedCompat | undefined, right: ManagedCompat | undefined): boolean {
+  return JSON.stringify(compactCompat(left) ?? {}) === JSON.stringify(compactCompat(right) ?? {});
+}
+
+function matchingPresetId(compat: ManagedCompat | undefined): string {
+  const match = CONNECTION_PRESETS.find((preset) => sameCompat(preset.compat, compat));
+  return match?.id ?? "custom";
+}
+
+function hasAdvancedConnection(headers: Record<string, string> | undefined, compat: ManagedCompat | undefined): boolean {
+  return (headers !== undefined && Object.keys(headers).length > 0) || compactCompat(compat) !== undefined;
+}
+
+function connectionSummary(headers: Record<string, string> | undefined, compat: ManagedCompat | undefined): string {
+  const preset = matchingPresetId(compat);
+  const presetLabel = CONNECTION_PRESETS.find((item) => item.id === preset)?.label;
+  const parts: string[] = [];
+  if (presetLabel !== undefined && preset !== "standard") parts.push(presetLabel);
+  else if (preset === "custom") parts.push("自定义");
+  const headerCount = headers === undefined ? 0 : Object.keys(headers).length;
+  if (headerCount > 0) parts.push(`${String(headerCount)} 个头`);
+  return parts.length === 0 ? "默认" : parts.join(" · ");
 }
 
 export function ProviderAvatar({ id, name }: { id: string; name?: string }) {
@@ -120,6 +206,7 @@ export function ProvidersListPage({ providers, customProviders, customById, enab
 function ProviderListRow({ provider, custom, enabledCount, onOpen }: { provider: ProviderStatus; custom?: ManagedProvider; enabledCount: number; onOpen: () => void }) {
   const configuredCount = custom?.models.length ?? 0;
   const modelCount = configuredCount > 0 ? configuredCount : provider.models.length;
+  const endpoint = hostLabel(custom?.baseUrl ?? provider.override?.baseUrl);
   const summary = modelCount === 0
     ? "未加载"
     : custom !== undefined
@@ -127,7 +214,7 @@ function ProviderListRow({ provider, custom, enabledCount, onOpen }: { provider:
       : enabledCount >= modelCount ? `全部 ${String(modelCount)} 个模型可用` : `${String(enabledCount)}/${String(modelCount)} 个模型已启用`;
   return <button type="button" className="settings-row settings-provider-row" onClick={onOpen}>
     <ProviderAvatar id={provider.id} name={custom?.name ?? provider.name} />
-    <span className="settings-row-main"><strong>{custom?.name ?? provider.name}</strong><small>{summary}{custom?.baseUrl === undefined ? "" : ` · ${custom.baseUrl.replace(/^https?:\/\//u, "")}`}</small></span>
+    <span className="settings-row-main"><strong>{custom?.name ?? provider.name}</strong><small>{summary}{endpoint === undefined ? "" : ` · ${endpoint}`}</small></span>
     <ProviderStatusChip provider={provider} custom={custom} />
   </button>;
 }
@@ -142,7 +229,7 @@ interface ProviderDetailPageProps {
   onCustomModels: (providerId: string, models: ManagedModel[]) => Promise<boolean>;
   onLogin: (provider: ProviderStatus, type: "api_key" | "oauth") => void;
   onLogout: (provider: ProviderStatus) => void;
-  onEdit: (provider: ManagedProvider) => void;
+  onEdit: () => void;
   onFetch: (providerId: string) => Promise<FetchedModel[]>;
   onBack: () => void;
 }
@@ -158,6 +245,8 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
   const [manualId, setManualId] = useState("");
   const [manualName, setManualName] = useState("");
   const [manualIdError, setManualIdError] = useState<string | undefined>();
+  const [addReasoning, setAddReasoning] = useState(false);
+  const [addVision, setAddVision] = useState(false);
   const modelBusy = busy === "model-manager";
   const accountBusy = busy === provider.id;
 
@@ -194,7 +283,7 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
     const apply = async (): Promise<boolean> => {
       if (custom !== undefined && additions.length > 0) {
         const existing = new Set(custom.models.map((model) => model.id));
-        const merged = [...custom.models, ...additions.filter((model) => !existing.has(model.id)).map((model) => ({ id: model.id, name: model.name, reasoning: false, vision: false }))];
+        const merged = [...custom.models, ...additions.filter((model) => !existing.has(model.id)).map((model) => ({ id: model.id, name: model.name, reasoning: addReasoning, vision: addVision }))];
         return onCustomModels(provider.id, merged);
       }
       return true;
@@ -215,7 +304,7 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
       setManualIdError(`模型 "${id}" 已存在`);
       return;
     }
-    void onCustomModels(provider.id, [...custom.models, { id, ...(manualName.trim() ? { name: manualName.trim() } : {}), reasoning: false, vision: false }]).then((ok) => {
+    void onCustomModels(provider.id, [...custom.models, { id, ...(manualName.trim() ? { name: manualName.trim() } : {}), reasoning: addReasoning, vision: addVision }]).then((ok) => {
       if (!ok) return;
       onEnableModels(provider.id, [id]);
       setManualId("");
@@ -247,17 +336,17 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
       <SettingsGroup>
         <div className="settings-account">
           <ProviderAvatar id={provider.id} name={custom?.name ?? provider.name} />
-          <div className="settings-account-main"><strong>{custom?.name ?? provider.name}</strong><small>{custom?.baseUrl === undefined ? provider.id : `${custom.baseUrl} · ${apiLabel(custom.api)}`}</small></div>
+          <div className="settings-account-main"><strong>{custom?.name ?? provider.name}</strong><small>{custom?.baseUrl === undefined ? (provider.override?.baseUrl === undefined ? provider.id : `${provider.override.baseUrl}`) : `${custom.baseUrl} · ${apiLabel(custom.api)}`}</small></div>
           <ProviderStatusChip provider={provider} custom={custom} />
         </div>
       </SettingsGroup>
-      {provider.authConfigured || provider.supportsApiKey || provider.supportsOAuth || custom !== undefined ? <SettingsGroup>
+      <SettingsGroup>
         {provider.authConfigured ? <SettingsRow icon={LogOut} label="退出登录" danger disabled={accountBusy} onClick={() => onLogout(provider)} /> : <>
           {provider.supportsApiKey ? <SettingsRow icon={KeyRound} label="使用 API Key 登录" disabled={accountBusy} onClick={() => onLogin(provider, "api_key")} /> : null}
           {provider.supportsOAuth ? <SettingsRow icon={ExternalLink} label="账号授权登录" disabled={accountBusy} onClick={() => onLogin(provider, "oauth")} /> : null}
         </>}
-        {custom === undefined ? null : <SettingsRow icon={Pencil} label="编辑连接" chevron onClick={() => onEdit(custom)} />}
-      </SettingsGroup> : null}
+        <SettingsRow icon={Pencil} label="编辑连接" chevron onClick={onEdit} />
+      </SettingsGroup>
       <SettingsGroup title={modelTitle}>
         {addedModels.length === 0 ? <div className="settings-model-empty">尚未添加模型</div> : addedModels.map((model) => {
           const configured = customModelById.get(model.id);
@@ -309,9 +398,17 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
           })} /><span><strong>{displayModelName(model.name ?? model.id)}</strong>{model.name === undefined || model.name === model.id ? null : <small>{model.id}</small>}</span></label>;
         })}
       </div>}
+      {fetched === undefined || addSelected.size === 0 ? null : <div className="model-config-options">
+        <label className="settings-checkbox"><input type="checkbox" checked={addReasoning} onChange={(event) => setAddReasoning(event.target.checked)} />思考</label>
+        <label className="settings-checkbox"><input type="checkbox" checked={addVision} onChange={(event) => setAddVision(event.target.checked)} />图片</label>
+      </div>}
       <div className="model-manage-manual">
         <label><span>模型 ID</span><input value={manualId} aria-invalid={manualIdError !== undefined} onChange={(event) => { setManualId(event.target.value); setManualIdError(undefined); }} />{manualIdError === undefined ? null : <small className="field-error">{manualIdError}</small>}</label>
         <label><span>显示名称</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
+        <div className="model-config-options">
+          <label className="settings-checkbox"><input type="checkbox" checked={addReasoning} onChange={(event) => setAddReasoning(event.target.checked)} />思考</label>
+          <label className="settings-checkbox"><input type="checkbox" checked={addVision} onChange={(event) => setAddVision(event.target.checked)} />图片</label>
+        </div>
         <Button variant="secondary" size="sm" disabled={manualId.trim() === "" || modelBusy} onClick={addManualModel}><Plus size={13} />添加</Button>
       </div>
       <div className="dialog-actions"><Button variant="secondary" onClick={() => setView("list")}>返回</Button>{fetched === undefined || addSelected.size === 0 ? null : <Button disabled={modelBusy} onClick={addSelectedModels}>添加所选（{String(addSelected.size)}）</Button>}</div>
@@ -433,13 +530,110 @@ export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete,
         <label><span>ID</span><input value={provider.id} disabled={editing !== undefined} autoFocus={editing === undefined} onChange={(event) => setProvider({ ...provider, id: event.target.value })} aria-invalid={!idAvailable} />{idAvailable ? null : <small className="field-error">该 ID 已被使用</small>}</label>
         <label><span>显示名称</span><input value={provider.name ?? ""} onChange={(event) => setProvider({ ...provider, name: event.target.value || undefined })} /></label>
         <label className="provider-editor-wide"><span>Base URL</span><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" aria-invalid={provider.baseUrl.trim() !== "" && !isValidHttpUrl(provider.baseUrl)} />{provider.baseUrl.trim() === "" || isValidHttpUrl(provider.baseUrl) ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
-        <label className="provider-editor-wide"><span>接口协议</span><select value={provider.api} onChange={(event) => setProvider({ ...provider, api: event.target.value as ManagedProvider["api"] })}>{API_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+        <label className="provider-editor-wide"><span>接口协议</span><select value={provider.api} onChange={(event) => setProvider({ ...provider, api: event.target.value as ManagedApi })}>{API_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
         <label className="settings-checkbox"><input type="checkbox" checked={provider.authHeader} onChange={(event) => setProvider({ ...provider, authHeader: event.target.checked })} /><span>发送 Bearer Authorization</span></label>
       </div>
+      <ConnectionExtras api={provider.api} headers={provider.headers} compat={provider.compat} onChange={({ headers, compat }) => setProvider({ ...provider, headers, compat })} />
+      {editing === undefined || onFetch === undefined ? null : <ConnectionCheck providerId={editing.id} disabled={busy} onFetch={onFetch} />}
       <div className="dialog-actions"><Button variant="secondary" onClick={goBack}>取消</Button><Button disabled={busy || !detailsValid || !idAvailable} onClick={() => { void onSave(provider, editing === undefined); }}><Save size={14} />{busy ? "保存中…" : editing === undefined ? "保存并添加模型" : "保存"}</Button></div>
       {editing === undefined || onDelete === undefined ? null : <SettingsGroup><SettingsRow icon={Trash2} label="删除供应商" danger onClick={() => onDelete(editing)} /></SettingsGroup>}
     </div> : null}
   </SettingsSubpage>;
+}
+
+interface BuiltinOverridePageProps {
+  provider: ProviderStatus;
+  busy: boolean;
+  onSave: (override: ProviderOverride) => Promise<void>;
+  onClear: () => Promise<void>;
+  onFetch?: (providerId: string) => Promise<FetchedModel[]>;
+  onBack: () => void;
+}
+
+/** 内置供应商连接覆盖：只改 URL / 头 / compat，不碰官方模型目录。 */
+export function BuiltinOverridePage({ provider, busy, onSave, onClear, onFetch, onBack }: BuiltinOverridePageProps) {
+  const [baseUrl, setBaseUrl] = useState(provider.override?.baseUrl ?? "");
+  const [headers, setHeaders] = useState<Record<string, string> | undefined>(provider.override?.headers);
+  const [compat, setCompat] = useState<ManagedCompat | undefined>(provider.override?.compat);
+  const urlValid = baseUrl.trim() === "" || isValidHttpUrl(baseUrl);
+  const hasOverride = provider.override !== undefined;
+  return <SettingsSubpage title="编辑连接" onBack={onBack}>
+    <div className="settings-stack">
+      <div className="provider-editor-grid">
+        <label className="provider-editor-wide"><span>Base URL</span><input value={baseUrl} autoFocus onChange={(event) => setBaseUrl(event.target.value)} placeholder="官方默认" aria-invalid={!urlValid} />{urlValid ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
+      </div>
+      <ConnectionExtras headers={headers} compat={compat} onChange={({ headers: nextHeaders, compat: nextCompat }) => { setHeaders(nextHeaders); setCompat(nextCompat); }} />
+      {onFetch === undefined ? null : <ConnectionCheck providerId={provider.id} disabled={busy} onFetch={onFetch} />}
+      <div className="dialog-actions"><Button variant="secondary" onClick={onBack}>取消</Button><Button disabled={busy || !urlValid} onClick={() => { void onSave({ ...(baseUrl.trim() === "" ? {} : { baseUrl: baseUrl.trim() }), headers, compat }); }}><Save size={14} />{busy ? "保存中…" : "保存"}</Button></div>
+      {hasOverride ? <SettingsGroup><SettingsRow icon={Trash2} label="恢复官方连接" danger disabled={busy} onClick={() => { void onClear(); }} /></SettingsGroup> : null}
+    </div>
+  </SettingsSubpage>;
+}
+
+function ConnectionCheck({ providerId, disabled, onFetch }: { providerId: string; disabled: boolean; onFetch: (providerId: string) => Promise<FetchedModel[]> }) {
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | undefined>();
+  const check = () => {
+    setChecking(true);
+    void onFetch(providerId).then((models) => {
+      setResult({ ok: true, text: `已获取 ${String(models.length)} 个模型` });
+    }).catch((error: unknown) => {
+      setResult({ ok: false, text: error instanceof Error ? error.message : "连接失败" });
+    }).finally(() => setChecking(false));
+  };
+  return <div className="connection-check">
+    <Button variant="secondary" size="sm" disabled={disabled || checking} onClick={check}><RotateCw size={13} />{checking ? "检查中…" : "检查连接"}</Button>
+    {result === undefined ? null : <small className={result.ok ? undefined : "field-error"}>{result.text}</small>}
+  </div>;
+}
+
+function ConnectionExtras({ api, headers, compat, onChange }: { api?: ManagedApi; headers?: Record<string, string>; compat?: ManagedCompat; onChange: (next: { headers?: Record<string, string>; compat?: ManagedCompat }) => void }) {
+  const configured = hasAdvancedConnection(headers, compat);
+  const [open, setOpen] = useState(configured);
+  const [headerRows, setHeaderRows] = useState<HeaderRow[]>(() => headersFromRecord(headers));
+  const presetId = matchingPresetId(compat);
+  const commitHeaders = (rows: HeaderRow[]) => {
+    setHeaderRows(rows);
+    onChange({ compat, headers: recordFromHeaders(rows) });
+  };
+  const openaiLike = api !== "anthropic-messages" && api !== "google-generative-ai";
+  const anthropicLike = api === "anthropic-messages";
+  const setCompatField = (patch: ManagedCompat) => {
+    const next = { ...compat };
+    for (const [key, value] of Object.entries(patch) as Array<[keyof ManagedCompat, ManagedCompat[keyof ManagedCompat]]>) {
+      if (value === undefined) delete next[key];
+      else (next as Record<string, unknown>)[key] = value;
+    }
+    onChange({ headers, compat: compactCompat(next) });
+  };
+  return <div className="connection-extras">
+    <button type="button" className="connection-extras-toggle" onClick={() => setOpen((current) => !current)}>
+      {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+      <span>高级连接</span>
+      <small>{connectionSummary(headers, compat)}</small>
+    </button>
+    {open ? <div className="connection-extras-body">
+      {api === "google-generative-ai" ? null : <div className="connection-preset-list">{CONNECTION_PRESETS.map((preset) => <button type="button" key={preset.id} className={`connection-preset ${presetId === preset.id ? "selected" : ""}`} onClick={() => onChange({ headers, compat: preset.compat })}>{preset.label}</button>)}</div>}
+      {openaiLike ? <div className="connection-compat-grid">
+        <label className="settings-checkbox"><input type="checkbox" checked={compat?.supportsDeveloperRole !== false} onChange={(event) => setCompatField({ supportsDeveloperRole: event.target.checked ? undefined : false })} />Developer 角色</label>
+        <label className="settings-checkbox"><input type="checkbox" checked={compat?.supportsReasoningEffort !== false} onChange={(event) => setCompatField({ supportsReasoningEffort: event.target.checked ? undefined : false })} />reasoning_effort</label>
+        <label><span>max tokens 字段</span><select value={compat?.maxTokensField ?? ""} onChange={(event) => setCompatField({ maxTokensField: event.target.value === "" ? undefined : event.target.value as ManagedMaxTokensField })}><option value="">默认</option><option value="max_completion_tokens">max_completion_tokens</option><option value="max_tokens">max_tokens</option></select></label>
+        <label><span>思考协议</span><select value={compat?.thinkingFormat ?? ""} onChange={(event) => setCompatField({ thinkingFormat: event.target.value === "" ? undefined : event.target.value as ManagedThinkingFormat })}><option value="">默认</option>{THINKING_FORMAT_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+      </div> : null}
+      {anthropicLike ? <div className="connection-compat-grid">
+        <label className="settings-checkbox"><input type="checkbox" checked={compat?.supportsEagerToolInputStreaming !== false} onChange={(event) => setCompatField({ supportsEagerToolInputStreaming: event.target.checked ? undefined : false })} />eager tool streaming</label>
+        <label className="settings-checkbox"><input type="checkbox" checked={compat?.allowEmptySignature === true} onChange={(event) => setCompatField({ allowEmptySignature: event.target.checked ? true : undefined })} />允许空 thinking 签名</label>
+      </div> : null}
+      <div className="connection-headers">
+        {headerRows.map((row) => <div className="connection-header-row" key={row.id}>
+          <input value={row.name} placeholder="Header" onChange={(event) => commitHeaders(headerRows.map((item) => item.id === row.id ? { ...item, name: event.target.value } : item))} />
+          <input value={row.value} placeholder="值" onChange={(event) => commitHeaders(headerRows.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} />
+          <Button variant="ghost" size="icon" aria-label={`删除 ${row.name || "请求头"}`} title="删除" onClick={() => commitHeaders(headerRows.filter((item) => item.id !== row.id))}><Trash2 size={14} /></Button>
+        </div>)}
+        {headerRows.length >= 20 ? null : <Button variant="secondary" size="sm" onClick={() => commitHeaders([...headerRows, { id: `new-${String(Date.now())}`, name: "", value: "" }])}><Plus size={13} />请求头</Button>}
+      </div>
+    </div> : null}
+  </div>;
 }
 
 /** OAuth/API Key 登录过程必须覆盖在当前页之上。 */

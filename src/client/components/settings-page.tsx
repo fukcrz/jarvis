@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
-import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderStatus, Workspace } from "../../shared/protocol";
+import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderOverride, ProviderStatus, Workspace } from "../../shared/protocol";
 import { api } from "../api";
 import { isNotificationEnabled, requestNotificationPermission, setNotificationEnabled } from "../notifications";
 import { Button } from "./ui/button";
@@ -14,6 +14,7 @@ import {
   isProviderUsable,
   modelKey,
   ModelScopePage,
+  BuiltinOverridePage,
   ProviderDetailPage,
   ProvidersListPage,
   ProviderWizardPage,
@@ -39,6 +40,7 @@ type SettingsRoute =
   | { page: "provider"; providerId: string }
   | { page: "provider-new" }
   | { page: "provider-edit"; providerId: string }
+  | { page: "provider-override"; providerId: string }
   | { page: "model-scope" }
   | { page: "workspaces" }
   | { page: "tunnel" }
@@ -122,7 +124,7 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
   useEffect(() => {
     setStack((current) => {
       const next = current.filter((item) => {
-        if (item.page === "provider") return providers.some((provider) => provider.id === item.providerId);
+        if (item.page === "provider" || item.page === "provider-override") return providers.some((provider) => provider.id === item.providerId);
         if (item.page === "provider-edit") return customProviders.some((provider) => provider.id === item.providerId);
         return true;
       });
@@ -174,6 +176,32 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
       showMessage(`已退出 ${target.name}`);
     } catch (error) {
       showMessage(error instanceof Error ? error.message : "退出登录失败", "error");
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const saveOverride = async (providerId: string, override: ProviderOverride) => {
+    setBusy("provider");
+    try {
+      await api.saveProviderOverride(providerId, override);
+      showMessage("连接已保存");
+      await reload();
+      goBack();
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : "连接保存失败", "error");
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const clearOverride = async (providerId: string) => {
+    setBusy("provider");
+    try {
+      await api.removeProviderOverride(providerId);
+      showMessage("已恢复官方连接");
+      await reload();
+      goBack();
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : "连接恢复失败", "error");
     } finally {
       setBusy(undefined);
     }
@@ -344,12 +372,15 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
     const provider = providers.find((item) => item.id === route.providerId);
     page = provider === undefined ? <SettingsSubpage title="供应商" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <ProviderDetailPage provider={provider} custom={customById.get(provider.id)} draft={enabledDraft} busy={busy}
       onToggleModel={toggleModelInstant} onEnableModels={enableModelsInstant} onCustomModels={persistCustomModels} onLogin={startLogin} onLogout={logout}
-      onEdit={(custom) => push({ page: "provider-edit", providerId: custom.id })} onFetch={api.fetchProviderModels} onBack={goBack} />;
+      onEdit={() => push(customById.has(provider.id) ? { page: "provider-edit", providerId: provider.id } : { page: "provider-override", providerId: provider.id })} onFetch={api.fetchProviderModels} onBack={goBack} />;
   } else if (route.page === "provider-new") {
     page = <ProviderWizardPage providers={providers} busy={busy === "provider"} onSave={saveProvider} onLogin={startLogin} onBack={goBack} />;
   } else if (route.page === "provider-edit") {
     const custom = customProviders.find((item) => item.id === route.providerId);
-    page = custom === undefined ? <SettingsSubpage title="供应商" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <ProviderWizardPage providers={providers} editing={custom} busy={busy === "provider"} onSave={saveProvider} onDelete={setProviderRemoveTarget} onLogin={startLogin} onBack={goBack} />;
+    page = custom === undefined ? <SettingsSubpage title="供应商" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <ProviderWizardPage providers={providers} editing={custom} busy={busy === "provider"} onSave={saveProvider} onDelete={setProviderRemoveTarget} onLogin={startLogin} onFetch={api.fetchProviderModels} onBack={goBack} />;
+  } else if (route.page === "provider-override") {
+    const provider = providers.find((item) => item.id === route.providerId);
+    page = provider === undefined ? <SettingsSubpage title="编辑连接" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <BuiltinOverridePage provider={provider} busy={busy === "provider"} onSave={(override) => saveOverride(provider.id, override)} onClear={() => clearOverride(provider.id)} onFetch={api.fetchProviderModels} onBack={goBack} />;
   } else if (route.page === "model-scope") {
     page = <ModelScopePage providers={providers} customById={customById} draft={enabledDraft} busy={busy === "model-manager"} onToggleModel={toggleModelInstant} onBack={goBack} />;
   } else if (route.page === "workspaces") {
