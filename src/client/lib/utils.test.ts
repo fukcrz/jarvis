@@ -136,6 +136,16 @@ describe("session list window", () => {
     expect(collapsed.expanded).toBe(false);
   });
 
+  it("does not remain expanded after the list shrinks into the default window", () => {
+    const items = Array.from({ length: SESSIONS_COLLAPSED_LIMIT + SESSIONS_PAGE_SIZE }, (_, index) => idle(`s-${index}`));
+    expect(sessionListWindow(items, 1).expanded).toBe(true);
+
+    const cleaned = sessionListWindow(items.slice(0, SESSIONS_COLLAPSED_LIMIT), 1);
+    expect(cleaned.sessions).toHaveLength(SESSIONS_COLLAPSED_LIMIT);
+    expect(cleaned.hasMore).toBe(false);
+    expect(cleaned.expanded).toBe(false);
+  });
+
   it("treats stopping sessions as running", () => {
     const items = [...Array.from({ length: 6 }, (_, index) => idle(`s-${index}`)), stopping("stopping-1")];
     const window = sessionListWindow(items, 0);

@@ -109,7 +109,7 @@ export interface SessionListWindow {
   sessions: SessionSummary[];
   /** 是否还有未展示的会话（应显示“展开更多”）。 */
   hasMore: boolean;
-  /** 是否已展开过（应显示“收起”）。 */
+  /** 是否展示了超过默认窗口的会话（应显示“收起”）。 */
   expanded: boolean;
 }
 
@@ -128,7 +128,7 @@ export function sessionListWindow(sessions: SessionSummary[], expandSteps: numbe
   return {
     sessions: ordered.slice(0, visibleCount),
     hasMore: ordered.length > visibleCount,
-    expanded: expandSteps > 0,
+    expanded: expandSteps > 0 && ordered.length > collapsedCount,
   };
 }
 
