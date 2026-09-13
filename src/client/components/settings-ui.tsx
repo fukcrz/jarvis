@@ -30,6 +30,28 @@ export function SettingsSubpage({ title, onBack, action, children }: { title: st
   return <><SettingsTopBar title={title} onBack={onBack} action={action} /><SettingsShell>{children}</SettingsShell></>;
 }
 
+/** 编辑页表单：无卡片，组标题下才画分隔线。 */
+export function SettingsForm({ children }: { children: ReactNode }) {
+  return <div className="settings-form">{children}</div>;
+}
+
+/** 表单分组：标题下一条线，字段之间不再画线。 */
+export function SettingsFormSection({ title, extra, onTitleClick, children }: { title?: string; extra?: ReactNode; onTitleClick?: () => void; children?: ReactNode }) {
+  const extraNode = extra === undefined ? null : <span className="settings-form-section-extra">{extra}</span>;
+  const heading = title === undefined ? null : onTitleClick === undefined
+    ? <h2>{title}{extraNode}</h2>
+    : <button type="button" className="settings-form-section-toggle" onClick={onTitleClick}><span>{title}</span>{extraNode}</button>;
+  return <section className="settings-form-section">{heading}{children}</section>;
+}
+
+/** 表单里的开关行：左标签右开关。 */
+export function SettingsFormSwitch({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange: (next: boolean) => void }) {
+  return <div className="settings-form-switch">
+    <span>{label}</span>
+    <SettingsSwitch checked={checked} disabled={disabled} onChange={onChange} label={label} />
+  </div>;
+}
+
 /** 分组卡片：可选组标题 + 圆角容器，行间自动细分隔线。 */
 export function SettingsGroup({ title, children }: { title?: string; children: ReactNode }) {
   return <section className="settings-block">

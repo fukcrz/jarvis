@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { Boxes, Check, ExternalLink, KeyRound, LogOut, Pencil, Plus, RotateCw, Save, Search, Trash2, X } from "lucide-react";
+import { Boxes, Check, ExternalLink, KeyRound, LogOut, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import type { AuthLoginOperation, EnabledModelsStatus, FetchedModel, ManagedApi, ManagedCompat, ManagedMaxTokensField, ManagedModel, ManagedProvider, ManagedThinkingFormat, ProviderOverride, ProviderStatus } from "../../shared/protocol";
 import { displayModelName } from "../model-display";
 import { Button } from "./ui/button";
-import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsSubpage, SettingsSwitch } from "./settings-ui";
+import { SettingsEmpty, SettingsForm, SettingsFormSection, SettingsFormSwitch, SettingsGroup, SettingsRow, SettingsSubpage, SettingsSwitch } from "./settings-ui";
 
 export const EMPTY_PROVIDER: ManagedProvider = { id: "", baseUrl: "", api: "openai-completions", authHeader: true, models: [] };
 
@@ -315,9 +315,9 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
     if (custom !== undefined) void onCustomModels(provider.id, custom.models.filter((model) => model.id !== modelId));
     else onToggleModel(provider.id, modelId);
   };
-  const saveEdit = (next: ManagedModel) => {
+  const saveEdit = () => {
     if (custom === undefined || editModel === undefined) return;
-    void onCustomModels(provider.id, custom.models.map((model) => model.id === editModel.id ? next : model)).then((ok) => {
+    void onCustomModels(provider.id, custom.models.map((model) => model.id === editModel.id ? editModel : model)).then((ok) => {
       if (ok) {
         setEditModel(undefined);
         setView("list");
@@ -331,7 +331,7 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
     ? `模型 · 已启用 ${String(addedModels.length)}/${String(provider.models.length)}`
     : `模型 · 已配置 ${String(addedModels.length)}`;
 
-  return <SettingsSubpage title={title} onBack={handleBack}>
+  return <SettingsSubpage title={title} onBack={handleBack} action={view === "edit" && editModel !== undefined ? <button type="button" className="settings-topbar-action" disabled={modelBusy} onClick={saveEdit}>保存</button> : undefined}>
     {view === "list" ? <div className="settings-stack">
       <SettingsGroup>
         <div className="settings-account">
@@ -364,9 +364,9 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
         <SettingsRow icon={Plus} label="添加模型" accent disabled={modelBusy || (custom === undefined && provider.models.length === 0)} onClick={openAddModels} />
       </SettingsGroup>
     </div> : null}
-    {view === "add" && custom === undefined ? <div className="settings-stack">
+    {view === "add" && custom === undefined ? <SettingsForm>
       <label className="provider-picker-search"><Search size={14} /><input autoFocus value={addSearch} onChange={(event) => setAddSearch(event.target.value)} placeholder="搜索模型" /></label>
-      {addCandidates.length === 0 ? <div className="model-empty">没有可添加的模型</div> : <SettingsGroup>
+      {addCandidates.length === 0 ? <div className="model-empty">没有可添加的模型</div> : <SettingsFormSection>
         {addCandidates.map((model) => {
           const key = modelKey(provider.id, model.id);
           const selected = addSelected.has(key);
@@ -376,20 +376,18 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
             return next;
           })} /><span><strong>{displayModelName(model.name ?? model.id)}</strong>{model.name === undefined || model.name === model.id ? null : <small>{model.id}</small>}</span></label>;
         })}
-      </SettingsGroup>}
-      {addSelected.size === 0 ? null : <SettingsGroup><SettingsRow icon={Plus} label={`启用所选（${String(addSelected.size)}）`} accent disabled={modelBusy} onClick={() => {
+      </SettingsFormSection>}
+      {addSelected.size === 0 ? null : <button type="button" className="settings-form-link" disabled={modelBusy} onClick={() => {
         onEnableModels(provider.id, [...addSelected].map((key) => splitModelKey(key).id));
         setView("list");
-      }} /></SettingsGroup>}
-    </div> : null}
-    {view === "add" && custom !== undefined ? <div className="settings-stack">
-      <SettingsGroup>
-        <SettingsRow icon={RotateCw} label={fetching ? "获取中…" : "从接口获取模型"} value={fetched === undefined ? undefined : `已获取 ${String(fetched.length)}`} disabled={fetching || modelBusy} onClick={() => {
-          setFetching(true);
-          void onFetch(provider.id).then(applyFetched).catch(() => { setFetched(undefined); }).finally(() => setFetching(false));
-        }} />
-      </SettingsGroup>
-      {fetched === undefined ? null : <SettingsGroup title={addCandidates.length === 0 ? "获取到的模型都已添加" : undefined}>
+      }}>启用所选（{String(addSelected.size)}）</button>}
+    </SettingsForm> : null}
+    {view === "add" && custom !== undefined ? <SettingsForm>
+      <button type="button" className="settings-form-link" disabled={fetching || modelBusy} onClick={() => {
+        setFetching(true);
+        void onFetch(provider.id).then(applyFetched).catch(() => { setFetched(undefined); }).finally(() => setFetching(false));
+      }}>{fetching ? "获取中…" : fetched === undefined ? "从接口获取模型" : `已获取 ${String(fetched.length)}`}</button>
+      {fetched === undefined ? null : <SettingsFormSection title={addCandidates.length === 0 ? "获取到的模型都已添加" : undefined}>
         {addCandidates.length === 0 ? null : addCandidates.map((model) => {
           const key = modelKey(provider.id, model.id);
           const selected = addSelected.has(key);
@@ -399,37 +397,31 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
             return next;
           })} /><span><strong>{displayModelName(model.name ?? model.id)}</strong>{model.name === undefined || model.name === model.id ? null : <small>{model.id}</small>}</span></label>;
         })}
-      </SettingsGroup>}
-      {fetched === undefined || addSelected.size === 0 ? null : <SettingsGroup>
-        <SettingsRow label="思考" control={<SettingsSwitch checked={addReasoning} onChange={setAddReasoning} label="思考" />} />
-        <SettingsRow label="图片" control={<SettingsSwitch checked={addVision} onChange={setAddVision} label="图片" />} />
-        <SettingsRow icon={Plus} label={`添加所选（${String(addSelected.size)}）`} accent disabled={modelBusy} onClick={addSelectedModels} />
-      </SettingsGroup>}
-      <SettingsGroup title="手动添加">
+      </SettingsFormSection>}
+      {fetched === undefined || addSelected.size === 0 ? null : <SettingsFormSection>
+        <SettingsFormSwitch label="思考" checked={addReasoning} onChange={setAddReasoning} />
+        <SettingsFormSwitch label="图片" checked={addVision} onChange={setAddVision} />
+        <button type="button" className="settings-form-link" disabled={modelBusy} onClick={addSelectedModels}>添加所选（{String(addSelected.size)}）</button>
+      </SettingsFormSection>}
+      <SettingsFormSection title="手动添加">
         <label className="settings-form-field"><span>模型 ID</span><input value={manualId} aria-invalid={manualIdError !== undefined} onChange={(event) => { setManualId(event.target.value); setManualIdError(undefined); }} />{manualIdError === undefined ? null : <small className="field-error">{manualIdError}</small>}</label>
         <label className="settings-form-field"><span>显示名称</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
-        <SettingsRow label="思考" control={<SettingsSwitch checked={addReasoning} onChange={setAddReasoning} label="思考" />} />
-        <SettingsRow label="图片" control={<SettingsSwitch checked={addVision} onChange={setAddVision} label="图片" />} />
-        <SettingsRow icon={Plus} label="添加" accent disabled={manualId.trim() === "" || modelBusy} onClick={addManualModel} />
-      </SettingsGroup>
-    </div> : null}
-    {view === "edit" && editModel !== undefined ? <EditModelForm model={editModel} onSave={saveEdit} /> : null}
+        <SettingsFormSwitch label="思考" checked={addReasoning} onChange={setAddReasoning} />
+        <SettingsFormSwitch label="图片" checked={addVision} onChange={setAddVision} />
+        <button type="button" className="settings-form-link" disabled={manualId.trim() === "" || modelBusy} onClick={addManualModel}>添加</button>
+      </SettingsFormSection>
+    </SettingsForm> : null}
+    {view === "edit" && editModel !== undefined ? <SettingsForm>
+      <SettingsFormSection>
+        <label className="settings-form-field"><span>模型 ID</span><input value={editModel.id} disabled /></label>
+        <label className="settings-form-field"><span>显示名称</span><input value={editModel.name ?? ""} onChange={(event) => setEditModel({ ...editModel, name: event.target.value || undefined })} /></label>
+        <label className="settings-form-field"><span>上下文窗口</span><input type="number" min={1} value={editModel.contextWindow ?? ""} onChange={(event) => setEditModel({ ...editModel, contextWindow: event.target.value ? Number(event.target.value) : undefined })} placeholder="自动" /></label>
+        <label className="settings-form-field"><span>最大输出</span><input type="number" min={1} value={editModel.maxTokens ?? ""} onChange={(event) => setEditModel({ ...editModel, maxTokens: event.target.value ? Number(event.target.value) : undefined })} placeholder="自动" /></label>
+        <SettingsFormSwitch label="思考" checked={editModel.reasoning} onChange={(checked) => setEditModel({ ...editModel, reasoning: checked })} />
+        <SettingsFormSwitch label="图片" checked={editModel.vision} onChange={(checked) => setEditModel({ ...editModel, vision: checked })} />
+      </SettingsFormSection>
+    </SettingsForm> : null}
   </SettingsSubpage>;
-}
-
-function EditModelForm({ model, onSave }: { model: ManagedModel; onSave: (model: ManagedModel) => void }) {
-  const [draft, setDraft] = useState<ManagedModel>({ ...model });
-  return <div className="settings-stack">
-    <SettingsGroup>
-      <label className="settings-form-field"><span>模型 ID</span><input value={draft.id} disabled /></label>
-      <label className="settings-form-field"><span>显示名称</span><input value={draft.name ?? ""} onChange={(event) => setDraft({ ...draft, name: event.target.value || undefined })} /></label>
-      <label className="settings-form-field"><span>上下文窗口</span><input type="number" min={1} value={draft.contextWindow ?? ""} onChange={(event) => setDraft({ ...draft, contextWindow: event.target.value ? Number(event.target.value) : undefined })} placeholder="自动" /></label>
-      <label className="settings-form-field"><span>最大输出</span><input type="number" min={1} value={draft.maxTokens ?? ""} onChange={(event) => setDraft({ ...draft, maxTokens: event.target.value ? Number(event.target.value) : undefined })} placeholder="自动" /></label>
-      <SettingsRow label="思考" control={<SettingsSwitch checked={draft.reasoning} onChange={(checked) => setDraft({ ...draft, reasoning: checked })} label="思考" />} />
-      <SettingsRow label="图片" control={<SettingsSwitch checked={draft.vision} onChange={(checked) => setDraft({ ...draft, vision: checked })} label="图片" />} />
-    </SettingsGroup>
-    <SettingsGroup><SettingsRow icon={Save} label="保存" accent onClick={() => onSave(draft)} /></SettingsGroup>
-  </div>;
 }
 
 interface ModelScopePageProps {
@@ -496,7 +488,11 @@ export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete,
     else setStage({ kind: "custom-protocol" });
   };
 
-  return <SettingsSubpage title={title} onBack={goBack} action={stage.kind === "custom-connection" ? <button type="button" className="settings-topbar-action" disabled={busy || !detailsValid || !idAvailable} onClick={() => { void onSave(provider, editing === undefined); }}>{busy ? "保存中…" : "保存"}</button> : undefined}>
+  const check = useConnectionCheck(editing?.id, onFetch);
+  return <SettingsSubpage title={title} onBack={goBack} action={stage.kind === "custom-connection" ? <>
+    {check.available ? <button type="button" className="settings-topbar-action muted" disabled={busy || check.checking} onClick={check.run}>{check.checking ? "检查中…" : check.result?.ok === true ? check.result.text : "检查连接"}</button> : null}
+    <button type="button" className="settings-topbar-action" disabled={busy || !detailsValid || !idAvailable} onClick={() => { void onSave(provider, editing === undefined); }}>{busy ? "保存中…" : "保存"}</button>
+  </> : undefined}>
     {stage.kind === "pick" ? <div className="settings-stack">
       <label className="provider-picker-search"><Search size={14} /><input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索供应商" /></label>
       <div className="api-choice-list provider-picker-list">
@@ -523,16 +519,18 @@ export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete,
       </button>)}</div>
       <div className="dialog-actions"><Button onClick={() => setStage({ kind: "custom-connection" })}>下一步</Button></div>
     </div> : null}
-    {stage.kind === "custom-connection" ? <SettingsGroup>
-      <label className="settings-form-field"><span>ID</span><input value={provider.id} disabled={editing !== undefined} autoFocus={editing === undefined} onChange={(event) => setProvider({ ...provider, id: event.target.value })} aria-invalid={!idAvailable} />{idAvailable ? null : <small className="field-error">该 ID 已被使用</small>}</label>
-      <label className="settings-form-field"><span>显示名称</span><input value={provider.name ?? ""} onChange={(event) => setProvider({ ...provider, name: event.target.value || undefined })} /></label>
-      <label className="settings-form-field"><span>Base URL</span><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" aria-invalid={provider.baseUrl.trim() !== "" && !isValidHttpUrl(provider.baseUrl)} />{provider.baseUrl.trim() === "" || isValidHttpUrl(provider.baseUrl) ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
-      <label className="settings-form-field"><span>接口协议</span><select value={provider.api} onChange={(event) => setProvider({ ...provider, api: event.target.value as ManagedApi })}>{API_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
-      <SettingsRow label="Bearer Authorization" control={<SettingsSwitch checked={provider.authHeader} onChange={(checked) => setProvider({ ...provider, authHeader: checked })} label="Bearer Authorization" />} />
-      {editing === undefined || onFetch === undefined ? null : <ConnectionCheck providerId={editing.id} disabled={busy} onFetch={onFetch} />}
+    {stage.kind === "custom-connection" ? <SettingsForm>
+      <SettingsFormSection>
+        <label className="settings-form-field"><span>ID</span><input value={provider.id} disabled={editing !== undefined} autoFocus={editing === undefined} onChange={(event) => setProvider({ ...provider, id: event.target.value })} aria-invalid={!idAvailable} />{idAvailable ? null : <small className="field-error">该 ID 已被使用</small>}</label>
+        <label className="settings-form-field"><span>显示名称</span><input value={provider.name ?? ""} onChange={(event) => setProvider({ ...provider, name: event.target.value || undefined })} /></label>
+        <label className="settings-form-field"><span>Base URL</span><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" aria-invalid={provider.baseUrl.trim() !== "" && !isValidHttpUrl(provider.baseUrl)} />{provider.baseUrl.trim() === "" || isValidHttpUrl(provider.baseUrl) ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
+        <label className="settings-form-field"><span>接口协议</span><select value={provider.api} onChange={(event) => setProvider({ ...provider, api: event.target.value as ManagedApi })}>{API_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+        <SettingsFormSwitch label="Bearer Authorization" checked={provider.authHeader} onChange={(checked) => setProvider({ ...provider, authHeader: checked })} />
+      </SettingsFormSection>
       <ConnectionExtras api={provider.api} headers={provider.headers} compat={provider.compat} onChange={({ headers, compat }) => setProvider({ ...provider, headers, compat })} />
-      {editing === undefined || onDelete === undefined ? null : <SettingsRow icon={Trash2} label="删除供应商" danger onClick={() => onDelete(editing)} />}
-    </SettingsGroup> : null}
+      {check.result === undefined || check.result.ok ? null : <p className="field-error">{check.result.text}</p>}
+      {editing === undefined || onDelete === undefined ? null : <button type="button" className="settings-form-link danger" onClick={() => onDelete(editing)}>删除供应商</button>}
+    </SettingsForm> : null}
   </SettingsSubpage>;
 }
 
@@ -552,30 +550,36 @@ export function BuiltinOverridePage({ provider, busy, onSave, onClear, onFetch, 
   const [compat, setCompat] = useState<ManagedCompat | undefined>(provider.override?.compat);
   const urlValid = baseUrl.trim() === "" || isValidHttpUrl(baseUrl);
   const hasOverride = provider.override !== undefined;
-  return <SettingsSubpage title="编辑连接" onBack={onBack} action={<button type="button" className="settings-topbar-action" disabled={busy || !urlValid} onClick={() => { void onSave({ ...(baseUrl.trim() === "" ? {} : { baseUrl: baseUrl.trim() }), headers, compat }); }}>{busy ? "保存中…" : "保存"}</button>}>
-    <SettingsGroup>
-      <label className="settings-form-field"><span>Base URL</span><input value={baseUrl} autoFocus onChange={(event) => setBaseUrl(event.target.value)} placeholder="官方默认" aria-invalid={!urlValid} />{urlValid ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
-      {onFetch === undefined ? null : <ConnectionCheck providerId={provider.id} disabled={busy} onFetch={onFetch} />}
+  const check = useConnectionCheck(provider.id, onFetch);
+  return <SettingsSubpage title="编辑连接" onBack={onBack} action={<>
+    {check.available ? <button type="button" className="settings-topbar-action muted" disabled={busy || check.checking} onClick={check.run}>{check.checking ? "检查中…" : check.result?.ok === true ? check.result.text : "检查连接"}</button> : null}
+    <button type="button" className="settings-topbar-action" disabled={busy || !urlValid} onClick={() => { void onSave({ ...(baseUrl.trim() === "" ? {} : { baseUrl: baseUrl.trim() }), headers, compat }); }}>{busy ? "保存中…" : "保存"}</button>
+  </>}>
+    <SettingsForm>
+      <SettingsFormSection>
+        <label className="settings-form-field"><span>Base URL</span><input value={baseUrl} autoFocus onChange={(event) => setBaseUrl(event.target.value)} placeholder="官方默认" aria-invalid={!urlValid} />{urlValid ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
+      </SettingsFormSection>
       <ConnectionExtras headers={headers} compat={compat} onChange={({ headers: nextHeaders, compat: nextCompat }) => { setHeaders(nextHeaders); setCompat(nextCompat); }} />
-      {hasOverride ? <SettingsRow icon={Trash2} label="恢复官方连接" danger disabled={busy} onClick={() => { void onClear(); }} /> : null}
-    </SettingsGroup>
+      {check.result === undefined || check.result.ok ? null : <p className="field-error">{check.result.text}</p>}
+      {hasOverride ? <button type="button" className="settings-form-link danger" disabled={busy} onClick={() => { void onClear(); }}>恢复官方连接</button> : null}
+    </SettingsForm>
   </SettingsSubpage>;
 }
 
-function ConnectionCheck({ providerId, disabled, onFetch }: { providerId: string; disabled: boolean; onFetch: (providerId: string) => Promise<FetchedModel[]> }) {
+function useConnectionCheck(providerId: string | undefined, onFetch?: (providerId: string) => Promise<FetchedModel[]>) {
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | undefined>();
-  return <>
-    <SettingsRow icon={RotateCw} label={checking ? "检查中…" : "检查连接"} value={result?.ok === true ? result.text : undefined} disabled={disabled || checking} onClick={() => {
-      setChecking(true);
-      void onFetch(providerId).then((models) => {
-        setResult({ ok: true, text: `已获取 ${String(models.length)}` });
-      }).catch((error: unknown) => {
-        setResult({ ok: false, text: error instanceof Error ? error.message : "连接失败" });
-      }).finally(() => setChecking(false));
-    }} />
-    {result === undefined || result.ok ? null : <p className="field-error settings-form-field">{result.text}</p>}
-  </>;
+  const available = providerId !== undefined && onFetch !== undefined;
+  const run = () => {
+    if (providerId === undefined || onFetch === undefined) return;
+    setChecking(true);
+    void onFetch(providerId).then((models) => {
+      setResult({ ok: true, text: `已获取 ${String(models.length)}` });
+    }).catch((error: unknown) => {
+      setResult({ ok: false, text: error instanceof Error ? error.message : "连接失败" });
+    }).finally(() => setChecking(false));
+  };
+  return { available, checking, result, run };
 }
 
 function ConnectionExtras({ api, headers, compat, onChange }: { api?: ManagedApi; headers?: Record<string, string>; compat?: ManagedCompat; onChange: (next: { headers?: Record<string, string>; compat?: ManagedCompat }) => void }) {
@@ -599,28 +603,29 @@ function ConnectionExtras({ api, headers, compat, onChange }: { api?: ManagedApi
     }
     onChange({ headers, compat: compactCompat(next) });
   };
-  return <>
-    <SettingsRow label="高级" value={connectionSummary(headers, compat)} onClick={() => setOpen((current) => !current)} />
+  return <SettingsFormSection title="高级" extra={connectionSummary(headers, compat)} onTitleClick={() => setOpen((current) => !current)}>
     {open ? <>
       {api === "google-generative-ai" ? null : <div className="connection-preset-list">{CONNECTION_PRESETS.map((preset) => <button type="button" key={preset.id} className={`connection-preset ${!showCustom && presetId === preset.id ? "selected" : ""}`} onClick={() => { setCustomMode(false); onChange({ headers, compat: preset.compat }); }}>{preset.label}</button>)}<button type="button" className={`connection-preset ${showCustom ? "selected" : ""}`} onClick={() => setCustomMode(true)}>自定义</button></div>}
       {showCustom && openaiLike ? <>
-        <SettingsRow label="开发者角色" control={<SettingsSwitch checked={compat?.supportsDeveloperRole !== false} onChange={(checked) => setCompatField({ supportsDeveloperRole: checked ? undefined : false })} label="开发者角色" />} />
-        <SettingsRow label="推理力度" control={<SettingsSwitch checked={compat?.supportsReasoningEffort !== false} onChange={(checked) => setCompatField({ supportsReasoningEffort: checked ? undefined : false })} label="推理力度" />} />
+        <SettingsFormSwitch label="开发者角色" checked={compat?.supportsDeveloperRole !== false} onChange={(checked) => setCompatField({ supportsDeveloperRole: checked ? undefined : false })} />
+        <SettingsFormSwitch label="推理力度" checked={compat?.supportsReasoningEffort !== false} onChange={(checked) => setCompatField({ supportsReasoningEffort: checked ? undefined : false })} />
         <label className="settings-form-field"><span>输出上限字段</span><select value={compat?.maxTokensField ?? ""} onChange={(event) => setCompatField({ maxTokensField: event.target.value === "" ? undefined : event.target.value as ManagedMaxTokensField })}><option value="">默认</option><option value="max_completion_tokens">max_completion_tokens</option><option value="max_tokens">max_tokens</option></select></label>
         <label className="settings-form-field"><span>思考协议</span><select value={compat?.thinkingFormat ?? ""} onChange={(event) => setCompatField({ thinkingFormat: event.target.value === "" ? undefined : event.target.value as ManagedThinkingFormat })}><option value="">默认</option>{THINKING_FORMAT_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
       </> : null}
       {showCustom && anthropicLike ? <>
-        <SettingsRow label="工具流式输出" control={<SettingsSwitch checked={compat?.supportsEagerToolInputStreaming !== false} onChange={(checked) => setCompatField({ supportsEagerToolInputStreaming: checked ? undefined : false })} label="工具流式输出" />} />
-        <SettingsRow label="允许空签名" control={<SettingsSwitch checked={compat?.allowEmptySignature === true} onChange={(checked) => setCompatField({ allowEmptySignature: checked ? true : undefined })} label="允许空签名" />} />
+        <SettingsFormSwitch label="工具流式输出" checked={compat?.supportsEagerToolInputStreaming !== false} onChange={(checked) => setCompatField({ supportsEagerToolInputStreaming: checked ? undefined : false })} />
+        <SettingsFormSwitch label="允许空签名" checked={compat?.allowEmptySignature === true} onChange={(checked) => setCompatField({ allowEmptySignature: checked ? true : undefined })} />
       </> : null}
       {headerRows.map((row) => <div className="connection-header-row" key={row.id}>
-        <input value={row.name} placeholder="Header" onChange={(event) => commitHeaders(headerRows.map((item) => item.id === row.id ? { ...item, name: event.target.value } : item))} />
+        <div className="connection-header-name">
+          <input value={row.name} placeholder="请求头" onChange={(event) => commitHeaders(headerRows.map((item) => item.id === row.id ? { ...item, name: event.target.value } : item))} />
+          <Button variant="ghost" size="icon" aria-label={`删除 ${row.name || "请求头"}`} title="删除" onClick={() => commitHeaders(headerRows.filter((item) => item.id !== row.id))}><Trash2 size={14} /></Button>
+        </div>
         <input value={row.value} placeholder="值" onChange={(event) => commitHeaders(headerRows.map((item) => item.id === row.id ? { ...item, value: event.target.value } : item))} />
-        <Button variant="ghost" size="icon" aria-label={`删除 ${row.name || "请求头"}`} title="删除" onClick={() => commitHeaders(headerRows.filter((item) => item.id !== row.id))}><Trash2 size={14} /></Button>
       </div>)}
-      {headerRows.length >= 20 ? null : <SettingsRow icon={Plus} label="请求头" accent onClick={() => commitHeaders([...headerRows, { id: `new-${String(Date.now())}`, name: "", value: "" }])} />}
+      {headerRows.length >= 20 ? null : <button type="button" className="settings-form-link" onClick={() => commitHeaders([...headerRows, { id: `new-${String(Date.now())}`, name: "", value: "" }])}>请求头</button>}
     </> : null}
-  </>;
+  </SettingsFormSection>;
 }
 
 /** OAuth/API Key 登录过程必须覆盖在当前页之上。 */

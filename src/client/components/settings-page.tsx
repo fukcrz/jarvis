@@ -20,7 +20,7 @@ import {
   ProviderWizardPage,
   splitModelKey,
 } from "./settings-providers";
-import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsShell, SettingsSubpage, SettingsSwitch, SettingsTopBar } from "./settings-ui";
+import { SettingsEmpty, SettingsFormSection, SettingsGroup, SettingsRow, SettingsShell, SettingsSubpage, SettingsSwitch, SettingsTopBar } from "./settings-ui";
 
 interface SettingsPageProps {
   assistantName: string;
@@ -409,10 +409,11 @@ function AssistantNamePage({ initialName, busy, onSave, onBack }: { initialName:
     event.preventDefault();
     void onSave(draft).then((saved) => { if (saved) onBack(); });
   };
-  return <SettingsSubpage title="助手名称" onBack={onBack}>
-    <form className="settings-stack" onSubmit={save}>
-      <SettingsGroup><label className="settings-form-field"><span>名称</span><input autoFocus value={draft} maxLength={64} onChange={(event) => setDraft(event.target.value)} /></label></SettingsGroup>
-      <Button type="submit" disabled={busy || draft.trim() === ""}>保存</Button>
+  return <SettingsSubpage title="助手名称" onBack={onBack} action={<button type="button" className="settings-topbar-action" disabled={busy || draft.trim() === ""} onClick={() => { void onSave(draft).then((saved) => { if (saved) onBack(); }); }}>{busy ? "保存中…" : "保存"}</button>}>
+    <form className="settings-form" onSubmit={save}>
+      <SettingsFormSection>
+        <label className="settings-form-field"><span>名称</span><input autoFocus value={draft} maxLength={64} onChange={(event) => setDraft(event.target.value)} /></label>
+      </SettingsFormSection>
     </form>
   </SettingsSubpage>;
 }

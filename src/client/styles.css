@@ -158,6 +158,9 @@ button.settings-row:disabled { opacity: .5; cursor: default; }
 .settings-switch[aria-checked="true"] { background: var(--accent); }
 .settings-switch[aria-checked="true"]::after { transform: translateX(16px); }
 .settings-switch:disabled { opacity: .5; cursor: default; }
+.settings-form-switch .settings-switch { width: 32px; height: 18px; }
+.settings-form-switch .settings-switch::after { width: 14px; height: 14px; }
+.settings-form-switch .settings-switch[aria-checked="true"]::after { transform: translateX(14px); }
 /* --- 供应商详情卡 / 页面内表单 --- */
 .settings-account { display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
 .settings-account .provider-avatar { width: 28px; height: 28px; border-radius: 7px; font-size: 12px; }
@@ -167,10 +170,30 @@ button.settings-row:disabled { opacity: .5; cursor: default; }
 .settings-model-empty { padding: 18px 12px; color: var(--muted); font-size: 12px; text-align: center; }
 .settings-fetch-models { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 11px; }
 .settings-fetch-models span:empty { display: none; }
-.settings-form-field { display: grid; gap: 2px; padding: 6px 12px 8px; color: var(--muted); font-size: 10px; }
-.settings-form-field input, .settings-form-field select { width: 100%; min-height: var(--ui-control); border: 0; border-radius: 0; background: transparent; padding: 2px 0; color: var(--ink); font-size: 12px; }
-.settings-form-field input:focus, .settings-form-field select:focus, .settings-form-field input:focus-visible, .settings-form-field select:focus-visible { outline: none; box-shadow: inset 0 -1px 0 var(--accent); }
-.settings-form-field input[aria-invalid="true"] { color: var(--danger); }
+.settings-form { display: grid; gap: 22px; }
+.settings-form-section { display: grid; gap: 12px; }
+.settings-form-section .pick-model-item { border: 0; border-radius: 0; background: transparent; padding: 0; }
+.settings-form-section > h2, .settings-form-section-toggle { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%; margin: 0; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); background: transparent; padding: 0 0 6px; color: var(--ink); font-size: var(--ui-title); font-weight: 650; text-align: left; }
+.settings-form-section-toggle { cursor: pointer; }
+.settings-form-section-extra { color: var(--muted); font-size: var(--ui-meta); font-weight: 500; }
+.settings-form-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; color: var(--ink); font-size: var(--ui-title); }
+.settings-form-link { justify-self: start; border: 0; background: transparent; padding: 0; color: var(--accent-strong); font-size: var(--ui-body); font-weight: 600; cursor: pointer; }
+.settings-form-link.danger { color: #ffb8bb; }
+.settings-form-link:disabled { opacity: .45; cursor: default; }
+.settings-topbar-action.muted { color: var(--muted); font-weight: 500; }
+.settings-form-field { display: grid; gap: 4px; padding: 0; color: var(--ink); font-size: var(--ui-title); }
+.settings-form-field > span { color: var(--ink); font-size: var(--ui-title); font-weight: 550; }
+.settings-form-field input, .settings-form-field select { width: 100%; min-height: var(--ui-control); appearance: none; -webkit-appearance: none; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); border-radius: 0; background: transparent; padding: 4px 0; color: var(--muted); font-size: var(--ui-body); }
+.settings-form-field select { padding-right: 18px; background-image: linear-gradient(45deg, transparent 50%, var(--subtle) 50%), linear-gradient(135deg, var(--subtle) 50%, transparent 50%); background-position: calc(100% - 8px) calc(50% - 1px), calc(100% - 3px) calc(50% - 1px); background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
+.settings-form-field input:focus, .settings-form-field select:focus, .settings-form-field input:focus-visible, .settings-form-field select:focus-visible { outline: none; border-bottom-color: var(--accent); color: var(--ink); }
+.settings-form-field input[aria-invalid="true"] { border-bottom-color: var(--danger); color: var(--danger); }
+.settings-form-field input:disabled { color: var(--subtle); }
+.settings-form-field input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.settings-form-field input[type="number"]::-webkit-outer-spin-button, .settings-form-field input[type="number"]::-webkit-inner-spin-button { margin: 0; -webkit-appearance: none; }
+.settings-form .provider-picker-search { border: 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); border-radius: 0; background: transparent; padding: 4px 0; }
+.settings-form .provider-picker-search input { font-size: var(--ui-body); }
+.settings-form .model-empty { border: 0; border-radius: 0; padding: 8px 0; text-align: left; }
+.settings-form-section .settings-checkbox { align-self: stretch; min-height: 28px; }
 .settings-page-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .tunnel-add-action { justify-content: flex-start; }
 .provider-editor-grid input { width: 100%; min-height: 32px; border: 1px solid var(--line-strong); border-radius: 5px; background: rgb(12 14 16 / .55); padding: 6px 8px; color: var(--ink); font-size: 13px; }
@@ -205,12 +228,13 @@ button.settings-row:disabled { opacity: .5; cursor: default; }
 .settings-empty small { color: var(--muted); font-size: 11px; }
 .settings-empty .button { margin-top: 6px; }
 /* --- 表单即时校验错误 --- */
-.connection-preset-list { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 12px; }
-.connection-preset { min-height: 24px; border: 0; border-radius: 4px; background: transparent; padding: 2px 8px; color: var(--muted); font-size: 10px; }
+.connection-preset-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; }
+.connection-preset { min-height: 24px; border: 0; border-radius: 4px; background: var(--surface-hover); padding: 2px 9px; color: var(--muted); font-size: 11px; }
 .connection-preset.selected { background: var(--accent-soft); color: var(--accent-strong); }
-.connection-header-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto; align-items: center; gap: 8px; padding: 6px 12px; }
-.connection-header-row input { min-width: 0; min-height: var(--ui-control); border: 0; border-radius: 0; background: transparent; padding: 2px 0; color: var(--ink); font-size: 12px; }
-.connection-header-row input:focus, .connection-header-row input:focus-visible { outline: none; box-shadow: inset 0 -1px 0 var(--accent); }
+.connection-header-row { display: grid; gap: 4px; }
+.connection-header-name { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; }
+.connection-header-row input { min-width: 0; min-height: var(--ui-control); border: 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); border-radius: 0; background: transparent; padding: 4px 0; color: var(--muted); font-size: var(--ui-body); }
+.connection-header-row input:focus, .connection-header-row input:focus-visible { outline: none; border-bottom-color: var(--accent); color: var(--ink); }
 .settings-group .pick-model-item { border: 0; border-radius: 0; background: transparent; padding: 6px 12px; }
 .field-error { color: var(--danger); font-size: 10px; }
 .provider-editor-grid input[aria-invalid="true"], .model-manage-manual input[aria-invalid="true"] { border-color: var(--danger); }
@@ -738,7 +762,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 @media (max-width: 760px) {
   .settings-shell { padding: 12px 12px 36px; }.settings-section { gap: 12px; }.settings-section-heading { align-items: center; gap: 8px; }.settings-section-heading .button { flex: 0 0 auto; }
     .provider-avatar { width: 28px; height: 28px; font-size: 12px; }
-    .settings-row, .settings-model-row, .settings-provider-row { min-height: 44px; }
+    .settings-row, .settings-model-row, .settings-provider-row, .settings-form-switch { min-height: 44px; }
     .settings-empty { padding: 16px 12px; }.tunnel-methods { grid-template-columns: 1fr 1fr; }.tunnel-url { align-items: flex-start; flex-direction: column; }.tunnel-url-actions { width: 100%; justify-content: flex-end; }
   /* 隧道行：URL 链接 + 4 个操作按钮在窄屏必须可换行，否则横向溢出导致布局变形 */
   .tunnel-entry { min-width: 0; }.tunnel-entry-head { flex-wrap: wrap; row-gap: 6px; }.tunnel-entry-toggle { flex: 1 1 100%; }.tunnel-entry-actions { flex-wrap: wrap; justify-content: flex-start; row-gap: 6px; }.tunnel-entry-actions a.button, .tunnel-entry-actions .button { max-width: 100%; min-width: 0; }.tunnel-config-fields { padding: 10px; }.tunnel-caddy-head { flex-wrap: wrap; }
