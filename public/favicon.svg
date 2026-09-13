@@ -1,8 +1,55 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 168">
-  <rect width="168" height="168" rx="38" fill="#0b0d14"/>
-  <rect x="46" y="44" width="76" height="64" rx="16" fill="none" stroke="#d0c7ff" stroke-width="10"/>
-  <path d="M70 68v16M98 68v16" fill="none" stroke="#d0c7ff" stroke-width="10" stroke-linecap="round"/>
-  <path d="M84 36v8" fill="none" stroke="#d0c7ff" stroke-width="10" stroke-linecap="round"/>
-  <circle cx="84" cy="32" r="6" fill="#f4be70"/>
-  <path d="M84 118 68 132 84 126 100 132Z" fill="#b6a8ff"/>
+  <defs>
+    <radialGradient id="bg" cx="32%" cy="14%" r="84%">
+      <stop offset="0%" stop-color="#2c2540"/>
+      <stop offset="52%" stop-color="#141824"/>
+      <stop offset="100%" stop-color="#0b0d14"/>
+    </radialGradient>
+    <linearGradient id="head" x1=".18" y1="0" x2=".72" y2="1">
+      <stop offset="0%" stop-color="#fffcff"/>
+      <stop offset="38%" stop-color="#ddd4ff"/>
+      <stop offset="100%" stop-color="#b7a8f0"/>
+    </linearGradient>
+    <radialGradient id="gold" cx="34%" cy="28%" r="66%">
+      <stop offset="0%" stop-color="#fff7e4"/>
+      <stop offset="36%" stop-color="#f4be70"/>
+      <stop offset="100%" stop-color="#a56a2a"/>
+    </radialGradient>
+    <linearGradient id="knot" x1=".15" y1="0" x2=".9" y2="1">
+      <stop offset="0%" stop-color="#fff3d4"/>
+      <stop offset="42%" stop-color="#f4be70"/>
+      <stop offset="100%" stop-color="#b56f2a"/>
+    </linearGradient>
+    <linearGradient id="silk" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8f82d6"/>
+      <stop offset="100%" stop-color="#4a427c"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="0" y1=".4" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5c5098"/>
+      <stop offset="100%" stop-color="#322c58"/>
+    </linearGradient>
+    <clipPath id="face">
+      <rect x="43" y="42" width="82" height="68" rx="25"/>
+    </clipPath>
+  </defs>
+  <rect width="168" height="168" rx="38" fill="url(#bg)"/>
+  <rect x="8" y="8" width="152" height="152" rx="32" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="1"/>
+  <ellipse cx="84" cy="118" rx="26" ry="9" fill="rgba(0,0,0,.25)"/>
+  <circle cx="84" cy="27" r="8.6" fill="url(#gold)"/>
+  <ellipse cx="81.3" cy="24.4" rx="2.9" ry="2.2" fill="#fff8ea"/>
+  <g clip-path="url(#face)">
+    <rect x="43" y="42" width="82" height="68" fill="url(#head)"/>
+    <path fill="rgba(255,255,255,.5)" d="M43 54c8-14 22-18 36-18 8 0 14 2 20 6-18 2-32 10-44 22-6 6-10 10-12 12z"/>
+    <ellipse cx="84" cy="116" rx="40" ry="18" fill="rgba(48,32,90,.14)"/>
+  </g>
+  <rect x="60" y="62" width="13" height="22" rx="6.5" fill="#12141c"/>
+  <rect x="95" y="62" width="13" height="22" rx="6.5" fill="#12141c"/>
+  <ellipse cx="64.2" cy="66.5" rx="2.4" ry="3" fill="rgba(255,255,255,.3)"/>
+  <ellipse cx="99.2" cy="66.5" rx="2.4" ry="3" fill="rgba(255,255,255,.3)"/>
+  <path fill="url(#silk)" d="M74 128C56 117 42 118 34 128C42 138 56 139 74 132Z"/>
+  <path fill="url(#fold)" d="M74 128C56 128 42 128 34 128C42 138 56 139 74 132Z"/>
+  <path fill="url(#silk)" d="M94 128C112 117 126 118 134 128C126 138 112 139 94 132Z"/>
+  <path fill="url(#fold)" d="M94 128C112 128 126 128 134 128C126 138 112 139 94 132Z"/>
+  <rect x="74" y="121" width="20" height="14" rx="3.5" fill="url(#knot)"/>
+  <rect x="77" y="123.2" width="14" height="4.8" rx="1.6" fill="rgba(255,248,230,.38)"/>
 </svg>
