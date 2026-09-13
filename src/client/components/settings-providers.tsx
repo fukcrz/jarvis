@@ -523,18 +523,16 @@ export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete,
       </button>)}</div>
       <div className="dialog-actions"><Button onClick={() => setStage({ kind: "custom-connection" })}>下一步</Button></div>
     </div> : null}
-    {stage.kind === "custom-connection" ? <div className="settings-stack">
-      <SettingsGroup>
-        <label className="settings-form-field"><span>ID</span><input value={provider.id} disabled={editing !== undefined} autoFocus={editing === undefined} onChange={(event) => setProvider({ ...provider, id: event.target.value })} aria-invalid={!idAvailable} />{idAvailable ? null : <small className="field-error">该 ID 已被使用</small>}</label>
-        <label className="settings-form-field"><span>显示名称</span><input value={provider.name ?? ""} onChange={(event) => setProvider({ ...provider, name: event.target.value || undefined })} /></label>
-        <label className="settings-form-field"><span>Base URL</span><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" aria-invalid={provider.baseUrl.trim() !== "" && !isValidHttpUrl(provider.baseUrl)} />{provider.baseUrl.trim() === "" || isValidHttpUrl(provider.baseUrl) ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
-        <label className="settings-form-field"><span>接口协议</span><select value={provider.api} onChange={(event) => setProvider({ ...provider, api: event.target.value as ManagedApi })}>{API_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
-        <SettingsRow label="Bearer Authorization" control={<SettingsSwitch checked={provider.authHeader} onChange={(checked) => setProvider({ ...provider, authHeader: checked })} label="Bearer Authorization" />} />
-      </SettingsGroup>
+    {stage.kind === "custom-connection" ? <SettingsGroup>
+      <label className="settings-form-field"><span>ID</span><input value={provider.id} disabled={editing !== undefined} autoFocus={editing === undefined} onChange={(event) => setProvider({ ...provider, id: event.target.value })} aria-invalid={!idAvailable} />{idAvailable ? null : <small className="field-error">该 ID 已被使用</small>}</label>
+      <label className="settings-form-field"><span>显示名称</span><input value={provider.name ?? ""} onChange={(event) => setProvider({ ...provider, name: event.target.value || undefined })} /></label>
+      <label className="settings-form-field"><span>Base URL</span><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" aria-invalid={provider.baseUrl.trim() !== "" && !isValidHttpUrl(provider.baseUrl)} />{provider.baseUrl.trim() === "" || isValidHttpUrl(provider.baseUrl) ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
+      <label className="settings-form-field"><span>接口协议</span><select value={provider.api} onChange={(event) => setProvider({ ...provider, api: event.target.value as ManagedApi })}>{API_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+      <SettingsRow label="Bearer Authorization" control={<SettingsSwitch checked={provider.authHeader} onChange={(checked) => setProvider({ ...provider, authHeader: checked })} label="Bearer Authorization" />} />
       {editing === undefined || onFetch === undefined ? null : <ConnectionCheck providerId={editing.id} disabled={busy} onFetch={onFetch} />}
       <ConnectionExtras api={provider.api} headers={provider.headers} compat={provider.compat} onChange={({ headers, compat }) => setProvider({ ...provider, headers, compat })} />
-      {editing === undefined || onDelete === undefined ? null : <SettingsGroup><SettingsRow icon={Trash2} label="删除供应商" danger onClick={() => onDelete(editing)} /></SettingsGroup>}
-    </div> : null}
+      {editing === undefined || onDelete === undefined ? null : <SettingsRow icon={Trash2} label="删除供应商" danger onClick={() => onDelete(editing)} />}
+    </SettingsGroup> : null}
   </SettingsSubpage>;
 }
 
@@ -555,21 +553,19 @@ export function BuiltinOverridePage({ provider, busy, onSave, onClear, onFetch, 
   const urlValid = baseUrl.trim() === "" || isValidHttpUrl(baseUrl);
   const hasOverride = provider.override !== undefined;
   return <SettingsSubpage title="编辑连接" onBack={onBack} action={<button type="button" className="settings-topbar-action" disabled={busy || !urlValid} onClick={() => { void onSave({ ...(baseUrl.trim() === "" ? {} : { baseUrl: baseUrl.trim() }), headers, compat }); }}>{busy ? "保存中…" : "保存"}</button>}>
-    <div className="settings-stack">
-      <SettingsGroup>
-        <label className="settings-form-field"><span>Base URL</span><input value={baseUrl} autoFocus onChange={(event) => setBaseUrl(event.target.value)} placeholder="官方默认" aria-invalid={!urlValid} />{urlValid ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
-      </SettingsGroup>
+    <SettingsGroup>
+      <label className="settings-form-field"><span>Base URL</span><input value={baseUrl} autoFocus onChange={(event) => setBaseUrl(event.target.value)} placeholder="官方默认" aria-invalid={!urlValid} />{urlValid ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
       {onFetch === undefined ? null : <ConnectionCheck providerId={provider.id} disabled={busy} onFetch={onFetch} />}
       <ConnectionExtras headers={headers} compat={compat} onChange={({ headers: nextHeaders, compat: nextCompat }) => { setHeaders(nextHeaders); setCompat(nextCompat); }} />
-      {hasOverride ? <SettingsGroup><SettingsRow icon={Trash2} label="恢复官方连接" danger disabled={busy} onClick={() => { void onClear(); }} /></SettingsGroup> : null}
-    </div>
+      {hasOverride ? <SettingsRow icon={Trash2} label="恢复官方连接" danger disabled={busy} onClick={() => { void onClear(); }} /> : null}
+    </SettingsGroup>
   </SettingsSubpage>;
 }
 
 function ConnectionCheck({ providerId, disabled, onFetch }: { providerId: string; disabled: boolean; onFetch: (providerId: string) => Promise<FetchedModel[]> }) {
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | undefined>();
-  return <SettingsGroup>
+  return <>
     <SettingsRow icon={RotateCw} label={checking ? "检查中…" : "检查连接"} value={result?.ok === true ? result.text : undefined} disabled={disabled || checking} onClick={() => {
       setChecking(true);
       void onFetch(providerId).then((models) => {
@@ -579,7 +575,7 @@ function ConnectionCheck({ providerId, disabled, onFetch }: { providerId: string
       }).finally(() => setChecking(false));
     }} />
     {result === undefined || result.ok ? null : <p className="field-error settings-form-field">{result.text}</p>}
-  </SettingsGroup>;
+  </>;
 }
 
 function ConnectionExtras({ api, headers, compat, onChange }: { api?: ManagedApi; headers?: Record<string, string>; compat?: ManagedCompat; onChange: (next: { headers?: Record<string, string>; compat?: ManagedCompat }) => void }) {
@@ -603,7 +599,7 @@ function ConnectionExtras({ api, headers, compat, onChange }: { api?: ManagedApi
     }
     onChange({ headers, compat: compactCompat(next) });
   };
-  return <SettingsGroup>
+  return <>
     <SettingsRow label="高级" value={connectionSummary(headers, compat)} onClick={() => setOpen((current) => !current)} />
     {open ? <>
       {api === "google-generative-ai" ? null : <div className="connection-preset-list">{CONNECTION_PRESETS.map((preset) => <button type="button" key={preset.id} className={`connection-preset ${!showCustom && presetId === preset.id ? "selected" : ""}`} onClick={() => { setCustomMode(false); onChange({ headers, compat: preset.compat }); }}>{preset.label}</button>)}<button type="button" className={`connection-preset ${showCustom ? "selected" : ""}`} onClick={() => setCustomMode(true)}>自定义</button></div>}
@@ -624,7 +620,7 @@ function ConnectionExtras({ api, headers, compat, onChange }: { api?: ManagedApi
       </div>)}
       {headerRows.length >= 20 ? null : <SettingsRow icon={Plus} label="请求头" accent onClick={() => commitHeaders([...headerRows, { id: `new-${String(Date.now())}`, name: "", value: "" }])} />}
     </> : null}
-  </SettingsGroup>;
+  </>;
 }
 
 /** OAuth/API Key 登录过程必须覆盖在当前页之上。 */
