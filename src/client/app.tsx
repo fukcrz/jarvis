@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, Bell, ChevronDown, CircleAlert, FolderPlus, MoreVertical, Pencil, Plus, Puzzle, X } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
@@ -40,6 +40,17 @@ const COMMAND_RETRY_BASE_DELAY_MS = 750;
 const COMMAND_RETRY_MAX_DELAY_MS = 10_000;
 const EMPTY_COMPOSER_COMMANDS: ComposerCommand[] = [];
 const SESSION_FOCUS_STORAGE_KEY = "jarvis.sessions.focus";
+const SIDEBAR_WIDTH_STORAGE_KEY = "jarvis.sidebar.width";
+const SIDEBAR_DEFAULT_WIDTH = 316;
+const SIDEBAR_MIN_WIDTH = 240;
+const SIDEBAR_MAX_WIDTH = 480;
+
+interface SidebarResizeState {
+  pointerId: number;
+  startX: number;
+  startWidth: number;
+}
+
 export function App() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -52,6 +63,11 @@ export function App() {
   const [sessionsByWorkspace, setSessionsByWorkspace] = useState<Record<string, SessionSummary[]>>({});
   const [sessionId, setSessionId] = useState<string | undefined>(() => initialPath.sessionId ?? window.localStorage.getItem("jarvis.session") ?? undefined);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Record<string, boolean>>(() => readExpandedWorkspaces());
+  const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth());
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  const sidebarResizeRef = useRef<SidebarResizeState | undefined>(undefined);
+  const sidebarWidthRef = useRef(sidebarWidth);
+  sidebarWidthRef.current = sidebarWidth;
   const [focusMode, setFocusMode] = useState(readSessionFocusMode);
   const [focusNow, setFocusNow] = useState(Date.now());
   const [loading, setLoading] = useState(true);
@@ -80,6 +96,71 @@ export function App() {
   const creatingSessionWorkspacesRef = useRef(new Set<string>());
   const previousSessionStatusRef = useRef<{ key?: string; runState?: string }>({});
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
+
+  const stopSidebarResize = useCallback((pointerId?: number) => {
+    const resize = sidebarResizeRef.current;
+    if (resize === undefined || (pointerId !== undefined && resize.pointerId !== pointerId)) return;
+    sidebarResizeRef.current = undefined;
+    persistSidebarWidth(sidebarWidthRef.current);
+    setSidebarResizing(false);
+    document.body.classList.remove("sidebar-resizing");
+  }, []);
+
+  const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || event.pointerType === "touch" || sidebarResizeRef.current !== undefined) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    sidebarResizeRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: sidebarWidthRef.current };
+    setSidebarResizing(true);
+    document.body.classList.add("sidebar-resizing");
+  };
+
+  const resizeSidebarWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = 16;
+    const nextWidth = event.key === "ArrowLeft"
+      ? clampSidebarWidth(sidebarWidthRef.current - step)
+      : event.key === "ArrowRight"
+        ? clampSidebarWidth(sidebarWidthRef.current + step)
+        : event.key === "Home"
+          ? SIDEBAR_MIN_WIDTH
+          : event.key === "End"
+            ? SIDEBAR_MAX_WIDTH
+            : undefined;
+    if (nextWidth === undefined) return;
+    event.preventDefault();
+    sidebarWidthRef.current = nextWidth;
+    setSidebarWidth((current) => current === nextWidth ? current : nextWidth);
+    persistSidebarWidth(nextWidth);
+  };
+
+  useEffect(() => {
+    const onPointerMove = (event: globalThis.PointerEvent) => {
+      const resize = sidebarResizeRef.current;
+      if (resize === undefined || event.pointerId !== resize.pointerId) return;
+      event.preventDefault();
+      const nextWidth = clampSidebarWidth(resize.startWidth + event.clientX - resize.startX);
+      sidebarWidthRef.current = nextWidth;
+      setSidebarWidth((current) => current === nextWidth ? current : nextWidth);
+    };
+    const onPointerUp = (event: globalThis.PointerEvent) => stopSidebarResize(event.pointerId);
+    const onPointerCancel = (event: globalThis.PointerEvent) => stopSidebarResize(event.pointerId);
+    const onWindowBlur = () => stopSidebarResize();
+    const onVisibilityChange = () => stopSidebarResize();
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+    window.addEventListener("blur", onWindowBlur);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      window.removeEventListener("blur", onWindowBlur);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      stopSidebarResize();
+    };
+  }, [stopSidebarResize]);
+
   // The URL is the source of truth for the selected workspace/session.
   useEffect(() => {
     const { workspaceId: pathWorkspaceId, sessionId: pathSessionId } = pathParams(location.pathname);
@@ -1064,9 +1145,24 @@ export function App() {
   </>;
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" style={{ gridTemplateColumns: `${String(sidebarWidth)}px minmax(0, 1fr)` }}>
       <ExtensionToasts toasts={globalExtensionToasts} sessionsByWorkspace={sessionsByWorkspace} onOpenSession={(workspaceId, sessionId) => navigate(`/chat/${workspaceId}/${sessionId}`)} onDismiss={(id) => setGlobalExtensionToasts((current) => current.filter((toast) => toast.id !== id))} />
-      <div className="desktop-sidebar">{sidebar}</div>
+      <div className={`desktop-sidebar${sidebarResizing ? " sidebar-resizing" : ""}`}>
+        {sidebar}
+        <div
+          className="sidebar-resizer"
+          role="separator"
+          aria-label="调整侧栏宽度"
+          aria-orientation="vertical"
+          aria-valuemin={SIDEBAR_MIN_WIDTH}
+          aria-valuemax={SIDEBAR_MAX_WIDTH}
+          aria-valuenow={sidebarWidth}
+          tabIndex={0}
+          onKeyDown={resizeSidebarWithKeyboard}
+          onLostPointerCapture={() => stopSidebarResize()}
+          onPointerDown={startSidebarResize}
+        />
+      </div>
       {!isMobile ? <section className={isSettingsPage || isFilesPage ? "main-pane settings-main-pane" : "main-pane"}>
         {isSettingsPage || isFilesPage ? null : <header className="chat-header">
           <div className="chat-title-wrap">
@@ -1214,6 +1310,29 @@ function mergeWorkspace(current: Workspace[], next: Workspace): Workspace[] {
   const copy = [...current];
   copy[existing] = next;
   return copy.sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
+}
+
+function persistSidebarWidth(width: number): void {
+  try {
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(width));
+  } catch {
+    // The sidebar still works for the current page when browser storage is unavailable.
+  }
+}
+
+function readSidebarWidth(): number {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+    if (raw === null) return SIDEBAR_DEFAULT_WIDTH;
+    const value = Number(raw);
+    return Number.isFinite(value) ? clampSidebarWidth(value) : SIDEBAR_DEFAULT_WIDTH;
+  } catch {
+    return SIDEBAR_DEFAULT_WIDTH;
+  }
+}
+
+function clampSidebarWidth(value: number): number {
+  return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, value));
 }
 
 function readSessionFocusMode(): boolean {
