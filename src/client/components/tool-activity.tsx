@@ -1,59 +1,39 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Clock3, LoaderCircle, RotateCcw, XCircle } from "lucide-react";
+import { LoaderCircle, Quote } from "lucide-react";
 import type { ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
-import { formatRunElapsed } from "../run-feedback";
 import { ImagePreview } from "./image-lightbox";
 
 interface ToolActivityProps {
   items: ToolTimelineItem[];
   active: boolean;
-  startedAt?: string;
-  stopping: boolean;
   /** 短旁白：当折叠标题，点开才露出工具列表。 */
   narration?: string;
 }
 
-/** Renders Pi tool activity as compact, inline timeline rows. */
-export function ToolActivity({ items, active, startedAt, stopping, narration }: ToolActivityProps) {
-  const narrated = narration !== undefined && narration.trim() !== "";
-  const defaultOpen = narrated ? active : isActivityOpenByDefault(items);
-  const [open, setOpen] = useState(defaultOpen);
+/** 工具行平铺；有短旁白时旁白当可点标题，默认收起。 */
+export function ToolActivity({ items, active, narration }: ToolActivityProps) {
+  const text = narration?.trim() ?? "";
+  const narrated = text !== "";
+  const [open, setOpen] = useState(() => !narrated || active);
   const touched = useRef(false);
   const [openToolId, setOpenToolId] = useState<string>();
-  const [now, setNow] = useState(() => Date.now());
   const state = activityState(items, active);
-  const summary = activitySummary(items, state, stopping);
-  const elapsed = active ? formatRunElapsed(startedAt, now) : undefined;
 
   useEffect(() => {
-    if (!active || startedAt === undefined) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [active, startedAt]);
+    if (!narrated || touched.current) return;
+    setOpen(active);
+  }, [active, narrated]);
 
-  useEffect(() => {
-    if (!touched.current) setOpen(narrated ? active : defaultOpen);
-  }, [active, defaultOpen, narrated]);
-
-  const toggle = () => { touched.current = true; setOpen((value) => !value); };
   return (
     <article className={`activity-group ${state}${narrated ? " narrated" : ""}`}>
-      {narrated ? <button className="activity-narration" type="button" onClick={toggle} aria-expanded={open}>{narration?.trim()}</button> : <button className="activity-summary" type="button" onClick={toggle} aria-expanded={open}>
-        <span className="activity-state-icon">{toolIcon(state)}</span>
-        {summary.label === undefined ? null : <span className="activity-label">{summary.label}</span>}
-        {summary.detail === undefined ? null : <span className="activity-detail">{summary.detail}</span>}
-        {elapsed === undefined ? null : <time className="activity-elapsed">{elapsed}</time>}
-      </button>}
-      {open ? <div className="activity-items">{items.map((item) => <ToolRow key={item.id} item={item} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
+      {narrated ? <button className="activity-narration" type="button" onClick={() => { touched.current = true; setOpen((value) => !value); }} aria-expanded={open}>
+        <span className="activity-narration-icon"><Quote size={14} /></span>
+        <span className="activity-narration-text">{text}</span>
+      </button> : null}
+      {!narrated || open ? <div className="activity-items">{items.map((item) => <ToolRow key={item.id} item={item} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
     </article>
   );
-}
-
-/** Keep short tool runs visible while preserving the explicit-command exception. */
-export function isActivityOpenByDefault(items: readonly ToolTimelineItem[]): boolean {
-  return items.length <= 3 || items.some((item) => item.name === "bash" && item.id.startsWith("bash:"));
 }
 
 function ToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open: boolean; onToggle: () => void }) {
@@ -66,18 +46,6 @@ function activityState(items: ToolTimelineItem[], active: boolean): ToolState {
   if (active) return "running";
   if (items.length > 0 && items.every((item) => item.state === "cancelled")) return "cancelled";
   return "completed";
-}
-
-function activitySummary(items: ToolTimelineItem[], state: ToolState, stopping: boolean): { label?: string; detail?: string } {
-  if (state === "running") {
-    const current = [...items].reverse().find((item) => item.state === "running" || item.state === "queued") ?? items.at(-1);
-    return {
-      ...(stopping ? { label: `正在停止 ${items.length} 项操作…` } : {}),
-      ...(current === undefined ? {} : { detail: toolActivityLabel(current) }),
-    };
-  }
-  if (state === "cancelled") return { label: `已停止 ${items.length} 项操作` };
-  return { label: `已执行 ${items.length} 项操作` };
 }
 
 function toolActivityLabel(item: ToolTimelineItem): string {
@@ -150,12 +118,4 @@ function compactToolStateIcon(state: ToolTimelineItem["state"]) {
   if (state === "failed") return <span className="tool-subtle-failure" aria-label="操作未完成">!</span>;
   if (state === "cancelled") return <span className="tool-subtle-failure" aria-label="操作已停止">·</span>;
   return undefined;
-}
-
-function toolIcon(state: ToolTimelineItem["state"]) {
-  if (state === "running") return <LoaderCircle size={15} className="spin" />;
-  if (state === "completed") return <Check size={15} />;
-  if (state === "failed") return <XCircle size={15} />;
-  if (state === "cancelled") return <RotateCcw size={15} />;
-  return <Clock3 size={15} />;
 }

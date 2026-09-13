@@ -816,7 +816,7 @@ export function isShortAssistantNarration(item: MessageTimelineItem): boolean {
   return length > 0 && length <= ACTIVITY_NARRATION_MAX_CHARS;
 }
 
-/** 短旁白紧挨着后面一组工具时，用旁白代替「已执行 N 项操作」。 */
+/** 短旁白紧挨着后面一组工具时，旁白作为可点标题，工具默认收在下面。 */
 export function isActivityNarratedBy(previous: TimelineRenderItem | undefined, entry: TimelineRenderItem): boolean {
   return entry.kind === "activity" && previous?.kind === "message" && isShortAssistantNarration(previous.item);
 }
@@ -913,7 +913,7 @@ function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderConte
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} />;
   if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
-  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={entry.items[0]?.id === context.activeActivityId} startedAt={context.status.activeRun?.startedAt} stopping={context.status.runState === "stopping"} narration={narration} />;
+  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={entry.items[0]?.id === context.activeActivityId} narration={narration} />;
 }
 
 /** 短旁白并进工具组：旁白当折叠标题，不再单独画一条消息。 */
