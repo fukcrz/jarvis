@@ -9,6 +9,7 @@ import { CodePreview } from "./code-preview";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 import { FileContextMenu, type FileContextMenuTarget } from "./file-context-menu";
+import { ImagePreview } from "./image-lightbox";
 
 interface FileBrowserProps {
   workspaces: Workspace[];
@@ -414,10 +415,12 @@ function FilePreview({ state, onBack, onCopy }: { state: FilePreviewState; onBac
   </article>;
 }
 
-function FilePreviewBody({ state, url }: { state: FilePreviewState; url: string }) {
+export function FilePreviewBody({ state, url }: { state: FilePreviewState; url: string }) {
   switch (state.kind) {
     case "image":
-      return <div className="file-preview-media"><img src={url} alt={state.name} /></div>;
+      return <ImagePreview className="file-preview-media file-preview-image" src={url} alt={state.name}>
+        <img src={url} alt={state.name} />
+      </ImagePreview>;
     case "pdf":
       return <div className="file-preview-media"><iframe src={url} title={state.name} /></div>;
     case "audio":

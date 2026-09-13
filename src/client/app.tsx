@@ -1163,7 +1163,7 @@ export function App() {
           onPointerDown={startSidebarResize}
         />
       </div>
-      {!isMobile ? <section className={isSettingsPage || isFilesPage ? "main-pane settings-main-pane" : "main-pane"}>
+      {!isMobile ? <section className={isSettingsPage ? "main-pane settings-main-pane" : isFilesPage ? "main-pane files-main-pane" : "main-pane"}>
         {isSettingsPage || isFilesPage ? null : <header className="chat-header">
           <div className="chat-title-wrap">
             <div className="chat-title">
