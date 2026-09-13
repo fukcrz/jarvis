@@ -4,7 +4,7 @@ import { Archive, ArrowDown, Bell, Brain, Check, ChevronRight, CircleAlert, Cloc
 import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
-import { parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, splitDialogHeading, type ExtensionSelectOption } from "../lib/extension-dialog";
+import { encodeMultiSelectValue, multiSelectAnswerLabel, parseMultiSelectDialog, parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, splitDialogHeading, type ExtensionSelectOption } from "../lib/extension-dialog";
 import { MarkdownMessage } from "./markdown-message";
 import { ImagePreview } from "./image-lightbox";
 import { ToolActivity } from "./tool-activity";
@@ -525,6 +525,8 @@ const EMPTY_PREVIEWS: ReadonlySet<number> = new Set();
  * 键是对话框 id（每个请求唯一的 UUID），对话框落定后清理。
  */
 const dialogDrafts = new Map<string, string>();
+/** 多选勾选草稿：与文本草稿分开，避免和输入内容抢同一个字符串。 */
+const dialogSelections = new Map<string, number[]>();
 
 function ExtensionUiOperation({ item, onRespond }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"] }) {
   if (item.request.method === "notify") return <ExtensionNotification item={item} />;
@@ -543,6 +545,16 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
   const [submitting, setSubmitting] = useState(false);
   const [showResult, setShowResult] = useState(false);
   const [expandedPreviews, setExpandedPreviews] = useState<ReadonlySet<number>>(EMPTY_PREVIEWS);
+  const [selected, setSelectedState] = useState<ReadonlySet<number>>(() => new Set(dialogSelections.get(request.id) ?? []));
+  const toggleSelected = (index: number) => {
+    setSelectedState((current) => {
+      const next = new Set(current);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      dialogSelections.set(request.id, [...next].sort((left, right) => left - right));
+      return next;
+    });
+  };
 
   // 重连/重新水合会用同一份数据重建 request 对象，但对话框本身没变：不能因此丢掉用户
   // 已经写了一半的内容（移动端切后台回来、网络恢复都会触发 resync → 重拉快照），也不该
@@ -557,12 +569,14 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
     setSubmitting(false);
     setShowResult(false);
     setExpandedPreviews(EMPTY_PREVIEWS);
+    setSelectedState(new Set(dialogSelections.get(request.id) ?? []));
   }, [request, setValue]);
 
   // 对话框落定（已答/取消/超时/关闭）后不再需要草稿。
   useEffect(() => {
     if (item.outcome === undefined) return;
     dialogDrafts.delete(request.id);
+    dialogSelections.delete(request.id);
   }, [item.outcome, request.id]);
 
   const respond = (response: ExtensionResponse) => {
@@ -571,10 +585,15 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
     Promise.resolve(onRespond(request.id, response)).catch(() => setSubmitting(false));
   };
   // 扩展回退格式的选项带序号/描述/预览；解析不出来时按原始字符串渲染。
-  const dialog = useMemo(() => request.method === "select" ? parseSelectDialog(request) : undefined, [request]);
+  const dialog = useMemo(() => {
+    if (request.method === "select") return parseSelectDialog(request);
+    if (request.method === "input") return parseMultiSelectDialog(request);
+    return undefined;
+  }, [request]);
+  const multi = request.method === "input" ? dialog : undefined;
   const choices: ExtensionSelectOption[] = request.method === "select"
     ? dialog?.options ?? request.options.map((option) => ({ value: option, label: option }))
-    : [];
+    : multi?.options ?? [];
   const togglePreview = (index: number) => {
     setExpandedPreviews((current) => {
       const next = new Set(current);
@@ -584,9 +603,9 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
     });
   };
   const onSelectKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (request.method !== "select") return;
-    // 预览开关是同一容器里的独立控件：它自己的 Enter/Space 不能被选项导航抢走（否则会误提交）。
-    if (event.target instanceof HTMLElement && event.target.closest(".extension-select-preview") !== null) return;
+    if (request.method !== "select" && multi === undefined) return;
+    // 预览开关 / 补充输入是同一卡片里的独立控件：Enter/Space 不能被选项导航抢走。
+    if (event.target instanceof HTMLElement && event.target.closest(".extension-select-preview, .extension-dialog-input") !== null) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const nextIndex = event.key === "ArrowDown"
@@ -598,17 +617,19 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
       const choice = choices[activeIndex];
       if (choice === undefined) return;
       event.preventDefault();
-      respond({ value: choice.value });
+      if (multi !== undefined) toggleSelected(choice.index ?? activeIndex + 1);
+      else respond({ value: choice.value });
     }
   };
 
   if (item.outcome !== undefined) return <ExtensionResult item={item} expanded={showResult} onToggle={() => setShowResult((current) => !current)} />;
   const title = dialog === undefined ? request.title : selectDialogTitle(dialog);
-  // 非选择卡（确认/输入/编辑）的标题也带扩展自己拼的信息，同样拆出短标签、保留换行结构。
-  const heading = request.method === "select" ? undefined : splitDialogHeading(request.title);
-  return <article className={`extension-operation pending ${request.method}`} aria-label={`扩展操作：${title}`} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); respond({ cancelled: true }); } }}>
-    <div className="extension-operation-heading"><Clock3 size={14} /><span>{extensionOperationPrompt(request.method)}</span><ExtensionTimeout timeout={request.timeout} createdAt={item.createdAt} /></div>
-    {request.method === "select" ? <div className="extension-operation-title-row"><p className="extension-operation-title extension-dialog-question">{dialog?.header === undefined ? null : <span className="extension-dialog-header">{dialog.header}</span>}{dialog?.question ?? request.title}</p><button type="button" className="extension-dock-close" aria-label="取消选择" disabled={submitting} onClick={() => respond({ cancelled: true })}><X size={16} /></button></div> : <p className="extension-operation-title extension-dialog-question">{heading?.header === undefined ? null : <span className="extension-dialog-header">{heading.header}</span>}{heading?.question ?? request.title}</p>}
+  // 非选择卡（确认 / 普通输入 / 编辑）的标题也带扩展自己拼的信息，同样拆出短标签、保留换行结构。
+  const heading = request.method === "select" || multi !== undefined ? undefined : splitDialogHeading(request.title);
+  const structured = request.method === "select" || multi !== undefined;
+  return <article className={`extension-operation pending ${request.method}${multi === undefined ? "" : " multi"}`} aria-label={`扩展操作：${title}`} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); respond({ cancelled: true }); } }}>
+    <div className="extension-operation-heading"><Clock3 size={14} /><span>{multi === undefined ? extensionOperationPrompt(request.method) : "需要选择"}</span><ExtensionTimeout timeout={request.timeout} createdAt={item.createdAt} /></div>
+    {structured ? <div className="extension-operation-title-row"><p className="extension-operation-title extension-dialog-question">{dialog?.header === undefined ? null : <span className="extension-dialog-header">{dialog.header}</span>}{dialog?.question ?? request.title}</p><button type="button" className="extension-dock-close" aria-label="取消选择" disabled={submitting} onClick={() => respond({ cancelled: true })}><X size={16} /></button></div> : <p className="extension-operation-title extension-dialog-question">{heading?.header === undefined ? null : <span className="extension-dialog-header">{heading.header}</span>}{heading?.question ?? request.title}</p>}
     {request.method === "confirm" && request.message !== undefined ? <p className="extension-operation-message">{request.message}</p> : null}
     {request.method === "select" ? <div className="extension-select-list" role="listbox" aria-label={title} tabIndex={0} onKeyDown={onSelectKeyDown}>
       {dialog === undefined
@@ -636,10 +657,30 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
           </div>;
         })}
     </div> : null}
-    {request.method === "input" ? <input autoFocus className="extension-dialog-input" placeholder={request.placeholder} value={value} disabled={submitting} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); respond({ value }); } }} /> : null}
+    {multi === undefined ? null : <div className="extension-select-list" role="listbox" aria-multiselectable="true" aria-label={title} tabIndex={0} onKeyDown={onSelectKeyDown}>
+      {choices.map((option, index) => {
+        const checked = selected.has(option.index ?? index + 1);
+        return <div key={option.value} className={`extension-select-option${checked ? " checked" : ""}`}>
+          <button ref={(element) => { optionRefs.current[index] = element; }} type="button" role="option" aria-selected={checked} className="extension-select-choice" disabled={submitting} onFocus={() => setActiveIndex(index)} onClick={() => toggleSelected(option.index ?? index + 1)}>
+            <span className="extension-select-index" aria-hidden>{checked ? <Check size={11} /> : option.index ?? index + 1}</span>
+            <span className="extension-select-body">
+              <span className="extension-select-label">{option.label}</span>
+              {option.description === undefined ? null : <span className="extension-select-description">{option.description}</span>}
+            </span>
+          </button>
+        </div>;
+      })}
+      <div className="extension-select-option custom">
+        <div className="extension-select-note">
+          <Pencil size={13} className="extension-select-custom-icon" aria-hidden />
+          <input className="extension-dialog-input" aria-label="补充" value={value} disabled={submitting} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); respond({ value: encodeMultiSelectValue(choices, selected, value) }); } }} />
+        </div>
+      </div>
+    </div>}
+    {request.method === "input" && multi === undefined ? <input autoFocus className="extension-dialog-input" placeholder={request.placeholder} value={value} disabled={submitting} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); respond({ value }); } }} /> : null}
     {request.method === "editor" ? <textarea autoFocus className="extension-dialog-input multiline" value={value} disabled={submitting} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); respond({ value }); } }} rows={8} /> : null}
     {request.method === "select" ? null : <div className="extension-interaction-actions">
-      {request.method === "confirm" ? <><button type="button" disabled={submitting} onClick={() => respond({ confirmed: false })}>拒绝</button><button type="button" className="accent" disabled={submitting} onClick={() => respond({ confirmed: true })}>{submitting ? "正在处理…" : "允许"}</button></> : <><button type="button" disabled={submitting} onClick={() => respond({ cancelled: true })}>取消</button><button type="button" className="accent" disabled={submitting} onClick={() => respond({ value })}>{submitting ? "正在提交…" : request.method === "editor" ? "提交修改" : "提交"}</button></>}
+      {request.method === "confirm" ? <><button type="button" disabled={submitting} onClick={() => respond({ confirmed: false })}>拒绝</button><button type="button" className="accent" disabled={submitting} onClick={() => respond({ confirmed: true })}>{submitting ? "正在处理…" : "允许"}</button></> : <>{multi === undefined ? <button type="button" disabled={submitting} onClick={() => respond({ cancelled: true })}>取消</button> : null}<button type="button" className="accent" disabled={submitting} onClick={() => respond({ value: multi === undefined ? value : encodeMultiSelectValue(choices, selected, value) })}>{submitting ? "正在提交…" : request.method === "editor" ? "提交修改" : "提交"}</button></>}
     </div>}
   </article>;
 }
@@ -655,7 +696,7 @@ function ExtensionNotification({ item }: { item: ExtensionUiTimelineItem }) {
 
 function ExtensionResult({ item, expanded, onToggle }: { item: ExtensionUiTimelineItem; expanded: boolean; onToggle: () => void }) {
   const request = item.request as ExtensionDialogRequest;
-  const canExpand = item.outcome === "answered" && (request.method === "input" || request.method === "editor") && item.value !== undefined && item.value !== "";
+  const canExpand = item.outcome === "answered" && (request.method === "input" || request.method === "editor") && item.value !== undefined && item.value !== "" && (request.method !== "input" || parseMultiSelectDialog(request) === undefined);
   const title = useMemo(() => dialogAriaTitle(request), [request]);
   return <article className={`extension-operation ${item.outcome ?? "closed"}`} aria-label={`扩展操作：${title}`}>
     <div className="extension-result-line"><span className="extension-operation-icon">{item.outcome === "answered" ? <Check size={14} /> : <XCircle size={14} />}</span><span>{extensionOperationLabel(item)}</span>{canExpand ? <button type="button" onClick={onToggle} aria-expanded={expanded}>{expanded ? "收起" : "查看内容"}</button> : null}</div>
@@ -669,6 +710,10 @@ function dialogAriaTitle(request: ExtensionDialogRequest): string {
     const dialog = parseSelectDialog(request);
     return dialog === undefined ? request.title : selectDialogTitle(dialog);
   }
+  if (request.method === "input") {
+    const dialog = parseMultiSelectDialog(request);
+    if (dialog !== undefined) return selectDialogTitle(dialog);
+  }
   const heading = splitDialogHeading(request.title);
   return heading.header === undefined ? heading.question : `${heading.header}：${heading.question}`;
 }
@@ -681,6 +726,13 @@ function extensionOperationLabel(item: ExtensionUiTimelineItem): string {
   if (item.outcome === "answered") {
     if (item.request.method === "confirm") return item.confirmed === true ? "已允许" : "已拒绝";
     if (item.request.method === "select") return `已选择：${item.value === undefined ? "未选择" : selectAnswerLabel(item.request.options, item.value)}`;
+    if (item.request.method === "input") {
+      const dialog = parseMultiSelectDialog(item.request);
+      if (dialog !== undefined) {
+        if (item.value === undefined || item.value === "") return "已选择：未选择";
+        return `已选择：${multiSelectAnswerLabel(dialog.options, item.value)}`;
+      }
+    }
     return item.value === "" ? "已提交空内容" : "已提交";
   }
   return item.outcome === "timeout" ? "已超时" : item.outcome === "cancelled" ? "已取消" : "已关闭";

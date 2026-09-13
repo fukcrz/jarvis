@@ -206,14 +206,71 @@ try {
     await request(900_000_006, "extension.uiSettled", { id: inputId, outcome: "cancelled" });
     pendingInput = undefined;
 
+    // 多选 RPC 回退是 `ui.input`：placeholder=1,3，选项编进标题。卡片要拆成可勾选列表，
+    // 补充输入可以和勾选同时提交；重新水合不能丢掉勾选和补充草稿。
+    const multiId = `${requestId.slice(0, -1)}5`;
+    const multiNote = "还要权限";
+    const multiTitle = [
+      "[范围] 这次改动包含哪些？",
+      "",
+      "1. 搜索 — 加筛选",
+      "2. 批量 — 一次改多条",
+      "3. 导出 — 下载表格",
+      "",
+      "Enter the numbers of all that apply, comma-separated (e.g. \"1,3\"), or type a custom answer as plain text.",
+    ].join("\n");
+    pendingInput = {
+      kind: "extension-ui",
+      id: `ext:${multiId}`,
+      createdAt: new Date().toISOString(),
+      request: { id: multiId, method: "input", title: multiTitle, placeholder: "1,3", timeout: 300_000 },
+    };
+    await request(900_000_010, "extension.uiRequest", { request: pendingInput.request });
+    const multiCard = page.locator(".extension-operation.input.pending.multi");
+    await multiCard.waitFor({ state: "visible", timeout: 5_000 });
+    const multiLabels = (await multiCard.locator(".extension-select-label").allTextContents()).map((label) => label.trim());
+    if (JSON.stringify(multiLabels) !== JSON.stringify(["搜索", "批量", "导出"])) failures.push(`${viewport.name}: 多选没有拆成勾选列表：${JSON.stringify(multiLabels)}`);
+    if ((await multiCard.locator(".extension-dialog-header").textContent())?.trim() !== "范围") failures.push(`${viewport.name}: 多选短标签没有单独渲染`);
+    if ((await multiCard.innerText()).includes("Enter the numbers")) failures.push(`${viewport.name}: 多选说明句没有从问题正文里剥掉`);
+    if ((await multiCard.locator(".extension-operation-heading").innerText()).includes("需要输入")) failures.push(`${viewport.name}: 多选卡片仍显示「需要输入」`);
+    await multiCard.locator(".extension-select-choice").nth(0).click();
+    await multiCard.locator(".extension-select-choice").nth(2).click();
+    if (await multiCard.locator(".extension-select-option.checked").count() !== 2) failures.push(`${viewport.name}: 多选勾选状态没有反映到选项上`);
+    const note = multiCard.locator(".extension-dialog-input[aria-label=\"补充\"]");
+    await note.click();
+    await page.keyboard.type(multiNote);
+    await multiCard.screenshot({ path: join(shotDir, `multiselect-${viewport.name}.png`) });
+    await page.evaluate(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("online"));
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+    });
+    await page.waitForTimeout(800);
+    if (await multiCard.count() !== 1) failures.push(`${viewport.name}: 重新同步快照后多选卡整个消失了`);
+    else {
+      if (await multiCard.locator(".extension-select-option.checked").count() !== 2) failures.push(`${viewport.name}: 重新同步快照后多选勾选丢失`);
+      if (await note.inputValue() !== multiNote) failures.push(`${viewport.name}: 重新同步快照后多选补充被清空（现在是「${await note.inputValue()}」）`);
+    }
+    await multiCard.locator("button.accent").click();
+    for (const deadline = Date.now() + 5_000; submissions.length < 2 && Date.now() < deadline;) await page.waitForTimeout(50);
+    const multiSubmission = submissions.at(-1);
+    if (multiSubmission?.id !== multiId || multiSubmission?.value !== "搜索, 导出 — 还要权限") failures.push(`${viewport.name}: 多选提交值不对：${JSON.stringify(multiSubmission)}`);
+    await request(900_000_011, "extension.uiSettled", { id: multiId, outcome: "answered", value: "搜索, 导出 — 还要权限" });
+    const multiAnswered = page.locator(".extension-operation.answered").filter({ hasText: "已选择" }).last();
+    await multiAnswered.waitFor({ state: "visible", timeout: 5_000 });
+    const multiAnsweredText = await multiAnswered.innerText();
+    if (multiAnsweredText.includes("Enter the numbers")) failures.push(`${viewport.name}: 多选结果行仍回显说明句`);
+    if (!multiAnsweredText.includes("搜索, 导出 — 还要权限")) failures.push(`${viewport.name}: 多选结果行没有显示勾选+补充`);
+    pendingInput = undefined;
+
     // 确认卡同样拆出短标签（改动不能只照顾选择/输入两种形态）。
     const confirmId = `${requestId.slice(0, -1)}7`;
-    await request(900_000_007, "extension.uiRequest", { request: { id: confirmId, method: "confirm", title: "[删除缓存] 允许清理构建缓存吗？", message: "将删除 dist/ 下的临时文件。", timeout: 300_000 } });
+    await request(900_000_012, "extension.uiRequest", { request: { id: confirmId, method: "confirm", title: "[删除缓存] 允许清理构建缓存吗？", message: "将删除 dist/ 下的临时文件。", timeout: 300_000 } });
     const confirmCard = page.locator(".extension-operation.confirm.pending");
     await confirmCard.waitFor({ state: "visible", timeout: 5_000 });
     if ((await confirmCard.locator(".extension-dialog-header").textContent())?.trim() !== "删除缓存") failures.push(`${viewport.name}: 确认卡的方括号短标签没有单独渲染`);
     await confirmCard.screenshot({ path: join(shotDir, `confirm-${viewport.name}.png`) });
-    await request(900_000_008, "extension.uiSettled", { id: confirmId, outcome: "cancelled" });
+    await request(900_000_013, "extension.uiSettled", { id: confirmId, outcome: "cancelled" });
 
     // 扩展往主输入框注入文本（set_editor_text）：重同步快照不能把用户后来写的内容覆盖掉。
     const injected = "注入的模板文本";
@@ -223,7 +280,7 @@ try {
       await route.fulfill({ response, json: { ...body, extensionUi: { ...(body.extensionUi ?? { dialogs: [], cards: [], statuses: {}, widgets: {} }), cards: [], editorText: { text: injected, revision: 1 } } } });
     });
     const composer = page.locator(".composer-editor .cm-content");
-    await request(900_000_009, "extension.uiRequest", { request: { id: `${requestId.slice(0, -1)}6`, method: "set_editor_text", text: injected } });
+    await request(900_000_014, "extension.uiRequest", { request: { id: `${requestId.slice(0, -1)}6`, method: "set_editor_text", text: injected } });
     await page.waitForFunction((text) => document.querySelector(".composer-editor .cm-content")?.textContent === text, injected, { timeout: 5_000 });
     await composer.click();
     await page.keyboard.press("End");
@@ -254,5 +311,5 @@ if (failures.length > 0) {
   console.error(failures.join("\n"));
   process.exitCode = 1;
 } else {
-  console.log(`Extension dialog smoke passed → ${shotDir}/select-*.png, ${shotDir}/input-*.png`);
+  console.log(`Extension dialog smoke passed → ${shotDir}/select-*.png, ${shotDir}/input-*.png, ${shotDir}/multiselect-*.png`);
 }

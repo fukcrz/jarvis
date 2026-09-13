@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSelectDialog, parseSelectOptions, previewSummary, selectAnswerLabel, selectDialogTitle, splitDialogHeading } from "./extension-dialog";
+import { encodeMultiSelectValue, MULTI_SELECT_PLACEHOLDER, multiSelectAnswerLabel, parseMultiSelectDialog, parseSelectDialog, parseSelectOptions, previewSummary, selectAnswerLabel, selectDialogTitle, splitDialogHeading } from "./extension-dialog";
 
 /**
  * 标题按 `rpc-fallback.ts` 的 `buildPreviewBlock` 拼法构造：问题 + `\n\n` +
@@ -138,6 +138,101 @@ describe("splitDialogHeading", () => {
     expect(splitDialogHeading("选择要使用的模型")).toEqual({ question: "选择要使用的模型" });
     // 方括号后面没有正文时不当作短标签。
     expect(splitDialogHeading("[只是提示]")).toEqual({ question: "[只是提示]" });
+  });
+});
+
+const MULTI_OPTIONS = [
+  { value: "1. 搜索 — 加筛选", index: 1, label: "搜索", description: "加筛选" },
+  { value: "2. 批量 — 一次改多条", index: 2, label: "批量", description: "一次改多条" },
+  { value: "3. 导出 — 下载表格", index: 3, label: "导出", description: "下载表格" },
+];
+
+function multiSelectTitle(question: string, options = ["1. 搜索 — 加筛选", "2. 批量 — 一次改多条", "3. 导出 — 下载表格"], locale: "en" | "zh" = "en"): string {
+  const instructions = locale === "zh"
+    ? "输入所有适用选项的编号，用逗号分隔（例如 \"1,3\"），或直接输入自定义回答。"
+    : "Enter the numbers of all that apply, comma-separated (e.g. \"1,3\"), or type a custom answer as plain text.";
+  return `${question}\n\n${options.join("\n")}\n\n${instructions}`;
+}
+
+describe("parseMultiSelectDialog", () => {
+  it("从 input 标题拆出问题与编号选项，剥掉说明句", () => {
+    const dialog = parseMultiSelectDialog({
+      title: multiSelectTitle("[范围] 这次改动包含哪些？"),
+      placeholder: MULTI_SELECT_PLACEHOLDER,
+    });
+
+    expect(dialog).toBeDefined();
+    expect(dialog!.header).toBe("范围");
+    expect(dialog!.question).toBe("这次改动包含哪些？");
+    expect(dialog!.options.map((option) => option.label)).toEqual(["搜索", "批量", "导出"]);
+    expect(dialog!.options.map((option) => option.description)).toEqual(["加筛选", "一次改多条", "下载表格"]);
+    expect(dialog!.options.every((option) => option.custom !== true)).toBe(true);
+  });
+
+  it("中文说明句同样剥掉", () => {
+    const dialog = parseMultiSelectDialog({
+      title: multiSelectTitle("这次改动包含哪些？", undefined, "zh"),
+      placeholder: MULTI_SELECT_PLACEHOLDER,
+    });
+
+    expect(dialog!.question).toBe("这次改动包含哪些？");
+    expect(dialog!.options).toHaveLength(3);
+  });
+
+  it("placeholder 不是 1,3 时放弃", () => {
+    expect(parseMultiSelectDialog({ title: multiSelectTitle("选哪些？"), placeholder: "请输入" })).toBeUndefined();
+    expect(parseMultiSelectDialog({ title: multiSelectTitle("选哪些？") })).toBeUndefined();
+  });
+
+  it("选项中间夹了别的行、或不足两项、或没有描述时放弃", () => {
+    expect(parseMultiSelectDialog({
+      title: "选哪些？\n\n1. 搜索 — 加筛选\n说明夹在中间\n2. 批量 — 一次改多条\n\ninstructions",
+      placeholder: MULTI_SELECT_PLACEHOLDER,
+    })).toBeUndefined();
+    expect(parseMultiSelectDialog({
+      title: "选哪些？\n\n1. 搜索 — 加筛选\n\ninstructions",
+      placeholder: MULTI_SELECT_PLACEHOLDER,
+    })).toBeUndefined();
+    expect(parseMultiSelectDialog({
+      title: "选哪些？\n\n1. 搜索\n2. 批量\n\ninstructions",
+      placeholder: MULTI_SELECT_PLACEHOLDER,
+    })).toBeUndefined();
+  });
+
+  it("普通输入卡（自行输入 follow-up）不会被当成多选", () => {
+    expect(parseMultiSelectDialog({
+      title: "[严格程度] 规则写多硬？\n\n输入你的回答：",
+      placeholder: "",
+    })).toBeUndefined();
+  });
+});
+
+describe("encodeMultiSelectValue", () => {
+  it("只勾选项时提交逗号分隔序号", () => {
+    expect(encodeMultiSelectValue(MULTI_OPTIONS, new Set([1, 3]), "")).toBe("1,3");
+    expect(encodeMultiSelectValue(MULTI_OPTIONS, new Set([3, 1, 2]), "  ")).toBe("1,2,3");
+  });
+
+  it("只写补充时提交补充原文", () => {
+    expect(encodeMultiSelectValue(MULTI_OPTIONS, new Set(), "只要搜索")).toBe("只要搜索");
+  });
+
+  it("勾选加补充时把标签和补充打成一段自定义文本", () => {
+    expect(encodeMultiSelectValue(MULTI_OPTIONS, new Set([1, 3]), "还要权限")).toBe("搜索, 导出 — 还要权限");
+  });
+
+  it("都空时提交空字符串", () => {
+    expect(encodeMultiSelectValue(MULTI_OPTIONS, new Set(), "")).toBe("");
+  });
+});
+
+describe("multiSelectAnswerLabel", () => {
+  it("纯序号回显成标签，其它原样", () => {
+    expect(multiSelectAnswerLabel(MULTI_OPTIONS, "1,3")).toBe("搜索、导出");
+    expect(multiSelectAnswerLabel(MULTI_OPTIONS, "1, 2")).toBe("搜索、批量");
+    expect(multiSelectAnswerLabel(MULTI_OPTIONS, "搜索, 导出 — 还要权限")).toBe("搜索, 导出 — 还要权限");
+    expect(multiSelectAnswerLabel(MULTI_OPTIONS, "只要搜索")).toBe("只要搜索");
+    expect(multiSelectAnswerLabel(MULTI_OPTIONS, "")).toBe("");
   });
 });
 
