@@ -7,11 +7,11 @@ import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsSubpage, SettingsSwi
 
 export const EMPTY_PROVIDER: ManagedProvider = { id: "", baseUrl: "", api: "openai-completions", authHeader: true, models: [] };
 
-const API_OPTIONS: Array<{ id: ManagedProvider["api"]; label: string; description: string }> = [
-  { id: "openai-completions", label: "OpenAI Completions", description: "兼容 OpenAI Chat Completions 接口" },
-  { id: "openai-responses", label: "OpenAI Responses", description: "使用 OpenAI Responses 接口" },
-  { id: "anthropic-messages", label: "Anthropic Messages", description: "兼容 Anthropic Messages 接口" },
-  { id: "google-generative-ai", label: "Google Generative AI", description: "使用 Google Generative AI 接口" },
+const API_OPTIONS: Array<{ id: ManagedProvider["api"]; label: string }> = [
+  { id: "openai-completions", label: "OpenAI Completions" },
+  { id: "openai-responses", label: "OpenAI Responses" },
+  { id: "anthropic-messages", label: "Anthropic Messages" },
+  { id: "google-generative-ai", label: "Google Generative AI" },
 ];
 
 type ProviderStage =
@@ -310,8 +310,8 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
         })}
       </div>}
       <div className="model-manage-manual">
-        <label><span>模型 ID</span><input value={manualId} aria-invalid={manualIdError !== undefined} onChange={(event) => { setManualId(event.target.value); setManualIdError(undefined); }} placeholder="例如 gpt-4o" />{manualIdError === undefined ? null : <small className="field-error">{manualIdError}</small>}</label>
-        <label><span>显示名称</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} placeholder="例如 GPT-4o" /></label>
+        <label><span>模型 ID</span><input value={manualId} aria-invalid={manualIdError !== undefined} onChange={(event) => { setManualId(event.target.value); setManualIdError(undefined); }} />{manualIdError === undefined ? null : <small className="field-error">{manualIdError}</small>}</label>
+        <label><span>显示名称</span><input value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
         <Button variant="secondary" size="sm" disabled={manualId.trim() === "" || modelBusy} onClick={addManualModel}><Plus size={13} />添加</Button>
       </div>
       <div className="dialog-actions"><Button variant="secondary" onClick={() => setView("list")}>返回</Button>{fetched === undefined || addSelected.size === 0 ? null : <Button disabled={modelBusy} onClick={addSelectedModels}>添加所选（{String(addSelected.size)}）</Button>}</div>
@@ -325,7 +325,7 @@ function EditModelForm({ model, onSave, onCancel }: { model: ManagedModel; onSav
   return <div className="settings-stack">
     <div className="model-config-fields">
       <label><span>模型 ID</span><input value={draft.id} disabled /></label>
-      <label><span>显示名称</span><input value={draft.name ?? ""} onChange={(event) => setDraft({ ...draft, name: event.target.value || undefined })} placeholder="例如 GPT-4o" /></label>
+      <label><span>显示名称</span><input value={draft.name ?? ""} onChange={(event) => setDraft({ ...draft, name: event.target.value || undefined })} /></label>
       <label><span>上下文窗口</span><input type="number" min={1} value={draft.contextWindow ?? ""} onChange={(event) => setDraft({ ...draft, contextWindow: event.target.value ? Number(event.target.value) : undefined })} placeholder="自动" /></label>
       <label><span>最大输出 token</span><input type="number" min={1} value={draft.maxTokens ?? ""} onChange={(event) => setDraft({ ...draft, maxTokens: event.target.value ? Number(event.target.value) : undefined })} placeholder="自动" /></label>
     </div>
@@ -374,11 +374,12 @@ interface ProviderWizardPageProps {
   onSave: (provider: ManagedProvider, openModelsAfterSave: boolean) => Promise<void>;
   onDelete?: (provider: ManagedProvider) => void;
   onLogin: (provider: ProviderStatus, type: "api_key" | "oauth") => void;
+  onFetch?: (providerId: string) => Promise<FetchedModel[]>;
   onBack: () => void;
 }
 
 /** 添加/编辑供应商：保留原有步骤，但不再使用对话框。 */
-export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete, onLogin, onBack }: ProviderWizardPageProps) {
+export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete, onLogin, onFetch, onBack }: ProviderWizardPageProps) {
   const [provider, setProvider] = useState<ManagedProvider>(() => editing === undefined
     ? { ...EMPTY_PROVIDER, models: [] }
     : { ...editing, models: editing.models.map((model) => ({ ...model })) });
@@ -404,7 +405,7 @@ export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete,
     {stage.kind === "pick" ? <div className="settings-stack">
       <label className="provider-picker-search"><Search size={14} /><input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索供应商" /></label>
       <div className="api-choice-list provider-picker-list">
-        <button type="button" className="api-choice provider-picker-custom" onClick={() => setStage({ kind: "custom-protocol" })}><span><strong>自定义供应商</strong><small>兼容接口</small></span><Plus size={16} /></button>
+        <button type="button" className="api-choice provider-picker-custom" onClick={() => setStage({ kind: "custom-protocol" })}><span><strong>自定义供应商</strong></span><Plus size={16} /></button>
         {pickerProviders.map((item) => {
           const configured = item.authConfigured || item.custom;
           return <button type="button" key={item.id} className={`api-choice ${configured ? "provider-picker-configured" : ""}`} onClick={() => setStage({ kind: "known", provider: item })}>
@@ -423,14 +424,14 @@ export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete,
     </div> : null}
     {stage.kind === "custom-protocol" ? <div className="settings-stack">
       <div className="api-choice-list">{API_OPTIONS.map((option) => <button type="button" key={option.id} className={`api-choice ${provider.api === option.id ? "selected" : ""}`} onClick={() => setProvider({ ...provider, api: option.id })}>
-        <span><strong>{option.label}</strong><small>{option.description}</small></span>{provider.api === option.id ? <Check size={16} /> : null}
+        <span><strong>{option.label}</strong></span>{provider.api === option.id ? <Check size={16} /> : null}
       </button>)}</div>
       <div className="dialog-actions"><Button onClick={() => setStage({ kind: "custom-connection" })}>下一步</Button></div>
     </div> : null}
     {stage.kind === "custom-connection" ? <div className="settings-stack">
       <div className="provider-editor-grid">
-        <label><span>ID</span><input value={provider.id} disabled={editing !== undefined} autoFocus={editing === undefined} onChange={(event) => setProvider({ ...provider, id: event.target.value })} placeholder="例如 my-provider" aria-invalid={!idAvailable} />{idAvailable ? null : <small className="field-error">该 ID 已被使用</small>}</label>
-        <label><span>显示名称</span><input value={provider.name ?? ""} onChange={(event) => setProvider({ ...provider, name: event.target.value || undefined })} placeholder="例如 我的模型服务" /></label>
+        <label><span>ID</span><input value={provider.id} disabled={editing !== undefined} autoFocus={editing === undefined} onChange={(event) => setProvider({ ...provider, id: event.target.value })} aria-invalid={!idAvailable} />{idAvailable ? null : <small className="field-error">该 ID 已被使用</small>}</label>
+        <label><span>显示名称</span><input value={provider.name ?? ""} onChange={(event) => setProvider({ ...provider, name: event.target.value || undefined })} /></label>
         <label className="provider-editor-wide"><span>Base URL</span><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" aria-invalid={provider.baseUrl.trim() !== "" && !isValidHttpUrl(provider.baseUrl)} />{provider.baseUrl.trim() === "" || isValidHttpUrl(provider.baseUrl) ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
         <label className="provider-editor-wide"><span>接口协议</span><select value={provider.api} onChange={(event) => setProvider({ ...provider, api: event.target.value as ManagedProvider["api"] })}>{API_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
         <label className="settings-checkbox"><input type="checkbox" checked={provider.authHeader} onChange={(event) => setProvider({ ...provider, authHeader: event.target.checked })} /><span>发送 Bearer Authorization</span></label>
