@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { RotateCcw, RotateCw, X, ZoomIn, ZoomOut } from "lucide-react";
+import { useHistoryBackTrap } from "../lib/history-back-trap";
 
 /** 缩放上下限与每档倍率（对齐 compass 预览组件的 0.1x–5x、×1.2）。 */
 const MIN_SCALE = 0.1;
@@ -44,6 +45,7 @@ interface ImageLightboxProps {
  * 点空白或 Esc 关闭。挂到 body 上，避免被消息 DOM 或滚动容器裁剪。
  */
 export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
+  useHistoryBackTrap(true, onClose);
   const [scale, setScale] = useState(1);
   const [angle, setAngle] = useState(0);
   const [offset, setOffset] = useState({ x: 0, y: 0 });

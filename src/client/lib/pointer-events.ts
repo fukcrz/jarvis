@@ -2,6 +2,7 @@
 const BLOCKING_OVERLAY_SELECTOR = [
   "[data-radix-dialog-overlay]",
   ".dialog-overlay",
+  ".file-browser-overlay",
   ".image-lightbox",
   ".auth-operation-overlay",
   ".action-sheet-overlay",

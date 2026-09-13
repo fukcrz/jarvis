@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import type { WorkspaceFileContent } from "../../shared/protocol";
 import { api, workspaceFileUrl } from "../api";
+import { useHistoryBackTrap } from "../lib/history-back-trap";
 import { CodePreview } from "./code-preview";
 import { Dialog, DialogContent } from "./ui/dialog";
 
@@ -141,6 +142,7 @@ export function LocalTextFileLink({ path, cwd, line, children, className }: Loca
 
 export function TextFilePreviewDialog({ file, line, open = true, onClose }: { file: WorkspaceFileContent; line?: number; open?: boolean; onClose: () => void }) {
   const codeRef = useRef<HTMLPreElement>(null);
+  useHistoryBackTrap(open, onClose);
   useEffect(() => {
     if (!open || line === undefined || codeRef.current === null) return;
     const target = codeRef.current.querySelector<HTMLElement>(`[data-line="${String(line)}"]`);

@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearTouchFocus, hasBlockingOverlay, installTouchFocusGuard, restoreBodyPointerEventsIfIdle } from "./pointer-events";
 
-function fakeDocument(pointerEvents: string, overlay: boolean): Document {
-  const overlayNode = overlay ? { className: "dialog-overlay" } : null;
+function fakeDocument(pointerEvents: string, overlay: boolean, overlayClass = "dialog-overlay"): Document {
+  const overlayNode = overlay ? { className: overlayClass } : null;
   return {
     body: { style: { pointerEvents } },
     querySelector: (selector: string) => {
       const tokens = selector.split(",").map((part) => part.trim());
-      return overlay && tokens.includes(".dialog-overlay") ? overlayNode : null;
+      return overlay && tokens.includes(`.${overlayClass}`) ? overlayNode : null;
     },
   } as unknown as Document;
 }
@@ -151,6 +151,13 @@ describe("restoreBodyPointerEventsIfIdle", () => {
 
   it("keeps none while a dialog overlay is still open", () => {
     const doc = fakeDocument("none", true);
+    expect(hasBlockingOverlay(doc)).toBe(true);
+    expect(restoreBodyPointerEventsIfIdle(doc)).toBe(false);
+    expect(doc.body.style.pointerEvents).toBe("none");
+  });
+
+  it("keeps none while the file browser overlay is still open", () => {
+    const doc = fakeDocument("none", true, "file-browser-overlay");
     expect(hasBlockingOverlay(doc)).toBe(true);
     expect(restoreBodyPointerEventsIfIdle(doc)).toBe(false);
     expect(doc.body.style.pointerEvents).toBe("none");

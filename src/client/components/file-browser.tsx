@@ -5,6 +5,7 @@ import { ArrowLeft, ChevronDown, ChevronRight, FileQuestion, FileText, Folder, F
 import type { WorkspaceDirectoryListing, WorkspaceFileContent } from "../../shared/protocol";
 import { api, ApiError, workspaceFileUrl } from "../api";
 import { useIsMobile } from "../hooks/use-is-mobile";
+import { useHistoryBackTrap } from "../lib/history-back-trap";
 import { MAX_TABLE_ROWS, parseDelimited, previewKindForPath, type PreviewKind } from "../lib/file-preview";
 import { MarkdownMessage } from "./markdown-message";
 import { CodePreview } from "./code-preview";
@@ -40,6 +41,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
   const [rootPath, setRootPath] = useState("");
   const [currentPath, setCurrentPath] = useState("");
   const treeRef = useRef<HTMLDivElement>(null);
+  const directoryScrollByPathRef = useRef<Record<string, number>>({});
   const loadedDirectoryPathsRef = useRef(new Set<string>());
   const loadingDirectoryPathsRef = useRef(new Set<string>());
   const deleteRequestRef = useRef(0);
@@ -151,6 +153,23 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
     setError(undefined);
   };
 
+  const rememberDirectoryScroll = (path: string) => {
+    if (!isMobile || treeRef.current === null || path === "") return;
+    directoryScrollByPathRef.current[path] = treeRef.current.scrollTop;
+  };
+
+  const listPath = currentPath === "" ? rootPath : currentPath;
+  const listingReady = (listPath === "" ? undefined : entriesByPath[listPath]) !== undefined;
+  useEffect(() => {
+    if (!isMobile || preview !== undefined || !listingReady || treeRef.current === null || listPath === "") return;
+    treeRef.current.scrollTop = directoryScrollByPathRef.current[listPath] ?? 0;
+  }, [isMobile, listPath, listingReady, preview]);
+
+  useHistoryBackTrap(isMobile, () => {
+    if (preview !== undefined) closePreview();
+    else onClose();
+  });
+
   const openFile = async (path: string) => {
     const targetWorkspaceId = workspaceRef.current;
     invalidatePreviewRequest();
@@ -211,6 +230,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
 
   const goUp = async () => {
     if (rootPath === "" || currentPath === "" || currentPath === rootPath) return;
+    rememberDirectoryScroll(currentPath);
     const parent = parentDirectoryWithinRoot(currentPath, rootPath);
     if (parent === undefined) return;
     setCurrentPath(parent);
@@ -280,7 +300,6 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
 
   const rootListing = rootPath === "" ? undefined : entriesByPath[rootPath];
   const treeEntries = rootListing?.entries ?? [];
-  const listPath = currentPath === "" ? rootPath : currentPath;
   const listListing = listPath === "" ? undefined : entriesByPath[listPath];
   const listEntries = listListing?.entries ?? [];
   const showMobilePreview = isMobile && preview !== undefined;
@@ -332,7 +351,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
                       type="button"
                       className={`file-browser-entry ${entry.kind} ${preview?.path === entry.path ? "selected" : ""}`}
                       key={entry.path}
-                      onClick={() => { if (entry.kind === "directory") void openDirectory(entry.path); else void openFile(entry.path); }}
+                      onClick={() => { rememberDirectoryScroll(listPath); if (entry.kind === "directory") void openDirectory(entry.path); else void openFile(entry.path); }}
                       onContextMenu={(event) => onEntryContextMenu(entry, event)}
                       disabled={loadingPaths[entry.path] === true}
                     >

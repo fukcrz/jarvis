@@ -812,6 +812,17 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
   /* 触屏平台的 ::-webkit-scrollbar 会占 10px 布局宽度，让正文右侧比左侧多缩进，移动端改为不显示 */
   .timeline { -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   .timeline::-webkit-scrollbar { display: none; }
+  .file-browser-chrome .button-icon { width: 44px; height: 44px; }
+  .file-browser-tree,
+  .file-preview-code,
+  .file-preview-markdown,
+  .file-preview-table-wrap,
+  .text-file-preview-code { -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .file-browser-tree::-webkit-scrollbar,
+  .file-preview-code::-webkit-scrollbar,
+  .file-preview-markdown::-webkit-scrollbar,
+  .file-preview-table-wrap::-webkit-scrollbar,
+  .text-file-preview-code::-webkit-scrollbar { display: none; }
   .composer { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
   .composer-editor .cm-editor { min-height: 48px !important; max-height: 168px !important; }
   .composer-editor .cm-scroller { min-height: 48px !important; max-height: 168px !important; }
