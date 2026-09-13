@@ -29,6 +29,7 @@ import type {
   EnabledModelsStatus,
   FetchedModel,
   ManagedProvider,
+  ProviderOverride,
   ProviderStatus,
 } from "../shared/protocol";
 
@@ -163,6 +164,11 @@ export const api = {
   customProviders: async (): Promise<ManagedProvider[]> => (await request<{ providers: ManagedProvider[] }>("/api/settings/custom-providers")).providers,
   saveCustomProvider: async ({ id, ...provider }: ManagedProvider): Promise<ManagedProvider> => (await request<{ provider: ManagedProvider }>(`/api/settings/custom-providers/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(provider) })).provider,
   removeCustomProvider: async (providerId: string): Promise<void> => { await request(`/api/settings/custom-providers/${encodeURIComponent(providerId)}`, { method: "DELETE" }); },
+  saveProviderOverride: async (providerId: string, override: ProviderOverride): Promise<ProviderOverride | undefined> => {
+    const result = await request<{ override: ProviderOverride | null }>(`/api/settings/providers/${encodeURIComponent(providerId)}/override`, { method: "PUT", body: JSON.stringify(override) });
+    return result.override ?? undefined;
+  },
+  removeProviderOverride: async (providerId: string): Promise<void> => { await request(`/api/settings/providers/${encodeURIComponent(providerId)}/override`, { method: "DELETE" }); },
   startLogin: async (providerId: string, type: "api_key" | "oauth"): Promise<AuthLoginOperation> => (await request<{ operation: AuthLoginOperation }>("/api/settings/auth/login", { method: "POST", body: JSON.stringify({ providerId, type }) })).operation,
   loginStatus: async (operationId: string): Promise<AuthLoginOperation> => (await request<{ operation: AuthLoginOperation }>(`/api/settings/auth/${operationId}`)).operation,
   respondLogin: async (operationId: string, value: string): Promise<AuthLoginOperation> => (await request<{ operation: AuthLoginOperation }>(`/api/settings/auth/${operationId}/respond`, { method: "POST", body: JSON.stringify({ value }) })).operation,

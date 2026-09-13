@@ -403,6 +403,166 @@ describe("Jarvis HTTP and WebSocket API", () => {
     }
   });
 
+  it("saves custom provider headers and compat without dropping unknown compat keys", async () => {
+    const agentDir = join(jarvisHome, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, "models.json"), JSON.stringify({
+      providers: {
+        local: {
+          baseUrl: "http://127.0.0.1:11434/v1",
+          api: "openai-completions",
+          apiKey: "test-key",
+          models: [{ id: "alpha", cost: { input: 1 } }],
+          compat: { supportsDeveloperRole: true, extraFlag: true },
+        },
+      },
+    }));
+    const server = activeApp();
+    const saved = await server.inject({
+      method: "PUT",
+      url: "/api/settings/custom-providers/local",
+      payload: {
+        baseUrl: "http://127.0.0.1:11434/v1",
+        api: "openai-completions",
+        authHeader: true,
+        headers: { "X-Title": "Jarvis" },
+        compat: { supportsDeveloperRole: false, thinkingFormat: "deepseek" },
+        models: [{ id: "alpha", reasoning: true, vision: true }],
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({
+      provider: {
+        id: "local",
+        headers: { "X-Title": "Jarvis" },
+        compat: { supportsDeveloperRole: false, thinkingFormat: "deepseek" },
+        models: [{ id: "alpha", reasoning: true, vision: true }],
+      },
+    });
+    const persisted = JSON.parse(await readFile(join(agentDir, "models.json"), "utf8")) as {
+      providers: { local: { headers?: Record<string, string>; compat?: Record<string, unknown>; models: Array<{ reasoning: boolean; input: string[]; cost?: unknown }> } };
+    };
+    expect(persisted.providers.local.headers).toEqual({ "X-Title": "Jarvis" });
+    expect(persisted.providers.local.compat).toEqual({ extraFlag: true, supportsDeveloperRole: false, thinkingFormat: "deepseek" });
+    expect(persisted.providers.local.models[0]).toMatchObject({ reasoning: true, input: ["text", "image"], cost: { input: 1 } });
+    const listed = await server.inject({ method: "GET", url: "/api/settings/custom-providers" });
+    expect(listed.json<{ providers: Array<{ id: string; headers?: Record<string, string>; compat?: Record<string, unknown> }> }>().providers.find((provider) => provider.id === "local")).toMatchObject({
+      headers: { "X-Title": "Jarvis" },
+      compat: { supportsDeveloperRole: false, thinkingFormat: "deepseek" },
+    });
+  });
+
+  it("overrides a built-in provider connection without replacing its model catalog", async () => {
+    const agentDir = join(jarvisHome, "agent");
+    await mkdir(agentDir, { recursive: true });
+    const server = activeApp();
+    const before = (await server.inject({ method: "GET", url: "/api/settings/providers" })).json<{ providers: Array<{ id: string; models: unknown[]; custom: boolean; override?: unknown }> }>().providers.find((provider) => provider.id === "openai");
+    expect(before?.custom).toBe(false);
+    expect(before?.override).toBeUndefined();
+    const catalogSize = before?.models.length ?? 0;
+    expect(catalogSize).toBeGreaterThan(0);
+
+    const saved = await server.inject({
+      method: "PUT",
+      url: "/api/settings/providers/openai/override",
+      payload: {
+        baseUrl: "https://proxy.example.com/v1",
+        headers: { "X-Proxy": "1" },
+        compat: { supportsDeveloperRole: false },
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toEqual({
+      override: {
+        baseUrl: "https://proxy.example.com/v1",
+        headers: { "X-Proxy": "1" },
+        compat: { supportsDeveloperRole: false },
+      },
+    });
+
+    const persisted = JSON.parse(await readFile(join(agentDir, "models.json"), "utf8")) as { providers: { openai: Record<string, unknown> } };
+    expect(persisted.providers.openai).toEqual({
+      baseUrl: "https://proxy.example.com/v1",
+      headers: { "X-Proxy": "1" },
+      compat: { supportsDeveloperRole: false },
+    });
+    expect(persisted.providers.openai["models"]).toBeUndefined();
+    expect(persisted.providers.openai["api"]).toBeUndefined();
+
+    const listed = (await server.inject({ method: "GET", url: "/api/settings/providers" })).json<{ providers: Array<{ id: string; custom: boolean; override?: { baseUrl?: string }; models: unknown[] }> }>().providers.find((provider) => provider.id === "openai");
+    expect(listed).toMatchObject({ custom: false, override: { baseUrl: "https://proxy.example.com/v1" } });
+    expect(listed?.models.length).toBe(catalogSize);
+
+    const customList = await server.inject({ method: "GET", url: "/api/settings/custom-providers" });
+    expect(customList.json<{ providers: Array<{ id: string }> }>().providers.find((provider) => provider.id === "openai")).toBeUndefined();
+
+    const emptied = await server.inject({ method: "PUT", url: "/api/settings/providers/openai/override", payload: {} });
+    expect(emptied.statusCode).toBe(200);
+    expect(emptied.json()).toEqual({ override: null });
+    expect(JSON.parse(await readFile(join(agentDir, "models.json"), "utf8")).providers["openai"]).toBeUndefined();
+
+    const restored = await server.inject({
+      method: "PUT",
+      url: "/api/settings/providers/openai/override",
+      payload: { baseUrl: "https://proxy.example.com/v1" },
+    });
+    expect(restored.statusCode).toBe(200);
+
+    const cleared = await server.inject({ method: "DELETE", url: "/api/settings/providers/openai/override" });
+    expect(cleared.statusCode).toBe(200);
+    const after = JSON.parse(await readFile(join(agentDir, "models.json"), "utf8")) as { providers: Record<string, unknown> };
+    expect(after.providers["openai"]).toBeUndefined();
+  });
+
+  it("fetches the model list from a built-in provider override", async () => {
+    const agentDir = join(jarvisHome, "agent");
+    await mkdir(agentDir, { recursive: true });
+    const { createServer } = await import("node:http");
+    const seen: { url?: string; header?: string } = {};
+    const httpServer = createServer((request, response) => {
+      seen.url = request.url;
+      seen.header = typeof request.headers["x-proxy"] === "string" ? request.headers["x-proxy"] : undefined;
+      if (request.url === "/v1/models") {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ data: [{ id: "proxy-model" }] }));
+      } else {
+        response.statusCode = 404;
+        response.end();
+      }
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const address = httpServer.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${String(address.port)}/v1`;
+    const server = activeApp();
+    const saved = await server.inject({
+      method: "PUT",
+      url: "/api/settings/providers/openai/override",
+      payload: { baseUrl, headers: { "X-Proxy": "1" } },
+    });
+    expect(saved.statusCode).toBe(200);
+    try {
+      const response = await server.inject({ method: "POST", url: "/api/settings/providers/openai/fetch-models", payload: {} });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ models: [{ id: "proxy-model" }] });
+      expect(seen.url).toBe("/v1/models");
+      expect(seen.header).toBe("1");
+    } finally {
+      await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("rejects connection overrides on a custom provider", async () => {
+    const agentDir = join(jarvisHome, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, "models.json"), JSON.stringify({
+      providers: { local: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", apiKey: "test-key", models: [{ id: "alpha" }] } },
+    }));
+    const server = activeApp();
+    const response = await server.inject({ method: "PUT", url: "/api/settings/providers/local/override", payload: { baseUrl: "https://proxy.example.com/v1" } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: { code: "PROVIDER_IS_CUSTOM" } });
+  });
+
   it("starts a manual compaction once for a repeated direct request", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "manual-compact-workspace");

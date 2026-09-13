@@ -141,6 +141,16 @@ describe("API client", () => {
     });
   });
 
+  it("saves a built-in provider override without duplicating the provider id", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ override: { baseUrl: "https://proxy.example.com/v1" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(api.saveProviderOverride("openai", { baseUrl: "https://proxy.example.com/v1" })).resolves.toEqual({ baseUrl: "https://proxy.example.com/v1" });
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe("/api/settings/providers/openai/override");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({ baseUrl: "https://proxy.example.com/v1" });
+  });
+
   it("sends a provider and model id to the session model endpoint", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ model: { provider: "provider", id: "model", name: "Model", reasoning: true } }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

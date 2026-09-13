@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir, resolveModelScopeWithDiagnostics, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthEvent, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
-import type { AppSettings, AuthLoginOperation, EnabledModelRef, EnabledModelsStatus, FetchedModel, ManagedModel, ManagedProvider, ProviderStatus } from "../shared/protocol.js";
+import type { AppSettings, AuthLoginOperation, EnabledModelRef, EnabledModelsStatus, FetchedModel, ManagedCompat, ManagedMaxTokensField, ManagedModel, ManagedProvider, ManagedThinkingFormat, ProviderOverride, ProviderStatus } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 
 interface StoredSettings { version: 1; assistantName: string; }
@@ -72,8 +72,10 @@ export class SettingsService {
     const credentialType = new Map(credentials.map((credential) => [credential.providerId, credential.type]));
     return runtime.getProviders().map((provider) => {
       const auth = runtime.getProviderAuthStatus(provider.id);
-      const configured = modelConfig.providers[provider.id];
+      const configured = record(modelConfig.providers[provider.id]) ? modelConfig.providers[provider.id] : undefined;
       const hasPlaceholder = configured?.["apiKey"] === CUSTOM_API_KEY_PLACEHOLDER && credentialType.has(provider.id) === false;
+      const custom = isManagedCustomProvider(configured);
+      const override = custom ? undefined : projectProviderOverride(configured);
       return {
         id: provider.id,
         name: provider.name,
@@ -82,7 +84,8 @@ export class SettingsService {
         credentialType: credentialType.get(provider.id),
         supportsApiKey: provider.auth.apiKey !== undefined,
         supportsOAuth: provider.auth.oauth !== undefined,
-        custom: modelConfig.providers[provider.id] !== undefined,
+        custom,
+        ...(override === undefined ? {} : { override }),
         models: runtime.getModels(provider.id).map(projectModel),
       };
     }).sort((left, right) => left.name.localeCompare(right.name));
@@ -130,9 +133,44 @@ export class SettingsService {
     if (saved["apiKey"] === CUSTOM_API_KEY_PLACEHOLDER) delete saved["apiKey"];
     if (!provider.authHeader) delete saved["authHeader"];
     if (provider.name === undefined) delete saved["name"];
+    applyManagedHeaders(saved, provider.headers);
+    applyManagedCompat(saved, provider.compat);
     await this.writeModelsConfig(config);
     await this.refreshRuntime();
     return provider;
+  }
+
+  async saveProviderOverride(providerId: string, input: ProviderOverride): Promise<ProviderOverride | undefined> {
+    assertProviderId(providerId);
+    const runtime = await this.modelRuntime();
+    if (runtime.getProvider(providerId) === undefined) throw new AppError("PROVIDER_NOT_FOUND", "Provider not found", 404);
+    const config = await this.readModelsConfig();
+    const existingValue = config.providers[providerId];
+    if (isManagedCustomProvider(existingValue)) throw new AppError("PROVIDER_IS_CUSTOM", "Use the custom provider editor for this connection", 400);
+    const existing: Record<string, unknown> = record(existingValue) ? { ...existingValue } : {};
+    const override = validateProviderOverride(input);
+    if (override.baseUrl === undefined) delete existing["baseUrl"];
+    else existing["baseUrl"] = override.baseUrl;
+    applyManagedHeaders(existing, override.headers);
+    applyManagedCompat(existing, override.compat);
+    delete existing["api"];
+    delete existing["models"];
+    if (isEmptyProviderRecord(existing)) delete config.providers[providerId];
+    else config.providers[providerId] = existing;
+    await this.writeModelsConfig(config);
+    await this.refreshRuntime();
+    return projectProviderOverride(config.providers[providerId]);
+  }
+
+  async removeProviderOverride(providerId: string): Promise<void> {
+    assertProviderId(providerId);
+    const config = await this.readModelsConfig();
+    const existingValue = config.providers[providerId];
+    if (existingValue === undefined) throw new AppError("PROVIDER_NOT_CONFIGURED", "Provider override not found", 404);
+    if (isManagedCustomProvider(existingValue)) throw new AppError("PROVIDER_IS_CUSTOM", "Use the custom provider editor for this connection", 400);
+    delete config.providers[providerId];
+    await this.writeModelsConfig(config);
+    await this.refreshRuntime();
   }
 
   async removeCustomProvider(providerId: string): Promise<void> {
@@ -154,15 +192,22 @@ export class SettingsService {
       this.readModelsConfig(),
     ]);
     if (provider === undefined) throw new AppError("PROVIDER_NOT_FOUND", "Provider not found", 404);
-    const baseUrl = auth?.auth.baseUrl ?? provider.baseUrl;
-    if (typeof baseUrl !== "string" || baseUrl === "") throw new AppError("PROVIDER_AUTH_MISSING", "Provider base URL is not configured", 400);
     const configured = record(config.providers[providerId]) ? config.providers[providerId] : {};
+    const configuredUrl = typeof configured["baseUrl"] === "string" && configured["baseUrl"].trim() !== "" ? configured["baseUrl"].trim() : undefined;
+    const providerUrl = typeof provider.baseUrl === "string" && provider.baseUrl !== "" ? provider.baseUrl : undefined;
+    const authUrl = typeof auth?.auth.baseUrl === "string" && auth.auth.baseUrl !== "" ? auth.auth.baseUrl : undefined;
+    const baseUrl = configuredUrl ?? providerUrl ?? authUrl;
+    if (baseUrl === undefined) throw new AppError("PROVIDER_AUTH_MISSING", "Provider base URL is not configured", 400);
     const api = isApi(configured["api"]) ? configured["api"] : detectApiFromProvider(provider, configured);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     try {
       const url = modelsEndpoint(baseUrl, api);
-      const headers: Record<string, string> = { ...(record(auth?.auth.headers) ? auth.auth.headers as Record<string, string> : {}) };
+      const headers: Record<string, string> = {
+        ...(projectHeaders(provider.headers) ?? {}),
+        ...(projectHeaders(configured["headers"]) ?? {}),
+        ...(projectHeaders(auth?.auth.headers) ?? {}),
+      };
       if (auth?.auth.apiKey !== undefined) {
         if (api === "anthropic-messages") {
           headers["x-api-key"] = auth.auth.apiKey;
@@ -352,7 +397,7 @@ function projectModel(model: { id: string; name: string; reasoning: boolean; inp
 }
 
 function projectManagedProvider(id: string, value: Record<string, unknown>): ManagedProvider | undefined {
-  if (typeof value["baseUrl"] !== "string" || typeof value["api"] !== "string" || !isApi(value["api"])) return undefined;
+  if (!isManagedCustomProvider(value) || typeof value["baseUrl"] !== "string" || !isApi(value["api"])) return undefined;
   const models = Array.isArray(value["models"]) ? value["models"].flatMap((model): ManagedModel[] => {
     if (!record(model) || typeof model["id"] !== "string") return [];
     const input = Array.isArray(model["input"]) ? model["input"] : [];
@@ -365,7 +410,18 @@ function projectManagedProvider(id: string, value: Record<string, unknown>): Man
       ...(typeof model["maxTokens"] === "number" ? { maxTokens: model["maxTokens"] } : {}),
     }];
   }) : [];
-  return { id, ...(typeof value["name"] === "string" ? { name: value["name"] } : {}), baseUrl: value["baseUrl"], api: value["api"], authHeader: value["authHeader"] === true, models };
+  const headers = projectHeaders(value["headers"]);
+  const compat = projectManagedCompat(value["compat"]);
+  return {
+    id,
+    ...(typeof value["name"] === "string" ? { name: value["name"] } : {}),
+    baseUrl: value["baseUrl"],
+    api: value["api"],
+    authHeader: value["authHeader"] === true,
+    ...(headers === undefined ? {} : { headers }),
+    ...(compat === undefined ? {} : { compat }),
+    models,
+  };
 }
 
 function validateManagedProvider(value: ManagedProvider): ManagedProvider {
@@ -390,7 +446,18 @@ function validateManagedProvider(value: ManagedProvider): ManagedProvider {
     };
   });
   // 模型统一在「模型管理」里配置，允许先保存供应商再添加模型。
-  return { id: value.id, ...(value.name?.trim() ? { name: value.name.trim() } : {}), baseUrl, api: value.api, authHeader: value.authHeader === true, models };
+  const headers = validateHeaders(value.headers);
+  const compat = validateManagedCompat(value.compat);
+  return {
+    id: value.id,
+    ...(value.name?.trim() ? { name: value.name.trim() } : {}),
+    baseUrl,
+    api: value.api,
+    authHeader: value.authHeader === true,
+    ...(headers === undefined ? {} : { headers }),
+    ...(compat === undefined ? {} : { compat }),
+    models,
+  };
 }
 
 function projectAuthPrompt(prompt: AuthPrompt): NonNullable<AuthLoginOperation["prompt"]> {
@@ -421,6 +488,134 @@ function isApi(value: unknown): value is ManagedProvider["api"] {
   return value === "openai-completions" || value === "openai-responses" || value === "anthropic-messages" || value === "google-generative-ai";
 }
 function validPositiveInt(value: number | undefined): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
+
+const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,64}$/;
+const MAX_HEADERS = 20;
+const MAX_HEADER_VALUE = 2_000;
+const COMPAT_KEYS = ["supportsDeveloperRole", "supportsReasoningEffort", "supportsUsageInStreaming", "maxTokensField", "thinkingFormat", "supportsEagerToolInputStreaming", "allowEmptySignature"] as const;
+const THINKING_FORMATS = new Set<ManagedThinkingFormat>(["openai", "openrouter", "deepseek", "together", "qwen", "qwen-chat-template"]);
+const MAX_TOKENS_FIELDS = new Set<ManagedMaxTokensField>(["max_completion_tokens", "max_tokens"]);
+
+function isManagedCustomProvider(value: unknown): boolean {
+  return record(value) && isApi(value["api"]);
+}
+
+function isEmptyProviderRecord(value: Record<string, unknown>): boolean {
+  return Object.keys(value).length === 0;
+}
+
+function projectHeaders(value: unknown): Record<string, string> | undefined {
+  if (!record(value)) return undefined;
+  const headers: Record<string, string> = {};
+  for (const [name, headerValue] of Object.entries(value)) {
+    if (typeof headerValue === "string" && headerValue !== "") headers[name] = headerValue;
+  }
+  return Object.keys(headers).length === 0 ? undefined : headers;
+}
+
+function projectManagedCompat(value: unknown): ManagedCompat | undefined {
+  if (!record(value)) return undefined;
+  const compat: ManagedCompat = {};
+  if (typeof value["supportsDeveloperRole"] === "boolean") compat.supportsDeveloperRole = value["supportsDeveloperRole"];
+  if (typeof value["supportsReasoningEffort"] === "boolean") compat.supportsReasoningEffort = value["supportsReasoningEffort"];
+  if (typeof value["supportsUsageInStreaming"] === "boolean") compat.supportsUsageInStreaming = value["supportsUsageInStreaming"];
+  if (typeof value["maxTokensField"] === "string" && MAX_TOKENS_FIELDS.has(value["maxTokensField"] as ManagedMaxTokensField)) {
+    compat.maxTokensField = value["maxTokensField"] as ManagedMaxTokensField;
+  }
+  if (typeof value["thinkingFormat"] === "string" && THINKING_FORMATS.has(value["thinkingFormat"] as ManagedThinkingFormat)) {
+    compat.thinkingFormat = value["thinkingFormat"] as ManagedThinkingFormat;
+  }
+  if (typeof value["supportsEagerToolInputStreaming"] === "boolean") compat.supportsEagerToolInputStreaming = value["supportsEagerToolInputStreaming"];
+  if (typeof value["allowEmptySignature"] === "boolean") compat.allowEmptySignature = value["allowEmptySignature"];
+  return Object.keys(compat).length === 0 ? undefined : compat;
+}
+
+function projectProviderOverride(value: unknown): ProviderOverride | undefined {
+  if (!record(value) || isManagedCustomProvider(value)) return undefined;
+  const rawUrl = value["baseUrl"];
+  const baseUrl = typeof rawUrl === "string" && rawUrl.trim() !== "" ? rawUrl : undefined;
+  const headers = projectHeaders(value["headers"]);
+  const compat = projectManagedCompat(value["compat"]);
+  if (baseUrl === undefined && headers === undefined && compat === undefined) return undefined;
+  return {
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(headers === undefined ? {} : { headers }),
+    ...(compat === undefined ? {} : { compat }),
+  };
+}
+
+function validateOptionalHttpUrl(value: string | undefined, emptyLabel: string): string | undefined {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "") return undefined;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("unsupported protocol");
+  } catch { throw new AppError("PROVIDER_URL_INVALID", `${emptyLabel} must be a valid HTTP or HTTPS URL`, 400); }
+  return trimmed;
+}
+
+function validateHeaders(value: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  const names = Object.keys(value);
+  if (names.length > MAX_HEADERS) throw new AppError("PROVIDER_HEADERS_INVALID", `At most ${String(MAX_HEADERS)} headers are allowed`, 400);
+  const headers: Record<string, string> = {};
+  const seen = new Set<string>();
+  for (const name of names) {
+    const key = name.trim();
+    if (!HEADER_NAME.test(key)) throw new AppError("PROVIDER_HEADERS_INVALID", "Header names must be valid HTTP tokens", 400);
+    const folded = key.toLowerCase();
+    if (seen.has(folded)) throw new AppError("PROVIDER_HEADERS_INVALID", `Header "${key}" is duplicated`, 400);
+    seen.add(folded);
+    const headerValue = value[name] ?? "";
+    if (headerValue === "") throw new AppError("PROVIDER_HEADERS_INVALID", `Header "${key}" needs a value`, 400);
+    if (headerValue.length > MAX_HEADER_VALUE) throw new AppError("PROVIDER_HEADERS_INVALID", `Header "${key}" is too long`, 400);
+    headers[key] = headerValue;
+  }
+  return Object.keys(headers).length === 0 ? undefined : headers;
+}
+
+function validateManagedCompat(value: ManagedCompat | undefined): ManagedCompat | undefined {
+  if (value === undefined) return undefined;
+  const compat: ManagedCompat = {};
+  if (value.supportsDeveloperRole !== undefined) compat.supportsDeveloperRole = value.supportsDeveloperRole;
+  if (value.supportsReasoningEffort !== undefined) compat.supportsReasoningEffort = value.supportsReasoningEffort;
+  if (value.supportsUsageInStreaming !== undefined) compat.supportsUsageInStreaming = value.supportsUsageInStreaming;
+  if (value.maxTokensField !== undefined) {
+    if (!MAX_TOKENS_FIELDS.has(value.maxTokensField)) throw new AppError("PROVIDER_COMPAT_INVALID", "Unsupported max tokens field", 400);
+    compat.maxTokensField = value.maxTokensField;
+  }
+  if (value.thinkingFormat !== undefined) {
+    if (!THINKING_FORMATS.has(value.thinkingFormat)) throw new AppError("PROVIDER_COMPAT_INVALID", "Unsupported thinking format", 400);
+    compat.thinkingFormat = value.thinkingFormat;
+  }
+  if (value.supportsEagerToolInputStreaming !== undefined) compat.supportsEagerToolInputStreaming = value.supportsEagerToolInputStreaming;
+  if (value.allowEmptySignature !== undefined) compat.allowEmptySignature = value.allowEmptySignature;
+  return Object.keys(compat).length === 0 ? undefined : compat;
+}
+
+function validateProviderOverride(value: ProviderOverride): ProviderOverride {
+  const baseUrl = validateOptionalHttpUrl(value.baseUrl, "Provider base URL");
+  const headers = validateHeaders(value.headers);
+  const compat = validateManagedCompat(value.compat);
+  return {
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(headers === undefined ? {} : { headers }),
+    ...(compat === undefined ? {} : { compat }),
+  };
+}
+
+function applyManagedHeaders(target: Record<string, unknown>, headers: Record<string, string> | undefined): void {
+  if (headers === undefined) delete target["headers"];
+  else target["headers"] = headers;
+}
+
+function applyManagedCompat(target: Record<string, unknown>, compat: ManagedCompat | undefined): void {
+  const existing = record(target["compat"]) ? { ...target["compat"] } : {};
+  for (const key of COMPAT_KEYS) delete existing[key];
+  if (compat !== undefined) Object.assign(existing, compat);
+  if (Object.keys(existing).length === 0) delete target["compat"];
+  else target["compat"] = existing;
+}
 
 /** 按 API 类型拼模型列表端点（baseUrl 已含版本路径，如 .../v1）。 */
 function modelsEndpoint(baseUrl: string, api: ManagedProvider["api"]): string {
@@ -461,9 +656,11 @@ function projectFetchedModels(body: unknown, api: ManagedProvider["api"]): Fetch
     .sort((left, right) => left.id.localeCompare(right.id));
 }
 
-/** 从 models.json 条目推断 API 类型（缺省按 OpenAI 兼容处理）。 */
-function detectApiFromProvider(_provider: object, configured: Record<string, unknown>): ManagedProvider["api"] {
+/** 从 models.json 或已加载模型推断 API 类型（缺省按 OpenAI 兼容处理）。 */
+function detectApiFromProvider(provider: { getModels(): readonly { api: string }[] }, configured: Record<string, unknown>): ManagedProvider["api"] {
   if (isApi(configured["api"])) return configured["api"];
+  const modelApi = provider.getModels()[0]?.api;
+  if (isApi(modelApi)) return modelApi;
   return "openai-completions";
 }
 

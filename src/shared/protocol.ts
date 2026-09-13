@@ -44,12 +44,41 @@ export interface ManagedModel {
   maxTokens?: number;
 }
 
+export const MANAGED_APIS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"] as const;
+export type ManagedApi = typeof MANAGED_APIS[number];
+
+export const MANAGED_THINKING_FORMATS = ["openai", "openrouter", "deepseek", "together", "qwen", "qwen-chat-template"] as const;
+export type ManagedThinkingFormat = typeof MANAGED_THINKING_FORMATS[number];
+
+export const MANAGED_MAX_TOKENS_FIELDS = ["max_completion_tokens", "max_tokens"] as const;
+export type ManagedMaxTokensField = typeof MANAGED_MAX_TOKENS_FIELDS[number];
+
+/** Jarvis 可编辑的 Pi `compat` 常用项；未知键由后端原样保留。 */
+export interface ManagedCompat {
+  supportsDeveloperRole?: boolean;
+  supportsReasoningEffort?: boolean;
+  supportsUsageInStreaming?: boolean;
+  maxTokensField?: ManagedMaxTokensField;
+  thinkingFormat?: ManagedThinkingFormat;
+  supportsEagerToolInputStreaming?: boolean;
+  allowEmptySignature?: boolean;
+}
+
+/** 内置供应商的连接覆盖：不写 `api` / `models`，避免覆盖官方目录。 */
+export interface ProviderOverride {
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  compat?: ManagedCompat;
+}
+
 export interface ManagedProvider {
   id: string;
   name?: string;
   baseUrl: string;
-  api: "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
+  api: ManagedApi;
   authHeader: boolean;
+  headers?: Record<string, string>;
+  compat?: ManagedCompat;
   models: ManagedModel[];
 }
 
@@ -62,6 +91,7 @@ export interface ProviderStatus {
   supportsApiKey: boolean;
   supportsOAuth: boolean;
   custom: boolean;
+  override?: ProviderOverride;
   models: ManagedModel[];
 }
 

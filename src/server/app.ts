@@ -8,7 +8,7 @@ import helmet from "@fastify/helmet";
 import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
 import { z } from "zod";
-import { THINKING_LEVELS, TUNNEL_METHODS } from "../shared/protocol.js";
+import { MANAGED_APIS, MANAGED_MAX_TOKENS_FIELDS, MANAGED_THINKING_FORMATS, THINKING_LEVELS, TUNNEL_METHODS } from "../shared/protocol.js";
 import type { ApiErrorBody, DirectoryListing, SessionRef, WorkspaceDirectoryListing, WorkspaceFile, WorkspaceFileContent } from "../shared/protocol.js";
 import { AUTH_COOKIE_NAME, AuthService, SESSION_TTL_MS } from "./auth-service.js";
 import { AppError, asMessage } from "./errors.js";
@@ -48,7 +48,31 @@ const authResponseInput = z.object({ value: z.string().max(200_000) }).strict();
 const enabledModelRefInput = z.object({ provider: z.string().min(1).max(120), id: z.string().min(1).max(320) }).strict();
 const enabledModelsInput = z.object({ models: z.array(enabledModelRefInput).max(5_000) }).strict();
 const managedModelInput = z.object({ id: z.string().min(1).max(320), name: z.string().max(160).optional(), reasoning: z.boolean(), vision: z.boolean(), contextWindow: z.number().int().positive().optional(), maxTokens: z.number().int().positive().optional() }).strict();
-const managedProviderInput = z.object({ id: z.string().min(1).max(120), name: z.string().max(160).optional(), baseUrl: z.string().min(1).max(2_000), api: z.enum(["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"]), authHeader: z.boolean(), models: z.array(managedModelInput).max(200) }).strict();
+const managedHeadersInput = z.record(z.string().min(1).max(64), z.string().min(1).max(2_000)).refine((value) => Object.keys(value).length <= 20, { message: "At most 20 headers are allowed" });
+const managedCompatInput = z.object({
+  supportsDeveloperRole: z.boolean().optional(),
+  supportsReasoningEffort: z.boolean().optional(),
+  supportsUsageInStreaming: z.boolean().optional(),
+  maxTokensField: z.enum(MANAGED_MAX_TOKENS_FIELDS).optional(),
+  thinkingFormat: z.enum(MANAGED_THINKING_FORMATS).optional(),
+  supportsEagerToolInputStreaming: z.boolean().optional(),
+  allowEmptySignature: z.boolean().optional(),
+}).strict();
+const managedProviderInput = z.object({
+  id: z.string().min(1).max(120),
+  name: z.string().max(160).optional(),
+  baseUrl: z.string().min(1).max(2_000),
+  api: z.enum(MANAGED_APIS),
+  authHeader: z.boolean(),
+  headers: managedHeadersInput.optional(),
+  compat: managedCompatInput.optional(),
+  models: z.array(managedModelInput).max(200),
+}).strict();
+const providerOverrideInput = z.object({
+  baseUrl: z.string().max(2_000).optional(),
+  headers: managedHeadersInput.optional(),
+  compat: managedCompatInput.optional(),
+}).strict();
 const extensionUiInput = z.object({
   id: z.string().uuid(),
   value: z.string().max(200_000).optional(),
@@ -267,6 +291,16 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.delete("/api/settings/custom-providers/:providerId", async (request) => {
     const params = z.object({ providerId: z.string().min(1).max(120) }).parse(request.params);
     await settings.removeCustomProvider(params.providerId);
+    return { removed: true };
+  });
+  app.put("/api/settings/providers/:providerId/override", async (request) => {
+    const params = z.object({ providerId: z.string().min(1).max(120) }).parse(request.params);
+    const override = await settings.saveProviderOverride(params.providerId, providerOverrideInput.parse(request.body));
+    return { override: override ?? null };
+  });
+  app.delete("/api/settings/providers/:providerId/override", async (request) => {
+    const params = z.object({ providerId: z.string().min(1).max(120) }).parse(request.params);
+    await settings.removeProviderOverride(params.providerId);
     return { removed: true };
   });
   app.post("/api/settings/providers/:providerId/fetch-models", async (request) => {
