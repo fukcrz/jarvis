@@ -100,7 +100,7 @@ export function TextFilePreviewDialog({ file, line, column, open = true, onClose
     target?.scrollIntoView({ block: "center" });
   }, [file, line, open]);
   return <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
-    <DialogContent className="text-file-preview-dialog" overlayClassName="text-file-preview-overlay" title={file.name}>
+    <DialogContent className="text-file-preview-dialog" title={file.name}>
       <div className="text-file-preview-shell">
         {file.truncated ? <div className="text-file-preview-notice" role="status">文件较大，仅显示前 512 KB。</div> : null}
         <CodePreview ref={codeRef} text={file.content} path={file.path} line={line} column={column} columnClassName="text-file-preview-column" className="text-file-preview-code" lineClassName="text-file-preview-line" />

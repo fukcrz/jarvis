@@ -821,18 +821,18 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .security-status small { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .security-form { display: grid; max-width: 420px; gap: 12px; }
 .security-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.text-file-preview-overlay { background: rgb(4 8 10 / .55); -webkit-backdrop-filter: blur(14px) saturate(1.1); backdrop-filter: blur(14px) saturate(1.1); }
-.text-file-preview-dialog { width: min(900px, calc(100vw - 32px)); max-height: min(820px, calc(100vh - 32px)); border-color: var(--glass-border); background: var(--glass-strong); box-shadow: 0 26px 80px rgb(0 0 0 / .62), var(--glass-highlight); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
-.text-file-preview-dialog .dialog-header { background: color-mix(in srgb, var(--glass-strong) 92%, transparent); -webkit-backdrop-filter: var(--glass-blur-soft); backdrop-filter: var(--glass-blur-soft); }
+.text-file-preview-dialog { width: min(900px, calc(100vw - 32px)); max-height: min(820px, calc(100vh - 32px)); gap: 8px; overflow: hidden; padding: 10px; }
+.text-file-preview-dialog .dialog-header { align-items: center; gap: 12px; top: 0; margin: 0; padding: 0 2px 8px; background: color-mix(in srgb, var(--glass-strong) 92%, transparent); -webkit-backdrop-filter: var(--glass-blur-soft); backdrop-filter: var(--glass-blur-soft); }
 .text-file-preview-dialog .dialog-header > div:first-child { min-width: 0; }
-.text-file-preview-dialog .dialog-header [role="heading"] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.text-file-preview-shell { display: grid; min-height: 0; gap: 8px; }
-.text-file-preview-notice { border: 1px solid rgb(255 184 107 / .28); border-radius: 6px; background: rgb(255 184 107 / .1); padding: 7px 10px; color: var(--warm); font-size: 11px; }
-.text-file-preview-code { max-height: min(65vh, 620px); overflow: auto; margin: 0; border: 1px solid rgb(255 255 255 / .1); border-radius: 7px; background: rgb(12 12 14 / .86); box-shadow: inset 0 1px 0 rgb(255 255 255 / .025); padding: 12px 0; color: #e4e4e7; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
+.text-file-preview-dialog .dialog-header [role="heading"] { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.text-file-preview-dialog .dialog-header .button-icon { width: 26px; height: 26px; }
+.text-file-preview-shell { display: grid; min-height: 0; gap: 6px; }
+.text-file-preview-notice { border: 1px solid rgb(255 184 107 / .28); border-radius: 4px; background: rgb(255 184 107 / .1); padding: 5px 8px; color: var(--warm); font-size: 11px; }
+.text-file-preview-code { max-height: min(72vh, 700px); overflow: auto; margin: 0; padding: 6px 0; color: #e4e4e7; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
 .text-file-preview-code code { display: block; min-width: max-content; }
-.text-file-preview-line { display: grid; grid-template-columns: 52px max-content; min-width: 100%; padding-right: 18px; }
-.text-file-preview-line-number { padding-right: 14px; color: #666671; text-align: right; user-select: none; }
-.text-file-preview-line-content { display: block; position: relative; min-height: 1.6em; white-space: pre; }
+.text-file-preview-line { display: inline-grid; grid-template-columns: 44px max-content; min-width: 100%; padding-right: 14px; }
+.text-file-preview-line-number { padding-right: 10px; color: #666671; text-align: right; user-select: none; }
+.text-file-preview-line-content { display: block; position: relative; min-height: 1.45em; white-space: pre; }
 .text-file-preview-line.highlighted { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .text-file-preview-line.highlighted .text-file-preview-line-number { color: var(--accent-strong); }
 .text-file-preview-column { position: absolute; top: 0; bottom: 0; left: calc(var(--text-file-column) * 1ch); width: 1px; background: var(--warm); opacity: .85; pointer-events: none; }
