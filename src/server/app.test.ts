@@ -942,7 +942,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(assistantHistory.items.map((item) => item.id)).toEqual([source.user1, source.assistant1]);
   });
 
-  it("forks from the latest user message when messageId is omitted", async () => {
+  it("forks all messages when messageId is omitted on an idle session", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "fork-omitted-workspace");
     await mkdir(workspacePath);
@@ -955,7 +955,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const session = forked.json<{ session: { id: string } }>().session;
     expect(session.id).not.toBe(source.id);
     const history = (await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${session.id}/timeline` })).json<{ items: Array<{ id: string }> }>();
-    expect(history.items.map((item) => item.id)).toEqual([source.user1, source.assistant1, source.user2]);
+    expect(history.items.map((item) => item.id)).toEqual([source.user1, source.assistant1, source.user2, source.assistant2]);
   });
 
   it("session-level fork while running stops at the last settled turn", async () => {

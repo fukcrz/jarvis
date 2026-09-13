@@ -826,7 +826,7 @@ export function App() {
     }
   };
 
-  /** 会话级分支：从该会话最新一条 user 消息处复制上下文。 */
+  /** 会话级分支：空闲会话复制全部消息；运行中截到上一个已结束回合。 */
   const forkSessionFromTarget = async (target: { workspaceId: string; sessionId: string }) => {
     try {
       const session = await api.forkSession(target);

@@ -1927,20 +1927,26 @@ function findVisibleMessageEntryId(entries: readonly unknown[], messageId: strin
 }
 
 /**
- * Fork point for session-level forking: the latest user message normally.
- * While the session is running, that user message starts the in-flight turn
- * (whose output is still being produced), so back off to its parent — the
- * branch never contains in-progress content, only the last settled turn.
+ * Fork point for session-level forking.
+ * Idle sessions copy every message on the branch (including the last assistant reply).
+ * While running, the latest user message starts the in-flight turn, so back off
+ * to its parent — the branch never contains in-progress content, only the last settled turn.
  */
 function sessionForkEntryId(branch: readonly unknown[], running: boolean): string | undefined {
+  if (!running) {
+    for (let i = branch.length - 1; i >= 0; i--) {
+      const entry = branch[i];
+      if (!isRecord(entry) || entry["type"] !== "message") continue;
+      const id = stringValue(entry["id"]);
+      return id === "" ? undefined : id;
+    }
+    return undefined;
+  }
   for (let i = branch.length - 1; i >= 0; i--) {
     const entry = branch[i];
     if (!isRecord(entry) || entry["type"] !== "message") continue;
     const message = entry["message"];
     if (!isRecord(message) || message["role"] !== "user") continue;
-    const id = stringValue(entry["id"]);
-    if (id === "") return undefined;
-    if (!running) return id;
     const parentId = entry["parentId"];
     return typeof parentId === "string" ? parentId : undefined;
   }
