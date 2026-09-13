@@ -286,6 +286,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
   const showMobilePreview = isMobile && preview !== undefined;
   const showDirectory = !showMobilePreview;
   const canGoUp = isMobile && !showMobilePreview && rootPath !== "" && currentPath !== "" && currentPath !== rootPath;
+  const directoryTitle = listListing?.name || pathBaseName(listPath);
   const copyable = preview?.content !== undefined && (preview.kind === "text" || preview.kind === "markdown" || preview.kind === "table");
   const previewUrl = preview === undefined ? undefined : workspaceFileUrl("", preview.path);
   const downloadUrl = preview === undefined ? undefined : workspaceFileUrl("", preview.path, { download: true });
@@ -306,10 +307,10 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="file-browser-overlay" />
       <DialogPrimitive.Content className={`file-browser-dialog${showMobilePreview ? " file-browser-previewing" : ""}`} aria-describedby={undefined} onOpenAutoFocus={(event) => event.preventDefault()} onInteractOutside={(event) => { if (deleteTarget !== undefined) event.preventDefault(); }} onPointerDownOutside={(event) => { if (deleteTarget !== undefined) event.preventDefault(); }} onEscapeKeyDown={(event) => { if (deleteTarget !== undefined) event.preventDefault(); }}>
-        <DialogPrimitive.Title className="file-browser-title">{preview?.name ?? "文件"}</DialogPrimitive.Title>
+        <DialogPrimitive.Title className="file-browser-title">{preview?.name ?? (canGoUp ? directoryTitle : "文件")}</DialogPrimitive.Title>
         <header className="file-browser-chrome">
           {canGoUp || showMobilePreview ? <Button variant="ghost" size="icon" aria-label={showMobilePreview ? "返回目录" : "上一级"} onClick={() => { if (showMobilePreview) closePreview(); else void goUp(); }}><ArrowLeft size={16} /></Button> : null}
-          {preview === undefined ? <span className="file-browser-chrome-title" /> : <span className="file-browser-chrome-title" title={previewTitle}>{preview.name}</span>}
+          {preview !== undefined ? <span className="file-browser-chrome-title" title={previewTitle}>{preview.name}</span> : canGoUp ? <span className="file-browser-chrome-title">{directoryTitle}</span> : <span className="file-browser-chrome-title" />}
           <div className="file-preview-actions">
             {copyable ? <Button variant="ghost" size="sm" onClick={() => { void copy(preview.content!.content, "已复制文件内容"); }}>复制</Button> : null}
             {preview === undefined || previewUrl === undefined ? null : <a className="button button-ghost button-sm" href={previewUrl} target="_blank" rel="noreferrer">打开</a>}
@@ -488,6 +489,13 @@ function directoryPath(path: string): string {
   if (index <= 0) return index === 0 ? "/" : "";
   const parent = path.slice(0, index);
   return /^[a-zA-Z]:$/.test(parent) ? `${parent}/` : parent;
+}
+
+export function pathBaseName(path: string): string {
+  if (path === "" || path === "/") return path;
+  const trimmed = path.endsWith("/") || path.endsWith("\\") ? path.slice(0, -1) : path;
+  const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return index < 0 ? trimmed : trimmed.slice(index + 1);
 }
 
 export function parentDirectoryWithinRoot(path: string, rootPath: string): string | undefined {

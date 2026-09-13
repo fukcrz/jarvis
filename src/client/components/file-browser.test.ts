@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { FilePreviewBody, parentDirectoryWithinRoot } from "./file-browser";
+import { FilePreviewBody, parentDirectoryWithinRoot, pathBaseName } from "./file-browser";
 
 describe("FilePreviewBody", () => {
   it("wraps images in ImagePreview without mounting the lightbox", () => {
@@ -46,5 +46,16 @@ describe("parentDirectoryWithinRoot", () => {
     expect(parentDirectoryWithinRoot("/ws", "/ws")).toBeUndefined();
     expect(parentDirectoryWithinRoot("/other/app.ts", "/ws")).toBeUndefined();
     expect(parentDirectoryWithinRoot("/ws-other/app.ts", "/ws")).toBeUndefined();
+  });
+});
+
+describe("pathBaseName", () => {
+  it("returns the last path segment", () => {
+    expect(pathBaseName("/ws/docs")).toBe("docs");
+    expect(pathBaseName("/ws/docs/")).toBe("docs");
+    expect(pathBaseName("C:\\ws\\docs\\")).toBe("docs");
+    expect(pathBaseName("docs")).toBe("docs");
+    expect(pathBaseName("/")).toBe("/");
+    expect(pathBaseName("")).toBe("");
   });
 });
