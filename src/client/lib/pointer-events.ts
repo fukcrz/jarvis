@@ -55,7 +55,7 @@ function resolveTouchFocusTarget(eventTarget: EventTarget | null): Element | nul
   return asElement(eventTarget)?.closest(TOUCH_FOCUS_SELECTOR) ?? null;
 }
 
-/** 触摸结束后清掉残留焦点。触屏会把 :focus 粘住，看起来像 hover。 */
+/** 触摸结束后清掉控件焦点，避免 :focus-visible / :focus-within 留下桌面态。 */
 export function clearTouchFocus(target: Element | null, doc: Document = document): boolean {
   const active = doc.activeElement;
   if (active === null || !("matches" in active) || typeof active.matches !== "function") return false;
