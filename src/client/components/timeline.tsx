@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { Archive, ArrowDown, Bell, Brain, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, ListTree, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
+import { Archive, ArrowDown, Bell, Brain, Check, ChevronDown, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
 import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
@@ -8,7 +8,6 @@ import { parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle
 import { MarkdownMessage } from "./markdown-message";
 import { ImagePreview } from "./image-lightbox";
 import { ToolActivity } from "./tool-activity";
-import { Dialog, DialogContent } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 import { useIsMobile } from "../hooks/use-is-mobile";
@@ -65,15 +64,31 @@ function stopFollowingOnGesture(element: HTMLDivElement, setFollowing: (value: b
 
 export interface UserMessageAnchor {
   id: string;
+  index: number;
   preview: string;
 }
 
 /** Build the prompt-only outline shared by desktop rail and mobile turn list. */
 export function userMessageAnchors(items: TimelineItem[]): UserMessageAnchor[] {
-  return items.flatMap((item) => {
-    if (item.kind !== "message" || item.role !== "user") return [];
-    return [{ id: item.id, preview: userMessagePreview(item) }];
-  });
+  const anchors: UserMessageAnchor[] = [];
+  for (const item of items) {
+    if (item.kind !== "message" || item.role !== "user") continue;
+    anchors.push({ id: item.id, index: anchors.length + 1, preview: userMessagePreview(item) });
+  }
+  return anchors;
+}
+
+/** Newest user message first, keeping chronological indexes. */
+export function mobileUserMessageRows(anchors: UserMessageAnchor[]): UserMessageAnchor[] {
+  return [...anchors].reverse();
+}
+
+export function activeUserMessageAnchor(anchors: UserMessageAnchor[], activeId?: string): UserMessageAnchor | undefined {
+  return anchors.find((anchor) => anchor.id === activeId) ?? anchors.at(-1);
+}
+
+export function formatUserMessageIndex(index: number): string {
+  return String(index).padStart(2, "0");
 }
 
 function userMessagePreview(item: MessageTimelineItem): string {
@@ -171,7 +186,8 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
     // near-bottom zone via user scroll must not jump the remaining distance.
     if (element === null || !followingRef.current) return;
     element.scrollTop = element.scrollHeight;
-  }, [items, streamingMessageId, feedback?.label, statusIndicatorKey]);
+    setFollowing(true);
+  }, [items, streamingMessageId, feedback?.label, statusIndicatorKey, navigatorOpen]);
 
   const loadEarlier = async () => {
     if (!hasMore || loadingEarlierRef.current) return;
@@ -225,11 +241,17 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
     if (hasMore) setLoadingAllHistory(true);
   };
 
+  const toggleNavigator = () => {
+    if (navigatorOpen) {
+      setNavigatorOpen(false);
+      setLoadingAllHistory(false);
+      return;
+    }
+    openNavigator();
+  };
+
   const jumpToUserMessage = (id: string) => {
-    const element = scrollRef.current;
-    const target = element === null ? undefined : Array.from(element.querySelectorAll<HTMLElement>("[data-user-message-id]")).find((item) => item.dataset.userMessageId === id);
-    if (element === null || target === undefined) return;
-    const targetTop = target.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop - Math.min(112, element.clientHeight * 0.22);
+    const collapseFirst = navigatorOpen;
     activeNavigationIdRef.current = id;
     if (activeNavigationTimerRef.current !== undefined) window.clearTimeout(activeNavigationTimerRef.current);
     activeNavigationTimerRef.current = window.setTimeout(() => {
@@ -239,19 +261,27 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
     setFollowing(false);
     setActiveUserMessageId(id);
     setHighlightedMessageId(id);
+    setNavigatorOpen(false);
+    setLoadingAllHistory(false);
+    const scrollToMessage = () => {
+      const element = scrollRef.current;
+      const target = element === null ? undefined : Array.from(element.querySelectorAll<HTMLElement>("[data-user-message-id]")).find((item) => item.dataset.userMessageId === id);
+      if (element === null || target === undefined) return;
+      const targetTop = target.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop - Math.min(112, element.clientHeight * 0.22);
+      element.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
+      setActiveUserMessageId(id);
+    };
     requestAnimationFrame(() => {
-      if (scrollRef.current === element) {
-        element.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
-        setActiveUserMessageId(id);
-      }
+      if (collapseFirst) requestAnimationFrame(scrollToMessage);
+      else scrollToMessage();
     });
     if (highlightTimerRef.current !== undefined) window.clearTimeout(highlightTimerRef.current);
     highlightTimerRef.current = window.setTimeout(() => setHighlightedMessageId(undefined), 1_700);
-    setNavigatorOpen(false);
   };
 
   return (
     <section className="timeline-shell">
+      <TurnNavigator mobile={isMobile} anchors={userMessages} activeId={activeUserMessageId} markerPositions={markerPositions} loadingAll={loadingAllHistory || loadingMore} open={navigatorOpen} onToggle={toggleNavigator} onJump={jumpToUserMessage} />
       <div className="timeline" ref={scrollRef} onScroll={(event) => {
         const element = event.currentTarget;
         setFollowing(isFollowingLatest(element));
@@ -284,29 +314,38 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
           </div>
         </div>
       </div>
-      <TurnNavigator mobile={isMobile} anchors={userMessages} activeId={activeUserMessageId} markerPositions={markerPositions} hasMore={hasMore} loadingAll={loadingAllHistory || loadingMore} open={navigatorOpen} onOpenChange={(open) => { setNavigatorOpen(open); if (!open) setLoadingAllHistory(false); }} onOpen={openNavigator} onJump={jumpToUserMessage} />
-      {!following ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
+      {!following && !navigatorOpen ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
     </section>
   );
 }
 
-function TurnNavigator({ mobile, anchors, activeId, markerPositions, hasMore, loadingAll, open, onOpenChange, onOpen, onJump }: { mobile: boolean; anchors: UserMessageAnchor[]; activeId?: string; markerPositions: Record<string, number>; hasMore: boolean; loadingAll: boolean; open: boolean; onOpenChange: (open: boolean) => void; onOpen: () => void; onJump: (id: string) => void }) {
+function TurnNavigator({ mobile, anchors, activeId, markerPositions, loadingAll, open, onToggle, onJump }: { mobile: boolean; anchors: UserMessageAnchor[]; activeId?: string; markerPositions: Record<string, number>; loadingAll: boolean; open: boolean; onToggle: () => void; onJump: (id: string) => void }) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const active = activeUserMessageAnchor(anchors, activeId);
+  useLayoutEffect(() => {
+    if (!mobile || !open) return;
+    listRef.current?.querySelector<HTMLElement>(".timeline-mobile-navigator-item.active")?.scrollIntoView({ block: "nearest" });
+  }, [activeId, anchors.length, mobile, open]);
   if (anchors.length === 0) return null;
   if (!mobile) return <nav className="timeline-desktop-navigator" aria-label="用户消息导航">
     <span className="timeline-navigator-track" aria-hidden="true" />
-    {anchors.map((anchor, index) => <button key={anchor.id} type="button" className={`timeline-navigator-marker${anchor.id === activeId ? " active" : ""}`} style={{ top: `${String((markerPositions[anchor.id] ?? index / Math.max(1, anchors.length - 1)) * 100)}%` }} aria-label={`跳转到第 ${String(index + 1)} 条用户消息：${anchor.preview}`} aria-current={anchor.id === activeId ? "step" : undefined} onClick={() => onJump(anchor.id)}><span className="timeline-navigator-marker-dot" /><span className="timeline-navigator-preview"><small>第 {String(index + 1)} 条用户消息</small><strong>{anchor.preview}</strong></span></button>)}
+    {anchors.map((anchor, index) => <button key={anchor.id} type="button" className={`timeline-navigator-marker${anchor.id === activeId ? " active" : ""}`} style={{ top: `${String((markerPositions[anchor.id] ?? index / Math.max(1, anchors.length - 1)) * 100)}%` }} aria-label={`跳转到第 ${String(anchor.index)} 条用户消息：${anchor.preview}`} aria-current={anchor.id === activeId ? "step" : undefined} onClick={() => onJump(anchor.id)}><span className="timeline-navigator-marker-dot" /><span className="timeline-navigator-preview"><small>第 {String(anchor.index)} 条用户消息</small><strong>{anchor.preview}</strong></span></button>)}
   </nav>;
-  return <>
-    <Button variant="ghost" size="icon" className="timeline-mobile-navigator-trigger" aria-label="浏览用户消息" title="浏览用户消息" onClick={onOpen}><ListTree size={17} /></Button>
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title="用户消息" description="点击任一消息可跳转到对应轮次。" className="turn-navigator-dialog">
-        <div className="turn-navigator-status"><span>{anchors.length} 条已加载</span>{hasMore || loadingAll ? <span>{loadingAll ? "正在加载完整历史…" : "可加载更早历史"}</span> : <span>完整历史</span>}</div>
-        <div className="turn-navigator-list">
-          {anchors.map((anchor, index) => <button key={anchor.id} type="button" className={`turn-navigator-item${anchor.id === activeId ? " active" : ""}`} aria-current={anchor.id === activeId ? "step" : undefined} onClick={() => onJump(anchor.id)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{anchor.preview}</strong></button>)}
-        </div>
-      </DialogContent>
-    </Dialog>
-  </>;
+  const countLabel = `${String(anchors.length)} 条`;
+  return <nav className={`timeline-mobile-navigator${open ? " open" : ""}`} aria-label="用户消息导航">
+    <button type="button" className="timeline-mobile-navigator-toggle" aria-expanded={open} aria-controls="timeline-mobile-navigator-list" aria-label={`用户消息，第 ${String(active?.index ?? anchors.length)} 条`} onClick={onToggle}>
+      <span className="timeline-mobile-navigator-index">{formatUserMessageIndex(active?.index ?? anchors.length)}</span>
+      <strong>{active?.preview ?? "用户消息"}</strong>
+      <span className="timeline-mobile-navigator-count">{countLabel}</span>
+      <ChevronDown size={16} />
+    </button>
+    {open ? <div className="timeline-mobile-navigator-panel" id="timeline-mobile-navigator-list">
+      {loadingAll ? <div className="timeline-mobile-navigator-status" role="status">加载中</div> : null}
+      <div className="timeline-mobile-navigator-list" ref={listRef}>
+        {mobileUserMessageRows(anchors).map((anchor) => <button key={anchor.id} type="button" className={`timeline-mobile-navigator-item${anchor.id === active?.id ? " active" : ""}`} aria-current={anchor.id === active?.id ? "true" : undefined} aria-label={`第 ${String(anchor.index)} 条用户消息`} onClick={() => onJump(anchor.id)}><span>{formatUserMessageIndex(anchor.index)}</span><strong>{anchor.preview}</strong></button>)}
+      </div>
+    </div> : null}
+  </nav>;
 }
 
 function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {

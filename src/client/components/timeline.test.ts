@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnPinned, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
+import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnPinned, mobileUserMessageRows, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -64,9 +64,36 @@ describe("userMessageAnchors", () => {
       { kind: "message", id: "u", role: "user", createdAt: "", text: `  first\n  ${longText}` },
       { kind: "message", id: "image", role: "user", createdAt: "", text: "", images: [{ mimeType: "image/png", data: "x" }] },
     ])).toEqual([
-      { id: "u", preview: `first ${"A".repeat(101)}…` },
-      { id: "image", preview: "图片消息" },
+      { id: "u", index: 1, preview: `first ${"A".repeat(101)}…` },
+      { id: "image", index: 2, preview: "图片消息" },
     ]);
+  });
+});
+
+describe("mobileUserMessageRows", () => {
+  it("lists newest user messages first without changing indexes", () => {
+    const anchors = userMessageAnchors([user("u1"), user("u2"), user("u3")]);
+    expect(mobileUserMessageRows(anchors).map((anchor) => [anchor.id, anchor.index])).toEqual([
+      ["u3", 3],
+      ["u2", 2],
+      ["u1", 1],
+    ]);
+  });
+});
+
+describe("activeUserMessageAnchor", () => {
+  it("prefers the active message and otherwise uses the latest", () => {
+    const anchors = userMessageAnchors([user("u1"), user("u2")]);
+    expect(activeUserMessageAnchor(anchors, "u1")?.id).toBe("u1");
+    expect(activeUserMessageAnchor(anchors)?.id).toBe("u2");
+    expect(activeUserMessageAnchor([])).toBeUndefined();
+  });
+});
+
+describe("formatUserMessageIndex", () => {
+  it("pads chronological indexes to two digits", () => {
+    expect(formatUserMessageIndex(1)).toBe("01");
+    expect(formatUserMessageIndex(12)).toBe("12");
   });
 });
 
