@@ -2,6 +2,17 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, notifyUnauthorized, sessionPath, socketUrl } from "../api";
 import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, sessionEventSchema } from "../../shared/protocol";
 import { notifyRunFinished, type RunNotificationInfo } from "../notifications";
+import {
+  coalesceStreamEvents,
+  parseSocketHeartbeat,
+  shouldFlushStreamEventImmediately,
+  shouldReconnectVisibleSocket,
+  socketHeartbeatMessage,
+  SOCKET_CLIENT_PING_INTERVAL_MS,
+  SOCKET_PING_TYPE,
+  SOCKET_PONG_TYPE,
+  SOCKET_WATCHDOG_INTERVAL_MS,
+} from "../lib/socket-sync";
 import { addOptimisticUserMessage, applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, removeOptimisticUserMessage, replaceUserMessageWithOptimistic, type TranscriptState } from "../transcript";
 
 interface StreamState {
@@ -59,6 +70,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   const refKey = ref === undefined ? undefined : `${ref.workspaceId}:${ref.sessionId}`;
   const refKeyRef = useRef(refKey);
   const requestFrame = useRef<number | undefined>(undefined);
+  const flushTimeout = useRef<number | undefined>(undefined);
   const queuedEvents = useRef<SessionEvent[]>([]);
   const defaultDocumentTitle = useRef(assistantName);
 
@@ -71,8 +83,19 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   }, [assistantName, refKey]);
   useEffect(() => { refKeyRef.current = refKey; }, [refKey]);
 
+  const cancelScheduledFlush = useCallback(() => {
+    if (requestFrame.current !== undefined) {
+      cancelAnimationFrame(requestFrame.current);
+      requestFrame.current = undefined;
+    }
+    if (flushTimeout.current !== undefined) {
+      window.clearTimeout(flushTimeout.current);
+      flushTimeout.current = undefined;
+    }
+  }, []);
+
   const flushEvents = useCallback(() => {
-    requestFrame.current = undefined;
+    cancelScheduledFlush();
     const events = queuedEvents.current.splice(0);
     const transcriptEvents: SessionEvent[] = [];
     const sideEffects: PanelSideEffect[] = [];
@@ -107,17 +130,18 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
       setExtensionPanels((previous) => applySideEffects(historyRewritten ? { widgets: {}, statuses: {} } : previous, sideEffects));
       if (historyRewritten) document.title = defaultDocumentTitle.current;
     }
-  }, []);
+  }, [cancelScheduledFlush]);
 
   const receiveEvent = useCallback((event: SessionEvent) => {
     queuedEvents.current.push(event);
-    if (event.type === "run.settled" || event.type === "run.failed") {
-      // 后台标签页中 rAF 被暂停、不会触发，而运行结束通知恰恰需要在后台弹出：
-      // 结算事件必须立即同步冲刷，否则通知永远不会出现。
+    // 后台标签页会暂停 rAF：所有事件必须立刻冲刷，否则切回前台才看到过期流。
+    // 前台仍用 rAF 合并 delta；结算事件同步冲刷，保证后台通知不丢。
+    if (shouldFlushStreamEventImmediately(document.hidden, event.type)) {
       flushEvents();
       return;
     }
     if (requestFrame.current === undefined) requestFrame.current = requestAnimationFrame(flushEvents);
+    if (flushTimeout.current === undefined) flushTimeout.current = window.setTimeout(flushEvents, 80);
   }, [flushEvents]);
 
   const refresh = useCallback(async () => {
@@ -132,10 +156,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
 
   useEffect(() => {
     queuedEvents.current = [];
-    if (requestFrame.current !== undefined) {
-      cancelAnimationFrame(requestFrame.current);
-      requestFrame.current = undefined;
-    }
+    cancelScheduledFlush();
     if (ref === undefined) {
       dispatch({ type: "reset" });
       setExtensionPanels({ widgets: {}, statuses: {} });
@@ -148,27 +169,88 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     let disposed = false;
     let socket: WebSocket | undefined;
     let reconnectTimer: number | undefined;
+    let pingTimer: number | undefined;
     let attempt = 0;
     let hydrated = false;
     let buffered: SessionEvent[] = [];
+    let lastEventAt = Date.now();
+    let lastReconnectAt = 0;
+
+    const stopReconnectAndPing = () => {
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+      }
+      if (pingTimer !== undefined) {
+        window.clearInterval(pingTimer);
+        pingTimer = undefined;
+      }
+    };
+
+    const markAlive = () => {
+      lastEventAt = Date.now();
+    };
+
+    const startKeepalive = (connection: WebSocket) => {
+      if (pingTimer !== undefined) window.clearInterval(pingTimer);
+      pingTimer = window.setInterval(() => {
+        if (disposed || socket !== connection || connection.readyState !== WebSocket.OPEN || document.hidden) return;
+        try {
+          connection.send(socketHeartbeatMessage(SOCKET_PING_TYPE));
+        } catch {
+          connection.close();
+        }
+      }, SOCKET_CLIENT_PING_INTERVAL_MS);
+    };
+
+    const replaceSocket = (next: WebSocket | undefined) => {
+      const previous = socket;
+      socket = next;
+      if (previous !== undefined && previous !== next) {
+        try {
+          previous.close();
+        } catch {
+          // CONNECTING 状态下 close 会抛 InvalidStateError，直接弃用旧连接。
+        }
+      }
+    };
 
     const connect = () => {
       if (disposed) return;
+      stopReconnectAndPing();
+      lastReconnectAt = Date.now();
       dispatch({ type: "connection", value: attempt === 0 ? "connecting" : "reconnecting" });
       const connection = new WebSocket(socketUrl(`${sessionPath(ref)}/events`));
-      socket = connection;
+      replaceSocket(connection);
       connection.addEventListener("message", (message) => {
-        if (disposed) return;
+        if (disposed || socket !== connection) return;
         try {
-          const parsed = sessionEventSchema.safeParse(JSON.parse(String(message.data)));
-          if (!parsed.success) return;
-          if (!hydrated) buffered.push(parsed.data);
-          else receiveEvent(parsed.data);
+          const parsed: unknown = JSON.parse(String(message.data));
+          const heartbeat = parseSocketHeartbeat(parsed);
+          if (heartbeat !== undefined) {
+            markAlive();
+            if (heartbeat.type === SOCKET_PING_TYPE && connection.readyState === WebSocket.OPEN) {
+              try {
+                connection.send(socketHeartbeatMessage(SOCKET_PONG_TYPE));
+              } catch {
+                connection.close();
+              }
+            }
+            return;
+          }
+          const event = sessionEventSchema.safeParse(parsed);
+          if (!event.success) return;
+          markAlive();
+          if (!hydrated) buffered.push(event.data);
+          else receiveEvent(event.data);
         } catch {
           // Invalid socket frames do not affect the established transcript.
         }
       });
       connection.addEventListener("open", () => {
+        if (disposed || socket !== connection) return;
+        markAlive();
+        startKeepalive(connection);
         void Promise.all([api.timeline(ref), api.runtime(ref)]).then(([page, snapshot]) => {
           if (disposed || socket !== connection) return;
           dispatch({ type: "hydrate", page, snapshot });
@@ -176,7 +258,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
           document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
           hydrated = true;
           // Most buffered events are covered by the authoritative snapshot.
-          for (const event of buffered.filter((event) => event.seq > snapshot.seq)) receiveEvent(event);
+          for (const event of buffered.filter((bufferedEvent) => bufferedEvent.seq > snapshot.seq)) receiveEvent(event);
           buffered = [];
           attempt = 0;
           dispatch({ type: "connection", value: "live" });
@@ -190,9 +272,13 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
       });
       connection.addEventListener("close", (event) => {
         if (disposed || socket !== connection) return;
-        socket = undefined;
+        replaceSocket(undefined);
         hydrated = false;
         buffered = [];
+        if (pingTimer !== undefined) {
+          window.clearInterval(pingTimer);
+          pingTimer = undefined;
+        }
         // 4401：服务端因未登录关闭握手，不再重连，交由 AuthGate 回到登录页。
         if (event.code === 4401) {
           notifyUnauthorized();
@@ -205,43 +291,49 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
       connection.addEventListener("error", () => connection.close());
     };
 
-    connect();
+    const reconnectNow = () => {
+      if (disposed) return;
+      hydrated = false;
+      buffered = [];
+      attempt = 0;
+      connect();
+    };
 
-    // 移动端浏览器切后台后，WebSocket 常被系统静默掐断且不再触发 close（半开连接），
-    // 仅靠 close 重连会永远卡在陈旧状态。回到前台/网络恢复时主动检查并强制同步：
-    // - 连接已死 → 立即重建（不等退避计时器）；
-    // - 连接看似存活（可能是僵尸）→ 重拉权威快照，保证状态即最新。
     const resync = () => {
       if (disposed) return;
-      if (socket === undefined || socket.readyState === WebSocket.CLOSED) {
-        if (reconnectTimer !== undefined) {
-          window.clearTimeout(reconnectTimer);
-          reconnectTimer = undefined;
-        }
-        const stale = socket;
-        socket = undefined;
-        if (stale !== undefined) {
-          try {
-            stale.close();
-          } catch {
-            // CONNECTING 状态下 close 会抛 InvalidStateError，直接弃用旧连接。
-          }
-        }
-        attempt = 0;
-        hydrated = false;
-        buffered = [];
-        connect();
-      } else if (socket.readyState === WebSocket.OPEN) {
-        void refresh();
+      const readyState = socket?.readyState ?? WebSocket.CLOSED;
+      if (shouldReconnectVisibleSocket({
+        visible: document.visibilityState === "visible",
+        online: navigator.onLine,
+        readyState,
+        lastEventAt,
+        now: Date.now(),
+        lastReconnectAt,
+      })) {
+        reconnectNow();
+        return;
       }
-      // CONNECTING/CLOSING：重连或关闭流程已在途中，交给既有路径。
+      if (readyState === WebSocket.OPEN) void refresh();
     };
+
+    connect();
+    const watchdogTimer = window.setInterval(() => {
+      if (disposed || document.hidden) return;
+      if (shouldReconnectVisibleSocket({
+        visible: true,
+        online: navigator.onLine,
+        readyState: socket?.readyState ?? WebSocket.CLOSED,
+        lastEventAt,
+        now: Date.now(),
+        lastReconnectAt,
+      })) reconnectNow();
+    }, SOCKET_WATCHDOG_INTERVAL_MS);
+
     const onVisibilityChange = () => {
+      if (queuedEvents.current.length > 0) flushEvents();
       if (document.visibilityState === "visible") resync();
     };
-    const onOnline = () => {
-      resync();
-    };
+    const onOnline = () => { resync(); };
     const onPageShow = (event: PageTransitionEvent) => {
       if (event.persisted) resync();
     };
@@ -250,17 +342,18 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     window.addEventListener("pageshow", onPageShow);
     return () => {
       disposed = true;
-      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      stopReconnectAndPing();
+      window.clearInterval(watchdogTimer);
       socket?.close();
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("online", onOnline);
       window.removeEventListener("pageshow", onPageShow);
     };
-  }, [refKey, receiveEvent, refresh]);
+  }, [refKey, receiveEvent, refresh, flushEvents, cancelScheduledFlush]);
 
   useEffect(() => () => {
-    if (requestFrame.current !== undefined) cancelAnimationFrame(requestFrame.current);
-  }, []);
+    cancelScheduledFlush();
+  }, [cancelScheduledFlush]);
 
   // Keep the displayed model responsive before the matching socket frame arrives.
   const selectModel = useCallback(async (model: ModelDescriptor): Promise<void> => {
@@ -395,31 +488,3 @@ function applySideEffects(previous: ExtensionPanelState, effects: PanelSideEffec
   return next;
 }
 
-function coalesceStreamEvents(events: SessionEvent[]): SessionEvent[] {
-  const result: SessionEvent[] = [];
-  for (const event of events) {
-    const previous = result.at(-1);
-    const previousPayload = previous?.type === "assistant.delta" && isRecord(previous.payload) ? previous.payload : undefined;
-    const payload = event.type === "assistant.delta" && isRecord(event.payload) ? event.payload : undefined;
-    const sameMessage = previousPayload?.["messageId"] === payload?.["messageId"];
-    if (previous !== undefined && previous.type === "assistant.delta" && event.type === "assistant.delta" && sameMessage && typeof previousPayload?.["delta"] === "string" && typeof payload?.["delta"] === "string") {
-      result[result.length - 1] = { ...event, payload: { messageId: payload["messageId"], delta: previousPayload["delta"] + payload["delta"] } };
-      continue;
-    }
-    const previousBash = previous?.type === "bash.delta" && isRecord(previous.payload) ? previous.payload : undefined;
-    const bashPayload = event.type === "bash.delta" && isRecord(event.payload) ? event.payload : undefined;
-    if (previous !== undefined && previous.type === "bash.delta" && event.type === "bash.delta" && previous.runId === event.runId && typeof previousBash?.["delta"] === "string" && typeof bashPayload?.["delta"] === "string") {
-      result[result.length - 1] = { ...event, payload: { delta: previousBash["delta"] + bashPayload["delta"] } };
-      continue;
-    }
-    const previousThinking = previous?.type === "thinking.delta" && isRecord(previous.payload) ? previous.payload : undefined;
-    const thinkingPayload = event.type === "thinking.delta" && isRecord(event.payload) ? event.payload : undefined;
-    const sameThinking = previousThinking?.["thinkingId"] === thinkingPayload?.["thinkingId"];
-    if (previous !== undefined && previous.type === "thinking.delta" && event.type === "thinking.delta" && sameThinking && typeof previousThinking?.["delta"] === "string" && typeof thinkingPayload?.["delta"] === "string") {
-      result[result.length - 1] = { ...event, payload: { thinkingId: thinkingPayload["thinkingId"], createdAt: thinkingPayload["createdAt"], delta: previousThinking["delta"] + thinkingPayload["delta"] } };
-      continue;
-    }
-    result.push(event);
-  }
-  return result;
-}

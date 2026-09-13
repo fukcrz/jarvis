@@ -1,12 +1,13 @@
 import type { SessionEvent, SessionRef, WorkspaceEvent } from "../shared/protocol.js";
 import { PROTOCOL_VERSION } from "../shared/protocol.js";
+import { parseSocketHeartbeat, SOCKET_HEARTBEAT_INTERVAL_MS, SOCKET_PING_TYPE, SOCKET_PONG_TYPE, socketHeartbeatMessage } from "../shared/socket-heartbeat.js";
 
 interface SocketLike {
   readyState: number;
   send(payload: string): void;
   terminate?: () => void;
   ping?: () => void;
-  on(event: "close" | "pong", listener: () => void): unknown;
+  on(event: "close" | "pong" | "message", listener: ((raw?: unknown) => void) | (() => void)): unknown;
 }
 
 export class EventHub {
@@ -17,10 +18,10 @@ export class EventHub {
   private readonly pendingPong = new WeakSet<SocketLike>();
   private heartbeatTimer: NodeJS.Timeout | undefined;
 
-  constructor(heartbeatMs = 30_000) {
+  constructor(heartbeatMs = SOCKET_HEARTBEAT_INTERVAL_MS) {
     // 移动端浏览器切后台后连接常被系统静默掐断且不再触发 close（半开连接）。
-    // 心跳让服务端主动发现死连接并断开，客户端收到 close 后自动重连。
-    // 浏览器对服务端 ping 的 pong 应答由协议层自动发出，无需客户端配合。
+    // 协议层 ping 在部分 WebView / 反向代理上不可靠，因此同时发应用层 ping；
+    // 两轮无 pong（协议层或应用层任一即可）则断开，客户端收到 close 后重连。
     this.heartbeatTimer = setInterval(() => this.sweep(), heartbeatMs);
     // 不阻止进程退出（自重启等场景）。
     this.heartbeatTimer.unref?.();
@@ -91,6 +92,25 @@ export class EventHub {
     socket.on("pong", () => {
       this.pendingPong.delete(socket);
     });
+    socket.on("message", (raw) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(typeof raw === "string" ? raw : Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw));
+      } catch {
+        return;
+      }
+      const heartbeat = parseSocketHeartbeat(parsed);
+      if (heartbeat?.type === SOCKET_PING_TYPE) {
+        this.pendingPong.delete(socket);
+        try {
+          if (socket.readyState === 1) socket.send(socketHeartbeatMessage(SOCKET_PONG_TYPE));
+        } catch {
+          sockets.delete(socket);
+        }
+        return;
+      }
+      if (heartbeat?.type === SOCKET_PONG_TYPE) this.pendingPong.delete(socket);
+    });
   }
 
   /** 心跳巡检：对无 pong 回应的连接调用 terminate，触发客户端 close → 自动重连。 */
@@ -110,6 +130,11 @@ export class EventHub {
         this.pendingPong.add(socket);
         try {
           socket.ping?.();
+        } catch {
+          // 协议层 ping 失败仍尝试应用层 ping。
+        }
+        try {
+          if (socket.readyState === 1) socket.send(socketHeartbeatMessage(SOCKET_PING_TYPE));
         } catch {
           // ping 失败视同无回应，下一轮 sweep 会断开该连接。
         }

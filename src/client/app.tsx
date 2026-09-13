@@ -24,6 +24,16 @@ import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
 import { installBodyPointerEventsGuard, installTouchFocusGuard } from "./lib/pointer-events";
 import { isSettingsPath, navigateBackOr } from "./lib/settings-routes";
+import {
+  mergeSessionSnapshots,
+  parseSocketHeartbeat,
+  shouldReconnectVisibleSocket,
+  socketHeartbeatMessage,
+  SOCKET_CLIENT_PING_INTERVAL_MS,
+  SOCKET_PING_TYPE,
+  SOCKET_PONG_TYPE,
+  SOCKET_WATCHDOG_INTERVAL_MS,
+} from "./lib/socket-sync";
 import { isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sortSessionSummaries } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { extensionToastDuration, extensionToastSourceLabel, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
@@ -437,21 +447,7 @@ export function App() {
     let disposed = false;
     void loadProjectSessions(workspaces).then((sessions) => {
       if (disposed) return;
-      setSessionsByWorkspace((current) => {
-        const next: Record<string, SessionSummary[]> = {};
-        for (const workspace of workspaces) {
-          const byId = new Map<string, SessionSummary>();
-          // 先保留当前列表（含事件流新增的会话，如刚创建的新会话）。
-          for (const session of current[workspace.id] ?? []) byId.set(session.id, session);
-          // 再补上快照里缺失的会话，但跳过事件流已删除的。
-          const deleted = deletedSessionsRef.current[workspace.id];
-          for (const session of sessions[workspace.id] ?? []) {
-            if (!byId.has(session.id) && deleted?.has(session.id) !== true) byId.set(session.id, session);
-          }
-          next[workspace.id] = sortSessionSummaries([...byId.values()]);
-        }
-        return next;
-      });
+      setSessionsByWorkspace((current) => mergeSessionSnapshots(current, sessions, workspaces.map((workspace) => workspace.id), deletedSessionsRef.current));
     }).catch((error: unknown) => {
       if (!disposed) setPageError(error instanceof Error ? error.message : "无法加载会话");
     });
@@ -564,18 +560,82 @@ export function App() {
 
   useEffect(() => {
     let disposed = false;
+    const reloadSessions = () => {
+      if (disposed || workspaces.length === 0) return;
+      void loadProjectSessions(workspaces).then((sessions) => {
+        if (disposed) return;
+        setSessionsByWorkspace((current) => mergeSessionSnapshots(current, sessions, workspaces.map((workspace) => workspace.id), deletedSessionsRef.current));
+      }).catch(() => undefined);
+    };
     const cleanups = workspaces.map((workspace) => {
       let socket: WebSocket | undefined;
       let reconnect: number | undefined;
+      let pingTimer: number | undefined;
+      let lastEventAt = Date.now();
+      let lastReconnectAt = 0;
+      const stopReconnectAndPing = () => {
+        if (reconnect !== undefined) {
+          window.clearTimeout(reconnect);
+          reconnect = undefined;
+        }
+        if (pingTimer !== undefined) {
+          window.clearInterval(pingTimer);
+          pingTimer = undefined;
+        }
+      };
+      const replaceSocket = (next: WebSocket | undefined) => {
+        const previous = socket;
+        socket = next;
+        if (previous !== undefined && previous !== next) {
+          try {
+            previous.close();
+          } catch {
+            // CONNECTING 状态下 close 会抛 InvalidStateError，直接弃用旧连接。
+          }
+        }
+      };
+      const startKeepalive = (connection: WebSocket) => {
+        if (pingTimer !== undefined) window.clearInterval(pingTimer);
+        pingTimer = window.setInterval(() => {
+          if (disposed || socket !== connection || connection.readyState !== WebSocket.OPEN || document.hidden) return;
+          try {
+            connection.send(socketHeartbeatMessage(SOCKET_PING_TYPE));
+          } catch {
+            connection.close();
+          }
+        }, SOCKET_CLIENT_PING_INTERVAL_MS);
+      };
       const connect = () => {
         if (disposed) return;
+        stopReconnectAndPing();
+        lastReconnectAt = Date.now();
         const connection = new WebSocket(socketUrl(`/api/workspaces/${workspace.id}/events`));
-        socket = connection;
+        replaceSocket(connection);
+        connection.addEventListener("open", () => {
+          if (disposed || socket !== connection) return;
+          lastEventAt = Date.now();
+          startKeepalive(connection);
+        });
         connection.addEventListener("message", (event) => {
+          if (disposed || socket !== connection) return;
           try {
-            const parsed = workspaceEventSchema.safeParse(JSON.parse(String(event.data)));
-            if (!parsed.success) return;
-            const workspaceEvent = parsed.data;
+            const parsed: unknown = JSON.parse(String(event.data));
+            const heartbeat = parseSocketHeartbeat(parsed);
+            if (heartbeat !== undefined) {
+              lastEventAt = Date.now();
+              if (heartbeat.type === SOCKET_PING_TYPE && connection.readyState === WebSocket.OPEN) {
+                try {
+                  connection.send(socketHeartbeatMessage(SOCKET_PONG_TYPE));
+                } catch {
+                  connection.close();
+                }
+              }
+              return;
+            }
+            const parsedEvent = workspaceEventSchema.safeParse(parsed);
+            if (!parsedEvent.success) return;
+            lastEventAt = Date.now();
+            const workspaceEvent = parsedEvent.data;
             if (workspaceEvent.type === "extension.notify") {
               const { notification } = workspaceEvent;
               const tone: "info" | "warning" | "error" = notification.notifyType === "warning" || notification.notifyType === "error" ? notification.notifyType : "info";
@@ -604,6 +664,11 @@ export function App() {
         });
         connection.addEventListener("close", (event) => {
           if (disposed || socket !== connection) return;
+          replaceSocket(undefined);
+          if (pingTimer !== undefined) {
+            window.clearInterval(pingTimer);
+            pingTimer = undefined;
+          }
           // 4401：服务端因未登录拒绝，AuthGate 会切回登录页，不再重连。
           if (event.code === 4401) {
             notifyUnauthorized();
@@ -611,18 +676,63 @@ export function App() {
           }
           reconnect = window.setTimeout(connect, 1_500);
         });
+        connection.addEventListener("error", () => connection.close());
+      };
+      const reconnectNow = () => {
+        if (disposed) return;
+        connect();
+      };
+      const resync = () => {
+        if (disposed) return;
+        if (shouldReconnectVisibleSocket({
+          visible: document.visibilityState === "visible",
+          online: navigator.onLine,
+          readyState: socket?.readyState ?? WebSocket.CLOSED,
+          lastEventAt,
+          now: Date.now(),
+          lastReconnectAt,
+        })) {
+          reconnectNow();
+          return;
+        }
+        if (socket?.readyState === WebSocket.OPEN) reloadSessions();
       };
       connect();
+      const watchdogTimer = window.setInterval(() => {
+        if (disposed || document.hidden) return;
+        if (shouldReconnectVisibleSocket({
+          visible: true,
+          online: navigator.onLine,
+          readyState: socket?.readyState ?? WebSocket.CLOSED,
+          lastEventAt,
+          now: Date.now(),
+          lastReconnectAt,
+        })) reconnectNow();
+      }, SOCKET_WATCHDOG_INTERVAL_MS);
+      const onVisibilityChange = () => {
+        if (document.visibilityState === "visible") resync();
+      };
+      const onOnline = () => { resync(); };
+      const onPageShow = (event: PageTransitionEvent) => {
+        if (event.persisted) resync();
+      };
+      document.addEventListener("visibilitychange", onVisibilityChange);
+      window.addEventListener("online", onOnline);
+      window.addEventListener("pageshow", onPageShow);
       return () => {
-        if (reconnect !== undefined) window.clearTimeout(reconnect);
+        stopReconnectAndPing();
+        window.clearInterval(watchdogTimer);
         socket?.close();
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+        window.removeEventListener("online", onOnline);
+        window.removeEventListener("pageshow", onPageShow);
       };
     });
     return () => {
       disposed = true;
       for (const cleanup of cleanups) cleanup();
     };
-  }, [workspaces]);
+  }, [workspaces, loadProjectSessions]);
 
   useEffect(() => {
     if (selectedRef === undefined || selectedRefKey === undefined) return;
