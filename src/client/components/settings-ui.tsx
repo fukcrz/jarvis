@@ -13,7 +13,7 @@ export function SettingsShell({ children }: { children: ReactNode }) {
 }
 
 /** 顶栏：返回 + 居中标题。首页用 X（返回会话），子页用 ‹ 返回。 */
-export function SettingsTopBar({ title, onBack, home }: { title: string; onBack: () => void; home?: boolean }) {
+export function SettingsTopBar({ title, onBack, home, action }: { title: string; onBack: () => void; home?: boolean; action?: ReactNode }) {
   return <header className="settings-topbar">
     <span className="settings-topbar-side">
       <button type="button" className="settings-topbar-back" onClick={onBack} aria-label={home === true ? "返回会话" : "返回"} title={home === true ? "返回会话" : "返回"}>
@@ -21,13 +21,13 @@ export function SettingsTopBar({ title, onBack, home }: { title: string; onBack:
       </button>
     </span>
     <h1 className="settings-topbar-title">{title}</h1>
-    <span className="settings-topbar-side" />
+    <span className="settings-topbar-side settings-topbar-trailing">{action}</span>
   </header>;
 }
 
 /** 子页骨架：顶栏 + 居中内容栏。 */
-export function SettingsSubpage({ title, onBack, children }: { title: string; onBack: () => void; children: ReactNode }) {
-  return <><SettingsTopBar title={title} onBack={onBack} /><SettingsShell>{children}</SettingsShell></>;
+export function SettingsSubpage({ title, onBack, action, children }: { title: string; onBack: () => void; action?: ReactNode; children: ReactNode }) {
+  return <><SettingsTopBar title={title} onBack={onBack} action={action} /><SettingsShell>{children}</SettingsShell></>;
 }
 
 /** 分组卡片：可选组标题 + 圆角容器，行间自动细分隔线。 */
