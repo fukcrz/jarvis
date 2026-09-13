@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
 import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderOverride, ProviderStatus, Workspace } from "../../shared/protocol";
 import { api } from "../api";
+import { isSettingsPath, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsPath, type SettingsRoute } from "../lib/settings-routes";
 import { isNotificationEnabled, requestNotificationPermission, setNotificationEnabled } from "../notifications";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
@@ -33,22 +35,12 @@ interface SettingsPageProps {
 }
 
 type SettingsMessageTone = "success" | "error";
-type SettingsRoute =
-  | { page: "home" }
-  | { page: "assistant-name" }
-  | { page: "providers" }
-  | { page: "provider"; providerId: string }
-  | { page: "provider-new" }
-  | { page: "provider-edit"; providerId: string }
-  | { page: "provider-override"; providerId: string }
-  | { page: "model-scope" }
-  | { page: "workspaces" }
-  | { page: "tunnel" }
-  | { page: "security" };
 
 /** 设置入口：分组首页 + 内部子页栈，PC/移动端使用同一信息架构。 */
 export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onAssistantNameChange, onBack }: SettingsPageProps) {
-  const [stack, setStack] = useState<SettingsRoute[]>([{ page: "home" }]);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const route = parseSettingsPath(location.pathname) ?? { page: "home" };
   const [name, setName] = useState(assistantName);
   const [notificationsEnabled, setNotificationsEnabledState] = useState(() => isNotificationEnabled());
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
@@ -69,11 +61,18 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
   const [tunnelSummary, setTunnelSummary] = useState<string>();
   const [securitySummary, setSecuritySummary] = useState<string>();
 
-  const route = stack[stack.length - 1] ?? { page: "home" };
   const showMessage = (nextMessage: string, tone: SettingsMessageTone = "success") => { setMessageTone(tone); setMessage(nextMessage); };
-  const push = (nextRoute: SettingsRoute) => setStack((current) => [...current, nextRoute]);
-  const goBack = () => setStack((current) => current.length > 1 ? current.slice(0, -1) : current);
-  const replaceTop = (nextRoute: SettingsRoute) => setStack((current) => [...current.slice(0, -1), nextRoute]);
+  const push = (nextRoute: SettingsRoute) => { navigate(settingsPath(nextRoute)); };
+  const replaceTop = (nextRoute: SettingsRoute) => { navigate(settingsPath(nextRoute), { replace: true }); };
+  const goBack = () => {
+    const parent = parentSettingsRoute(route, {
+      hasProvider: route.page === "provider-edit" ? customProviders.some((provider) => provider.id === route.providerId) : undefined,
+    });
+    navigateBackOr(navigate, () => {
+      if (parent !== undefined) navigate(settingsPath(parent), { replace: true });
+      else onBack();
+    });
+  };
 
   useEffect(() => {
     if (message === undefined) return;
@@ -120,17 +119,23 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
     return () => window.clearInterval(timer);
   }, [operation?.id, operation?.state]);
 
-  // 删除后不保留指向已删除供应商的详情/编辑页。
+  // 未知设置路径、或已删除供应商的详情/编辑页，回落到还存在的父页。
   useEffect(() => {
-    setStack((current) => {
-      const next = current.filter((item) => {
-        if (item.page === "provider" || item.page === "provider-override") return providers.some((provider) => provider.id === item.providerId);
-        if (item.page === "provider-edit") return customProviders.some((provider) => provider.id === item.providerId);
-        return true;
-      });
-      return next.length === current.length ? current : next.length === 0 ? [{ page: "home" }] : next;
-    });
-  }, [providers, customProviders]);
+    const parsed = parseSettingsPath(location.pathname);
+    if (parsed === undefined) {
+      if (isSettingsPath(location.pathname)) navigate(settingsPath({ page: "home" }), { replace: true });
+      return;
+    }
+    if (parsed.page === "provider" || parsed.page === "provider-override") {
+      if (loading) return;
+      if (!providers.some((provider) => provider.id === parsed.providerId)) navigate(settingsPath({ page: "providers" }), { replace: true });
+      return;
+    }
+    if (parsed.page === "provider-edit") {
+      if (loading) return;
+      if (!customProviders.some((provider) => provider.id === parsed.providerId)) navigate(settingsPath({ page: "providers" }), { replace: true });
+    }
+  }, [customProviders, loading, location.pathname, navigate, providers]);
 
   const saveName = async (nextName: string): Promise<boolean> => {
     setBusy("name");

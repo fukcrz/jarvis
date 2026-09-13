@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Boxes, Check, ExternalLink, KeyRound, LogOut, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import type { AuthLoginOperation, EnabledModelsStatus, FetchedModel, ManagedApi, ManagedCompat, ManagedMaxTokensField, ManagedModel, ManagedProvider, ManagedThinkingFormat, ProviderOverride, ProviderStatus } from "../../shared/protocol";
+import { useHistoryBackTrap } from "../lib/history-back-trap";
 import { displayModelName } from "../model-display";
 import { Button } from "./ui/button";
 import { SettingsEmpty, SettingsForm, SettingsFormSection, SettingsFormSwitch, SettingsGroup, SettingsRow, SettingsSubpage, SettingsSwitch } from "./settings-ui";
@@ -247,6 +248,7 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
   const [manualIdError, setManualIdError] = useState<string | undefined>();
   const [addReasoning, setAddReasoning] = useState(false);
   const [addVision, setAddVision] = useState(false);
+  useHistoryBackTrap(view !== "list", () => { setEditModel(undefined); setView("list"); });
   const modelBusy = busy === "model-manager";
   const accountBusy = busy === provider.id;
 
@@ -479,13 +481,17 @@ export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete,
     return providers.filter((item) => needle === "" || `${item.name}\n${item.id}`.toLocaleLowerCase().includes(needle));
   }, [providers, search]);
   const title = editing !== undefined ? "编辑供应商" : stage.kind === "pick" ? "添加供应商" : stage.kind === "known" ? "登录供应商" : stage.kind === "custom-protocol" ? "选择接口" : "连接信息";
+  const stepBack = () => {
+    if (stage.kind === "known" || stage.kind === "custom-protocol") setStage({ kind: "pick" });
+    else setStage({ kind: "custom-protocol" });
+  };
+  useHistoryBackTrap(editing === undefined && stage.kind !== "pick", stepBack);
   const goBack = () => {
     if (editing !== undefined || stage.kind === "pick") {
       onBack();
       return;
     }
-    if (stage.kind === "known" || stage.kind === "custom-protocol") setStage({ kind: "pick" });
-    else setStage({ kind: "custom-protocol" });
+    stepBack();
   };
 
   const check = useConnectionCheck(editing?.id, onFetch);

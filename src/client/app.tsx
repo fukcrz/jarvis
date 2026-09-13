@@ -23,6 +23,7 @@ import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
 import { installBodyPointerEventsGuard, installTouchFocusGuard } from "./lib/pointer-events";
+import { isSettingsPath, navigateBackOr } from "./lib/settings-routes";
 import { isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sortSessionSummaries } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { extensionToastDuration, extensionToastSourceLabel, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
@@ -89,7 +90,7 @@ export function App() {
   const workspaceOrderRequestRef = useRef<number | undefined>(undefined);
   const workspaceOrderSequenceRef = useRef(0);
   // Mobile uses the global session list as its home: #/projects and #/chat/:workspaceId/:sessionId.
-  const isSettingsPage = location.pathname === "/settings";
+  const isSettingsPage = isSettingsPath(location.pathname);
   const mobilePage: "sessions" | "chat" | "settings" = isSettingsPage ? "settings" : location.pathname.startsWith("/chat") ? "chat" : "sessions";
   const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | undefined>();
   // Prevent repeated clicks from stacking unused sessions in the same workspace.
@@ -1219,10 +1220,10 @@ export function App() {
           </div>
           {selectedRef === undefined ? null : <Tooltip label="文件"><Button variant="ghost" size="icon" aria-label="文件" onClick={() => setFilesWorkspaceId(selectedRef.workspaceId)}><Folder size={16} /></Button></Tooltip>}
         </header>}
-        {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : renderChatContent()}
+        {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigateBackOr(navigate, () => navigate("/projects", { replace: true }))} /> : renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigate("/projects", { replace: true })} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={visibleSessionsByWorkspace} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onOpenProjectMenu={(workspace) => setMobileActionTarget({ kind: "project", workspace })} onOpenSearch={() => setSearchOpen(true)} focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} /> : <section className="mobile-chat-page">
+        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigateBackOr(navigate, () => navigate("/projects", { replace: true }))} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={visibleSessionsByWorkspace} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onOpenProjectMenu={(workspace) => setMobileActionTarget({ kind: "project", workspace })} onOpenSearch={() => setSearchOpen(true)} focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
             <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate("/projects", { replace: true })}><ArrowLeft size={16} /></Button>
             <button type="button" className="mobile-chat-session" aria-haspopup="dialog" aria-expanded={userNavigatorOpen} onClick={() => setUserNavigatorOpen(true)}><span>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</span><ChevronDown size={14} /></button>
