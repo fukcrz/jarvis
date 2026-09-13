@@ -21,7 +21,7 @@ export function DialogContent({ children, title, description, className, overlay
             <Button variant="ghost" size="icon" aria-label="关闭对话框"><X size={17} /></Button>
           </DialogPrimitive.Close>
         </div>
-        {children}
+        <div className="dialog-body">{children}</div>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   );
