@@ -798,15 +798,26 @@ export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] 
   return result;
 }
 
+function isPendingToolItem(item: TimelineItem): boolean {
+  return item.kind === "tool" && (item.state === "queued" || item.state === "running");
+}
+
 function hasActiveActivity(items: TimelineItem[], status: SessionStatus): boolean {
   if (status.runState === "idle") return false;
   const last = items.at(-1);
-  return last?.kind === "tool" || (last?.kind === "thinking" && last.state === "running");
+  if (last?.kind === "thinking" && last.state === "running") return true;
+  return isToolActivityRunning(items, status);
 }
 
-/** 旁白/工具组只在最后一条仍是工具时算执行中；后面已经在思考就停转圈。 */
+/** 尾部工具组里还有未完成的工具才算执行中；思考已开始或工具都结束则停转圈。 */
 export function isToolActivityRunning(items: TimelineItem[], status: SessionStatus): boolean {
-  return status.runState !== "idle" && items.at(-1)?.kind === "tool";
+  if (status.runState === "idle" || items.at(-1)?.kind !== "tool") return false;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind !== "tool") return false;
+    if (isPendingToolItem(item)) return true;
+  }
+  return false;
 }
 
 /** 最后一段连续工具条目的首条 id：把运行中的耗时计时交给真正活跃的那一组。 */

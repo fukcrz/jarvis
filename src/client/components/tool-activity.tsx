@@ -19,6 +19,9 @@ export function ToolActivity({ items, active, narration }: ToolActivityProps) {
   const touched = useRef(false);
   const [openToolId, setOpenToolId] = useState<string>();
   const state = activityState(items, active);
+  const pendingToolId = state === "running"
+    ? (items.find((item) => item.state === "running") ?? items.find((item) => item.state === "queued"))?.id
+    : undefined;
 
   useEffect(() => {
     if (!narrated || touched.current) return;
@@ -28,18 +31,18 @@ export function ToolActivity({ items, active, narration }: ToolActivityProps) {
   return (
     <article className={`activity-group ${state}${narrated ? " narrated" : ""}`}>
       {narrated ? <button className="activity-narration" type="button" onClick={() => { touched.current = true; setOpen((value) => !value); }} aria-expanded={open}>
-        <span className="activity-narration-icon">{state === "running" ? <LoaderCircle size={14} className="spin" /> : <Quote size={14} />}</span>
+        <span className="activity-narration-icon">{state === "running" && !open ? <LoaderCircle size={14} className="spin" /> : <Quote size={14} />}</span>
         <span className="activity-narration-text">{text}</span>
       </button> : null}
-      {!narrated || open ? <div className="activity-items">{items.map((item) => <ToolRow key={item.id} item={item} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
+      {!narrated || open ? <div className="activity-items">{items.map((item) => <ToolRow key={item.id} item={item} pending={item.id === pendingToolId} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
     </article>
   );
 }
 
-function ToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open: boolean; onToggle: () => void }) {
+function ToolRow({ item, pending, open, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; onToggle: () => void }) {
   return item.name === "bash"
-    ? <CommandToolRow item={item} open={open} onToggle={onToggle} />
-    : <GenericToolRow item={item} open={open} onToggle={onToggle} />;
+    ? <CommandToolRow item={item} pending={pending} open={open} onToggle={onToggle} />
+    : <GenericToolRow item={item} pending={pending} open={open} onToggle={onToggle} />;
 }
 
 function activityState(items: ToolTimelineItem[], active: boolean): ToolState {
@@ -72,10 +75,10 @@ function compactCommand(value?: string): string {
   return normalized.length > 72 ? `${normalized.slice(0, 69)}…` : normalized;
 }
 
-function GenericToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open: boolean; onToggle: () => void }) {
+function GenericToolRow({ item, pending, open, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; onToggle: () => void }) {
   const output = item.error ?? item.output;
   const images = item.images ?? [];
-  const stateIcon = compactToolStateIcon(item.state);
+  const stateIcon = compactToolStateIcon(item.state, pending);
   return (
     <article className={`tool-item tool-list-item ${item.state}`}>
       <button className="tool-summary" type="button" onClick={onToggle} aria-expanded={open}>
@@ -93,10 +96,10 @@ function GenericToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open
   );
 }
 
-function CommandToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open: boolean; onToggle: () => void }) {
+function CommandToolRow({ item, pending, open, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; onToggle: () => void }) {
   const command = item.inputPreview ?? item.target ?? "";
   const output = item.error ?? item.output;
-  const stateIcon = compactToolStateIcon(item.state);
+  const stateIcon = compactToolStateIcon(item.state, pending);
   return (
     <article className={`tool-item tool-list-item command-item ${item.state}`}>
       <button className="tool-summary command-summary" type="button" onClick={onToggle} aria-expanded={open}>
@@ -113,8 +116,8 @@ function CommandToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open
   );
 }
 
-function compactToolStateIcon(state: ToolTimelineItem["state"]) {
-  if (state === "running" || state === "queued") return <LoaderCircle size={14} className="spin" />;
+function compactToolStateIcon(state: ToolTimelineItem["state"], pending: boolean) {
+  if (pending) return <LoaderCircle size={14} className="spin" />;
   if (state === "failed") return <CircleAlert size={14} aria-label="操作未完成" />;
   if (state === "cancelled") return <span className="tool-subtle-failure" aria-label="操作已停止">·</span>;
   return undefined;

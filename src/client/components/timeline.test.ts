@@ -279,11 +279,13 @@ describe("isToolActivityRunning", () => {
   const running: SessionStatus = { sessionId: "s", runState: "running" };
   const idle: SessionStatus = { sessionId: "s", runState: "idle" };
 
-  it("stays running only while the last timeline item is still a tool", () => {
-    expect(isToolActivityRunning([tool("a")], running)).toBe(true);
-    expect(isToolActivityRunning([tool("a"), { ...thinking("t1"), state: "running" }], running)).toBe(false);
-    expect(isToolActivityRunning([tool("a"), message("m1")], running)).toBe(false);
-    expect(isToolActivityRunning([tool("a")], idle)).toBe(false);
+  it("stays running only while the tail tool group still has a pending tool", () => {
+    expect(isToolActivityRunning([{ ...tool("a"), state: "running" }], running)).toBe(true);
+    expect(isToolActivityRunning([tool("a"), { ...tool("b"), state: "queued" }], running)).toBe(true);
+    expect(isToolActivityRunning([tool("a")], running)).toBe(false);
+    expect(isToolActivityRunning([{ ...tool("a"), state: "running" }, { ...thinking("t1"), state: "running" }], running)).toBe(false);
+    expect(isToolActivityRunning([{ ...tool("a"), state: "running" }, message("m1")], running)).toBe(false);
+    expect(isToolActivityRunning([{ ...tool("a"), state: "running" }], idle)).toBe(false);
   });
 });
 
