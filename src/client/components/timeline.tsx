@@ -954,9 +954,9 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
 
   const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
   const process = renderProcessEntries(turn.process, context);
-  return <>
-    {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
-    {!collapsible ? process : <section className={`turn-process ${open ? "expanded" : "collapsed"}`}>
+  const processBlock = process.length === 0 ? null : !collapsible
+    ? <div className="turn-process-stack">{process}</div>
+    : <section className={`turn-process ${open ? "expanded" : "collapsed"}`}>
       <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => { touched.current = true; setOpen((value) => !value); }}>
         <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
         <span className="turn-process-label">过程</span>
@@ -964,7 +964,10 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
         {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
       </button>
       {!open ? null : <div className="turn-process-body">{process}</div>}
-    </section>}
+    </section>;
+  return <>
+    {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
+    {processBlock}
     {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, context)}
     {turn.finalError === undefined ? null : renderTimelineEntry({ kind: "error", items: turn.finalError }, context)}
   </>;
