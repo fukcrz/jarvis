@@ -806,6 +806,11 @@ export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
   return turns;
 }
 
+/** 助手旁白紧挨着后面一组工具时，用旁白代替「已执行 N 项操作」。 */
+export function isActivityNarratedBy(previous: TimelineRenderItem | undefined, entry: TimelineRenderItem): boolean {
+  return entry.kind === "activity" && previous?.kind === "message" && previous.item.role === "assistant";
+}
+
 function renderItemKey(entry: TimelineRenderItem): string {
   return entry.kind === "activity" || entry.kind === "error" ? entry.items[0]?.id ?? "empty" : entry.item.id;
 }
@@ -892,13 +897,13 @@ interface TurnRenderContext {
   setEditingMessageId: (id: string | undefined) => void;
 }
 
-function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext): ReactNode {
+function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, hideActivitySummary = false): ReactNode {
   if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} editing={entry.item.id === context.editingMessageId} highlighted={entry.item.id === context.highlightedMessageId} onStartEdit={() => context.setEditingMessageId(entry.item.id)} onCancelEdit={() => context.setEditingMessageId(undefined)} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} retrying={context.status.retrying !== undefined} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} />;
   if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
-  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={entry.items[0]?.id === context.activeActivityId} startedAt={context.status.activeRun?.startedAt} stopping={context.status.runState === "stopping"} />;
+  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={entry.items[0]?.id === context.activeActivityId} startedAt={context.status.activeRun?.startedAt} stopping={context.status.runState === "stopping"} hideSummary={hideActivitySummary} />;
 }
 
 function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRenderContext & { turn: TimelineTurn; active: boolean; autoCollapse: boolean }) {
@@ -927,7 +932,7 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
   }, [active, autoCollapse, canAutoCollapse]);
 
   const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
-  const process = turn.process.map((entry) => renderTimelineEntry(entry, context));
+  const process = turn.process.map((entry, index) => renderTimelineEntry(entry, context, isActivityNarratedBy(turn.process[index - 1], entry)));
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
     {!collapsible ? process : <section className={`turn-process ${open ? "expanded" : "collapsed"}`}>

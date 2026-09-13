@@ -390,6 +390,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .activity-detail { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }.activity-elapsed { flex: 0 0 auto; color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .activity-summary > svg:last-child { flex: 0 0 auto; margin-left: auto; }
 .activity-items { display: grid; gap: 0; margin-top: 5px; border-left: 1px solid var(--line); padding-left: 7px; }
+.activity-group.narrated .activity-items { margin-top: 2px; }
 .activity-items .tool-item { margin: 0; }
 .activity-items .tool-list-item { overflow: visible; border: 0; border-radius: 4px; background: transparent; }
 .activity-items .tool-list-item.running, .activity-items .tool-list-item.failed, .activity-items .tool-list-item.completed { border: 0; background: transparent; }

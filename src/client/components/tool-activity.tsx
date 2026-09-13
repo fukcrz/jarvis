@@ -10,10 +10,12 @@ interface ToolActivityProps {
   active: boolean;
   startedAt?: string;
   stopping: boolean;
+  /** 旁白已经说明这组工具，不再画「已执行 N 项操作」。 */
+  hideSummary?: boolean;
 }
 
 /** Renders Pi tool activity as compact, inline timeline rows. */
-export function ToolActivity({ items, active, startedAt, stopping }: ToolActivityProps) {
+export function ToolActivity({ items, active, startedAt, stopping, hideSummary = false }: ToolActivityProps) {
   const defaultOpen = isActivityOpenByDefault(items);
   const [open, setOpen] = useState(defaultOpen);
   const touched = useRef(false);
@@ -22,6 +24,7 @@ export function ToolActivity({ items, active, startedAt, stopping }: ToolActivit
   const state = activityState(items, active);
   const summary = activitySummary(items, state, stopping);
   const elapsed = active ? formatRunElapsed(startedAt, now) : undefined;
+  const showItems = hideSummary || open;
 
   useEffect(() => {
     if (!active || startedAt === undefined) return;
@@ -35,14 +38,14 @@ export function ToolActivity({ items, active, startedAt, stopping }: ToolActivit
   }, [defaultOpen]);
 
   return (
-    <article className={`activity-group ${state}`}>
-      <button className="activity-summary" type="button" onClick={() => { touched.current = true; setOpen((value) => !value); }} aria-expanded={open}>
+    <article className={`activity-group ${state}${hideSummary ? " narrated" : ""}`}>
+      {hideSummary ? null : <button className="activity-summary" type="button" onClick={() => { touched.current = true; setOpen((value) => !value); }} aria-expanded={open}>
         <span className="activity-state-icon">{toolIcon(state)}</span>
         {summary.label === undefined ? null : <span className="activity-label">{summary.label}</span>}
         {summary.detail === undefined ? null : <span className="activity-detail">{summary.detail}</span>}
         {elapsed === undefined ? null : <time className="activity-elapsed">{elapsed}</time>}
-      </button>
-      {open ? <div className="activity-items">{items.map((item) => <ToolRow key={item.id} item={item} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
+      </button>}
+      {showItems ? <div className="activity-items">{items.map((item) => <ToolRow key={item.id} item={item} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
     </article>
   );
 }

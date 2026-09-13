@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnPinned, mobileUserMessageRows, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
+import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isTurnPinned, mobileUserMessageRows, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -248,6 +248,20 @@ describe("summarizeTurnProcess", () => {
     const [turn] = groupTimelineTurns([user("u1"), { ...tool("a"), createdAt: "" }, tool("b")]);
 
     expect(turn === undefined ? undefined : summarizeTurnProcess(turn)).toEqual({ operations: 2 });
+  });
+});
+
+describe("isActivityNarratedBy", () => {
+  it("pairs an assistant message with the following tool group", () => {
+    expect(isActivityNarratedBy({ kind: "message", item: message("m1") }, { kind: "activity", items: [tool("a")] })).toBe(true);
+  });
+
+  it("does not pair tools with thinking, errors, or a missing previous entry", () => {
+    expect(isActivityNarratedBy({ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] })).toBe(false);
+    expect(isActivityNarratedBy({ kind: "error", items: [error("e1")] }, { kind: "activity", items: [tool("a")] })).toBe(false);
+    expect(isActivityNarratedBy(undefined, { kind: "activity", items: [tool("a")] })).toBe(false);
+    expect(isActivityNarratedBy({ kind: "message", item: message("m1") }, { kind: "thinking", item: thinking("t1") })).toBe(false);
+    expect(isActivityNarratedBy({ kind: "message", item: user("u1") }, { kind: "activity", items: [tool("a")] })).toBe(false);
   });
 });
 
