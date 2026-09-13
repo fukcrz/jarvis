@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Clock3, Image as ImageIcon, LoaderCircle, RotateCcw, XCircle } from "lucide-react";
+import { Check, Clock3, LoaderCircle, RotateCcw, XCircle } from "lucide-react";
 import type { ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
 import { formatRunElapsed } from "../run-feedback";
@@ -106,13 +106,12 @@ function compactCommand(value?: string): string {
 function GenericToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open: boolean; onToggle: () => void }) {
   const output = item.error ?? item.output;
   const images = item.images ?? [];
+  const stateIcon = compactToolStateIcon(item.state);
   return (
     <article className={`tool-item tool-list-item ${item.state}`}>
       <button className="tool-summary" type="button" onClick={onToggle} aria-expanded={open}>
-        <span className="tool-state-icon">{subtleToolIcon(item.state)}</span>
+        {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
         <span className="tool-title">{toolActivityLabel(item)}</span>
-        {images.length === 0 ? null : <span className="tool-has-image" title={`结果包含 ${String(images.length)} 张图片`}><ImageIcon size={13} /></span>}
-        {item.durationMs === undefined ? null : <span className="tool-duration">{formatDuration(item.durationMs)}</span>}
       </button>
       {open ? <div className="tool-details inline-details">
         {images.length === 0 ? null : <div className="tool-images" aria-label="读取到的图片">
@@ -128,13 +127,13 @@ function GenericToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open
 function CommandToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open: boolean; onToggle: () => void }) {
   const command = item.inputPreview ?? item.target ?? "";
   const output = item.error ?? item.output;
+  const stateIcon = compactToolStateIcon(item.state);
   return (
     <article className={`tool-item tool-list-item command-item ${item.state}`}>
       <button className="tool-summary command-summary" type="button" onClick={onToggle} aria-expanded={open}>
-        <span className="tool-state-icon">{subtleToolIcon(item.state)}</span>
+        {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
         <span className="tool-target">{compactCommand(command)}</span>
         {item.excludeFromContext === true ? <span className="command-excluded" title="输出不会发送给模型">不进上下文</span> : null}
-        {item.durationMs === undefined ? null : <span className="command-duration">{formatDuration(item.durationMs)}</span>}
       </button>
       {open ? <div className="tool-details command-details inline-details">
         <div className="detail-command-line"><code>$ {command || "(empty)"}</code></div>
@@ -145,16 +144,11 @@ function CommandToolRow({ item, open, onToggle }: { item: ToolTimelineItem; open
   );
 }
 
-function subtleToolIcon(state: ToolTimelineItem["state"]) {
+function compactToolStateIcon(state: ToolTimelineItem["state"]) {
   if (state === "running" || state === "queued") return <LoaderCircle size={14} className="spin" />;
   if (state === "failed") return <span className="tool-subtle-failure" aria-label="操作未完成">!</span>;
   if (state === "cancelled") return <span className="tool-subtle-failure" aria-label="操作已停止">·</span>;
-  return <Check size={14} />;
-}
-
-function formatDuration(durationMs: number): string {
-  if (durationMs < 1_000) return `${durationMs}ms`;
-  return `${(durationMs / 1_000).toFixed(durationMs >= 10_000 ? 0 : 1)}s`;
+  return undefined;
 }
 
 function toolIcon(state: ToolTimelineItem["state"]) {

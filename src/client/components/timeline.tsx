@@ -479,7 +479,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, highli
         {images.length === 0 ? null : <div className="message-images" aria-label="消息图片">
           {images.map((image, index) => <ImagePreview key={`${image.mimeType}:${index}`} src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`}><button type="button" className="message-image-thumb" aria-label={`预览图片 ${String(index + 1)}`}><img src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`} loading="lazy" /></button></ImagePreview>)}
         </div>}
-        {editing ? <div className="message-inline-editor"><textarea autoFocus value={draft} disabled={submitting} aria-label="编辑消息" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancelEdit(); } if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitEdit(); } }} /><div className="message-inline-editor-actions"><button type="button" disabled={submitting} onClick={onCancelEdit}>取消</button><button type="button" className="accent" disabled={submitting || (draft.trim() === "" && images.length === 0)} onClick={() => { void submitEdit(); }}>{submitting ? "正在重新生成…" : "重新生成"}</button></div><small>发送后将从此消息重新生成后续回答</small></div> : item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
+        {editing ? <div className="message-inline-editor"><textarea autoFocus value={draft} disabled={submitting} aria-label="编辑消息" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancelEdit(); } if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitEdit(); } }} /><div className="message-inline-editor-actions"><button type="button" disabled={submitting} onClick={onCancelEdit}>取消</button><button type="button" className="accent" disabled={submitting || (draft.trim() === "" && images.length === 0)} onClick={() => { void submitEdit(); }}>{submitting ? "正在重新生成…" : "重新生成"}</button></div></div> : item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
           <MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} interactiveFiles={item.role === "assistant" && !streaming} />
         </div>}
         {editing ? null : <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : onStartEdit} onFork={onFork} />}
@@ -806,9 +806,19 @@ export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
   return turns;
 }
 
-/** 助手旁白紧挨着后面一组工具时，用旁白代替「已执行 N 项操作」。 */
+/** 一两句以内的过程旁白；更长的助手文本不当旁白，避免把整段汇报收进工具组。 */
+export const ACTIVITY_NARRATION_MAX_CHARS = 80;
+
+export function isShortAssistantNarration(item: MessageTimelineItem): boolean {
+  if (item.role !== "assistant") return false;
+  if ((item.images?.length ?? 0) > 0) return false;
+  const length = [...item.text.trim()].length;
+  return length > 0 && length <= ACTIVITY_NARRATION_MAX_CHARS;
+}
+
+/** 短旁白紧挨着后面一组工具时，用旁白代替「已执行 N 项操作」。 */
 export function isActivityNarratedBy(previous: TimelineRenderItem | undefined, entry: TimelineRenderItem): boolean {
-  return entry.kind === "activity" && previous?.kind === "message" && previous.item.role === "assistant";
+  return entry.kind === "activity" && previous?.kind === "message" && isShortAssistantNarration(previous.item);
 }
 
 function renderItemKey(entry: TimelineRenderItem): string {

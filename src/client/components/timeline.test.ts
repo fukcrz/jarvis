@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isTurnPinned, mobileUserMessageRows, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
+import { activeUserMessageAnchor, ACTIVITY_NARRATION_MAX_CHARS, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isShortAssistantNarration, isTurnPinned, mobileUserMessageRows, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -251,12 +251,22 @@ describe("summarizeTurnProcess", () => {
   });
 });
 
+describe("isShortAssistantNarration", () => {
+  it("accepts a short assistant line and rejects longer text or images", () => {
+    expect(isShortAssistantNarration(message("m1"))).toBe(true);
+    expect(isShortAssistantNarration({ ...message("long"), text: "字".repeat(ACTIVITY_NARRATION_MAX_CHARS + 1) })).toBe(false);
+    expect(isShortAssistantNarration({ ...message("image"), images: [{ mimeType: "image/png", data: "x" }] })).toBe(false);
+    expect(isShortAssistantNarration(user("u1"))).toBe(false);
+  });
+});
+
 describe("isActivityNarratedBy", () => {
-  it("pairs an assistant message with the following tool group", () => {
+  it("pairs a short assistant message with the following tool group", () => {
     expect(isActivityNarratedBy({ kind: "message", item: message("m1") }, { kind: "activity", items: [tool("a")] })).toBe(true);
   });
 
-  it("does not pair tools with thinking, errors, or a missing previous entry", () => {
+  it("does not pair tools with long text, thinking, errors, or a missing previous entry", () => {
+    expect(isActivityNarratedBy({ kind: "message", item: { ...message("long"), text: "字".repeat(ACTIVITY_NARRATION_MAX_CHARS + 1) } }, { kind: "activity", items: [tool("a")] })).toBe(false);
     expect(isActivityNarratedBy({ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] })).toBe(false);
     expect(isActivityNarratedBy({ kind: "error", items: [error("e1")] }, { kind: "activity", items: [tool("a")] })).toBe(false);
     expect(isActivityNarratedBy(undefined, { kind: "activity", items: [tool("a")] })).toBe(false);
