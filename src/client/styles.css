@@ -33,8 +33,8 @@
   --glass-highlight: inset 0 1px 0 rgb(255 255 255 / .07);
   --glass-blur: blur(22px) saturate(1.2);
   --glass-blur-soft: blur(14px) saturate(1.12);
-  --glass-overlay: rgb(4 8 10 / .16);
-  --glass-dialog: rgb(18 24 40 / .48);
+  --glass-overlay: rgb(4 8 10 / .08);
+  --glass-dialog: rgb(18 24 40 / .32);
   --glass-overlay-blur: blur(8px) saturate(1.05);
   --atmosphere:
     radial-gradient(920px 560px at 12% -12%, rgb(182 168 255 / .18), transparent 58%),
