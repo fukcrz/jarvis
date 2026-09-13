@@ -22,7 +22,7 @@ import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
-import { installBodyPointerEventsGuard } from "./lib/pointer-events";
+import { installBodyPointerEventsGuard, installTouchFocusGuard } from "./lib/pointer-events";
 import { isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sortSessionSummaries } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { extensionToastDuration, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
@@ -187,7 +187,14 @@ export function App() {
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
-  useEffect(() => installBodyPointerEventsGuard(), []);
+  useEffect(() => {
+    const restoreBodyPointerEvents = installBodyPointerEventsGuard();
+    const removeTouchFocusGuard = installTouchFocusGuard();
+    return () => {
+      restoreBodyPointerEvents();
+      removeTouchFocusGuard();
+    };
+  }, []);
 
   // Track the visual viewport so mobile layouts can shrink below the on-screen
   // keyboard (dvh does not include it on iOS/Android). Sets --vvh on the root;

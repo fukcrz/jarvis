@@ -57,8 +57,6 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 html[data-pointer="coarse"] button,
 html[data-pointer="coarse"] [role="button"] { cursor: default; }
-html[data-pointer="coarse"] button:focus,
-html[data-pointer="coarse"] button:focus-visible { outline: none; }
 .app-loading, .empty-workspace { display: grid; place-content: center; min-height: 100vh; gap: 12px; color: var(--muted); text-align: center; }
 .app-shell { display: grid; grid-template-columns: 316px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100vh; background: transparent; }
 .desktop-sidebar { min-width: 0; overflow: hidden; border-right: 1px solid var(--glass-border); background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
@@ -491,7 +489,6 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-session-action-delete:disabled { opacity: 0.45; }
 .mobile-session-group-header { display: flex; align-items: center; gap: 2px; position: sticky; top: 0; z-index: 2; padding: 8px 12px 4px; background: var(--glass); color: var(--subtle); -webkit-backdrop-filter: var(--glass-blur-soft); backdrop-filter: var(--glass-blur-soft); }
 .mobile-session-group-toggle { display: flex; align-items: center; min-width: 0; flex: 1; gap: 7px; border: 0; border-radius: 6px; background: transparent; padding: 7px 4px 8px; color: var(--subtle); text-align: left; }
-.mobile-session-group-toggle:focus-visible { outline: none; }
 .mobile-session-group-toggle strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13px; font-weight: 650; }
 .mobile-session-group-toggle .sidebar-activity { flex: 0 0 auto; margin-right: 0; }
 .mobile-session-group-chevron { flex: 0 0 auto; color: var(--muted); transition: transform 0.18s ease; }
@@ -507,39 +504,27 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
   -webkit-touch-callout: none;
 }
 .mobile-all-sessions-page button:hover,
-.mobile-all-sessions-page button:active,
-.mobile-all-sessions-page button:focus,
-.mobile-all-sessions-page button:focus-visible {
+.mobile-all-sessions-page button:active {
   outline: none;
   box-shadow: none;
   filter: none;
 }
 .mobile-all-sessions-page .button-ghost:hover:not(:disabled),
-.mobile-all-sessions-page .button-ghost:active,
-.mobile-all-sessions-page .button-ghost:focus,
-.mobile-all-sessions-page .button-ghost:focus-visible {
+.mobile-all-sessions-page .button-ghost:active {
   background: transparent;
   color: var(--muted);
 }
 .mobile-all-sessions-page .button.session-focus-toggle.active:hover,
-.mobile-all-sessions-page .button.session-focus-toggle.active:active,
-.mobile-all-sessions-page .button.session-focus-toggle.active:focus,
-.mobile-all-sessions-page .button.session-focus-toggle.active:focus-visible {
+.mobile-all-sessions-page .button.session-focus-toggle.active:active {
   background: var(--accent-soft);
   color: var(--accent-strong);
 }
 .mobile-session-group-toggle:hover,
 .mobile-session-group-toggle:active,
-.mobile-session-group-toggle:focus,
-.mobile-session-group-toggle:focus-visible,
 .mobile-session-window-action:hover,
 .mobile-session-window-action:active,
-.mobile-session-window-action:focus,
-.mobile-session-window-action:focus-visible,
 .mobile-session-select:hover,
-.mobile-session-select:active,
-.mobile-session-select:focus,
-.mobile-session-select:focus-visible {
+.mobile-session-select:active {
   background: transparent;
   color: inherit;
 }
