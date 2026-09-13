@@ -18,9 +18,9 @@ export function sessionAttentionState(session: SessionSummary): SessionAttention
 export function sessionAttentionRank(session: SessionSummary): number {
   const state = sessionAttentionState(session);
   if (state === "waiting_interaction") return 0;
-  if (state === "running") return 1;
-  if (state === "failed") return 2;
-  if (state === "completed_unread") return 3;
+  if (state === "failed") return 1;
+  if (state === "completed_unread") return 2;
+  if (state === "running") return 3;
   return 4;
 }
 

@@ -26,7 +26,7 @@ describe("session summary order", () => {
       { ...base, id: "idle", preview: "hello", lastUserMessageAt: "2026-01-09T00:00:00.000Z" },
       { ...base, id: "starred", preview: "starred", starred: true, lastUserMessageAt: "2026-01-01T00:00:00.000Z" },
     ]);
-    expect(ids(ordered)).toEqual(["waiting", "running", "failed", "completed", "idle", "starred"]);
+    expect(ids(ordered)).toEqual(["waiting", "failed", "completed", "running", "idle", "starred"]);
   });
 
   it("orders the same attention state by when that state was entered", () => {

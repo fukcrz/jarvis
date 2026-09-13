@@ -55,10 +55,23 @@ describe("mobile project status", () => {
 
   it("selects the highest-priority attention state", () => {
     expect(projectAttentionSession([
+      { ...session, id: "running", runState: "running" },
+      { ...session, id: "completed", attentionState: "completed_unread" },
       { ...session, id: "failed", attentionState: "failed" },
       { ...session, id: "waiting", attentionState: "waiting_interaction" },
-      { ...session, id: "running", runState: "running" },
     ])?.id).toBe("waiting");
+  });
+
+  it("prefers failure, completion, then running when no interaction is pending", () => {
+    expect(projectAttentionSession([
+      { ...session, id: "running", runState: "running" },
+      { ...session, id: "completed", attentionState: "completed_unread" },
+      { ...session, id: "failed", attentionState: "failed" },
+    ])?.id).toBe("failed");
+    expect(projectAttentionSession([
+      { ...session, id: "running", runState: "running" },
+      { ...session, id: "completed", attentionState: "completed_unread" },
+    ])?.id).toBe("completed");
   });
 
   it("uses the most recently entered attention state when priority is tied", () => {
@@ -70,18 +83,22 @@ describe("mobile project status", () => {
 });
 
 describe("mobile project chip order", () => {
-  it("puts attention projects first, then the latest entered attention state", () => {
+  it("puts attention projects first in status priority order", () => {
     const idle = workspace("idle", 0);
-    const failed = workspace("failed", 1);
-    const waiting = workspace("waiting", 2);
-    const olderIdle = workspace("older-idle", 3);
-    const ordered = sortWorkspacesByAttention([idle, failed, waiting, olderIdle], {
+    const running = workspace("running", 1);
+    const completed = workspace("completed", 2);
+    const failed = workspace("failed", 3);
+    const waiting = workspace("waiting", 4);
+    const olderIdle = workspace("older-idle", 5);
+    const ordered = sortWorkspacesByAttention([idle, running, completed, failed, waiting, olderIdle], {
       idle: [{ ...session, id: "idle-new", workspaceId: idle.id, lastUserMessageAt: "2026-01-04T00:00:00.000Z" }],
+      running: [{ ...session, id: "running", workspaceId: running.id, runState: "running", attentionAt: "2026-01-05T00:00:00.000Z" }],
+      completed: [{ ...session, id: "completed", workspaceId: completed.id, attentionState: "completed_unread", attentionAt: "2026-01-04T00:00:00.000Z" }],
       failed: [{ ...session, id: "failed", workspaceId: failed.id, attentionState: "failed", attentionAt: "2026-01-03T00:00:00.000Z" }],
       waiting: [{ ...session, id: "waiting", workspaceId: waiting.id, attentionState: "waiting_interaction", attentionAt: "2026-01-02T00:00:00.000Z" }],
       "older-idle": [{ ...session, id: "idle-old", workspaceId: olderIdle.id, lastUserMessageAt: "2026-01-01T00:00:00.000Z" }],
     });
-    expect(ordered.map((item) => item.id)).toEqual(["waiting", "failed", "idle", "older-idle"]);
+    expect(ordered.map((item) => item.id)).toEqual(["waiting", "failed", "completed", "running", "idle", "older-idle"]);
   });
 });
 
