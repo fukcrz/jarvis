@@ -121,7 +121,7 @@ function LocalLink({ node: _node, href, className, children, ...rest }: Componen
   const interactive = useContext(InteractiveFilesContext);
   const reference = interactive ? localFileReferenceFromHref(href) : undefined;
   if (reference !== undefined && isTextFilePreviewPath(reference.path)) {
-    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line} column={reference.column} className={className}>{children}</LocalTextFileLink>;
+    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line} className={className}>{children}</LocalTextFileLink>;
   }
   const resolved = rewriteLocalLinkHref(href, cwd);
   if (resolved === href) return <a href={href} className={className} {...rest}>{children}</a>;
@@ -233,7 +233,7 @@ function MarkdownCode({ node: _node, children, className, ...rest }: ComponentPr
   const text = textFromReactNode(children).trim();
   const reference = localFileReferenceFromHref(text);
   if (interactive && !isBlock && reference !== undefined && looksLikeFileReference(text) && isTextFilePreviewPath(reference.path)) {
-    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line} column={reference.column}><code className={className} {...rest}>{children}</code></LocalTextFileLink>;
+    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line}><code className={className} {...rest}>{children}</code></LocalTextFileLink>;
   }
   return <code className={className} {...rest}>{children}</code>;
 }

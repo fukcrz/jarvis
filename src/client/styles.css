@@ -661,7 +661,6 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
   .extension-interaction-actions button:hover:not(:disabled), .extension-result-line button:hover { color: var(--ink); text-decoration: underline; outline: none; }
   .extension-toast-source:hover { opacity: 1; outline: none; }
   .extension-widget-heading:hover { color: var(--ink); outline: none; }
-  .text-file-preview-line:hover { background: rgb(255 255 255 / .04); }
   .extension-select-choice:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .extension-select-choice:hover:not(:disabled) .extension-select-label { color: var(--accent-strong); }
   .extension-select-preview-toggle:hover:not(:disabled) { color: var(--muted); }
@@ -832,11 +831,8 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .text-file-preview-dialog .dialog-header .button-icon { width: 26px; height: 26px; }
 .text-file-preview-shell { display: grid; min-height: 0; gap: 6px; }
 .text-file-preview-notice { border: 1px solid rgb(255 184 107 / .28); border-radius: 4px; background: rgb(255 184 107 / .1); padding: 5px 8px; color: var(--warm); font-size: 11px; }
-.text-file-preview-code { max-height: min(72vh, 700px); overflow: auto; margin: 0; padding: 6px 0; color: #e4e4e7; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
+.text-file-preview-code { max-height: min(72vh, 700px); overflow: auto; margin: 0; padding: 6px 0; color: #e4e4e7; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; cursor: text; user-select: text; }
 .text-file-preview-code code { display: block; min-width: max-content; }
 .text-file-preview-line { display: inline-grid; grid-template-columns: 44px max-content; min-width: 100%; padding-right: 14px; }
 .text-file-preview-line-number { padding-right: 10px; color: #666671; text-align: right; user-select: none; }
 .text-file-preview-line-content { display: block; position: relative; min-height: 1.45em; white-space: pre; }
-.text-file-preview-line.highlighted { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.text-file-preview-line.highlighted .text-file-preview-line-number { color: var(--accent-strong); }
-.text-file-preview-column { position: absolute; top: 0; bottom: 0; left: calc(var(--text-file-column) * 1ch); width: 1px; background: var(--warm); opacity: .85; pointer-events: none; }

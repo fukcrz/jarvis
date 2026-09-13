@@ -50,7 +50,6 @@ interface LocalTextFileLinkProps {
   cwd?: string;
   children: ReactNode;
   line?: number;
-  column?: number;
   className?: string;
 }
 
@@ -103,7 +102,7 @@ export function LocalTextFilePreviewAnchor({ path, cwd, className, loading = fal
 }
 
 /** 只有服务端确认是可读取文本文件后，才把普通文本显示成可点击入口。 */
-export function LocalTextFileLink({ path, cwd, line, column, children, className }: LocalTextFileLinkProps) {
+export function LocalTextFileLink({ path, cwd, line, children, className }: LocalTextFileLinkProps) {
   const [available, setAvailable] = useState<boolean>();
   const [loading, setLoading] = useState(false);
   const [file, setFile] = useState<WorkspaceFileContent>();
@@ -136,11 +135,11 @@ export function LocalTextFileLink({ path, cwd, line, column, children, className
   if (available !== true) return <span className="local-file-reference">{children}</span>;
   return <>
     <LocalTextFilePreviewAnchor path={path} cwd={cwd} className={className} loading={loading} onOpen={openPreview}>{children}</LocalTextFilePreviewAnchor>
-    {file === undefined ? null : <TextFilePreviewDialog file={file} line={line} column={column} open={open} onClose={() => setOpen(false)} />}
+    {file === undefined ? null : <TextFilePreviewDialog file={file} line={line} open={open} onClose={() => setOpen(false)} />}
   </>;
 }
 
-export function TextFilePreviewDialog({ file, line, column, open = true, onClose }: { file: WorkspaceFileContent; line?: number; column?: number; open?: boolean; onClose: () => void }) {
+export function TextFilePreviewDialog({ file, line, open = true, onClose }: { file: WorkspaceFileContent; line?: number; open?: boolean; onClose: () => void }) {
   const codeRef = useRef<HTMLPreElement>(null);
   useEffect(() => {
     if (!open || line === undefined || codeRef.current === null) return;
@@ -148,10 +147,10 @@ export function TextFilePreviewDialog({ file, line, column, open = true, onClose
     target?.scrollIntoView({ block: "center" });
   }, [file, line, open]);
   return <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
-    <DialogContent className="text-file-preview-dialog" title={file.name}>
+    <DialogContent className="text-file-preview-dialog" title={file.name} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
       <div className="text-file-preview-shell">
         {file.truncated ? <div className="text-file-preview-notice" role="status">文件较大，仅显示前 512 KB。</div> : null}
-        <CodePreview ref={codeRef} text={file.content} path={file.path} line={line} column={column} columnClassName="text-file-preview-column" className="text-file-preview-code" lineClassName="text-file-preview-line" />
+        <CodePreview ref={codeRef} text={file.content} path={file.path} className="text-file-preview-code" lineClassName="text-file-preview-line" />
       </div>
     </DialogContent>
   </Dialog>;

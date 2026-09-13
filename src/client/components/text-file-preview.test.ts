@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { CodePreview } from "./code-preview";
 import { LocalTextFilePreviewAnchor, localTextFilePreviewHref, shouldOpenLocalTextFilePreview } from "./text-file-preview";
 
 describe("local text file preview trigger", () => {
@@ -29,5 +30,22 @@ describe("local text file preview trigger", () => {
     expect(shouldOpenLocalTextFilePreview(click, { isCollapsed: false })).toBe(false);
     expect(shouldOpenLocalTextFilePreview({ ...click, ctrlKey: true }, { isCollapsed: true })).toBe(false);
     expect(shouldOpenLocalTextFilePreview({ ...click, button: 1 }, { isCollapsed: true })).toBe(false);
+  });
+});
+
+describe("text file preview content", () => {
+  it("shows syntax highlighting without a current-line marker", () => {
+    const markup = renderToStaticMarkup(createElement(CodePreview, {
+      text: "export const n = 1;\nexport const m = 2;",
+      path: "chart.ts",
+      className: "text-file-preview-code",
+      lineClassName: "text-file-preview-line",
+    }));
+
+    expect(markup).toContain("hljs-keyword");
+    expect(markup).toContain('class="text-file-preview-line"');
+    expect(markup).not.toContain("highlighted");
+    expect(markup).not.toContain("text-file-preview-column");
+    expect(markup).not.toContain("code-block-copy");
   });
 });
