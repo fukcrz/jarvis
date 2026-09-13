@@ -8,7 +8,6 @@ import { Dialog, DialogContent } from "./ui/dialog";
 interface MobileSessionSwitcherProps {
   workspaces: Workspace[];
   sessionsByWorkspace: Record<string, SessionSummary[]>;
-  selectedSessionId?: string;
   onCreateSession: (workspaceId: string) => void;
   onSelectSession: (workspaceId: string, sessionId: string) => void;
   onOpenSessionMenu: (workspaceId: string, session: SessionSummary) => void;
@@ -113,7 +112,7 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
     setSessionExpandSteps((current) => ({ ...current, [workspaceId]: 0 }));
   };
   const renderSessionRows = (workspaceId: string, sessions: SessionSummary[]) => sessions.map((session) => (
-    <MobileSessionRow key={`${workspaceId}:${session.id}`} session={session} selected={session.id === props.selectedSessionId} onSelect={() => props.onSelectSession(workspaceId, session.id)} onMenu={() => props.onOpenSessionMenu(workspaceId, session)} />
+    <MobileSessionRow key={`${workspaceId}:${session.id}`} session={session} onSelect={() => props.onSelectSession(workspaceId, session.id)} onMenu={() => props.onOpenSessionMenu(workspaceId, session)} />
   ));
   return <section className="mobile-page mobile-all-sessions-page" aria-label="全部会话">
     <header className="mobile-switcher-header"><strong>{props.assistantName}</strong><div className="mobile-switcher-actions"><Button variant="ghost" size="icon" aria-label="搜索会话" title="搜索会话" onClick={props.onOpenSearch}><Search size={16} /></Button><Button variant="ghost" size="icon" className={`session-focus-toggle${props.focusMode ? " active" : ""}`} aria-label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} aria-pressed={props.focusMode} title={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} onClick={props.onToggleFocusMode}><Focus size={16} /></Button><Button variant="ghost" size="icon" aria-label="打开设置" title="设置" onClick={props.onOpenSettings}><Settings2 size={16} /></Button><Button variant="ghost" size="icon" aria-label="新建会话" onClick={requestCreateSession} disabled={props.workspaces.length === 0}><Plus size={16} /></Button></div></header>
@@ -188,14 +187,13 @@ function MobileProjectStatus({ session }: { session: SessionSummary | undefined 
 
 interface MobileSessionRowProps {
   session: SessionSummary;
-  selected: boolean;
   onSelect: () => void;
   onMenu: () => void;
 }
 
 function MobileSessionRow(props: MobileSessionRowProps) {
-  const { session, selected } = props;
-  return <div className={`mobile-session-row${selected ? " selected" : ""}`}>
+  const { session } = props;
+  return <div className="mobile-session-row">
     <button type="button" className="mobile-session-select" onClick={props.onSelect}><span className="mobile-session-copy"><strong>{session.starred === true ? <Star className="session-star" size={11} fill="currentColor" aria-hidden="true" /> : null}<span>{sessionLabel(session.name, session.preview)}</span></strong>{isSessionRunning(session) ? null : <small>{formatRelativeTime(session.updatedAt)}</small>}</span>{sessionAttentionLabel(session) === undefined ? null : <span className={`sidebar-activity attention-${session.attentionState ?? "idle"} ${session.runState}`} role="status" aria-label={sessionAttentionLabel(session)} />}</button>
     <Button variant="ghost" size="icon" className="mobile-session-menu" aria-label={`管理会话 ${sessionLabel(session.name, session.preview)}`} onClick={props.onMenu}><MoreVertical size={16} /></Button>
   </div>;
