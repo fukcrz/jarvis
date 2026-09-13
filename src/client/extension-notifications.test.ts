@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extensionToastDuration, mergeExtensionToast, type ExtensionToastInput } from "./extension-notifications";
+import { extensionToastDuration, extensionToastSourceLabel, mergeExtensionToast, type ExtensionToastInput } from "./extension-notifications";
 
 const info = (id: string, message: string): ExtensionToastInput => ({ id, workspaceId: "workspace", message, tone: "info" });
 
@@ -30,6 +30,16 @@ describe("mergeExtensionToast", () => {
 
     expect(warning).toMatchObject({ tone: "warning", count: 1 });
     expect(error).toMatchObject({ tone: "error", count: 1 });
+  });
+});
+
+describe("extensionToastSourceLabel", () => {
+  it("only returns a real session name", () => {
+    expect(extensionToastSourceLabel("选择文本时，链接无法选择")).toBe("选择文本时，链接无法选择");
+    expect(extensionToastSourceLabel("  方案讨论  ")).toBe("方案讨论");
+    expect(extensionToastSourceLabel(undefined)).toBeUndefined();
+    expect(extensionToastSourceLabel(null)).toBeUndefined();
+    expect(extensionToastSourceLabel("   ")).toBeUndefined();
   });
 });
 

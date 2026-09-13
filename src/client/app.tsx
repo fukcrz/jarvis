@@ -25,7 +25,7 @@ import { Tooltip } from "./components/ui/tooltip";
 import { installBodyPointerEventsGuard, installTouchFocusGuard } from "./lib/pointer-events";
 import { isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sortSessionSummaries } from "./lib/utils";
 import { useSessionStream } from "./hooks/use-session-stream";
-import { extensionToastDuration, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
+import { extensionToastDuration, extensionToastSourceLabel, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
 
 /** Extract the entity ids carried by the current hash route. */
 function pathParams(pathname: string): { workspaceId?: string; sessionId?: string } {
@@ -1388,9 +1388,9 @@ function ExtensionToasts({ toasts, sessionsByWorkspace, onOpenSession, onDismiss
     {toasts.map((toast) => {
       const Icon = toast.tone === "info" ? Bell : CircleAlert;
       const session = toast.sessionId === undefined ? undefined : sessionsByWorkspace[toast.workspaceId]?.find((candidate) => candidate.id === toast.sessionId);
-      const label = session === undefined ? undefined : sessionLabel(session.name, session.preview);
-      return <div key={toast.id} className={`toast-surface extension-toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}>
-        <Icon size={15} className="toast-surface-icon" /><div className="extension-toast-copy">{toast.count > 1 || toast.sessionId === undefined ? null : <button type="button" className="extension-toast-source" onClick={() => onOpenSession(toast.workspaceId, toast.sessionId!)}>{label ?? "打开来源会话"}</button>}{toast.count > 1 ? <strong className="extension-toast-count">收到 {toast.count} 条扩展通知</strong> : <span className="extension-toast-message">{toast.message}</span>}</div><button type="button" aria-label="关闭通知" onClick={() => onDismiss(toast.id)}><X size={14} /></button>
+      const sourceLabel = extensionToastSourceLabel(session?.name);
+      return <div key={toast.id} className={`extension-toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}>
+        <Icon size={14} /><div className="extension-toast-copy">{toast.count > 1 || toast.sessionId === undefined || sourceLabel === undefined ? null : <button type="button" className="extension-toast-source" onClick={() => onOpenSession(toast.workspaceId, toast.sessionId!)}>{sourceLabel}</button>}{toast.count > 1 ? <strong className="extension-toast-count">收到 {toast.count} 条扩展通知</strong> : <span className="extension-toast-message">{toast.message}</span>}</div><button type="button" aria-label="关闭通知" onClick={() => onDismiss(toast.id)}><X size={14} /></button>
       </div>;
     })}
   </div>;

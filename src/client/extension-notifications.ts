@@ -29,3 +29,9 @@ export function extensionToastDuration(tone: ExtensionToastTone): number {
   if (tone === "warning") return 5_000;
   return 3_000;
 }
+
+/** Toast source row only uses a real session name, never preview text. */
+export function extensionToastSourceLabel(name: string | null | undefined): string | undefined {
+  const trimmed = name?.trim();
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+}
