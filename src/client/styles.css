@@ -491,15 +491,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-page-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px; }
 .mobile-session-list { padding-top: 0; }
 .mobile-project-row { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--glass-border); }
-.mobile-session-row { position: relative; z-index: 1; display: flex; align-items: center; gap: 4px; background: var(--canvas); touch-action: pan-y; transition: transform 0.18s ease; will-change: transform; }
-.mobile-session-row.swipe-open { transform: translateX(-132px); }
-.mobile-session-swipe { position: relative; overflow: hidden; border-bottom: 1px solid var(--glass-border); }
-.mobile-session-actions { position: absolute; z-index: 0; inset: 0 0 0 auto; display: flex; width: 132px; }
-.mobile-session-actions button { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 0; padding: 0; font-size: 11px; font-weight: 600; }
-.mobile-session-action-rename { background: #2a3248; color: #d3d2dc; }
-.mobile-session-action-fork { background: #2a2448; color: #d0c7ff; }
-.mobile-session-action-delete { background: #4a1f28; color: #ff9d9d; }
-.mobile-session-action-delete:disabled { opacity: 0.45; }
+.mobile-session-row { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--glass-border); background: var(--canvas); }
 .mobile-session-group-header { display: flex; align-items: center; gap: 2px; position: sticky; top: 0; z-index: 2; padding: 8px 12px 4px; background: var(--glass); color: var(--subtle); -webkit-backdrop-filter: var(--glass-blur-soft); backdrop-filter: var(--glass-blur-soft); }
 .mobile-session-group-toggle { display: flex; align-items: center; min-width: 0; flex: 1; gap: 7px; border: 0; border-radius: 6px; background: transparent; padding: 7px 4px 8px; color: var(--subtle); text-align: left; }
 .mobile-session-group-toggle strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13px; font-weight: 650; }
