@@ -409,7 +409,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .activity-narration-icon { display: grid; flex: 0 0 auto; margin-top: 1px; color: var(--subtle); }
 .activity-narration-text { min-width: 0; font-size: 11px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
 .activity-items { display: grid; gap: 0; }
-.activity-group.narrated .activity-items { margin-top: 2px; }
+.activity-group.narrated .activity-items { margin-top: 2px; padding-left: 21px; }
 .activity-items .tool-item { margin: 0; }
 .activity-items .tool-list-item { overflow: visible; border: 0; border-radius: 4px; background: transparent; }
 .activity-items .tool-list-item.running, .activity-items .tool-list-item.failed, .activity-items .tool-list-item.completed { border: 0; background: transparent; }
