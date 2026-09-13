@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type PointerEvent } from "react";
-import { CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleDot, Focus, Folder, LoaderCircle, MoreVertical, Plus, Search, Settings2 } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleDot, Focus, Folder, LoaderCircle, MoreVertical, Plus, Search, Settings2, Star } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionAttentionState, sessionLabel, sessionListWindow, sortSessionSummaries } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -197,7 +197,7 @@ interface MobileSessionRowProps {
 function MobileSessionRow(props: MobileSessionRowProps) {
   const { session, selected } = props;
   return <div className={`mobile-session-row${selected ? " selected" : ""}`}>
-    <button type="button" className="mobile-session-select" onClick={props.onSelect}><span className="mobile-session-copy"><strong>{sessionLabel(session.name, session.preview)}</strong>{isSessionRunning(session) ? null : <small>{formatRelativeTime(session.updatedAt)}</small>}</span>{sessionAttentionLabel(session) === undefined ? null : <span className={`sidebar-activity attention-${session.attentionState ?? "idle"} ${session.runState}`} role="status" aria-label={sessionAttentionLabel(session)} />}</button>
+    <button type="button" className="mobile-session-select" onClick={props.onSelect}><span className="mobile-session-copy"><strong>{session.starred === true ? <Star className="session-star" size={11} fill="currentColor" aria-hidden="true" /> : null}<span>{sessionLabel(session.name, session.preview)}</span></strong>{isSessionRunning(session) ? null : <small>{formatRelativeTime(session.updatedAt)}</small>}</span>{sessionAttentionLabel(session) === undefined ? null : <span className={`sidebar-activity attention-${session.attentionState ?? "idle"} ${session.runState}`} role="status" aria-label={sessionAttentionLabel(session)} />}</button>
     <Button variant="ghost" size="icon" className="mobile-session-menu" aria-label={`管理会话 ${sessionLabel(session.name, session.preview)}`} onClick={props.onMenu}><MoreVertical size={16} /></Button>
   </div>;
 }

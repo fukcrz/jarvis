@@ -67,6 +67,29 @@ describe("API client", () => {
     expect(new Headers(init?.headers).has("content-type")).toBe(false);
   });
 
+  it("sends a starred flag when updating a session bookmark", async () => {
+    const session = {
+      id: "c2f73ddd-cfc6-464f-acb3-c8f425cea7f0",
+      workspaceId: "da69b38d-f132-4c84-8c4f-6174015e9c5e",
+      name: null,
+      preview: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      runState: "idle",
+      starred: true,
+    };
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ session }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ref = { workspaceId: session.workspaceId, sessionId: session.id };
+
+    await expect(api.setSessionStarred(ref, true)).resolves.toEqual(session);
+
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe(`/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}`);
+    expect(init?.method).toBe("PATCH");
+    expect(init?.body).toBe(JSON.stringify({ starred: true }));
+  });
+
   it("sends an optional keepSessionId when cleaning project sessions", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ removed: ["c2f73ddd-cfc6-464f-acb3-c8f425cea7f0"], skipped: [] }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

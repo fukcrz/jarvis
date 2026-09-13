@@ -919,6 +919,31 @@ describe("Jarvis HTTP and WebSocket API", () => {
     socket.close();
   });
 
+  it("stars a session and skips it during cleanup", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "starred-sessions-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath, label: "Starred sessions" } })).json<{ workspace: { id: string } }>().workspace;
+    const keep = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const starred = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const idle = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+
+    const patched = await server.inject({ method: "PATCH", url: `/api/workspaces/${workspace.id}/sessions/${starred.id}`, payload: { starred: true } });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json()).toMatchObject({ session: { id: starred.id, starred: true } });
+
+    const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` });
+    expect((listed.json() as { sessions: Array<{ id: string; starred?: boolean }> }).sessions.find((session) => session.id === starred.id)?.starred).toBe(true);
+
+    const cleaned = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/cleanup`, payload: { keepSessionId: keep.id } });
+    expect(cleaned.statusCode).toBe(200);
+    expect(cleaned.json()).toMatchObject({ removed: [idle.id], skipped: [] });
+
+    const remaining = (await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` })).json() as { sessions: Array<{ id: string; starred?: boolean }> };
+    expect(remaining.sessions.map((session) => session.id).sort()).toEqual([keep.id, starred.id].sort());
+    expect(remaining.sessions.find((session) => session.id === starred.id)?.starred).toBe(true);
+  });
+
   it("forks user and assistant message history into independent sessions", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "fork-workspace");

@@ -74,6 +74,7 @@ interface ActiveSession {
   attentionState: SessionAttentionState;
   attentionAt?: string;
   lastUserMessageAt?: string;
+  starred?: boolean;
   requestRuns: Map<string, RunAccepted>;
   liveMessages: Map<string, MessageTimelineItem>;
   /** Retry attempts which have not yet been reconciled with persisted history. */
@@ -321,6 +322,23 @@ export class SessionService {
     return summary;
   }
 
+  async setStarred(ref: SessionRef, starred: boolean): Promise<SessionSummary> {
+    const active = await this.getActive(ref);
+    if ((active.starred === true) === starred) return this.summaryFromActive(active);
+    await this.attention.setStarred(active.ref, starred);
+    if (starred) active.starred = true;
+    else delete active.starred;
+    const summary = this.summaryFromActive(active);
+    this.publishSummary(active, summary);
+    return summary;
+  }
+
+  async patch(ref: SessionRef, input: { name?: string; starred?: boolean }): Promise<SessionSummary> {
+    if (input.name !== undefined) await this.rename(ref, input.name);
+    if (input.starred !== undefined) return this.setStarred(ref, input.starred);
+    return this.summaryFromActive(await this.getActive(ref));
+  }
+
   async remove(ref: SessionRef): Promise<void> {
     return this.withSessionTransition(ref, async () => {
       const key = activeKey(ref);
@@ -370,7 +388,7 @@ export class SessionService {
     const removed: string[] = [];
     const skipped: SessionCleanupResult["skipped"] = [];
     for (const summary of summaries) {
-      if (summary.id === keepSessionId) continue;
+      if (summary.id === keepSessionId || summary.starred === true) continue;
       try {
         await this.remove({ workspaceId, sessionId: summary.id });
         removed.push(summary.id);
@@ -1219,6 +1237,7 @@ export class SessionService {
       attentionState: sortMeta.attentionState,
       ...(sortMeta.attentionAt === undefined ? {} : { attentionAt: sortMeta.attentionAt }),
       ...(sortMeta.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: sortMeta.lastUserMessageAt }),
+      ...(sortMeta.starred === true ? { starred: true } : {}),
       requestRuns: new Map(),
       liveMessages: new Map(),
       liveErrors: new Map(),
@@ -1783,6 +1802,7 @@ export class SessionService {
     const attentionState = active?.attentionState ?? persisted?.attentionState ?? "idle";
     const attentionAt = active?.attentionAt ?? persisted?.attentionAt;
     const lastUserMessageAt = active?.lastUserMessageAt ?? persisted?.lastUserMessageAt;
+    const starred = active?.starred === true || persisted?.starred === true;
     return {
       id: entry.id,
       workspaceId: workspace.id,
@@ -1794,6 +1814,7 @@ export class SessionService {
       attentionState,
       ...(attentionState === "idle" || attentionAt === undefined ? {} : { attentionAt }),
       ...(lastUserMessageAt === undefined ? {} : { lastUserMessageAt }),
+      ...(starred ? { starred: true } : {}),
     };
   }
 
@@ -1809,6 +1830,7 @@ export class SessionService {
       attentionState: active.attentionState,
       ...(active.attentionState === "idle" || active.attentionAt === undefined ? {} : { attentionAt: active.attentionAt }),
       ...(active.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: active.lastUserMessageAt }),
+      ...(active.starred === true ? { starred: true } : {}),
     };
   }
 }

@@ -82,9 +82,9 @@ export const SESSIONS_PAGE_SIZE = 5;
 /** 聚焦模式中，普通会话保持可见的最近活动时间窗口。 */
 export const SESSION_FOCUS_WINDOW_MS = 10 * 60_000;
 
-/** 项目清理会删除的闲置会话：排除当前保留项与执行中的会话。 */
+/** 项目清理会删除的闲置会话：排除当前保留项、执行中的会话与收藏会话。 */
 export function sessionCleanupTargets(sessions: SessionSummary[], keepSessionId?: string): SessionSummary[] {
-  return sessions.filter((session) => session.id !== keepSessionId && !isSessionRunning(session));
+  return sessions.filter((session) => session.id !== keepSessionId && !isSessionRunning(session) && session.starred !== true);
 }
 
 export function sessionAttentionLabel(session: SessionSummary): string | undefined {

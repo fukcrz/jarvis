@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { GitBranch, Pencil, Trash2 } from "lucide-react";
+import { GitBranch, Pencil, Star, Trash2 } from "lucide-react";
 import type { SessionSummary } from "../../shared/protocol";
 
 export interface SessionContextMenuTarget {
@@ -12,16 +12,17 @@ export interface SessionContextMenuTarget {
 interface SessionContextMenuProps {
   target: SessionContextMenuTarget;
   onClose: () => void;
+  onStar: (target: SessionContextMenuTarget) => void;
   onFork: (target: SessionContextMenuTarget) => void;
   onRename: (target: SessionContextMenuTarget) => void;
   onDelete: (target: SessionContextMenuTarget) => void;
 }
 
 const MENU_WIDTH = 196;
-const MENU_HEIGHT = 112;
+const MENU_HEIGHT = 148;
 const VIEWPORT_GUTTER = 8;
 
-export function SessionContextMenu({ target, onClose, onFork, onRename, onDelete }: SessionContextMenuProps) {
+export function SessionContextMenu({ target, onClose, onStar, onFork, onRename, onDelete }: SessionContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const left = Math.max(VIEWPORT_GUTTER, Math.min(target.x, window.innerWidth - MENU_WIDTH - VIEWPORT_GUTTER));
   const top = Math.max(VIEWPORT_GUTTER, Math.min(target.y, window.innerHeight - MENU_HEIGHT - VIEWPORT_GUTTER));
@@ -52,6 +53,7 @@ export function SessionContextMenu({ target, onClose, onFork, onRename, onDelete
 
   return (
     <div ref={menuRef} className="context-menu" role="menu" aria-label="会话操作" tabIndex={-1} style={{ left, top }} onContextMenu={(event) => event.preventDefault()}>
+      <button className="context-menu-item" type="button" role="menuitem" onClick={() => onStar(target)}><Star size={14} fill={target.session.starred === true ? "currentColor" : "none"} /><span>{target.session.starred === true ? "取消收藏" : "收藏"}</span></button>
       <button className="context-menu-item" type="button" role="menuitem" onClick={() => onFork(target)}><GitBranch size={14} /><span>创建分支</span></button>
       <button className="context-menu-item" type="button" role="menuitem" onClick={() => onRename(target)}><Pencil size={14} /><span>重命名会话</span></button>
       <button className="context-menu-item danger" type="button" role="menuitem" disabled={busy} title={busy ? "请先停止此会话再删除" : undefined} onClick={() => onDelete(target)}>

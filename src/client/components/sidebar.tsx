@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Files, Focus, Folder, FolderPlus, MessageSquarePlus, Search, Settings2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Files, Focus, Folder, FolderPlus, MessageSquarePlus, Search, Settings2, Star } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionLabel, sessionListWindow, sortSessionSummaries, workspaceDropTarget } from "../lib/utils";
@@ -173,7 +173,7 @@ export function Sidebar(props: SidebarProps) {
                     y: event.clientY === 0 ? bounds.bottom : event.clientY,
                   });
                 }}>
-                  <span className="session-text"><strong>{sessionLabel(session.name, session.preview)}</strong>{isSessionRunning(session) ? null : <small>{formatRelativeTime(session.updatedAt)}</small>}</span>
+                  <span className="session-text"><strong>{session.starred === true ? <Star className="session-star" size={11} fill="currentColor" aria-hidden="true" /> : null}<span>{sessionLabel(session.name, session.preview)}</span></strong>{isSessionRunning(session) ? null : <small>{formatRelativeTime(session.updatedAt)}</small>}</span>
                   {sessionAttentionLabel(session) === undefined ? null : <span className={`sidebar-activity attention-${session.attentionState ?? "idle"} ${session.runState}`} role="status" aria-label={`${sessionAttentionLabel(session)}的会话`} />}
                 </button>)}
                 {window.hasMore ? <button type="button" className="session-expand-more" onClick={() => expandSessions(workspace.id)} aria-label="展开更多会话"><ChevronDown size={13} />展开更多会话</button> : null}

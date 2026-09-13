@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Folder, Loader2, Search, X } from "lucide-react";
+import { Folder, Loader2, Search, Star, X } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { formatRelativeTime, sessionLabel, sortSessionSummaries } from "../lib/utils";
 import { Dialog, DialogContent } from "./ui/dialog";
@@ -85,7 +85,7 @@ export function SessionSearchDialog(props: SessionSearchDialogProps) {
               <button type="button" key={`${workspace.id}:${session.id}`} className="session-search-row" onClick={() => select(workspace.id, session.id)}>
                 <span className="session-search-head">
                   <span className="session-search-workspace"><Folder size={12} aria-hidden="true" />{workspace.label}</span>
-                  <strong>{sessionLabel(session.name, session.preview)}</strong>
+                  <strong>{session.starred === true ? <Star className="session-star" size={11} fill="currentColor" aria-hidden="true" /> : null}<span>{sessionLabel(session.name, session.preview)}</span></strong>
                   <time>{formatRelativeTime(session.updatedAt)}</time>
                 </span>
                 {session.matchSnippet === undefined ? null : <small className="session-search-snippet">{session.matchSnippet}</small>}

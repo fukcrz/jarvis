@@ -89,6 +89,11 @@ describe("session cleanup targets", () => {
     const items = [idle("idle-1"), running("run-1"), idle("idle-2")];
     expect(ids(sessionCleanupTargets(items))).toEqual(["idle-1", "idle-2"]);
   });
+
+  it("keeps starred idle sessions", () => {
+    const items = [idle("idle-1"), { ...idle("starred-1"), starred: true }, running("run-1")];
+    expect(ids(sessionCleanupTargets(items))).toEqual(["idle-1"]);
+  });
 });
 
 describe("session list window", () => {

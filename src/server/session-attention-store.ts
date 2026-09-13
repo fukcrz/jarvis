@@ -6,12 +6,14 @@ export interface SessionSortMeta {
   attentionState: SessionAttentionState;
   attentionAt?: string;
   lastUserMessageAt?: string;
+  starred?: boolean;
 }
 
 interface PersistedSessionMeta {
   attentionState?: Exclude<SessionAttentionState, "idle">;
   attentionAt?: string;
   lastUserMessageAt?: string;
+  starred?: true;
 }
 
 interface PersistedAttentionFile {
@@ -47,9 +49,11 @@ export class SessionAttentionStore {
       const current = data.sessions[entryKey] ?? {};
       // Running / waiting are reconstructed from the live session and must not survive a restart.
       if (state !== "completed_unread" && state !== "failed") {
-        const next: PersistedSessionMeta = {};
-        if (current.lastUserMessageAt !== undefined) next.lastUserMessageAt = current.lastUserMessageAt;
-        if (Object.keys(next).length === 0) delete data.sessions[entryKey];
+        const next = compactPersistedMeta({
+          ...(current.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: current.lastUserMessageAt }),
+          ...(current.starred === true ? { starred: true } : {}),
+        });
+        if (next === undefined) delete data.sessions[entryKey];
         else data.sessions[entryKey] = next;
         return;
       }
@@ -61,6 +65,24 @@ export class SessionAttentionStore {
     await this.update((data) => {
       const entryKey = key(ref);
       data.sessions[entryKey] = { ...data.sessions[entryKey], lastUserMessageAt: at };
+    });
+  }
+
+  async setStarred(ref: SessionRef, starred: boolean): Promise<void> {
+    await this.update((data) => {
+      const entryKey = key(ref);
+      const current = data.sessions[entryKey] ?? {};
+      if (starred) {
+        data.sessions[entryKey] = { ...current, starred: true };
+        return;
+      }
+      const next = compactPersistedMeta({
+        ...(current.attentionState === undefined ? {} : { attentionState: current.attentionState }),
+        ...(current.attentionAt === undefined ? {} : { attentionAt: current.attentionAt }),
+        ...(current.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: current.lastUserMessageAt }),
+      });
+      if (next === undefined) delete data.sessions[entryKey];
+      else data.sessions[entryKey] = next;
     });
   }
 
@@ -116,7 +138,12 @@ function metaFromPersisted(entry: PersistedSessionMeta | undefined): SessionSort
     attentionState: entry.attentionState ?? "idle",
     ...(entry.attentionAt === undefined ? {} : { attentionAt: entry.attentionAt }),
     ...(entry.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: entry.lastUserMessageAt }),
+    ...(entry.starred === true ? { starred: true } : {}),
   };
+}
+
+function compactPersistedMeta(entry: PersistedSessionMeta): PersistedSessionMeta | undefined {
+  return Object.keys(entry).length === 0 ? undefined : entry;
 }
 
 function migratePersistedFile(value: unknown): PersistedAttentionFile | undefined {
@@ -137,6 +164,7 @@ function migratePersistedEntry(value: unknown): PersistedSessionMeta | undefined
   const next: PersistedSessionMeta = {};
   const lastUserMessageAt = stringTime(item["lastUserMessageAt"]);
   if (lastUserMessageAt !== undefined) next.lastUserMessageAt = lastUserMessageAt;
+  if (item["starred"] === true) next.starred = true;
   const state = item["attentionState"] ?? item["state"];
   if (state === "completed_unread" || state === "failed") {
     next.attentionState = state;

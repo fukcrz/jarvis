@@ -694,6 +694,16 @@ export function App() {
     setPageError(undefined);
   };
 
+  const toggleSessionStarred = async (target: { workspaceId: string; session: SessionSummary }) => {
+    try {
+      const session = await api.setSessionStarred({ workspaceId: target.workspaceId, sessionId: target.session.id }, target.session.starred !== true);
+      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session) }));
+      setPageError(undefined);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "无法更新收藏");
+    }
+  };
+
   const renameSession = async () => {
     const target = renameTarget;
     if (target === undefined) return;
@@ -1184,7 +1194,10 @@ export function App() {
         </section>}
       </div> : null}
 
-      {sessionMenu === undefined ? null : <SessionContextMenu target={sessionMenu} onClose={closeSessionMenu} onFork={(target) => {
+      {sessionMenu === undefined ? null : <SessionContextMenu target={sessionMenu} onClose={closeSessionMenu} onStar={(target) => {
+        setSessionMenu(undefined);
+        void toggleSessionStarred({ workspaceId: target.workspaceId, session: target.session });
+      }} onFork={(target) => {
         setSessionMenu(undefined);
         void forkSessionFromTarget({ workspaceId: target.workspaceId, sessionId: target.session.id });
       }} onRename={(target) => {
@@ -1220,7 +1233,10 @@ export function App() {
       }} onRemoveProject={(workspace) => {
         setMobileActionTarget(undefined);
         setProjectRemoveTarget(workspace);
-      }} cleanupDisabled={mobileActionTarget?.kind === "project" && sessionCleanupTargets(sessionsByWorkspace[mobileActionTarget.workspace.id] ?? [], keepSessionIdFor(mobileActionTarget.workspace.id)).length === 0} onRenameSession={(targetWorkspaceId, session) => {
+      }} cleanupDisabled={mobileActionTarget?.kind === "project" && sessionCleanupTargets(sessionsByWorkspace[mobileActionTarget.workspace.id] ?? [], keepSessionIdFor(mobileActionTarget.workspace.id)).length === 0} onStarSession={(targetWorkspaceId, session) => {
+        setMobileActionTarget(undefined);
+        void toggleSessionStarred({ workspaceId: targetWorkspaceId, session });
+      }} onRenameSession={(targetWorkspaceId, session) => {
         setMobileActionTarget(undefined);
         setRenameTarget({ workspaceId: targetWorkspaceId, session });
         setRenameValue(session.name ?? sessionLabel(session.name, session.preview));
@@ -1278,8 +1294,8 @@ function withoutSession(current: SessionSummary[], sessionId: string): SessionSu
 function sessionCleanupConfirmMessage(workspace: Workspace | undefined, sessions: SessionSummary[], keepSessionId?: string): string {
   const count = sessionCleanupTargets(sessions, keepSessionId).length;
   const label = workspace?.label ?? "";
-  if (keepSessionId !== undefined) return `「${label}」将永久删除 ${String(count)} 个闲置会话，当前会话与执行中的会话会保留。不可恢复。`;
-  return `「${label}」将永久删除 ${String(count)} 个闲置会话，执行中的会话会保留。不可恢复。`;
+  if (keepSessionId !== undefined) return `「${label}」将永久删除 ${String(count)} 个闲置会话，当前会话、执行中的会话与收藏会话会保留。不可恢复。`;
+  return `「${label}」将永久删除 ${String(count)} 个闲置会话，执行中的会话与收藏会话会保留。不可恢复。`;
 }
 
 function withoutDraft(current: Record<string, string>, sessionId: string): Record<string, string> {
@@ -1300,7 +1316,9 @@ function mergeSession(current: SessionSummary[], next: SessionSummary): SessionS
   const existing = current.findIndex((session) => session.id === next.id);
   if (existing === -1) return sortSessionSummaries([next, ...current]);
   const copy = [...current];
-  copy[existing] = { ...copy[existing], ...next };
+  const merged = { ...copy[existing], ...next };
+  if (next.starred !== true) delete merged.starred;
+  copy[existing] = merged;
   return sortSessionSummaries(copy);
 }
 

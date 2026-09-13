@@ -26,7 +26,10 @@ const directoryQuery = z.object({ path: z.string().min(1).optional(), roots: z.e
 const fileSearchQuery = z.object({ query: z.string().max(160).optional() }).strict();
 const workspacePathQuery = z.object({ path: z.string().max(2000).optional() }).strict();
 const workspaceEntryQuery = z.object({ path: z.string().min(1).max(2000) }).strict();
-const sessionNameInput = z.object({ name: z.string().min(1).max(120) }).strict();
+const sessionPatchInput = z.object({
+  name: z.string().min(1).max(120).optional(),
+  starred: z.boolean().optional(),
+}).strict().refine((value) => value.name !== undefined || value.starred !== undefined, { message: "name or starred is required" });
 const sessionCleanupInput = z.object({ keepSessionId: z.string().uuid().optional() }).strict();
 const modelInput = z.object({ provider: z.string().min(1).max(160), modelId: z.string().min(1).max(320) }).strict();
 const thinkingInput = z.object({ level: z.enum(THINKING_LEVELS) }).strict();
@@ -361,8 +364,8 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   });
   app.patch("/api/workspaces/:workspaceId/sessions/:sessionId", async (request) => {
     const ref = sessionRef(request.params);
-    const body = sessionNameInput.parse(request.body);
-    return { session: await sessions.rename(ref, body.name) };
+    const body = sessionPatchInput.parse(request.body);
+    return { session: await sessions.patch(ref, body) };
   });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/viewed", async (request) => ({ session: await sessions.markViewed(sessionRef(request.params)) }));
   app.delete("/api/workspaces/:workspaceId/sessions/:sessionId", async (request) => {
