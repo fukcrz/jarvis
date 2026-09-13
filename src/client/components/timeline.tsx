@@ -807,7 +807,7 @@ export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
 }
 
 /** 短过程旁白；更长的助手文本不当旁白，避免把整段汇报收进工具组。 */
-export const ACTIVITY_NARRATION_MAX_CHARS = 60;
+export const ACTIVITY_NARRATION_MAX_CHARS = 100;
 
 export function isShortAssistantNarration(item: MessageTimelineItem): boolean {
   if (item.role !== "assistant") return false;
