@@ -33,7 +33,6 @@ export function LoginPage({ assistantName, onAuthenticated }: LoginPageProps) {
       <span className="login-mark"><ShieldCheck size={16} /></span>
       <div className="login-heading">
         <h1>{assistantName}</h1>
-        <p>请输入访问密码继续</p>
       </div>
       <label className="login-field">
         <span>密码</span>
@@ -41,7 +40,6 @@ export function LoginPage({ assistantName, onAuthenticated }: LoginPageProps) {
           autoFocus
           type="password"
           autoComplete="current-password"
-          placeholder="访问密码"
           value={password}
           onChange={(event) => { setPassword(event.target.value); setError(undefined); }}
         />

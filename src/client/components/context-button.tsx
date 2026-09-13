@@ -23,7 +23,7 @@ export function ContextButton({ contextUsage, disabled, busy, onCompact }: Conte
   const [open, setOpen] = useState(false);
   const percent = contextUsage?.percent ?? null;
   const tone = usageTone(percent);
-  const label = percent === null ? "查看上下文详情" : `上下文已使用 ${Math.round(percent)}%（点击查看详情）`;
+  const label = percent === null ? "上下文" : `上下文已使用 ${Math.round(percent)}%`;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -44,7 +44,6 @@ export function ContextButton({ contextUsage, disabled, busy, onCompact }: Conte
             <div><span>窗口</span><strong>{formatTokens(contextUsage?.contextWindow ?? 0)}</strong></div>
             <div><span>占用</span><strong>{percent === null ? "—" : `${Math.round(percent)}%`}</strong></div>
           </div>
-          <p className="context-dialog-hint">{usageHint(percent)}</p>
           <Button variant="default" className="context-compact" disabled={disabled || busy} onClick={() => { setOpen(false); onCompact(); }}>
             {busy ? <LoaderCircle className="spin" size={14} /> : <Archive size={14} />}
             {busy ? "运行中无法压缩" : "压缩上下文"}
@@ -75,13 +74,6 @@ function usageTone(percent: number | null): UsageTone {
   if (percent < 60) return "ok";
   if (percent < 85) return "warm";
   return "hot";
-}
-
-function usageHint(percent: number | null): string {
-  if (percent === null) return "当前无法估算上下文使用量。";
-  if (percent < 60) return "上下文使用正常。";
-  if (percent < 85) return "上下文接近上限，建议压缩以继续长任务。";
-  return "上下文即将耗尽，建议立即压缩。";
 }
 
 function formatTokens(tokens: number): string {

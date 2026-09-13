@@ -393,14 +393,12 @@ function RunFailureCard({ failure, onRetryCompaction }: { failure: NonNullable<S
   const occurredAt = formatFailureTime(failure.occurredAt);
   const requestId = requestIdFromMessage(failure.message);
   const title = compactionFailed ? "上下文压缩未完成" : "本次任务未完成";
-  const summary = compactionFailed
-    ? "压缩没有生成可用摘要，任务已停止。"
-    : "任务已停止，可以查看诊断信息后继续操作。";
+  const summary = compactionFailed ? "压缩没有生成可用摘要，任务已停止。" : undefined;
 
   return <article className="timeline-event run-failure" role="alert">
     <button className="timeline-event-summary run-failure-header" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
       <span className="run-failure-icon"><CircleAlert size={16} /></span>
-      <span className="run-failure-copy"><strong>{title}</strong><span>{summary}</span></span>
+      <span className="run-failure-copy"><strong>{title}</strong>{summary === undefined ? null : <span>{summary}</span>}</span>
     </button>
     {open ? <div className="run-failure-diagnostics">
       <dl>
@@ -481,7 +479,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, highli
         {images.length === 0 ? null : <div className="message-images" aria-label="消息图片">
           {images.map((image, index) => <ImagePreview key={`${image.mimeType}:${index}`} src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`}><button type="button" className="message-image-thumb" aria-label={`预览图片 ${String(index + 1)}`}><img src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`} loading="lazy" /></button></ImagePreview>)}
         </div>}
-        {editing ? <div className="message-inline-editor"><textarea autoFocus value={draft} disabled={submitting} aria-label="编辑消息" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancelEdit(); } if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitEdit(); } }} /><div className="message-inline-editor-actions"><button type="button" disabled={submitting} onClick={onCancelEdit}>取消</button><button type="button" className="accent" disabled={submitting || (draft.trim() === "" && images.length === 0)} onClick={() => { void submitEdit(); }}>{submitting ? "正在重新生成…" : "重新生成"}</button></div><small>发送后将从此消息重新生成后续回答 · Ctrl / Cmd + Enter 提交</small></div> : item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
+        {editing ? <div className="message-inline-editor"><textarea autoFocus value={draft} disabled={submitting} aria-label="编辑消息" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancelEdit(); } if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitEdit(); } }} /><div className="message-inline-editor-actions"><button type="button" disabled={submitting} onClick={onCancelEdit}>取消</button><button type="button" className="accent" disabled={submitting || (draft.trim() === "" && images.length === 0)} onClick={() => { void submitEdit(); }}>{submitting ? "正在重新生成…" : "重新生成"}</button></div><small>发送后将从此消息重新生成后续回答</small></div> : item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
           <MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} interactiveFiles={item.role === "assistant" && !streaming} />
         </div>}
         {editing ? null : <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : onStartEdit} onFork={onFork} />}
@@ -643,7 +641,6 @@ function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimeli
     {request.method === "select" ? null : <div className="extension-interaction-actions">
       {request.method === "confirm" ? <><button type="button" disabled={submitting} onClick={() => respond({ confirmed: false })}>拒绝</button><button type="button" className="accent" disabled={submitting} onClick={() => respond({ confirmed: true })}>{submitting ? "正在处理…" : "允许"}</button></> : <><button type="button" disabled={submitting} onClick={() => respond({ cancelled: true })}>取消</button><button type="button" className="accent" disabled={submitting} onClick={() => respond({ value })}>{submitting ? "正在提交…" : request.method === "editor" ? "提交修改" : "提交"}</button></>}
     </div>}
-    {request.method === "editor" ? <small className="extension-interaction-hint">按 Ctrl / Cmd + Enter 提交</small> : null}
   </article>;
 }
 

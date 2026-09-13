@@ -344,7 +344,7 @@ export function FileBrowser({ workspaces, workspaceId, onWorkspaceChange, onBack
         document.body.classList.add("file-browser-resizing");
       }} />
       <main className="file-browser-main">
-        {preview !== undefined ? <FilePreview state={preview} onBack={closePreview} onCopy={(value, message) => { void copy(value, message); }} /> : <div className="file-browser-empty file-browser-preview-empty"><FileCode2 size={30} /><h2>选择一个文件</h2><p>左侧目录中的文件会在这里预览。</p></div>}
+        {preview !== undefined ? <FilePreview state={preview} onBack={closePreview} onCopy={(value, message) => { void copy(value, message); }} /> : <div className="file-browser-empty file-browser-preview-empty"><FileCode2 size={30} /><h2>选择一个文件</h2></div>}
       </main>
     </div>
     <Dialog open={workspacePickerOpen} onOpenChange={setWorkspacePickerOpen}>
@@ -432,7 +432,7 @@ export function FilePreviewBody({ state, url }: { state: FilePreviewState; url: 
     case "table":
       return <TablePreview text={state.content?.content ?? ""} name={state.name} />;
     case "unsupported":
-      return <div className="file-browser-empty file-preview-unsupported"><FileQuestion size={30} /><h2>暂不支持预览</h2><p>该文件类型无法在浏览器中直接展示，可以下载后使用本机应用打开。</p></div>;
+      return <div className="file-browser-empty file-preview-unsupported"><FileQuestion size={30} /><h2>暂不支持预览</h2></div>;
     default:
       return <CodePreview text={state.content?.content ?? ""} path={state.path} className="file-preview-code" lineClassName="file-preview-line" />;
   }

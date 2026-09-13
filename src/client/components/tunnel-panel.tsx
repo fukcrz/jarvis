@@ -6,9 +6,9 @@ import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 
 const TUNNEL_METHODS: Array<{ id: TunnelMethod; name: string; description: string }> = [
-  { id: "cloudflared", name: "Cloudflare 隧道", description: "无需账号，自动下载 cloudflared" },
-  { id: "sish", name: "自建 SSH (sish)", description: "自有服务器，子域名 + 自动 HTTPS" },
-  { id: "frp", name: "frp", description: "自有 frps 服务器" },
+  { id: "cloudflared", name: "Cloudflare 隧道", description: "无需账号" },
+  { id: "sish", name: "自建 SSH (sish)", description: "自有 SSH" },
+  { id: "frp", name: "frp", description: "自有 frps" },
 ];
 
 const STATE_META: Record<TunnelState, { label: string; className: string; busy?: boolean }> = {
@@ -154,7 +154,7 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
               <label className="settings-field"><span>frps 服务器</span><input value={tunnel.frp.server} disabled /></label>
               <label className="settings-field"><span>远程端口</span><input value={String(tunnel.frp.remotePort ?? "（同本地）")} disabled /></label>
               {caddySnippet === "" ? null : <div className="tunnel-caddy">
-                <div className="tunnel-caddy-head"><span>HTTPS 建议（Caddyfile）：</span><Button variant="ghost" size="sm" onClick={() => { void copyText(caddySnippet, "caddy"); }}>{copied === "caddy" ? <Check size={13} /> : <Copy size={13} />}复制</Button></div>
+                <div className="tunnel-caddy-head"><span>Caddyfile</span><Button variant="ghost" size="sm" onClick={() => { void copyText(caddySnippet, "caddy"); }}>{copied === "caddy" ? <Check size={13} /> : <Copy size={13} />}复制</Button></div>
                 <pre>{caddySnippet}</pre>
               </div>}
             </div> : null}
@@ -164,7 +164,7 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
           ...(tunnel.name === undefined ? {} : { name: tunnel.name }),
           ...(tunnel.sish === undefined ? {} : { sish: tunnel.sish }),
           ...(tunnel.frp === undefined ? {} : { frp: tunnel.frp }),
-        })); }} /><span>自动启动（服务启动时自动连接，默认关闭）</span></label>
+        })); }} /><span>自动启动</span></label>
             {tunnel.logs.length === 0 ? null : <TunnelLogView logs={tunnel.logs} />}
           </div> : null}
         </article>;
@@ -259,22 +259,20 @@ function TunnelEditor({ open, tunnel, busy, onClose, onSave }: { open: boolean; 
           <strong>{item.name}</strong><small>{item.description}</small>
         </button>)}
       </div>
-      <label className="settings-field"><span>显示名称（可选）</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="如 演示用 Cloudflare" /></label>
+      <label className="settings-field"><span>显示名称</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
       {method === "sish" ? <div className="tunnel-config-fields">
-        <label className="settings-field"><span>服务器地址（user@host 或 host）</span><input value={sishServer} onChange={(event) => setSishServer(event.target.value)} placeholder="如 user@tun.example.com" /></label>
-        <label className="settings-field"><span>子域名（可选，留空随机分配）</span><input value={sishSubdomain} onChange={(event) => setSishSubdomain(event.target.value)} placeholder="如 myjarvis → https://myjarvis.example.com" /></label>
-        <label className="settings-field"><span>服务器 SSH 端口（默认 22）</span><input type="number" min={1} max={65535} value={sishSshPort} onChange={(event) => setSishSshPort(event.target.value)} /></label>
-        <p className="settings-muted">服务端建议部署开源 sish（docker 一条命令 + DNS 泛解析 *.你的域名 → 服务器），自动签发 HTTPS 证书、按子域名转发。官方托管 tuns.sh 为 pico+ 付费订阅（$2/月），自部署免费。</p>
+        <label className="settings-field"><span>服务器地址</span><input value={sishServer} onChange={(event) => setSishServer(event.target.value)} placeholder="user@host" /></label>
+        <label className="settings-field"><span>子域名（留空随机）</span><input value={sishSubdomain} onChange={(event) => setSishSubdomain(event.target.value)} /></label>
+        <label className="settings-field"><span>SSH 端口（默认 22）</span><input type="number" min={1} max={65535} value={sishSshPort} onChange={(event) => setSishSshPort(event.target.value)} /></label>
       </div> : null}
       {method === "frp" ? <div className="tunnel-config-fields">
-        <label className="settings-field"><span>frps 服务器地址（host:port）</span><input value={frpServer} onChange={(event) => setFrpServer(event.target.value)} placeholder="如 1.2.3.4:7000" /></label>
-        <label className="settings-field"><span>token</span><input type="password" value={frpToken} onChange={(event) => setFrpToken(event.target.value)} placeholder="frps 的 auth.token" /></label>
-        <label className="settings-field"><span>远程端口（默认与本地端口相同）</span><input type="number" min={1} max={65535} value={frpRemotePort} onChange={(event) => setFrpRemotePort(event.target.value)} /></label>
-        <label className="settings-field"><span>域名（可选，用于生成 Caddy HTTPS 配置）</span><input value={frpDomain} onChange={(event) => setFrpDomain(event.target.value)} placeholder="如 jarvis.example.com" /></label>
-        {caddySnippet === "" ? null : <div className="tunnel-caddy"><div className="tunnel-caddy-head"><span>HTTPS 建议：VPS 上装 Caddy（自动签发/续期 Let's Encrypt 证书），Caddyfile 内容：</span></div><pre>{caddySnippet}</pre></div>}
-        <p className="settings-muted">frp 本身不支持自动证书，域名 + Caddy 是标准 HTTPS 方案。</p>
+        <label className="settings-field"><span>frps 服务器</span><input value={frpServer} onChange={(event) => setFrpServer(event.target.value)} placeholder="host:port" /></label>
+        <label className="settings-field"><span>token</span><input type="password" value={frpToken} onChange={(event) => setFrpToken(event.target.value)} /></label>
+        <label className="settings-field"><span>远程端口（留空同本地）</span><input type="number" min={1} max={65535} value={frpRemotePort} onChange={(event) => setFrpRemotePort(event.target.value)} /></label>
+        <label className="settings-field"><span>域名</span><input value={frpDomain} onChange={(event) => setFrpDomain(event.target.value)} /></label>
+        {caddySnippet === "" ? null : <div className="tunnel-caddy"><div className="tunnel-caddy-head"><span>Caddyfile</span></div><pre>{caddySnippet}</pre></div>}
       </div> : null}
-      <label className="settings-checkbox"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>自动启动（服务启动时自动连接，默认关闭）</span></label>
+      <label className="settings-checkbox"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>自动启动</span></label>
       <div className="dialog-actions">
         <Button variant="secondary" onClick={onClose}>取消</Button>
         <Button disabled={busy || !formValid} onClick={() => onSave(buildInput(), tunnel?.id)}><Check size={14} />{busy ? "保存中…" : tunnel === undefined ? "添加" : "保存"}</Button>

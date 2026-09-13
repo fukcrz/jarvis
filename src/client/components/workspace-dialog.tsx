@@ -65,7 +65,7 @@ export function WorkspaceDialog(props: WorkspaceDialogProps) {
           {directory !== undefined && directory.entries.length === 0 ? <p className="directory-empty">没有子目录</p> : null}
         </div>
         <footer className="directory-selection">
-          <div><strong>{directory?.name}</strong><span>{directory?.isRootPicker === true ? "选择磁盘以浏览其中的文件夹" : directory?.path}</span>{directory?.isGitRepository ? <small>Git 仓库</small> : null}</div>
+          <div><strong>{directory?.name}</strong>{directory?.isRootPicker === true ? null : <span>{directory?.path}</span>}{directory?.isGitRepository ? <small>Git 仓库</small> : null}</div>
           <Button onClick={() => { void add(); }} disabled={directory === undefined || directory.isRootPicker || pending}><FolderPlus size={16} /> 选择此文件夹</Button>
         </footer>
       </section>

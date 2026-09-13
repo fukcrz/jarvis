@@ -1275,7 +1275,7 @@ export function App() {
 
       <Dialog open={forkTarget !== undefined} onOpenChange={(open) => { if (!open && !forkPending) setForkTarget(undefined); }}>
         <DialogContent title="创建会话分支">
-          <p className="delete-session-message">确定要从这条消息创建分支吗？原会话不会受到影响。</p>
+          <p className="delete-session-message">原会话不会受到影响。</p>
           <div className="dialog-actions">
             <Button variant="secondary" onClick={() => setForkTarget(undefined)} disabled={forkPending}>取消</Button>
             <Button className="fork-confirm-button" onClick={() => { void confirmForkMessage(); }} disabled={forkPending}>{forkPending ? "正在创建…" : "创建分支"}</Button>

@@ -449,7 +449,7 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
         </div>}
         <div className="composer-footer">
           <div className="composer-options">
-            <Tooltip label={attachDisabled ? "当前模型不支持图片" : "添加图片（支持 Ctrl+V 粘贴）"}>
+            <Tooltip label={attachDisabled ? "当前模型不支持图片" : "添加图片"}>
               <Button variant="ghost" className="composer-attach" size="icon" aria-label="添加图片" disabled={attachDisabled} onClick={openAttach}><Plus size={16} /></Button>
             </Tooltip>
             {controls}
@@ -457,7 +457,7 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
           <div className="composer-actions">
             {onCancelEdit === undefined ? null : <Tooltip label="取消编辑"><Button variant="ghost" className="composer-cancel-edit" size="icon" aria-label="取消编辑" onClick={onCancelEdit}><X size={15} /></Button></Tooltip>}
             {canSend ? (
-              <Tooltip label={busy ? "排队为后续消息（全部完成后投递）" : "发送消息"}>
+              <Tooltip label={busy ? "排队为后续消息" : "发送消息"}>
                 <Button className="composer-send" size="icon" aria-label={busy ? "排队为后续消息" : "发送消息"} onClick={() => { void submit(); }}><ArrowUp size={17} /></Button>
               </Tooltip>
             ) : busy ? (
@@ -490,8 +490,8 @@ function QueueBar({ queue, onDequeueAll, onRemoveQueued, onToggleKind }: { queue
         <span className="composer-queue-kind">{message.kind === "followUp" ? "后续" : "插队"}</span>
         <span className="composer-queue-text" title={message.text}>{preview(message)}</span>
         <span className="composer-queue-actions">
-          <Tooltip label="撤回编辑（恢复到输入框）"><button type="button" className="composer-queue-action" aria-label="撤回编辑" onClick={() => { onRemoveQueued(message.id, true); }}><RotateCcw size={12} /></button></Tooltip>
-          <Tooltip label={message.kind === "followUp" ? "设为紧急（插队，当前回合后投递）" : "取消紧急（改为后续，全部完成后投递）"}>
+          <Tooltip label="撤回编辑"><button type="button" className="composer-queue-action" aria-label="撤回编辑" onClick={() => { onRemoveQueued(message.id, true); }}><RotateCcw size={12} /></button></Tooltip>
+          <Tooltip label={message.kind === "followUp" ? "设为紧急" : "取消紧急"}>
             <button type="button" className={`composer-queue-action${message.kind === "steer" ? " urgent" : ""}`} aria-label={message.kind === "followUp" ? "设为紧急" : "取消紧急"} onClick={() => { onToggleKind(message.id); }}><Zap size={12} /></button>
           </Tooltip>
           <Tooltip label="删除此排队消息"><button type="button" className="composer-queue-action" aria-label="删除此消息" onClick={() => { onRemoveQueued(message.id, false); }}><X size={12} /></button></Tooltip>
