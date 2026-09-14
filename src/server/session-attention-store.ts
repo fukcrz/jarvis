@@ -87,7 +87,14 @@ export class SessionAttentionStore {
   }
 
   async remove(ref: SessionRef): Promise<void> {
-    await this.update((data) => { delete data.sessions[key(ref)]; });
+    await this.removeMany([ref]);
+  }
+
+  async removeMany(refs: SessionRef[]): Promise<void> {
+    if (refs.length === 0) return;
+    await this.update((data) => {
+      for (const ref of refs) delete data.sessions[key(ref)];
+    });
   }
 
   async flush(): Promise<void> {

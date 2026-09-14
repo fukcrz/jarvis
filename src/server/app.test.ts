@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { AgentSession } from "@earendil-works/pi-coding-agent";
+import { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "./app.js";
@@ -1151,6 +1151,25 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const remaining = (await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` })).json() as { sessions: Array<{ id: string; starred?: boolean }> };
     expect(remaining.sessions.map((session) => session.id).sort()).toEqual([keep.id, starred.id].sort());
     expect(remaining.sessions.find((session) => session.id === starred.id)?.starred).toBe(true);
+  });
+
+  it("cleans idle sessions without rereading every transcript", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "cleanup-scan-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath, label: "Cleanup scan" } })).json<{ workspace: { id: string } }>().workspace;
+    const keep = await writeConversationSession(workspacePath);
+    const idleA = await writeConversationSession(workspacePath);
+    const idleB = await writeConversationSession(workspacePath);
+    const listSpy = vi.spyOn(SessionManager, "list");
+
+    const cleaned = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/cleanup`, payload: { keepSessionId: keep.id } });
+    expect(cleaned.statusCode).toBe(200);
+    expect(listSpy).not.toHaveBeenCalled();
+    expect((cleaned.json() as { removed: string[] }).removed.sort()).toEqual([idleA.id, idleB.id].sort());
+
+    const remaining = (await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` })).json() as { sessions: Array<{ id: string }> };
+    expect(remaining.sessions.map((session) => session.id)).toEqual([keep.id]);
   });
 
   it("serves tool images from an opened session without inlining bytes in the timeline", async () => {

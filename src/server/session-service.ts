@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { rm, stat } from "node:fs/promises";
+import { open, readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import {
@@ -340,6 +340,54 @@ export class SessionService {
   }
 
   async remove(ref: SessionRef): Promise<void> {
+    await this.deleteSession(ref);
+    await this.attention.remove(ref);
+  }
+
+  async cleanup(workspaceId: string, keepSessionId?: string): Promise<SessionCleanupResult> {
+    const workspace = this.workspaces.get(workspaceId);
+    const files = await listSessionFiles(workspace);
+    const pathById = new Map(files.map((file) => [file.id, file.path]));
+    const sortMeta = await this.attention.list(workspaceId);
+    const candidates = new Set(pathById.keys());
+    for (const active of this.active.values()) {
+      if (active.ref.workspaceId === workspaceId) candidates.add(active.ref.sessionId);
+    }
+
+    const removed: string[] = [];
+    const skipped: SessionCleanupResult["skipped"] = [];
+    const removedRefs: SessionRef[] = [];
+    for (const sessionId of candidates) {
+      if (sessionId === keepSessionId) continue;
+      const ref = { workspaceId, sessionId };
+      const active = this.active.get(activeKey(ref));
+      if (active?.starred === true || sortMeta.get(sessionId)?.starred === true) continue;
+      if (active !== undefined && this.isBusy(active)) {
+        skipped.push({ id: sessionId, reason: "busy" });
+        continue;
+      }
+      try {
+        await this.deleteSession(ref, pathById.get(sessionId) ?? active?.session.sessionFile);
+        removed.push(sessionId);
+        removedRefs.push(ref);
+      } catch (error) {
+        if (error instanceof AppError && error.code === "SESSION_BUSY") {
+          skipped.push({ id: sessionId, reason: "busy" });
+          continue;
+        }
+        if (error instanceof AppError && error.code === "SESSION_NOT_FOUND") {
+          removed.push(sessionId);
+          removedRefs.push(ref);
+          continue;
+        }
+        skipped.push({ id: sessionId, reason: "error" });
+      }
+    }
+    await this.attention.removeMany(removedRefs);
+    return { removed, skipped };
+  }
+
+  private async deleteSession(ref: SessionRef, knownPath?: string): Promise<void> {
     return this.withSessionTransition(ref, async () => {
       const key = activeKey(ref);
       if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is already being deleted", 409);
@@ -351,60 +399,28 @@ export class SessionService {
         if (pending !== undefined) await pending.catch(() => undefined);
 
         const active = this.active.get(key);
-        if (active !== undefined && (active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming)) {
+        if (active !== undefined && this.isBusy(active)) {
           throw new AppError("SESSION_BUSY", "Stop the current run before deleting this session", 409);
         }
 
-        const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
-        const listed = sessionDir === undefined
-          ? await SessionManager.list(workspace.cwd)
-          : await SessionManager.list(workspace.cwd, sessionDir);
-        const match = listed.find((entry) => entry.id === ref.sessionId);
-        if (match === undefined && active === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+        const path = knownPath ?? active?.session.sessionFile ?? await findSessionFile(workspace, ref.sessionId);
+        if (path === undefined && active === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
 
-        if (active !== undefined) {
-          await this.disposeActive(active, "quit");
-        }
+        if (active !== undefined) await this.disposeActive(active, "quit");
 
-        if (match !== undefined) {
+        if (path !== undefined) {
           try {
-            await rm(match.path);
-          } catch (error) {
-            if (isMissingFile(error)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+            await rm(path, { force: true });
+          } catch {
             throw new AppError("SESSION_DELETE_FAILED", "Unable to delete session history", 500);
           }
         }
 
-        await this.attention.remove(ref);
         this.events.publishWorkspace(ref.workspaceId, { version: 1, type: "session.deleted", workspaceId: ref.workspaceId, sessionId: ref.sessionId });
       } finally {
         this.deleting.delete(key);
       }
     });
-  }
-
-  async cleanup(workspaceId: string, keepSessionId?: string): Promise<SessionCleanupResult> {
-    const summaries = await this.list(workspaceId);
-    const removed: string[] = [];
-    const skipped: SessionCleanupResult["skipped"] = [];
-    for (const summary of summaries) {
-      if (summary.id === keepSessionId || summary.starred === true) continue;
-      try {
-        await this.remove({ workspaceId, sessionId: summary.id });
-        removed.push(summary.id);
-      } catch (error) {
-        if (error instanceof AppError && error.code === "SESSION_BUSY") {
-          skipped.push({ id: summary.id, reason: "busy" });
-          continue;
-        }
-        if (error instanceof AppError && error.code === "SESSION_NOT_FOUND") {
-          removed.push(summary.id);
-          continue;
-        }
-        skipped.push({ id: summary.id, reason: "error" });
-      }
-    }
-    return { removed, skipped };
   }
 
   async timeline(ref: SessionRef, before?: number, limit = PAGE_LIMIT): Promise<TimelinePage> {
@@ -1894,6 +1910,65 @@ function readSessionDir(path: string): string | undefined {
 function resolveConfiguredSessionDir(value: string, baseDir: string): string {
   const expanded = value === "~" ? homedir() : value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
   return isAbsolute(expanded) ? resolve(expanded) : resolve(baseDir, expanded);
+}
+
+function defaultSessionDir(cwd: string, agentDir: string): string {
+  const encoded = `--${resolve(cwd).replace(/^[\\/]/, "").replace(/[\\/:]/g, "-")}--`;
+  return join(agentDir, "sessions", encoded);
+}
+
+function sessionFilesDirectory(workspace: Workspace): string {
+  return sessionDirectoryFor(workspace.cwd, getAgentDir()) ?? defaultSessionDir(workspace.cwd, getAgentDir());
+}
+
+function shouldFilterSessionCwd(workspace: Workspace, directory: string): boolean {
+  return sessionDirectoryFor(workspace.cwd, getAgentDir()) !== undefined && resolve(directory) !== resolve(defaultSessionDir(workspace.cwd, getAgentDir()));
+}
+
+async function listSessionFiles(workspace: Workspace): Promise<Array<{ id: string; path: string }>> {
+  const directory = sessionFilesDirectory(workspace);
+  const filterCwd = shouldFilterSessionCwd(workspace, directory);
+  const resolvedCwd = resolve(workspace.cwd);
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (isMissingFile(error)) return [];
+    throw error;
+  }
+  const files = await Promise.all(names.filter((name) => name.endsWith(".jsonl")).map(async (name) => {
+    const path = join(directory, name);
+    const header = await readSessionFileHeader(path);
+    if (header === undefined) return undefined;
+    if (filterCwd && (header.cwd === undefined || header.cwd === "" || resolve(header.cwd) !== resolvedCwd)) return undefined;
+    return { id: header.id, path };
+  }));
+  return files.filter((file): file is { id: string; path: string } => file !== undefined);
+}
+
+async function findSessionFile(workspace: Workspace, sessionId: string): Promise<string | undefined> {
+  const files = await listSessionFiles(workspace);
+  return files.find((file) => file.id === sessionId)?.path;
+}
+
+const SESSION_HEADER_SCAN_BYTES = 64 * 1024;
+
+async function readSessionFileHeader(path: string): Promise<{ id: string; cwd?: string } | undefined> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, "r");
+    const buffer = Buffer.alloc(SESSION_HEADER_SCAN_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const newline = buffer.subarray(0, bytesRead).indexOf(0x0a);
+    if (newline <= 0) return undefined;
+    const parsed: unknown = JSON.parse(buffer.subarray(0, newline).toString("utf8"));
+    if (!isRecord(parsed) || parsed["type"] !== "session" || typeof parsed["id"] !== "string" || parsed["id"] === "") return undefined;
+    return { id: parsed["id"], ...(typeof parsed["cwd"] === "string" ? { cwd: parsed["cwd"] } : {}) };
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 async function sessionModifiedAt(sessionFile: string | undefined, fallback: string): Promise<string> {

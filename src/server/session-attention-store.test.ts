@@ -41,6 +41,18 @@ describe("SessionAttentionStore starring", () => {
     });
   });
 
+  it("removes many session records in one write", async () => {
+    const store = new SessionAttentionStore(directory);
+    const other = { workspaceId: ref.workspaceId, sessionId: "33333333-3333-4333-8333-333333333333" };
+    await store.setStarred(ref, true);
+    await store.setStarred(other, true);
+    await store.removeMany([ref, other]);
+    expect(JSON.parse(await readFile(join(directory, "jarvis-session-attention.json"), "utf8"))).toEqual({
+      version: 2,
+      sessions: {},
+    });
+  });
+
   it("reads a starred flag from existing files", async () => {
     await writeFile(join(directory, "jarvis-session-attention.json"), `${JSON.stringify({
       version: 2,
