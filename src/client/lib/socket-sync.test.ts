@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEvent, SessionSummary } from "../../shared/protocol";
 import {
+  clearIdleAttention,
   coalesceStreamEvents,
+  mergeSession,
   mergeSessionSnapshots,
   parseSocketHeartbeat,
+  sessionKey,
   shouldFlushStreamEventImmediately,
   shouldReconnectVisibleSocket,
   socketHeartbeatMessage,
+  touchViewedIdleKeys,
   SOCKET_PING_TYPE,
   SOCKET_PONG_TYPE,
   SOCKET_RECONNECT_COOLDOWN_MS,
@@ -131,5 +135,43 @@ describe("mergeSessionSnapshots", () => {
       { ws: new Set(["gone", "also-gone"]) },
     );
     expect(merged.ws?.map((item) => item.id)).toEqual(["keep"]);
+  });
+
+  it("keeps a just-viewed idle session idle when a stale completed snapshot arrives", () => {
+    const viewed = session("a", { runState: "idle", attentionState: "idle" });
+    const snapshot = session("a", { runState: "idle", attentionState: "completed_unread", attentionAt: "2026-01-02T00:00:00.000Z" });
+    const merged = mergeSessionSnapshots(
+      { ws: [viewed] },
+      { ws: [snapshot] },
+      ["ws"],
+      {},
+      new Set([sessionKey("ws", "a")]),
+    );
+    expect(merged.ws?.[0]).toMatchObject({ id: "a", attentionState: "idle" });
+    expect(merged.ws?.[0]?.attentionAt).toBeUndefined();
+  });
+});
+
+describe("session attention viewed idle", () => {
+  it("clears completed and failed dots on idle sessions", () => {
+    expect(clearIdleAttention(session("a", { attentionState: "completed_unread", attentionAt: "2026-01-02T00:00:00.000Z" }))).toMatchObject({ attentionState: "idle" });
+    expect(clearIdleAttention(session("a", { attentionState: "failed", attentionAt: "2026-01-02T00:00:00.000Z" })).attentionAt).toBeUndefined();
+    expect(clearIdleAttention(session("a", { runState: "running", attentionState: "running" })).attentionState).toBe("running");
+  });
+
+  it("does not restore completed unread after the user viewed an idle session", () => {
+    const current = [session("a", { attentionState: "idle" })];
+    const incoming = session("a", { attentionState: "completed_unread", attentionAt: "2026-01-02T00:00:00.000Z" });
+    const merged = mergeSession(current, incoming, new Set([sessionKey("ws", "a")]));
+    expect(merged[0]).toMatchObject({ id: "a", attentionState: "idle" });
+    expect(merged[0]?.attentionAt).toBeUndefined();
+  });
+
+  it("drops the viewed-idle guard when a new run starts", () => {
+    const keys = new Set([sessionKey("ws", "a")]);
+    touchViewedIdleKeys(keys, session("a", { runState: "running", attentionState: "running" }));
+    expect(keys.has(sessionKey("ws", "a"))).toBe(false);
+    const later = mergeSession([session("a")], session("a", { attentionState: "completed_unread" }), keys);
+    expect(later[0]?.attentionState).toBe("completed_unread");
   });
 });

@@ -25,8 +25,12 @@ import { Tooltip } from "./components/ui/tooltip";
 import { installBodyPointerEventsGuard, installTextSelectionGuard, installTouchFocusGuard } from "./lib/pointer-events";
 import { isSettingsPath, navigateBackOr } from "./lib/settings-routes";
 import {
+  clearIdleAttention,
+  mergeSession,
   mergeSessionSnapshots,
   parseSocketHeartbeat,
+  sessionKey,
+  touchViewedIdleKeys,
   shouldReconnectVisibleSocket,
   socketHeartbeatMessage,
   SOCKET_CLIENT_PING_INTERVAL_MS,
@@ -70,6 +74,7 @@ export function App() {
   // 会话列表基准快照可能晚于会话事件返回：快照在途时创建/删除的会话以事件流
   // 为准，应用快照时合并而非整体覆盖，避免新建的会话被陈旧快照抹掉。
   const deletedSessionsRef = useRef<Record<string, Set<string>>>({});
+  const viewedIdleKeysRef = useRef(new Set<string>());
   const [workspaceId, setWorkspaceId] = useState<string | undefined>(() => initialPath.workspaceId ?? window.localStorage.getItem("jarvis.workspace") ?? undefined);
   const [sessionsByWorkspace, setSessionsByWorkspace] = useState<Record<string, SessionSummary[]>>({});
   const [sessionId, setSessionId] = useState<string | undefined>(() => initialPath.sessionId ?? window.localStorage.getItem("jarvis.session") ?? undefined);
@@ -449,7 +454,7 @@ export function App() {
     let disposed = false;
     void loadProjectSessions(workspaces).then((sessions) => {
       if (disposed) return;
-      setSessionsByWorkspace((current) => mergeSessionSnapshots(current, sessions, workspaces.map((workspace) => workspace.id), deletedSessionsRef.current));
+      setSessionsByWorkspace((current) => mergeSessionSnapshots(current, sessions, workspaces.map((workspace) => workspace.id), deletedSessionsRef.current, viewedIdleKeysRef.current));
     }).catch((error: unknown) => {
       if (!disposed) setPageError(error instanceof Error ? error.message : "无法加载会话");
     });
@@ -566,7 +571,7 @@ export function App() {
       if (disposed || workspaces.length === 0) return;
       void loadProjectSessions(workspaces).then((sessions) => {
         if (disposed) return;
-        setSessionsByWorkspace((current) => mergeSessionSnapshots(current, sessions, workspaces.map((workspace) => workspace.id), deletedSessionsRef.current));
+        setSessionsByWorkspace((current) => mergeSessionSnapshots(current, sessions, workspaces.map((workspace) => workspace.id), deletedSessionsRef.current, viewedIdleKeysRef.current));
       }).catch(() => undefined);
     };
     const cleanups = workspaces.map((workspace) => {
@@ -650,6 +655,7 @@ export function App() {
             }
             if (workspaceEvent.type === "session.deleted") {
               (deletedSessionsRef.current[workspace.id] ??= new Set()).add(workspaceEvent.sessionId);
+              viewedIdleKeysRef.current.delete(sessionKey(workspace.id, workspaceEvent.sessionId));
               setSessionsByWorkspace((current) => {
                 const sessions = current[workspace.id] ?? [];
                 const next = withoutSession(sessions, workspaceEvent.sessionId);
@@ -659,7 +665,8 @@ export function App() {
               setSessionMenu((current) => current?.workspaceId === workspace.id && current.session.id === workspaceEvent.sessionId ? undefined : current);
               return;
             }
-            setSessionsByWorkspace((current) => ({ ...current, [workspace.id]: mergeSession(current[workspace.id] ?? [], workspaceEvent.session) }));
+            touchViewedIdleKeys(viewedIdleKeysRef.current, workspaceEvent.session);
+            setSessionsByWorkspace((current) => ({ ...current, [workspace.id]: mergeSession(current[workspace.id] ?? [], workspaceEvent.session, viewedIdleKeysRef.current) }));
           } catch {
             // A malformed workspace event does not invalidate the active view.
           }
@@ -736,14 +743,28 @@ export function App() {
     };
   }, [workspaces, loadProjectSessions]);
 
+  const applyViewedSession = useCallback((session: SessionSummary) => {
+    if (session.runState === "idle" && (session.attentionState === undefined || session.attentionState === "idle")) {
+      viewedIdleKeysRef.current.add(sessionKey(session.workspaceId, session.id));
+    } else {
+      viewedIdleKeysRef.current.delete(sessionKey(session.workspaceId, session.id));
+    }
+    setSessionsByWorkspace((current) => ({ ...current, [session.workspaceId]: mergeSession(current[session.workspaceId] ?? [], session, viewedIdleKeysRef.current) }));
+  }, []);
+
+  const markSessionViewed = useCallback((ref: SessionRef, optimistic?: SessionSummary) => {
+    if (optimistic !== undefined && optimistic.runState === "idle") {
+      applyViewedSession(clearIdleAttention(optimistic));
+    }
+    void api.markSessionViewed(ref).then((session) => {
+      applyViewedSession(session);
+    }).catch(() => undefined);
+  }, [applyViewedSession]);
+
   useEffect(() => {
     if (selectedRef === undefined || selectedRefKey === undefined) return;
-    let disposed = false;
-    void api.markSessionViewed(selectedRef).then((session) => {
-      if (disposed) return;
-      setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session) }));
-    }).catch(() => undefined);
-    return () => { disposed = true; };
+    // 只跟选中变化走；会话摘要更新（含关注态）不得反复 POST /viewed。
+    markSessionViewed(selectedRef, selectedSession);
   }, [selectedRefKey]);
 
   useEffect(() => {
@@ -769,14 +790,8 @@ export function App() {
     // Only clear completed/unread attention on an actual transition to idle.
     // session.updated itself changes the status object and must not re-enter this loop.
     if (status.runState !== "idle" || previous.key !== key || previous.runState === undefined || previous.runState === "idle") return;
-    const ref = selectedRef;
-    let disposed = false;
-    void api.markSessionViewed(ref).then((session) => {
-      if (disposed) return;
-      setSessionsByWorkspace((current) => ({ ...current, [ref.workspaceId]: mergeSession(current[ref.workspaceId] ?? [], session) }));
-    }).catch(() => undefined);
-    return () => { disposed = true; };
-  }, [stream.transcript.status, selectedRef, selectedRefKey]);
+    markSessionViewed(selectedRef, selectedSession === undefined ? undefined : { ...selectedSession, runState: "idle" });
+  }, [stream.transcript.status, selectedRef, selectedRefKey, markSessionViewed]);
 
   const createSession = async (targetWorkspaceId = workspaceId) => {
     if (targetWorkspaceId === undefined || creatingSessionWorkspacesRef.current.has(targetWorkspaceId)) return;
@@ -791,7 +806,7 @@ export function App() {
         setDrafts((current) => moveKeyedValue(current, draftSource.id, session.id));
         setAttachmentsBySession((current) => moveKeyedValue(current, draftSource.id, session.id));
       }
-      setSessionsByWorkspace((current) => ({ ...current, [targetWorkspaceId]: mergeSession(current[targetWorkspaceId] ?? [], session) }));
+      setSessionsByWorkspace((current) => ({ ...current, [targetWorkspaceId]: mergeSession(current[targetWorkspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
       setWorkspaceId(targetWorkspaceId);
       setSessionId(session.id);
@@ -848,7 +863,7 @@ export function App() {
   const toggleSessionStarred = async (target: { workspaceId: string; session: SessionSummary }) => {
     try {
       const session = await api.setSessionStarred({ workspaceId: target.workspaceId, sessionId: target.session.id }, target.session.starred !== true);
-      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session) }));
+      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       setPageError(undefined);
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "无法更新收藏");
@@ -860,7 +875,7 @@ export function App() {
     if (target === undefined) return;
     try {
       const session = await api.renameSession({ workspaceId: target.workspaceId, sessionId: target.session.id }, renameValue);
-      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session) }));
+      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       setRenameTarget(undefined);
       setPageError(undefined);
     } catch (error) {
@@ -991,7 +1006,7 @@ export function App() {
   const forkSessionFromTarget = async (target: { workspaceId: string; sessionId: string }) => {
     try {
       const session = await api.forkSession(target);
-      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session) }));
+      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       setPageError(undefined);
       setNewSessionFocusId(session.id);
       chooseSession(target.workspaceId, session.id);
@@ -1035,7 +1050,7 @@ export function App() {
       }
       setSessionsByWorkspace((current) => ({
         ...current,
-        [selectedRef.workspaceId]: markSessionUserActivity(current[selectedRef.workspaceId] ?? [], selectedRef.sessionId),
+        [selectedRef.workspaceId]: markSessionUserActivity(current[selectedRef.workspaceId] ?? [], selectedRef.sessionId, viewedIdleKeysRef.current),
       }));
       setPageError(undefined);
       return true;
@@ -1097,7 +1112,7 @@ export function App() {
       await api.editAndResend(selectedRef, message.id, text, clientRequestId, images);
       setSessionsByWorkspace((current) => ({
         ...current,
-        [selectedRef.workspaceId]: markSessionUserActivity(current[selectedRef.workspaceId] ?? [], selectedRef.sessionId),
+        [selectedRef.workspaceId]: markSessionUserActivity(current[selectedRef.workspaceId] ?? [], selectedRef.sessionId, viewedIdleKeysRef.current),
       }));
       setPageError(undefined);
       return true;
@@ -1121,7 +1136,7 @@ export function App() {
     setForkPending(true);
     try {
       const session = await api.forkSession(selectedRef, message.id);
-      setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session) }));
+      setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       setForkTarget(undefined);
       setPageError(undefined);
       setNewSessionFocusId(session.id);
@@ -1143,7 +1158,7 @@ export function App() {
       await api.bash(selectedRef, command, excludeFromContext, randomUUID());
       setSessionsByWorkspace((current) => ({
         ...current,
-        [selectedRef.workspaceId]: markSessionUserActivity(current[selectedRef.workspaceId] ?? [], selectedRef.sessionId),
+        [selectedRef.workspaceId]: markSessionUserActivity(current[selectedRef.workspaceId] ?? [], selectedRef.sessionId, viewedIdleKeysRef.current),
       }));
       setPageError(undefined);
       return true;
@@ -1247,6 +1262,8 @@ export function App() {
 
   const chooseSession = (nextWorkspaceId: string, nextSessionId: string) => {
     setExpandedWorkspaceIds((current) => ({ ...current, [nextWorkspaceId]: true }));
+    const current = (sessionsByWorkspace[nextWorkspaceId] ?? []).find((session) => session.id === nextSessionId);
+    markSessionViewed({ workspaceId: nextWorkspaceId, sessionId: nextSessionId }, current);
     const target = `/chat/${nextWorkspaceId}/${nextSessionId}`;
     if (!isMobile) {
       // Desktop: session selection never enters the history.
@@ -1464,21 +1481,13 @@ function moveKeyedValue<T>(current: Record<string, T>, fromId: string, toId: str
   return next;
 }
 
-function markSessionUserActivity(sessions: SessionSummary[], sessionId: string): SessionSummary[] {
+function markSessionUserActivity(sessions: SessionSummary[], sessionId: string, viewedIdleKeys?: Set<string>): SessionSummary[] {
   const at = new Date().toISOString();
-  return sortSessionSummaries(sessions.map((session) => session.id === sessionId
-    ? { ...session, runState: "running" as const, attentionState: "running" as const, attentionAt: at, lastUserMessageAt: at, updatedAt: at }
-    : session));
-}
-
-function mergeSession(current: SessionSummary[], next: SessionSummary): SessionSummary[] {
-  const existing = current.findIndex((session) => session.id === next.id);
-  if (existing === -1) return sortSessionSummaries([next, ...current]);
-  const copy = [...current];
-  const merged = { ...copy[existing], ...next };
-  if (next.starred !== true) delete merged.starred;
-  copy[existing] = merged;
-  return sortSessionSummaries(copy);
+  return sortSessionSummaries(sessions.map((session) => {
+    if (session.id !== sessionId) return session;
+    viewedIdleKeys?.delete(sessionKey(session.workspaceId, session.id));
+    return { ...session, runState: "running" as const, attentionState: "running" as const, attentionAt: at, lastUserMessageAt: at, updatedAt: at };
+  }));
 }
 
 function mergeWorkspace(current: Workspace[], next: Workspace): Workspace[] {

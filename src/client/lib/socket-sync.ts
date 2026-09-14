@@ -1,6 +1,8 @@
 import { isRecord, type SessionEvent, type SessionSummary } from "../../shared/protocol";
 import { sortSessionSummaries } from "../../shared/session-sort";
 
+const EMPTY_VIEWED_IDLE_KEYS: ReadonlySet<string> = new Set();
+
 export {
   parseSocketHeartbeat,
   SOCKET_HEARTBEAT_INTERVAL_MS,
@@ -71,6 +73,53 @@ export function coalesceStreamEvents(events: SessionEvent[]): SessionEvent[] {
   return result;
 }
 
+export function sessionKey(workspaceId: string, sessionId: string): string {
+  return `${workspaceId}:${sessionId}`;
+}
+
+/** 点开空闲会话后立刻去掉完成/失败圆点，不必等 /viewed 返回。 */
+export function clearIdleAttention(session: SessionSummary): SessionSummary {
+  if (session.runState !== "idle") return session;
+  if (session.attentionState === undefined || session.attentionState === "idle" || session.attentionState === "waiting_interaction") return session;
+  const next = { ...session, attentionState: "idle" as const };
+  delete next.attentionAt;
+  return next;
+}
+
+/**
+ * 用户刚把空闲会话标为已读后，迟到的 completed_unread / failed 不得盖回圆点。
+ * 新的 running / waiting 会清掉这个保护。
+ */
+export function shouldKeepViewedIdle(incoming: SessionSummary): boolean {
+  return incoming.runState === "idle"
+    && (incoming.attentionState === "completed_unread" || incoming.attentionState === "failed");
+}
+
+/** 新任务开始后，允许下一次完成/失败重新亮点。 */
+export function touchViewedIdleKeys(keys: Set<string>, incoming: SessionSummary): void {
+  const key = sessionKey(incoming.workspaceId, incoming.id);
+  if (!keys.has(key) || shouldKeepViewedIdle(incoming)) return;
+  if (incoming.runState !== "idle" || incoming.attentionState === "running" || incoming.attentionState === "waiting_interaction") {
+    keys.delete(key);
+  }
+}
+
+export function mergeSession(current: SessionSummary[], next: SessionSummary, viewedIdleKeys: ReadonlySet<string> = EMPTY_VIEWED_IDLE_KEYS): SessionSummary[] {
+  const keepViewedIdle = viewedIdleKeys.has(sessionKey(next.workspaceId, next.id)) && shouldKeepViewedIdle(next);
+  const incoming = keepViewedIdle ? { ...next, attentionState: "idle" as const } : next;
+  const existing = current.findIndex((session) => session.id === incoming.id);
+  if (existing === -1) {
+    if (keepViewedIdle) delete incoming.attentionAt;
+    return sortSessionSummaries([incoming, ...current]);
+  }
+  const copy = [...current];
+  const merged = { ...copy[existing], ...incoming };
+  if (incoming.starred !== true) delete merged.starred;
+  if (keepViewedIdle || incoming.attentionState === "idle") delete merged.attentionAt;
+  copy[existing] = merged;
+  return sortSessionSummaries(copy);
+}
+
 /**
  * HTTP 会话列表是权威快照；当前列表里尚未出现在快照中的项（刚创建、事件已到列表未到）保留。
  * 已标记删除的 id 两侧都丢掉。
@@ -80,6 +129,7 @@ export function mergeSessionSnapshots(
   snapshots: Record<string, SessionSummary[]>,
   workspaceIds: string[],
   deleted: Record<string, Set<string> | undefined>,
+  viewedIdleKeys: ReadonlySet<string> = EMPTY_VIEWED_IDLE_KEYS,
 ): Record<string, SessionSummary[]> {
   const next: Record<string, SessionSummary[]> = {};
   for (const workspaceId of workspaceIds) {
@@ -87,7 +137,7 @@ export function mergeSessionSnapshots(
     const byId = new Map<string, SessionSummary>();
     for (const session of snapshots[workspaceId] ?? []) {
       if (deletedIds?.has(session.id) === true) continue;
-      byId.set(session.id, session);
+      byId.set(session.id, applyViewedIdleGuard(session, viewedIdleKeys));
     }
     for (const session of current[workspaceId] ?? []) {
       if (byId.has(session.id) || deletedIds?.has(session.id) === true) continue;
@@ -95,5 +145,12 @@ export function mergeSessionSnapshots(
     }
     next[workspaceId] = sortSessionSummaries([...byId.values()]);
   }
+  return next;
+}
+
+function applyViewedIdleGuard(session: SessionSummary, viewedIdleKeys: ReadonlySet<string>): SessionSummary {
+  if (!viewedIdleKeys.has(sessionKey(session.workspaceId, session.id)) || !shouldKeepViewedIdle(session)) return session;
+  const next = { ...session, attentionState: "idle" as const };
+  delete next.attentionAt;
   return next;
 }
