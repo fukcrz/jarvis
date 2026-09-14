@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearTouchFocus, hasBlockingOverlay, installTouchFocusGuard, restoreBodyPointerEventsIfIdle } from "./pointer-events";
+import { clearTouchFocus, hasBlockingOverlay, installTextSelectionGuard, installTouchFocusGuard, restoreBodyPointerEventsIfIdle, setTextSelecting } from "./pointer-events";
 
 function fakeDocument(pointerEvents: string, overlay: boolean, overlayClass = "dialog-overlay"): Document {
   const overlayNode = overlay ? { className: overlayClass } : null;
@@ -167,5 +167,121 @@ describe("restoreBodyPointerEventsIfIdle", () => {
     const doc = fakeDocument("auto", false);
     expect(restoreBodyPointerEventsIfIdle(doc)).toBe(false);
     expect(doc.body.style.pointerEvents).toBe("auto");
+  });
+});
+
+function fakeClosestTarget(kind: "timeline" | "composer" | "other") {
+  return {
+    closest: (selector: string) => {
+      if (kind === "timeline" && selector === ".timeline") return {};
+      if (kind === "composer" && selector === ".chat-dock, .composer, .cm-editor") return {};
+      return null;
+    },
+  };
+}
+
+describe("installTextSelectionGuard", () => {
+  function harness() {
+    const listeners = new Map<string, Set<(event: Event) => void>>();
+    const viewListeners = new Map<string, Set<(event: Event) => void>>();
+    const classNames = new Set<string>();
+    const view = {
+      addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+        const set = viewListeners.get(type) ?? new Set();
+        set.add(listener as (event: Event) => void);
+        viewListeners.set(type, set);
+      },
+      removeEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+        viewListeners.get(type)?.delete(listener as (event: Event) => void);
+      },
+    };
+    const doc = {
+      documentElement: {
+        classList: {
+          contains: (name: string) => classNames.has(name),
+          toggle: (name: string, force?: boolean) => {
+            if (force === true) classNames.add(name);
+            else if (force === false) classNames.delete(name);
+            else if (classNames.has(name)) classNames.delete(name);
+            else classNames.add(name);
+          },
+        },
+      },
+      defaultView: view,
+      addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+        const set = listeners.get(type) ?? new Set();
+        set.add(listener as (event: Event) => void);
+        listeners.set(type, set);
+      },
+      removeEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
+        listeners.get(type)?.delete(listener as (event: Event) => void);
+      },
+    } as unknown as Document;
+    const dispatchDoc = (type: string, event: object) => {
+      for (const listener of listeners.get(type) ?? []) listener(event as Event);
+    };
+    const dispatchView = (type: string, event: object) => {
+      for (const listener of viewListeners.get(type) ?? []) listener(event as Event);
+    };
+    return {
+      selecting: () => classNames.has("text-selecting"),
+      dispatchDoc,
+      dispatchView,
+      uninstall: installTextSelectionGuard(doc),
+    };
+  }
+
+  it("disables overlays while dragging a selection on the timeline", () => {
+    const { selecting, dispatchDoc, dispatchView, uninstall } = harness();
+    dispatchDoc("pointerdown", { pointerId: 1, pointerType: "mouse", button: 0, target: fakeClosestTarget("timeline") });
+    expect(selecting()).toBe(true);
+    dispatchView("pointerup", { pointerId: 1 });
+    expect(selecting()).toBe(false);
+    uninstall();
+  });
+
+  it("does not disable overlays when pressing the composer", () => {
+    const { selecting, dispatchDoc, uninstall } = harness();
+    dispatchDoc("pointerdown", { pointerId: 1, pointerType: "mouse", button: 0, target: fakeClosestTarget("composer") });
+    expect(selecting()).toBe(false);
+    uninstall();
+  });
+
+  it("does not disable overlays when pressing outside the timeline", () => {
+    const { selecting, dispatchDoc, uninstall } = harness();
+    dispatchDoc("pointerdown", { pointerId: 1, pointerType: "mouse", button: 0, target: fakeClosestTarget("other") });
+    expect(selecting()).toBe(false);
+    uninstall();
+  });
+
+  it("clears the selecting lock on blur", () => {
+    const { selecting, dispatchDoc, dispatchView, uninstall } = harness();
+    dispatchDoc("pointerdown", { pointerId: 1, pointerType: "mouse", button: 0, target: fakeClosestTarget("timeline") });
+    expect(selecting()).toBe(true);
+    dispatchView("blur", {});
+    expect(selecting()).toBe(false);
+    uninstall();
+  });
+});
+
+describe("setTextSelecting", () => {
+  it("toggles the document class only when the state changes", () => {
+    const classNames = new Set<string>();
+    const doc = {
+      documentElement: {
+        classList: {
+          contains: (name: string) => classNames.has(name),
+          toggle: (name: string, force?: boolean) => {
+            if (force === true) classNames.add(name);
+            else classNames.delete(name);
+          },
+        },
+      },
+    } as unknown as Document;
+    expect(setTextSelecting(true, doc)).toBe(true);
+    expect(classNames.has("text-selecting")).toBe(true);
+    expect(setTextSelecting(true, doc)).toBe(false);
+    expect(setTextSelecting(false, doc)).toBe(true);
+    expect(classNames.has("text-selecting")).toBe(false);
   });
 });

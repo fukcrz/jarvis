@@ -9,6 +9,8 @@ const BLOCKING_OVERLAY_SELECTOR = [
 ].join(", ");
 const TOUCH_FOCUS_SELECTOR = 'a, button, summary, [role="button"]';
 const TEXT_ENTRY_SELECTOR = "input, textarea, select";
+const COMPOSER_SELECTOR = ".chat-dock, .composer, .cm-editor";
+const TEXT_SELECTING_CLASS = "text-selecting";
 const TOUCH_FOCUS_RETRY_MS = 32;
 
 export function hasBlockingOverlay(root: ParentNode = document): boolean {
@@ -33,6 +35,65 @@ export function installBodyPointerEventsGuard(doc: Document = document): () => v
     doc.removeEventListener("pointerdown", restore, true);
     view?.removeEventListener("focus", restore);
     doc.removeEventListener("visibilitychange", restore);
+  };
+}
+
+function isComposerTarget(target: EventTarget | null): boolean {
+  return asElement(target)?.closest(COMPOSER_SELECTOR) !== null;
+}
+
+function isTimelineTarget(target: EventTarget | null): boolean {
+  return asElement(target)?.closest(".timeline") !== null;
+}
+
+export function setTextSelecting(active: boolean, doc: Document = document): boolean {
+  const root = doc.documentElement;
+  const current = root.classList.contains(TEXT_SELECTING_CLASS);
+  if (active === current) return false;
+  root.classList.toggle(TEXT_SELECTING_CLASS, active);
+  return true;
+}
+
+/**
+ * 从时间线划选文字时，叠在消息上的输入框会吃掉 mouseup，浏览器一直停在选区拖动手势里。
+ * 按下后立刻关掉叠层命中，抬手或失焦后再恢复。
+ */
+export function installTextSelectionGuard(doc: Document = document): () => void {
+  const view = doc.defaultView;
+  if (view === null) return () => {};
+  const selecting = new Set<number>();
+  const sync = () => {
+    setTextSelecting(selecting.size > 0, doc);
+  };
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType !== "mouse" || event.button !== 0) return;
+    if (isComposerTarget(event.target) || !isTimelineTarget(event.target)) {
+      selecting.delete(event.pointerId);
+      sync();
+      return;
+    }
+    selecting.add(event.pointerId);
+    setTextSelecting(true, doc);
+  };
+  const onPointerEnd = (event: PointerEvent) => {
+    if (!selecting.delete(event.pointerId)) return;
+    sync();
+  };
+  const onBlur = () => {
+    selecting.clear();
+    setTextSelecting(false, doc);
+  };
+  doc.addEventListener("pointerdown", onPointerDown, true);
+  view.addEventListener("pointerup", onPointerEnd, true);
+  view.addEventListener("pointercancel", onPointerEnd, true);
+  view.addEventListener("blur", onBlur);
+  return () => {
+    doc.removeEventListener("pointerdown", onPointerDown, true);
+    view.removeEventListener("pointerup", onPointerEnd, true);
+    view.removeEventListener("pointercancel", onPointerEnd, true);
+    view.removeEventListener("blur", onBlur);
+    selecting.clear();
+    setTextSelecting(false, doc);
   };
 }
 

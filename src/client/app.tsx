@@ -22,7 +22,7 @@ import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
-import { installBodyPointerEventsGuard, installTouchFocusGuard } from "./lib/pointer-events";
+import { installBodyPointerEventsGuard, installTextSelectionGuard, installTouchFocusGuard } from "./lib/pointer-events";
 import { isSettingsPath, navigateBackOr } from "./lib/settings-routes";
 import {
   mergeSessionSnapshots,
@@ -288,9 +288,11 @@ export function App() {
   useEffect(() => {
     const restoreBodyPointerEvents = installBodyPointerEventsGuard();
     const removeTouchFocusGuard = installTouchFocusGuard();
+    const removeTextSelectionGuard = installTextSelectionGuard();
     return () => {
       restoreBodyPointerEvents();
       removeTouchFocusGuard();
+      removeTextSelectionGuard();
     };
   }, []);
 
@@ -1420,7 +1422,7 @@ export function App() {
       </Dialog>
       <Dialog open={sessionCleanupTarget !== undefined} onOpenChange={(open) => { if (!open && !sessionCleanupPending) setSessionCleanupTarget(undefined); }}>
         <DialogContent title="清理会话">
-          <p className="delete-session-message">{sessionCleanupConfirmMessage(sessionCleanupTarget, sessionsByWorkspace[sessionCleanupTarget?.id ?? ""] ?? [], sessionCleanupTarget === undefined ? undefined : keepSessionIdFor(sessionCleanupTarget.id))}</p>
+          <p className="delete-session-message">{sessionCleanupConfirmMessage(sessionsByWorkspace[sessionCleanupTarget?.id ?? ""] ?? [], sessionCleanupTarget === undefined ? undefined : keepSessionIdFor(sessionCleanupTarget.id))}</p>
           <div className="dialog-actions"><Button variant="secondary" onClick={() => setSessionCleanupTarget(undefined)} disabled={sessionCleanupPending}>取消</Button><Button variant="danger" onClick={() => { void cleanupProjectSessions(); }} disabled={sessionCleanupPending}>{sessionCleanupPending ? "正在清理…" : "清理会话"}</Button></div>
         </DialogContent>
       </Dialog>
@@ -1443,11 +1445,9 @@ function withoutSession(current: SessionSummary[], sessionId: string): SessionSu
   return next.length === current.length ? current : next;
 }
 
-function sessionCleanupConfirmMessage(workspace: Workspace | undefined, sessions: SessionSummary[], keepSessionId?: string): string {
+function sessionCleanupConfirmMessage(sessions: SessionSummary[], keepSessionId?: string): string {
   const count = sessionCleanupTargets(sessions, keepSessionId).length;
-  const label = workspace?.label ?? "";
-  if (keepSessionId !== undefined) return `「${label}」将永久删除 ${String(count)} 个闲置会话，当前会话、执行中的会话与收藏会话会保留。不可恢复。`;
-  return `「${label}」将永久删除 ${String(count)} 个闲置会话，执行中的会话与收藏会话会保留。不可恢复。`;
+  return `永久删除 ${String(count)} 个闲置会话，不可恢复。`;
 }
 
 function withoutDraft(current: Record<string, string>, sessionId: string): Record<string, string> {
