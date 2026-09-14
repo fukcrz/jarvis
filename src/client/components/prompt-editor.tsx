@@ -338,7 +338,7 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
     onCreateEditor: createEditor,
     minHeight: "76px",
     maxHeight: "220px",
-    theme: "dark",
+    theme: "none",
     basicSetup,
     extensions,
   });
