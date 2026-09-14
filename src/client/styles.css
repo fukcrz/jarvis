@@ -393,7 +393,9 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 /* mermaid 图形卡片：沿用代码块外框，头部多一个「源码/图形」切换 */
 .mermaid-block-actions { display: inline-flex; align-items: center; gap: 2px; }
 .mermaid-block-diagram { display: grid; place-items: center; overflow-x: auto; padding: 14px 12px; }
-.mermaid-block-diagram svg { max-width: 100%; height: auto; }
+.mermaid-block-diagram:focus { outline: none; }
+.mermaid-block-diagram:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+.mermaid-block-diagram svg { max-width: 100%; height: auto; cursor: zoom-in; }
 .mermaid-block-error { margin: 0; border-bottom: 1px solid rgb(255 255 255 / .06); background: var(--warm-soft); padding: 6px 12px; color: var(--warm); font-size: 11px; }
 /* highlight.js 语法高亮配色（消息与代码预览共用） */
 :is(.message-content, .code-preview) .hljs { color: #e4e4e7; background: transparent; }
@@ -897,8 +899,10 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .image-lightbox { position: fixed; z-index: 100; inset: 0; overflow: hidden; background: rgb(4 8 10 / .55); cursor: zoom-out; -webkit-backdrop-filter: blur(18px) saturate(1.1); backdrop-filter: blur(18px) saturate(1.1); }
 .image-lightbox:focus { outline: none; }
 .image-lightbox-stage { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; touch-action: none; }
-.image-lightbox-stage img { display: block; max-width: min(1100px, 94vw); max-height: 90vh; object-fit: contain; cursor: grab; user-select: none; box-shadow: 0 18px 60px rgb(0 0 0 / .55); }
-.image-lightbox-stage img.dragging { cursor: grabbing; }
+.image-lightbox-content { display: grid; place-items: center; max-width: min(1100px, 94vw); max-height: 90vh; cursor: grab; user-select: none; }
+.image-lightbox-content.dragging, .image-lightbox-content.dragging img { cursor: grabbing; }
+.image-lightbox-content img, .image-lightbox-diagram svg { display: block; width: auto; height: auto; max-width: min(1100px, 94vw); max-height: 90vh; object-fit: contain; pointer-events: none; user-select: none; box-shadow: 0 18px 60px rgb(0 0 0 / .55); }
+.image-lightbox-diagram { display: grid; place-items: center; background: var(--code); border-radius: 8px; padding: 18px; }
 .image-lightbox-controls { position: absolute; z-index: 1; bottom: max(18px, env(safe-area-inset-bottom)); left: 50%; display: flex; align-items: center; gap: 2px; transform: translateX(-50%); border: 1px solid var(--glass-border); border-radius: 999px; background: var(--glass-strong); padding: 4px; -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
 .image-lightbox-controls button { display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 50%; background: transparent; color: #e9e7f0; cursor: pointer; }
 .image-lightbox-controls button:focus-visible { background: rgb(255 255 255 / .1); color: var(--accent-strong); outline: none; }

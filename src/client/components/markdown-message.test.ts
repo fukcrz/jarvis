@@ -212,6 +212,8 @@ describe("MarkdownMessage", () => {
     expect(markup).toContain("复制");
     expect(markup).not.toContain("复制图");
     expect(markup).not.toContain("mermaid-block-diagram");
+    expect(markup).not.toContain("预览图形");
+    expect(markup).not.toContain("image-lightbox");
 
     const streaming = renderToStaticMarkup(createElement(MarkdownMessage, { text: "```mermaid\nflowchart LR\n  A --> B\n```", streaming: true }));
     expect(streaming).toContain('class="code-block mermaid-block"');

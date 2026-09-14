@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ImagePreview, clampScale, nextAngle, nextScale } from "./image-lightbox";
+import { DiagramLightboxContent, ImagePreview, clampScale, nextAngle, nextScale } from "./image-lightbox";
 
 describe("image lightbox transform helpers", () => {
   it("zooms by a fixed step and clamps to the 0.1x–5x range", () => {
@@ -35,3 +35,15 @@ describe("ImagePreview", () => {
     expect(markup).not.toContain("image-lightbox");
   });
 });
+
+describe("DiagramLightboxContent", () => {
+  it("wraps the rendered svg for the zoom overlay", () => {
+    const markup = renderToStaticMarkup(createElement(DiagramLightboxContent, {
+      svg: "<svg id=\"chart\"><g /></svg>",
+    }));
+    expect(markup).toContain("image-lightbox-diagram");
+    expect(markup).toContain('id="chart"');
+  });
+});
+
+

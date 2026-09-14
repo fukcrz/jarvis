@@ -29,9 +29,17 @@ interface DragState {
   startY: number;
   originX: number;
   originY: number;
-  /** 按下点在大图上时点空白不关闭；用标记记录，避免指针捕获改写 event.target。 */
+  /** 按下点在内容上时点空白不关闭；用标记记录，避免指针捕获改写 event.target。 */
   fromBackdrop: boolean;
   moved: boolean;
+}
+
+interface MediaLightboxProps {
+  label: string;
+  closeLabel: string;
+  rotatable?: boolean;
+  children: ReactNode;
+  onClose: () => void;
 }
 
 interface ImageLightboxProps {
@@ -40,11 +48,16 @@ interface ImageLightboxProps {
   onClose: () => void;
 }
 
+interface DiagramLightboxProps {
+  svg: string;
+  onClose: () => void;
+}
+
 /**
- * 图片预览浮层：缩放（滚轮 + 控件 + 双指）、拖拽平移、±90° 旋转，
+ * 媒体预览浮层：缩放（滚轮 + 控件 + 双指）、拖拽平移，可选 ±90° 旋转，
  * 点空白或 Esc 关闭。挂到 body 上，避免被消息 DOM 或滚动容器裁剪。
  */
-export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
+function MediaLightbox({ label, closeLabel, rotatable = false, children, onClose }: MediaLightboxProps) {
   useHistoryBackTrap(true, onClose);
   const [scale, setScale] = useState(1);
   const [angle, setAngle] = useState(0);
@@ -104,7 +117,7 @@ export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
         startY: event.clientY,
         originX: offset.x,
         originY: offset.y,
-        fromBackdrop: event.target === event.currentTarget,
+        fromBackdrop: !(event.target instanceof Element) || event.target.closest(".image-lightbox-content") === null,
         moved: false,
       };
       setDragging(true);
@@ -168,8 +181,9 @@ export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
     onClose();
   };
 
+  const rotation = rotatable ? ` rotate(${String(angle)}deg)` : "";
   return createPortal(
-    <div ref={overlayRef} className="image-lightbox" role="dialog" aria-modal="true" aria-label={alt === "" ? "图片预览" : alt} tabIndex={-1}>
+    <div ref={overlayRef} className="image-lightbox" role="dialog" aria-modal="true" aria-label={label} tabIndex={-1}>
       <div
         ref={stageRef}
         className="image-lightbox-stage"
@@ -179,24 +193,46 @@ export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
         onPointerCancel={handlePointerEnd}
         onClick={handleStageClick}
       >
-        <img
-          src={src}
-          alt={alt}
-          draggable={false}
-          className={dragging ? "dragging" : undefined}
-          style={{ transform: `translate(${String(offset.x)}px, ${String(offset.y)}px) scale(${String(scale)}) rotate(${String(angle)}deg)` }}
-        />
+        <div
+          className={`image-lightbox-content${dragging ? " dragging" : ""}`}
+          style={{ transform: `translate(${String(offset.x)}px, ${String(offset.y)}px) scale(${String(scale)})${rotation}` }}
+        >
+          {children}
+        </div>
       </div>
       <div className="image-lightbox-controls">
         <button type="button" aria-label="缩小" onClick={() => { setScale((current) => nextScale(current, -1)); }}><ZoomOut size={18} /></button>
         <button type="button" aria-label="放大" onClick={() => { setScale((current) => nextScale(current, 1)); }}><ZoomIn size={18} /></button>
-        <button type="button" aria-label="向左旋转 90 度" onClick={() => { setAngle((current) => nextAngle(current, -1)); }}><RotateCcw size={18} /></button>
-        <button type="button" aria-label="向右旋转 90 度" onClick={() => { setAngle((current) => nextAngle(current, 1)); }}><RotateCw size={18} /></button>
-        <button type="button" aria-label="关闭图片预览" onClick={onClose}><X size={18} /></button>
+        {rotatable ? <>
+          <button type="button" aria-label="向左旋转 90 度" onClick={() => { setAngle((current) => nextAngle(current, -1)); }}><RotateCcw size={18} /></button>
+          <button type="button" aria-label="向右旋转 90 度" onClick={() => { setAngle((current) => nextAngle(current, 1)); }}><RotateCw size={18} /></button>
+        </> : null}
+        <button type="button" aria-label={closeLabel} onClick={onClose}><X size={18} /></button>
       </div>
     </div>,
     document.body,
   );
+}
+
+/**
+ * 图片预览浮层：缩放、拖拽、旋转，点空白或 Esc 关闭。
+ */
+export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
+  const label = alt === "" ? "图片预览" : alt;
+  return <MediaLightbox label={label} closeLabel="关闭图片预览" rotatable onClose={onClose}>
+    <img src={src} alt={alt} draggable={false} />
+  </MediaLightbox>;
+}
+
+export function DiagramLightboxContent({ svg }: { svg: string }) {
+  return <div className="image-lightbox-diagram" dangerouslySetInnerHTML={{ __html: svg }} />;
+}
+
+/** mermaid SVG 全屏预览：缩放、拖拽，不旋转。 */
+export function DiagramLightbox({ svg, onClose }: DiagramLightboxProps) {
+  return <MediaLightbox label="图形预览" closeLabel="关闭图形预览" onClose={onClose}>
+    <DiagramLightboxContent svg={svg} />
+  </MediaLightbox>;
 }
 
 interface ImagePreviewProps {

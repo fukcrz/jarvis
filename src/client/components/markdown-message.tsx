@@ -37,7 +37,7 @@ const rehypePlugins: PluggableList = [[rehypeSanitize, sanitizeSchema], rehypeHi
 const urlTransform = (url: string): string =>
   /^data:image\//i.test(url) || localFilePathFromHref(url) !== undefined ? url : defaultUrlTransform(url);
 
-import { ImagePreview } from "./image-lightbox";
+import { DiagramLightbox, ImagePreview } from "./image-lightbox";
 import { LocalTextFileLink } from "./text-file-preview";
 
 interface MarkdownMessageProps {
@@ -277,6 +277,7 @@ function MermaidBlock({ code }: { code: string }) {
   const [svg, setSvg] = useState<string>();
   const [failed, setFailed] = useState(false);
   const [showSource, setShowSource] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copiedDiagram, setCopiedDiagram] = useState(false);
 
@@ -315,8 +316,18 @@ function MermaidBlock({ code }: { code: string }) {
     </div>
     {!failed ? null : <p className="mermaid-block-error" role="status">图形渲染失败，已显示源码</p>}
     {diagram && !showSource
-      ? <div className="mermaid-block-diagram" dangerouslySetInnerHTML={{ __html: svg }} />
+      ? <div
+        className="mermaid-block-diagram"
+        role="button"
+        tabIndex={0}
+        aria-label="预览图形"
+        onClick={(event) => { if ((event.target as Element).closest("svg") !== null) setPreviewOpen(true); }}
+        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setPreviewOpen(true); } }}
+      >
+        <div dangerouslySetInnerHTML={{ __html: svg }} />
+      </div>
       : <pre><code>{code}</code></pre>}
+    {previewOpen && svg !== undefined ? <DiagramLightbox svg={svg} onClose={() => setPreviewOpen(false)} /> : null}
   </div>;
 }
 
