@@ -1,5 +1,5 @@
 import { isRecord, type SessionEvent, type SessionSummary } from "../../shared/protocol";
-import { sortSessionSummaries } from "../../shared/session-sort";
+import { isEmptySession, sortSessionSummaries } from "../../shared/session-sort";
 
 const EMPTY_VIEWED_IDLE_KEYS: ReadonlySet<string> = new Set();
 
@@ -121,8 +121,8 @@ export function mergeSession(current: SessionSummary[], next: SessionSummary, vi
 }
 
 /**
- * HTTP 会话列表是权威快照；当前列表里尚未出现在快照中的项（刚创建、事件已到列表未到）保留。
- * 已标记删除的 id 两侧都丢掉。
+ * HTTP 会话列表是权威快照；当前列表里尚未出现在快照中的非空项（刚创建、事件已到列表未到）保留。
+ * 空草稿不落盘，快照没有则丢掉，避免幽灵新会话。已标记删除的 id 两侧都丢掉。
  */
 export function mergeSessionSnapshots(
   current: Record<string, SessionSummary[]>,
@@ -141,6 +141,7 @@ export function mergeSessionSnapshots(
     }
     for (const session of current[workspaceId] ?? []) {
       if (byId.has(session.id) || deletedIds?.has(session.id) === true) continue;
+      if (isEmptySession(session)) continue;
       byId.set(session.id, session);
     }
     next[workspaceId] = sortSessionSummaries([...byId.values()]);

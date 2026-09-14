@@ -114,7 +114,7 @@ describe("mergeSessionSnapshots", () => {
   it("lets the HTTP snapshot overwrite live fields and keeps unsynced local sessions", () => {
     const local = session("a", { runState: "running", attentionState: "running", starred: true });
     const snapshot = session("a", { runState: "idle", attentionState: "completed_unread" });
-    const created = session("b", { runState: "running", attentionState: "running" });
+    const created = session("b", { preview: "just created", runState: "running", attentionState: "running" });
     const merged = mergeSessionSnapshots(
       { ws: [local, created] },
       { ws: [snapshot] },
@@ -125,6 +125,18 @@ describe("mergeSessionSnapshots", () => {
     expect(merged.ws?.[0]).toMatchObject({ id: "a", runState: "idle", attentionState: "completed_unread" });
     expect(merged.ws?.[0]?.starred).toBeUndefined();
     expect(merged.ws?.[1]).toMatchObject({ id: "b", runState: "running" });
+  });
+
+  it("drops empty drafts that are missing from the HTTP snapshot", () => {
+    const ghost = session("ghost");
+    const keep = session("keep", { preview: "hello" });
+    const merged = mergeSessionSnapshots(
+      { ws: [ghost, keep] },
+      { ws: [keep] },
+      ["ws"],
+      {},
+    );
+    expect(merged.ws?.map((item) => item.id)).toEqual(["keep"]);
   });
 
   it("drops sessions marked deleted on either side", () => {

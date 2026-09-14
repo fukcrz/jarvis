@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError, isSessionConflict } from "./api";
+import { api, ApiError, isSessionConflict, isSessionMissing } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -214,6 +214,12 @@ describe("API client", () => {
     expect(isSessionConflict(new ApiError("RUN_NOT_ACTIVE", "settled", 409))).toBe(true);
     expect(isSessionConflict(new ApiError("MODEL_NOT_AVAILABLE", "conflict", 409))).toBe(false);
     expect(isSessionConflict(new ApiError("SESSION_BUSY", "busy", 500))).toBe(false);
+  });
+
+  it("treats a missing session as already gone", () => {
+    expect(isSessionMissing(new ApiError("SESSION_NOT_FOUND", "Session not found", 404))).toBe(true);
+    expect(isSessionMissing(new ApiError("FILE_NOT_FOUND", "File not found", 404))).toBe(false);
+    expect(isSessionMissing(new ApiError("SESSION_NOT_FOUND", "Session not found", 409))).toBe(false);
   });
 
   it("sends Fork and edit-and-resend message operations to their session endpoints", async () => {

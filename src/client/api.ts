@@ -59,6 +59,11 @@ export function isSessionConflict(error: unknown): error is ApiError {
     && (error.code === "SESSION_BUSY" || error.code === "RUN_NOT_ACTIVE");
 }
 
+/** Empty drafts are memory-only; a 404 here means the slot is already gone. */
+export function isSessionMissing(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 404 && error.code === "SESSION_NOT_FOUND";
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers);
   if (options?.body !== undefined && options.body !== null && !headers.has("content-type")) headers.set("content-type", "application/json");

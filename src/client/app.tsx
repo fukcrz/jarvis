@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, Bell, ChevronDown, CircleAlert, Folder, FolderPlus, MoreVertical, Pencil, Plus, Puzzle, X } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
-import { api, isSessionConflict, notifyUnauthorized, socketUrl } from "./api";
+import { api, isSessionConflict, isSessionMissing, notifyUnauthorized, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
 import { ThinkingSelector } from "./components/thinking-selector";
@@ -793,56 +793,64 @@ export function App() {
     markSessionViewed(selectedRef, selectedSession === undefined ? undefined : { ...selectedSession, runState: "idle" });
   }, [stream.transcript.status, selectedRef, selectedRefKey, markSessionViewed]);
 
+  const forgetEmptyDrafts = async (targetWorkspaceId: string, extras: SessionSummary[]) => {
+    if (extras.length === 0) return;
+    const removed: string[] = [];
+    let removeFailed = false;
+    for (const old of extras) {
+      try {
+        await api.removeSession({ workspaceId: targetWorkspaceId, sessionId: old.id });
+        removed.push(old.id);
+      } catch (error) {
+        if (isSessionMissing(error)) removed.push(old.id);
+        else removeFailed = true;
+      }
+    }
+    if (removed.length > 0) {
+      const deleted = deletedSessionsRef.current[targetWorkspaceId] ??= new Set();
+      for (const id of removed) deleted.add(id);
+      setSessionsByWorkspace((current) => {
+        let sessions = current[targetWorkspaceId] ?? [];
+        for (const id of removed) sessions = withoutSession(sessions, id);
+        return { ...current, [targetWorkspaceId]: sessions };
+      });
+    }
+    if (removeFailed) setPageError("无法刷新会话");
+  };
+
+  const openCreatedSession = (targetWorkspaceId: string, nextSessionId: string) => {
+    setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
+    setPageError(undefined);
+    setNewSessionFocusId(nextSessionId);
+    const target = `/chat/${targetWorkspaceId}/${nextSessionId}`;
+    if (location.pathname === target) return;
+    if (!isMobile) {
+      navigate(target, { replace: true });
+      return;
+    }
+    if (mobilePage === "sessions") {
+      navigate(target);
+      return;
+    }
+    navigate(target, { replace: true });
+  };
+
   const createSession = async (targetWorkspaceId = workspaceId) => {
     if (targetWorkspaceId === undefined || creatingSessionWorkspacesRef.current.has(targetWorkspaceId)) return;
 
     const existingEmpties = (sessionsByWorkspace[targetWorkspaceId] ?? []).filter((session) => isEmptySession(session));
-    const draftSource = existingEmpties.find((session) => session.id === sessionId) ?? existingEmpties[0];
+    const reusable = existingEmpties.find((session) => session.id === sessionId) ?? existingEmpties[0];
+    if (reusable !== undefined) {
+      openCreatedSession(targetWorkspaceId, reusable.id);
+      void forgetEmptyDrafts(targetWorkspaceId, existingEmpties.filter((session) => session.id !== reusable.id));
+      return;
+    }
 
     creatingSessionWorkspacesRef.current.add(targetWorkspaceId);
     try {
       const session = await api.createSession(targetWorkspaceId);
-      if (draftSource !== undefined) {
-        setDrafts((current) => moveKeyedValue(current, draftSource.id, session.id));
-        setAttachmentsBySession((current) => moveKeyedValue(current, draftSource.id, session.id));
-      }
       setSessionsByWorkspace((current) => ({ ...current, [targetWorkspaceId]: mergeSession(current[targetWorkspaceId] ?? [], session, viewedIdleKeysRef.current) }));
-      setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
-      setWorkspaceId(targetWorkspaceId);
-      setSessionId(session.id);
-      setPageError(undefined);
-      setNewSessionFocusId(session.id);
-      const target = `/chat/${targetWorkspaceId}/${session.id}`;
-      if (!isMobile) {
-        navigate(target, { replace: true });
-      } else if (mobilePage === "sessions") {
-        // Mobile page-level move: global session list -> chat.
-        navigate(target);
-      } else {
-        navigate(target, { replace: true });
-      }
-      if (existingEmpties.length > 0) {
-        const removed: string[] = [];
-        let removeFailed = false;
-        for (const old of existingEmpties) {
-          try {
-            await api.removeSession({ workspaceId: targetWorkspaceId, sessionId: old.id });
-            removed.push(old.id);
-          } catch {
-            removeFailed = true;
-          }
-        }
-        if (removed.length > 0) {
-          const deleted = deletedSessionsRef.current[targetWorkspaceId] ??= new Set();
-          for (const id of removed) deleted.add(id);
-          setSessionsByWorkspace((current) => {
-            let sessions = current[targetWorkspaceId] ?? [];
-            for (const id of removed) sessions = withoutSession(sessions, id);
-            return { ...current, [targetWorkspaceId]: sessions };
-          });
-        }
-        if (removeFailed) setPageError("无法刷新会话");
-      }
+      openCreatedSession(targetWorkspaceId, session.id);
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "无法创建会话");
     } finally {
@@ -1471,13 +1479,6 @@ function withoutDraft(current: Record<string, string>, sessionId: string): Recor
   if (!(sessionId in current)) return current;
   const next = { ...current };
   delete next[sessionId];
-  return next;
-}
-
-function moveKeyedValue<T>(current: Record<string, T>, fromId: string, toId: string): Record<string, T> {
-  if (!(fromId in current) || fromId === toId) return current;
-  const next = { ...current, [toId]: current[fromId]! };
-  delete next[fromId];
   return next;
 }
 
