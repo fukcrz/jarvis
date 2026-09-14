@@ -14,7 +14,13 @@ import { Tooltip } from "./ui/tooltip";
 const basicSetup: BasicSetupOptions = { lineNumbers: false, foldGutter: false, highlightActiveLine: false };
 // Module-level so the array identity never changes; a new identity per render
 // would make useCodeMirror reconfigure (and effectively reset) the editor.
-const editorExtensions: Extension[] = [CodeMirrorView.lineWrapping];
+const editorExtensions: Extension[] = [
+  CodeMirrorView.lineWrapping,
+  CodeMirrorView.theme({
+    ".cm-content": { caretColor: "#fff" },
+    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#fff" },
+  }),
+];
 
 type Completion =
   | { kind: "command"; command: ComposerCommand }
