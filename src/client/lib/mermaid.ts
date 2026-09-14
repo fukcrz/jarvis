@@ -4,12 +4,32 @@
  */
 let mermaidPromise: Promise<typeof import("mermaid").default> | undefined;
 
+const RENDER_ATTEMPTS = 3;
+let renderQueue: Promise<void> = Promise.resolve();
+
+function enqueueRender<T>(task: () => Promise<T>): Promise<T> {
+  const run = renderQueue.then(task, task);
+  renderQueue = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+function waitForPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    const schedule = globalThis.requestAnimationFrame ?? ((callback: (time: number) => void) => {
+      globalThis.setTimeout(() => callback(0), 0);
+    });
+    schedule(() => resolve());
+  });
+}
+
 /** 按需加载并初始化 mermaid：安全级别维持 strict（内置 DOMPurify，图形源码不能注入脚本）。 */
 async function loadMermaid(): Promise<typeof import("mermaid").default> {
   mermaidPromise ??= import("mermaid").then(({ default: mermaid }) => {
+    mermaid.startOnLoad = false;
     mermaid.initialize({
       startOnLoad: false,
       securityLevel: "strict",
+      suppressErrorRendering: true,
       theme: "base",
       fontFamily: "system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei UI', sans-serif",
       themeVariables: {
@@ -50,12 +70,23 @@ const XLINK_NS = "http://www.w3.org/1999/xlink";
 const EXPORT_BACKGROUND = "#0b0d14";
 const MAX_EXPORT_EDGE = 4096;
 
-/** 把 mermaid 源码渲染成 SVG 字符串；源码非法时抛错，交由调用方退回源码展示。 */
+/** 把 mermaid 源码渲染成 SVG 字符串。瞬时失败会排队重试；源码非法时仍抛错，交由调用方退回源码展示。 */
 export async function renderMermaidDiagram(code: string): Promise<string> {
-  const mermaid = await loadMermaid();
-  diagramCounter += 1;
-  const { svg } = await mermaid.render(`jarvis-mermaid-${String(diagramCounter)}`, code);
-  return svg;
+  return enqueueRender(async () => {
+    const mermaid = await loadMermaid();
+    let lastError: unknown;
+    for (let attempt = 0; attempt < RENDER_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) await waitForPaint();
+      try {
+        diagramCounter += 1;
+        const { svg } = await mermaid.render(`jarvis-mermaid-${String(diagramCounter)}`, code);
+        return svg;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  });
 }
 
 /** 补齐导出所需的 SVG 命名空间，去掉 XML 声明。 */

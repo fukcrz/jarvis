@@ -1,5 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { prepareMermaidSvgForExport, writeDiagramClipboard } from "./mermaid";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareMermaidSvgForExport, renderMermaidDiagram, writeDiagramClipboard } from "./mermaid";
+
+const mermaid = vi.hoisted(() => ({
+  startOnLoad: true,
+  initialize: vi.fn(),
+  render: vi.fn(),
+}));
+
+vi.mock("mermaid", () => ({
+  default: mermaid,
+}));
 
 describe("prepareMermaidSvgForExport", () => {
   it("adds svg namespaces and strips the xml declaration", () => {
@@ -58,5 +68,54 @@ describe("writeDiagramClipboard", () => {
     });
     await expect(writeDiagramClipboard("<svg />", new Blob(["png"], { type: "image/png" }))).resolves.toBe("svg");
     expect(writeText).toHaveBeenCalledWith("<svg />");
+  });
+});
+
+describe("renderMermaidDiagram", () => {
+  beforeEach(() => {
+    mermaid.startOnLoad = true;
+    mermaid.initialize.mockClear();
+    mermaid.render.mockReset();
+    vi.stubGlobal("requestAnimationFrame", (callback: (time: number) => void) => {
+      callback(0);
+      return 1;
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("retries a transient render failure then returns svg", async () => {
+    mermaid.render
+      .mockRejectedValueOnce(new Error("svg element not in render tree"))
+      .mockResolvedValueOnce({ svg: "<svg id=\"ok\" />" });
+    await expect(renderMermaidDiagram("flowchart TD\\n  A --> B")).resolves.toBe("<svg id=\"ok\" />");
+    expect(mermaid.startOnLoad).toBe(false);
+    expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({
+      startOnLoad: false,
+      suppressErrorRendering: true,
+    }));
+    expect(mermaid.render).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws after repeated render failures", async () => {
+    mermaid.render.mockRejectedValue(new Error("parse"));
+    await expect(renderMermaidDiagram("not a diagram")).rejects.toThrow("parse");
+    expect(mermaid.render).toHaveBeenCalledTimes(3);
+  });
+
+  it("renders diagrams one at a time", async () => {
+    const order: string[] = [];
+    mermaid.render.mockImplementation(async (_id: string, code: string) => {
+      order.push(`start:${code}`);
+      await Promise.resolve();
+      order.push(`end:${code}`);
+      return { svg: `<svg id="${code}" />` };
+    });
+    const first = renderMermaidDiagram("one");
+    const second = renderMermaidDiagram("two");
+    await expect(Promise.all([first, second])).resolves.toEqual(["<svg id=\"one\" />", "<svg id=\"two\" />"]);
+    expect(order).toEqual(["start:one", "end:one", "start:two", "end:two"]);
   });
 });

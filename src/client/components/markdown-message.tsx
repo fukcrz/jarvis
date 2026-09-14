@@ -283,6 +283,7 @@ function MermaidBlock({ code }: { code: string }) {
   useEffect(() => {
     if (streaming || code.trim() === "") return;
     let cancelled = false;
+    setFailed(false);
     void renderMermaidDiagram(code)
       .then((result) => { if (!cancelled) { setSvg(result); setFailed(false); } })
       .catch(() => { if (!cancelled) { setSvg(undefined); setFailed(true); } });
