@@ -15,10 +15,16 @@ import {
 } from "../lib/socket-sync";
 import { addOptimisticUserMessage, applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, removeOptimisticUserMessage, replaceUserMessageWithOptimistic, type TranscriptState } from "../transcript";
 
-interface StreamState {
+/** 切会话时的首屏条数：先画出最近一轮，不够再往上补。 */
+export const INITIAL_TIMELINE_LIMIT = 40;
+
+export interface StreamState {
   transcript: TranscriptState;
   connection: "connecting" | "live" | "reconnecting" | "offline";
   error?: string;
+  /** 当前 transcript 所属会话。切走时先留着旧内容，等新数据到了再换。 */
+  sessionKey?: string;
+  pendingSessionKey?: string;
 }
 
 export interface ExtensionPanelState {
@@ -29,8 +35,9 @@ export interface ExtensionPanelState {
 }
 
 type Action =
-  | { type: "reset" }
-  | { type: "hydrate"; page: Awaited<ReturnType<typeof api.timeline>>; snapshot: Awaited<ReturnType<typeof api.runtime>> }
+  | { type: "select"; sessionKey?: string }
+  | { type: "hydrate"; sessionKey: string; page: Awaited<ReturnType<typeof api.timeline>>; snapshot: Awaited<ReturnType<typeof api.runtime>>; connection?: StreamState["connection"] }
+  | { type: "hydrate-error"; sessionKey: string; error: string }
   | { type: "events"; events: SessionEvent[] }
   | { type: "model"; model: ModelDescriptor }
   | { type: "thinking"; thinking: SessionThinkingSnapshot }
@@ -42,9 +49,53 @@ type Action =
 
 const initialState: StreamState = { transcript: emptyTranscript, connection: "offline" };
 
-function reducer(state: StreamState, action: Action): StreamState {
-  if (action.type === "reset") return initialState;
-  if (action.type === "hydrate") return { ...state, transcript: hydrateTranscript(state.transcript, action.page, action.snapshot), error: undefined };
+function isCurrentSession(state: StreamState, sessionKey: string): boolean {
+  return (state.pendingSessionKey ?? state.sessionKey) === sessionKey;
+}
+
+export function reduceSessionStream(state: StreamState, action: Action): StreamState {
+  if (action.type === "select") {
+    if (action.sessionKey === undefined) return initialState;
+    if (state.sessionKey === action.sessionKey && state.pendingSessionKey === undefined) {
+      return state.connection === "offline" ? { ...state, connection: "connecting", error: undefined } : state;
+    }
+    return {
+      ...state,
+      connection: "connecting",
+      error: undefined,
+      pendingSessionKey: state.sessionKey === action.sessionKey ? undefined : action.sessionKey,
+    };
+  }
+  if (action.type === "hydrate") {
+    if (!isCurrentSession(state, action.sessionKey)) return state;
+    const previous = state.sessionKey === action.sessionKey ? state.transcript : emptyTranscript;
+    return {
+      ...state,
+      transcript: hydrateTranscript(previous, action.page, action.snapshot),
+      error: undefined,
+      sessionKey: action.sessionKey,
+      pendingSessionKey: undefined,
+      ...(action.connection === undefined ? {} : { connection: action.connection }),
+    };
+  }
+  if (action.type === "hydrate-error") {
+    if (!isCurrentSession(state, action.sessionKey)) return state;
+    if (state.sessionKey === action.sessionKey) return { ...state, error: action.error };
+    return {
+      ...state,
+      transcript: emptyTranscript,
+      error: action.error,
+      sessionKey: action.sessionKey,
+      pendingSessionKey: undefined,
+    };
+  }
+  if (state.pendingSessionKey !== undefined) {
+    if (action.type === "connection") {
+      if (action.value === "live") return state;
+      return { ...state, connection: action.value, ...(action.error === undefined ? {} : { error: action.error }) };
+    }
+    return state;
+  }
   if (action.type === "events") return { ...state, transcript: applySessionEvents(state.transcript, action.events) };
   if (action.type === "model") return { ...state, transcript: { ...state.transcript, model: { ...state.transcript.model, current: action.model } } };
   if (action.type === "thinking") return { ...state, transcript: { ...state.transcript, thinking: action.thinking } };
@@ -62,7 +113,7 @@ type PanelSideEffect =
   | { kind: "editor"; text: string };
 
 export function useSessionStream(ref: SessionRef | undefined, assistantName = document.title, sessionName?: string) {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const [state, dispatch] = useReducer(reduceSessionStream, initialState);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [extensionPanels, setExtensionPanels] = useState<ExtensionPanelState>({ widgets: {}, statuses: {} });
   const stateRef = useRef(state);
@@ -144,28 +195,38 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     if (flushTimeout.current === undefined) flushTimeout.current = window.setTimeout(flushEvents, 80);
   }, [flushEvents]);
 
-  const refresh = useCallback(async () => {
-    if (ref === undefined) return;
-    const selectedKey = refKey;
-    const [page, snapshot] = await Promise.all([api.timeline(ref), api.runtime(ref)]);
-    if (refKeyRef.current !== selectedKey) return;
-    dispatch({ type: "hydrate", page, snapshot });
+  const applyHydration = useCallback((sessionKey: string, page: Awaited<ReturnType<typeof api.timeline>>, snapshot: Awaited<ReturnType<typeof api.runtime>>, connection?: StreamState["connection"]) => {
+    dispatch({ type: "hydrate", sessionKey, page, snapshot, connection });
     setExtensionPanels(extensionPanelsFromSnapshot(snapshot.extensionUi));
     document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
-  }, [refKey]);
+  }, []);
+  const applyHydrationRef = useRef(applyHydration);
+  useEffect(() => { applyHydrationRef.current = applyHydration; }, [applyHydration]);
+  const refreshRef = useRef<(connection?: StreamState["connection"]) => Promise<void>>(async () => undefined);
+
+  const refresh = useCallback(async (connection?: StreamState["connection"]) => {
+    if (ref === undefined || refKey === undefined) return;
+    const selectedKey = refKey;
+    try {
+      const [page, snapshot] = await Promise.all([api.timeline(ref, undefined, INITIAL_TIMELINE_LIMIT), api.runtime(ref)]);
+      if (refKeyRef.current !== selectedKey) return;
+      applyHydration(selectedKey, page, snapshot, connection);
+    } catch (error: unknown) {
+      if (refKeyRef.current !== selectedKey) return;
+      dispatch({ type: "hydrate-error", sessionKey: selectedKey, error: error instanceof Error ? error.message : "无法加载此会话" });
+    }
+  }, [applyHydration, refKey]);
+  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
 
   useEffect(() => {
     queuedEvents.current = [];
     cancelScheduledFlush();
-    if (ref === undefined) {
-      dispatch({ type: "reset" });
-      setExtensionPanels({ widgets: {}, statuses: {} });
+    dispatch({ type: "select", sessionKey: refKey });
+    setExtensionPanels({ widgets: {}, statuses: {} });
+    if (ref === undefined || refKey === undefined) {
       document.title = defaultDocumentTitle.current;
       return;
     }
-    dispatch({ type: "reset" });
-    setExtensionPanels({ widgets: {}, statuses: {} });
-    document.title = defaultDocumentTitle.current;
     let disposed = false;
     let socket: WebSocket | undefined;
     let reconnectTimer: number | undefined;
@@ -175,6 +236,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     let buffered: SessionEvent[] = [];
     let lastEventAt = Date.now();
     let lastReconnectAt = 0;
+    const selectedKey = refKey;
 
     const stopReconnectAndPing = () => {
       if (reconnectTimer !== undefined) {
@@ -215,6 +277,42 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
       }
     };
 
+    let hydratePromise: Promise<boolean> | undefined;
+    let hydrateGeneration = 0;
+    let hasOpened = false;
+    const flushBuffered = (seq: number) => {
+      for (const event of buffered.filter((bufferedEvent) => bufferedEvent.seq > seq)) receiveEvent(event);
+      buffered = [];
+    };
+    const ensureHydrated = (connection?: StreamState["connection"]) => {
+      if (hydratePromise === undefined) {
+        const generation = hydrateGeneration;
+        hydratePromise = Promise.all([api.timeline(ref, undefined, INITIAL_TIMELINE_LIMIT), api.runtime(ref)]).then(([page, snapshot]) => {
+          if (disposed || refKeyRef.current !== selectedKey || generation !== hydrateGeneration) return false;
+          applyHydrationRef.current(selectedKey, page, snapshot, connection);
+          hydrated = true;
+          flushBuffered(snapshot.seq);
+          return true;
+        }).catch((error: unknown) => {
+          if (generation === hydrateGeneration) hydratePromise = undefined;
+          if (!disposed && refKeyRef.current === selectedKey && generation === hydrateGeneration) {
+            dispatch({ type: "hydrate-error", sessionKey: selectedKey, error: error instanceof Error ? error.message : "无法加载此会话" });
+          }
+          throw error;
+        });
+      } else if (connection !== undefined) {
+        return hydratePromise.then((ok) => {
+          if (ok && !disposed && refKeyRef.current === selectedKey) {
+            hydrated = true;
+            flushBuffered(stateRef.current.transcript.seq);
+            dispatch({ type: "connection", value: connection });
+          }
+          return ok;
+        });
+      }
+      return hydratePromise;
+    };
+
     const connect = () => {
       if (disposed) return;
       stopReconnectAndPing();
@@ -251,17 +349,14 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
         if (disposed || socket !== connection) return;
         markAlive();
         startKeepalive(connection);
-        void Promise.all([api.timeline(ref), api.runtime(ref)]).then(([page, snapshot]) => {
-          if (disposed || socket !== connection) return;
-          dispatch({ type: "hydrate", page, snapshot });
-          setExtensionPanels(extensionPanelsFromSnapshot(snapshot.extensionUi));
-          document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
+        const reusedHydrate = hydratePromise !== undefined;
+        const resync = hasOpened;
+        hasOpened = true;
+        void ensureHydrated("live").then((ok) => {
+          if (!ok || disposed || socket !== connection) return;
           hydrated = true;
-          // Most buffered events are covered by the authoritative snapshot.
-          for (const event of buffered.filter((bufferedEvent) => bufferedEvent.seq > snapshot.seq)) receiveEvent(event);
-          buffered = [];
           attempt = 0;
-          dispatch({ type: "connection", value: "live" });
+          if (resync && reusedHydrate) void refreshRef.current();
         }).catch((error: unknown) => {
           if (disposed || socket !== connection) return;
           hydrated = false;
@@ -295,6 +390,8 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
       if (disposed) return;
       hydrated = false;
       buffered = [];
+      hydrateGeneration += 1;
+      hydratePromise = undefined;
       attempt = 0;
       connect();
     };
@@ -313,9 +410,10 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
         reconnectNow();
         return;
       }
-      if (readyState === WebSocket.OPEN) void refresh();
+      if (readyState === WebSocket.OPEN) void refreshRef.current();
     };
 
+    void ensureHydrated().catch(() => undefined);
     connect();
     const watchdogTimer = window.setInterval(() => {
       if (disposed || document.hidden) return;
@@ -349,7 +447,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
       window.removeEventListener("online", onOnline);
       window.removeEventListener("pageshow", onPageShow);
     };
-  }, [refKey, receiveEvent, refresh, flushEvents, cancelScheduledFlush]);
+  }, [refKey, receiveEvent, flushEvents, cancelScheduledFlush]);
 
   useEffect(() => () => {
     cancelScheduledFlush();
@@ -371,7 +469,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   }, [refKey]);
 
   const loadEarlier = useCallback(async () => {
-    if (ref === undefined || !stateRef.current.transcript.hasMore || loadingEarlier) return;
+    if (ref === undefined || stateRef.current.pendingSessionKey !== undefined || !stateRef.current.transcript.hasMore || loadingEarlier) return;
     setLoadingEarlier(true);
     try {
       const page = await api.timeline(ref, stateRef.current.transcript.start);

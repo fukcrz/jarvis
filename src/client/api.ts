@@ -225,8 +225,11 @@ export const api = {
   renameSession: async (ref: SessionRef, name: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(sessionPath(ref), { method: "PATCH", body: JSON.stringify({ name }) })).session,
   setSessionStarred: async (ref: SessionRef, starred: boolean): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(sessionPath(ref), { method: "PATCH", body: JSON.stringify({ starred }) })).session,
   markSessionViewed: async (ref: SessionRef): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`${sessionPath(ref)}/viewed`, { method: "POST", body: "{}" })).session,
-  timeline: async (ref: SessionRef, before?: number): Promise<TimelinePage> => {
-    const query = before === undefined ? "" : `?before=${String(before)}`;
+  timeline: async (ref: SessionRef, before?: number, limit?: number): Promise<TimelinePage> => {
+    const params = new URLSearchParams();
+    if (before !== undefined) params.set("before", String(before));
+    if (limit !== undefined) params.set("limit", String(limit));
+    const query = params.size === 0 ? "" : `?${params.toString()}`;
     return request(`${sessionPath(ref)}/timeline${query}`);
   },
   runtime: async (ref: SessionRef): Promise<SessionStreamSnapshot> => request(`${sessionPath(ref)}/runtime`),

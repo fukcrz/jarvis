@@ -244,4 +244,16 @@ describe("API client", () => {
     expect(init?.method).toBe("POST");
     expect(init?.body).toBe(JSON.stringify({ customInstructions: "Keep test results", clientRequestId: requestId }));
   });
+
+  it("requests a bounded first timeline page", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ items: [], start: 0, total: 0, hasMore: false }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ref = { workspaceId: "da69b38d-f132-4c84-8c4f-6174015e9c5e", sessionId: "c2f73ddd-cfc6-464f-acb3-c8f425cea7f0" };
+
+    await api.timeline(ref, undefined, 40);
+    await api.timeline(ref, 12);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}/timeline?limit=40`);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(`/api/workspaces/${ref.workspaceId}/sessions/${ref.sessionId}/timeline?before=12`);
+  });
 });
