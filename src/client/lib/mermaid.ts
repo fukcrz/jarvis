@@ -80,13 +80,40 @@ export async function renderMermaidDiagram(code: string): Promise<string> {
       try {
         diagramCounter += 1;
         const { svg } = await mermaid.render(`jarvis-mermaid-${String(diagramCounter)}`, code);
-        return svg;
+        return normalizeMermaidSvg(svg);
       } catch (error) {
         lastError = error;
       }
     }
     throw lastError;
   });
+}
+
+/**
+ * mermaid 默认 useMaxWidth 会产出 width="100%"（再加 max-width 像素）。
+ * 消息列有确定宽度，图能撑开；全屏灯箱是 shrink-to-fit，百分比宽度会算成 0×0。
+ * 渲染后改成 viewBox 像素尺寸，灯箱和消息列都能按图本身大小显示。
+ */
+export function normalizeMermaidSvg(svg: string): string {
+  const start = svg.indexOf("<svg");
+  if (start === -1) return svg;
+  const rest = svg.slice(start);
+  const openTag = /^<svg\b[^>]*>/.exec(rest)?.[0];
+  if (openTag === undefined) return svg;
+  const widthMatch = /\swidth\s*=\s*(["'])([^"']*)\1/i.exec(openTag);
+  if (widthMatch === null || !widthMatch[2].trim().endsWith("%")) return svg;
+  const { width, height } = svgPixelSize(rest);
+  let tag = openTag.replace(/\swidth\s*=\s*(["'])[^"']*\1/i, ` width="${String(width)}"`);
+  if (/\sheight\s*=/.test(tag)) {
+    tag = tag.replace(/\sheight\s*=\s*(["'])[^"']*\1/i, ` height="${String(height)}"`);
+  } else {
+    tag = tag.replace(/\s*\/?\s*>$/, ` height="${String(height)}"$&`);
+  }
+  tag = tag.replace(/\sstyle\s*=\s*(["'])([\s\S]*?)\1/i, (_all, quote: string, style: string) => {
+    const cleaned = style.replace(/max-width\s*:\s*[^;]*;?\s*/gi, "").trim();
+    return cleaned === "" ? "" : ` style=${quote}${cleaned}${quote}`;
+  });
+  return svg.slice(0, start) + tag + rest.slice(openTag.length);
 }
 
 /** 补齐导出所需的 SVG 命名空间，去掉 XML 声明。 */

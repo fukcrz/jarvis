@@ -902,7 +902,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .image-lightbox-content { display: grid; place-items: center; max-width: min(1100px, 94vw); max-height: 90vh; cursor: grab; user-select: none; }
 .image-lightbox-content.dragging, .image-lightbox-content.dragging img { cursor: grabbing; }
 .image-lightbox-content img, .image-lightbox-diagram svg { display: block; width: auto; height: auto; max-width: min(1100px, 94vw); max-height: 90vh; object-fit: contain; pointer-events: none; user-select: none; box-shadow: 0 18px 60px rgb(0 0 0 / .55); }
-.image-lightbox-diagram { display: grid; place-items: center; background: var(--code); border-radius: 8px; padding: 18px; }
+.image-lightbox-diagram { display: grid; place-items: center; max-width: min(1100px, 94vw); max-height: 90vh; background: var(--code); border-radius: 8px; padding: 18px; }
 .image-lightbox-controls { position: absolute; z-index: 1; bottom: max(18px, env(safe-area-inset-bottom)); left: 50%; display: flex; align-items: center; gap: 2px; transform: translateX(-50%); border: 1px solid var(--glass-border); border-radius: 999px; background: var(--glass-strong); padding: 4px; -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
 .image-lightbox-controls button { display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 50%; background: transparent; color: #e9e7f0; cursor: pointer; }
 .image-lightbox-controls button:focus-visible { background: rgb(255 255 255 / .1); color: var(--accent-strong); outline: none; }

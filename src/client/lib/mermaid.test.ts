@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareMermaidSvgForExport, renderMermaidDiagram, writeDiagramClipboard } from "./mermaid";
+import { normalizeMermaidSvg, prepareMermaidSvgForExport, renderMermaidDiagram, writeDiagramClipboard } from "./mermaid";
 
 const mermaid = vi.hoisted(() => ({
   startOnLoad: true,
@@ -10,6 +10,31 @@ const mermaid = vi.hoisted(() => ({
 vi.mock("mermaid", () => ({
   default: mermaid,
 }));
+
+describe("normalizeMermaidSvg", () => {
+  it("replaces percentage width with viewBox pixel size", () => {
+    const svg = '<svg id="x" width="100%" xmlns="http://www.w3.org/2000/svg" style="max-width: 248.03px;" viewBox="0 0 248.03 167.61"><g /></svg>';
+    expect(normalizeMermaidSvg(svg)).toBe(
+      '<svg id="x" width="248.03" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 248.03 167.61" height="167.61"><g /></svg>',
+    );
+  });
+
+  it("keeps other inline styles after stripping max-width", () => {
+    const svg = '<svg width="100%" style="max-width: 10px; background: #111;" viewBox="0 0 10 8"><g /></svg>';
+    expect(normalizeMermaidSvg(svg)).toBe(
+      '<svg width="10" style="background: #111;" viewBox="0 0 10 8" height="8"><g /></svg>',
+    );
+  });
+
+  it("leaves pixel-sized svg unchanged", () => {
+    const svg = '<svg width="10" height="8" viewBox="0 0 10 8"><g /></svg>';
+    expect(normalizeMermaidSvg(svg)).toBe(svg);
+  });
+
+  it("returns markup without an svg root unchanged", () => {
+    expect(normalizeMermaidSvg("<div />")).toBe("<div />");
+  });
+});
 
 describe("prepareMermaidSvgForExport", () => {
   it("adds svg namespaces and strips the xml declaration", () => {
@@ -103,6 +128,15 @@ describe("renderMermaidDiagram", () => {
     mermaid.render.mockRejectedValue(new Error("parse"));
     await expect(renderMermaidDiagram("not a diagram")).rejects.toThrow("parse");
     expect(mermaid.render).toHaveBeenCalledTimes(3);
+  });
+
+  it("normalizes percentage-width mermaid svg for shrink-to-fit preview", async () => {
+    mermaid.render.mockResolvedValueOnce({
+      svg: '<svg id="ok" width="100%" style="max-width: 10px;" viewBox="0 0 10 8"><g /></svg>',
+    });
+    await expect(renderMermaidDiagram("flowchart TD\n  A --> B")).resolves.toBe(
+      '<svg id="ok" width="10" viewBox="0 0 10 8" height="8"><g /></svg>',
+    );
   });
 
   it("renders diagrams one at a time", async () => {
