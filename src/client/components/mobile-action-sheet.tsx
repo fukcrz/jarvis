@@ -37,7 +37,6 @@ export function MobileActionSheet(props: MobileActionSheetProps) {
           {props.onOpenFiles === undefined ? null : <button type="button" className="action-sheet-item" onClick={() => props.onOpenFiles?.(target.workspaceId)}><Folder size={16} />文件</button>}
           <button type="button" className="action-sheet-item danger" disabled={target.session.runState !== "idle"} onClick={() => props.onDeleteSession(target.workspaceId, target.session)}><Trash2 size={16} />删除会话</button>
         </> : null}
-        <DialogPrimitive.Close asChild><button type="button" className="action-sheet-cancel">取消</button></DialogPrimitive.Close>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   </DialogPrimitive.Root>;

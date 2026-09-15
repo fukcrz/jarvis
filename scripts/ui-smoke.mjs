@@ -361,7 +361,9 @@ async function verifyMobileNavigation(page, name, session) {
   const actionSheet = page.locator(".action-sheet");
   await actionSheet.locator(".action-sheet-title-main").getByText(sessionName, { exact: true }).waitFor({ state: "visible", timeout: 5_000 });
   await actionSheet.locator(".action-sheet-title-subtitle").getByText(session.label, { exact: true }).waitFor({ state: "visible", timeout: 5_000 });
-  await actionSheet.getByRole("button", { name: "取消" }).click();
+  if (await actionSheet.getByRole("button", { name: "取消" }).count() !== 0) failures.push(`${name}: action sheet still renders a redundant cancel button`);
+  await page.locator(".action-sheet-overlay").click({ position: { x: 10, y: 10 } });
+  await actionSheet.waitFor({ state: "hidden", timeout: 5_000 });
 
   await assertNoHorizontalOverflow(page, name);
 }
