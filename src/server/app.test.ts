@@ -316,6 +316,46 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(searched.json()).toEqual({ sessions: [{ id: sessionId, name: "Auth refactor", preview: "Review authentication", path: sessionFile }] });
   });
 
+  it("hides pi-subagent sessions from lists, references, and cleanup", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "hidden-subagent-sessions-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const visibleId = randomUUID();
+    const hiddenId = "subagent.0123456789abcdef";
+    const timestamp = new Date("2026-08-09T00:00:00.000Z").toISOString();
+    const writeSession = async (id: string, name: string, text: string, parentSession?: string): Promise<string> => {
+      const path = join(sessionDir, `${timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`);
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(path, [
+        JSON.stringify({ type: "session", version: 3, id, timestamp, cwd: workspacePath, ...(parentSession === undefined ? {} : { parentSession }) }),
+        JSON.stringify({ type: "session_info", id: randomUUID(), parentId: null, timestamp, name }),
+        JSON.stringify({ type: "message", id: randomUUID(), parentId: null, timestamp, message: { role: "user", content: text, timestamp: Date.parse(timestamp) } }),
+      ].join("\n") + "\n");
+      return path;
+    };
+    const visiblePath = await writeSession(visibleId, "Visible session", "Visible text", join(sessionDir, "ordinary-parent.jsonl"));
+    const hiddenPath = await writeSession(hiddenId, "Private subagent", "Private subagent text");
+
+    const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` });
+    expect(listed.statusCode).toBe(200);
+    expect((listed.json() as { sessions: Array<{ id: string }> }).sessions.map((session) => session.id)).toEqual([visibleId]);
+
+    const searched = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions?query=${encodeURIComponent("Private subagent")}` });
+    expect(searched.statusCode).toBe(200);
+    expect(searched.json()).toEqual({ sessions: [] });
+
+    const references = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/session-files` });
+    expect(references.statusCode).toBe(200);
+    expect((references.json() as { sessions: Array<{ id: string }> }).sessions.map((session) => session.id)).toEqual([visibleId]);
+
+    const cleaned = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/cleanup`, payload: {} });
+    expect(cleaned.statusCode).toBe(200);
+    expect(cleaned.json()).toEqual({ removed: [visibleId], skipped: [] });
+    expect(existsSync(visiblePath)).toBe(false);
+    expect(existsSync(hiddenPath)).toBe(true);
+  });
+
   it("lists a composer command that Jarvis can execute", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "commands-workspace");

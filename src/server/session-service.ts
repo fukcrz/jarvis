@@ -162,9 +162,9 @@ export class SessionService {
   async list(workspaceId: string, query?: string): Promise<SessionSummary[]> {
     const workspace = this.workspaces.get(workspaceId);
     const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
-    const listed = sessionDir === undefined
+    const listed = (sessionDir === undefined
       ? await SessionManager.list(workspace.cwd)
-      : await SessionManager.list(workspace.cwd, sessionDir);
+      : await SessionManager.list(workspace.cwd, sessionDir)).filter((entry) => isVisibleSessionId(entry.id));
     const sortMeta = await this.attention.list(workspaceId);
     const needle = query?.trim().toLocaleLowerCase();
     // SessionInfo.allMessagesText 已包含会话全部 user/assistant 消息文本（list 时读入），
@@ -178,7 +178,7 @@ export class SessionService {
     const summaries = listedMatches.map(({ summary, searchText }) => attachSearchSnippet(summary, searchText, needle));
 
     for (const active of this.active.values()) {
-      if (active.ref.workspaceId !== workspaceId || summaries.some((summary) => summary.id === active.ref.sessionId)) continue;
+      if (!isVisibleSessionId(active.ref.sessionId) || active.ref.workspaceId !== workspaceId || summaries.some((summary) => summary.id === active.ref.sessionId)) continue;
       const summary = this.summaryFromActive(active);
       const searchText = sessionBranchSearchText(summary.name, summary.preview, active.session.sessionManager.getBranch());
       if (needle !== undefined && needle !== "" && !searchText.toLocaleLowerCase().includes(needle)) continue;
@@ -200,12 +200,12 @@ export class SessionService {
   async fileReferences(workspaceId: string, query?: string): Promise<SessionFileReference[]> {
     const workspace = this.workspaces.get(workspaceId);
     const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
-    const listed = sessionDir === undefined
+    const listed = (sessionDir === undefined
       ? await SessionManager.list(workspace.cwd)
-      : await SessionManager.list(workspace.cwd, sessionDir);
+      : await SessionManager.list(workspace.cwd, sessionDir)).filter((entry) => isVisibleSessionId(entry.id));
     const activeById = new Map(
       [...this.active.values()]
-        .filter((active) => active.ref.workspaceId === workspaceId)
+        .filter((active) => active.ref.workspaceId === workspaceId && isVisibleSessionId(active.ref.sessionId))
         .map((active) => [active.ref.sessionId, active]),
     );
     const needle = query?.trim().toLocaleLowerCase() ?? "";
@@ -351,7 +351,7 @@ export class SessionService {
     const sortMeta = await this.attention.list(workspaceId);
     const candidates = new Set(pathById.keys());
     for (const active of this.active.values()) {
-      if (active.ref.workspaceId === workspaceId) candidates.add(active.ref.sessionId);
+      if (active.ref.workspaceId === workspaceId && isVisibleSessionId(active.ref.sessionId)) candidates.add(active.ref.sessionId);
     }
 
     const removed: string[] = [];
@@ -388,6 +388,7 @@ export class SessionService {
   }
 
   private async deleteSession(ref: SessionRef, knownPath?: string): Promise<void> {
+    if (!isVisibleSessionId(ref.sessionId)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
     return this.withSessionTransition(ref, async () => {
       const key = activeKey(ref);
       if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is already being deleted", 409);
@@ -1185,9 +1186,9 @@ export class SessionService {
   private async openActive(ref: SessionRef): Promise<ActiveSession> {
     const workspace = this.workspaces.get(ref.workspaceId);
     const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
-    const sessions = sessionDir === undefined
+    const sessions = (sessionDir === undefined
       ? await SessionManager.list(workspace.cwd)
-      : await SessionManager.list(workspace.cwd, sessionDir);
+      : await SessionManager.list(workspace.cwd, sessionDir)).filter((entry) => isVisibleSessionId(entry.id));
     const match = sessions.find((entry) => entry.id === ref.sessionId);
     if (match === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
     const manager = sessionDir === undefined ? SessionManager.open(match.path) : SessionManager.open(match.path, sessionDir);
@@ -1878,6 +1879,11 @@ function activeKey(ref: SessionRef): string {
   return `${ref.workspaceId}:${ref.sessionId}`;
 }
 
+/** pi-subagent uses this namespace for persistent child-agent sessions. */
+function isVisibleSessionId(sessionId: string): boolean {
+  return !sessionId.startsWith("subagent.");
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1939,7 +1945,7 @@ async function listSessionFiles(workspace: Workspace): Promise<Array<{ id: strin
   const files = await Promise.all(names.filter((name) => name.endsWith(".jsonl")).map(async (name) => {
     const path = join(directory, name);
     const header = await readSessionFileHeader(path);
-    if (header === undefined) return undefined;
+    if (header === undefined || !isVisibleSessionId(header.id)) return undefined;
     if (filterCwd && (header.cwd === undefined || header.cwd === "" || resolve(header.cwd) !== resolvedCwd)) return undefined;
     return { id: header.id, path };
   }));
