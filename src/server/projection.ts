@@ -1,4 +1,5 @@
 import { isRecord, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
+import { attachSubagentView, subagentViewFromArgs } from "./subagent-view.js";
 import { stringValue, toIso } from "./values.js";
 
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
@@ -77,16 +78,16 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
       if (existingIndex !== undefined) {
         const current = items[existingIndex];
         if (current?.kind === "tool") {
-          items[existingIndex] = {
+          items[existingIndex] = attachSubagentView({
             ...current,
             state,
             ...(state === "failed" ? { error: output } : { output, ...(images.length === 0 ? {} : { images }) }),
-          };
+          }, message);
           continue;
         }
       }
       const tool = toolFromCall(toolId, stringValue(message["toolName"]) || "tool", undefined, createdAt, state);
-      items.push({ ...tool, ...(state === "failed" ? { error: output } : { output }), ...(state === "failed" || images.length === 0 ? {} : { images }) });
+      items.push(attachSubagentView({ ...tool, ...(state === "failed" ? { error: output } : { output }), ...(state === "failed" || images.length === 0 ? {} : { images }) }, message));
       toolIndex.set(toolId, items.length - 1);
       continue;
     }
@@ -242,6 +243,7 @@ export function toolFromCall(
   const target = toolTarget(args);
   const title = toolTitle(name);
   const inputPreview = summarizeArgs(args);
+  const subagent = subagentViewFromArgs(name, args);
   return {
     kind: "tool",
     id,
@@ -252,6 +254,7 @@ export function toolFromCall(
     ...(target === undefined ? {} : { target }),
     ...(inputPreview === "" ? {} : { inputPreview }),
     ...(metadata?.cwd === undefined ? {} : { cwd: metadata.cwd }),
+    ...(subagent === undefined ? {} : { subagent }),
   };
 }
 
@@ -272,25 +275,25 @@ export function toolWithResult(tool: ToolTimelineItem, result: unknown, isError:
     delete next.output;
     delete next.images;
     if (text !== "") next.error = text;
-    return next;
+    return attachSubagentView(next, result);
   }
   delete next.error;
   if (text !== "") next.output = text;
   if (images.length > 0) next.images = images;
-  return next;
+  return attachSubagentView(next, result);
 }
 
 export function toolWithPartial(tool: ToolTimelineItem, result: unknown): ToolTimelineItem {
   const output = truncate(textFromToolResult(result));
   const metadata = toolResultMetadata(result);
   const images = toolImagesFromResult(result);
-  return {
+  return attachSubagentView({
     ...tool,
     state: "running",
     ...(output === "" ? {} : { output }),
     ...(images.length === 0 ? {} : { images }),
     ...(metadata.truncated ? { truncated: true } : {}),
-  };
+  }, result);
 }
 
 export function textFromContent(content: unknown): string {

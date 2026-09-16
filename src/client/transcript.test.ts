@@ -712,4 +712,54 @@ describe("transcript queue", () => {
     const state = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, snapshotWithQueue());
     expect(state.queue).toEqual(emptySessionQueue);
   });
+
+  it("keeps compact subagent snapshots from tool.upsert and drops child trees", () => {
+    const result = applySessionEvents(emptyTranscript, [{
+      version: 1,
+      sessionId: "session",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "tool.upsert",
+      payload: {
+        tool: {
+          kind: "tool",
+          id: "sa-1",
+          createdAt: "2026-08-09T00:00:00.000Z",
+          name: "subagent",
+          title: "subagent",
+          state: "running",
+          subagent: {
+            kind: "pi-subagent",
+            results: [{
+              agent: "scout",
+              prompt: "Find auth",
+              state: "running",
+              source: "user",
+              output: "looking",
+              toolCalls: [{ name: "read", summary: "package.json" }],
+              messages: [{ role: "assistant", content: [{ type: "text", text: "secret" }] }],
+            }],
+            total: 1,
+            completed: 0,
+            running: 1,
+            failed: 0,
+          },
+        },
+      },
+    }]);
+    expect(result.items[0]).toMatchObject({
+      id: "sa-1",
+      subagent: {
+        kind: "pi-subagent",
+        running: 1,
+        results: [{ agent: "scout", prompt: "Find auth", state: "running", source: "user", output: "looking", toolCalls: [{ name: "read", summary: "package.json" }] }],
+      },
+    });
+    expect(result.items[0]).toEqual(expect.not.objectContaining({
+      subagent: expect.objectContaining({
+        results: [expect.objectContaining({ messages: expect.anything() })],
+      }),
+    }));
+    expect(JSON.stringify(result.items[0])).not.toContain("secret");
+  });
 });

@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type ImageAttachment, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol";
+import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type ImageAttachment, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol";
 import { isRecord } from "../shared/protocol";
 
 export interface TranscriptState {
@@ -391,7 +391,49 @@ function recordTool(value: unknown): ToolTimelineItem | undefined {
     ...(typeof value["output"] === "string" ? { output: value["output"] } : {}),
     ...(typeof value["error"] === "string" ? { error: value["error"] } : {}),
     ...toolImagesFromValue(value["images"]),
+    ...recordSubagentView(value["subagent"]),
   };
+}
+
+function recordSubagentView(value: unknown): { subagent: SubagentView } | Record<string, never> {
+  if (!isRecord(value) || value["kind"] !== "pi-subagent" || !Array.isArray(value["results"])) return {};
+  const results = value["results"].flatMap(recordSubagentCall);
+  if (results.length === 0) return {};
+  return {
+    subagent: {
+      kind: "pi-subagent",
+      results,
+      total: results.length,
+      completed: results.filter((call) => call.state === "completed").length,
+      running: results.filter((call) => call.state === "running").length,
+      failed: results.filter((call) => call.state === "failed").length,
+    },
+  };
+}
+
+function recordSubagentCall(value: unknown): SubagentCallView[] {
+  if (!isRecord(value) || typeof value["agent"] !== "string" || value["agent"] === "" || typeof value["prompt"] !== "string") return [];
+  const state = value["state"];
+  if (state !== "running" && state !== "completed" && state !== "failed" && state !== "cancelled") return [];
+  const source = value["source"];
+  const toolCalls = Array.isArray(value["toolCalls"])
+    ? value["toolCalls"].flatMap((entry) => {
+      if (!isRecord(entry) || typeof entry["name"] !== "string" || entry["name"] === "" || typeof entry["summary"] !== "string") return [];
+      return [{ name: entry["name"], summary: entry["summary"] }];
+    }).slice(0, 4)
+    : [];
+  return [{
+    agent: value["agent"],
+    prompt: value["prompt"],
+    state,
+    ...(source === "user" || source === "project" || source === "unknown" ? { source } : {}),
+    ...(typeof value["model"] === "string" && value["model"] !== "" ? { model: value["model"] } : {}),
+    ...(typeof value["turns"] === "number" && Number.isFinite(value["turns"]) && value["turns"] > 0 ? { turns: value["turns"] } : {}),
+    ...(typeof value["sessionHandle"] === "string" && value["sessionHandle"] !== "" ? { sessionHandle: value["sessionHandle"] } : {}),
+    ...(typeof value["output"] === "string" && value["output"] !== "" ? { output: value["output"] } : {}),
+    ...(typeof value["error"] === "string" && value["error"] !== "" ? { error: value["error"] } : {}),
+    ...(toolCalls.length === 0 ? {} : { toolCalls }),
+  }];
 }
 
 function toolImagesFromValue(value: unknown): { images: ImageAttachment[] } | Record<string, never> {

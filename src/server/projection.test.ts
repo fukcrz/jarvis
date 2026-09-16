@@ -341,3 +341,216 @@ describe("projectHistory", () => {
     })]);
   });
 });
+
+describe("pi-subagent snapshots", () => {
+  const longPrompt = `${"Find the auth flow ".repeat(20)}end`;
+  const childMessages = [
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", name: "read", arguments: { path: "src/server/auth-service.ts" } },
+        { type: "text", text: "Auth lives in auth-service." },
+      ],
+    },
+  ];
+
+  it("seeds running calls from args before details arrive", () => {
+    const running = toolFromCall("sa-1", "subagent", {
+      calls: [{ agent: "scout", prompt: longPrompt, session: "explore-auth" }],
+    }, "2026-08-09T00:00:00.000Z", "running");
+
+    expect(running.subagent).toEqual({
+      kind: "pi-subagent",
+      results: [{
+        agent: "scout",
+        prompt: `${longPrompt.replace(/\s+/g, " ").trim().slice(0, 159)}…`,
+        state: "running",
+        sessionHandle: "explore-auth",
+      }],
+      total: 1,
+      completed: 0,
+      running: 1,
+      failed: 0,
+    });
+    expect(JSON.stringify(running.subagent)).not.toContain("messages");
+  });
+
+  it("overlays live progress without copying child message trees", () => {
+    const running = toolFromCall("sa-1", "subagent", {
+      calls: [{ agent: "scout", prompt: "Find auth" }],
+    }, "2026-08-09T00:00:00.000Z", "running");
+    const partial = toolWithPartial(running, {
+      content: [{ type: "text", text: "Subagents: 0/1 done, 1 running..." }],
+      details: {
+        kind: "pi-subagent",
+        projectAgentsDir: "/secret/agents",
+        results: [{
+          agent: "scout",
+          prompt: "Find auth",
+          agentSource: "user",
+          exitCode: -1,
+          messages: childMessages,
+          stderr: "noise",
+          model: "gpt-test",
+          usage: { turns: 1 },
+        }],
+      },
+    });
+
+    expect(partial.subagent).toMatchObject({
+      kind: "pi-subagent",
+      running: 1,
+      completed: 0,
+      failed: 0,
+      results: [{
+        agent: "scout",
+        state: "running",
+        source: "user",
+        model: "gpt-test",
+        turns: 1,
+        output: "Auth lives in auth-service.",
+        toolCalls: [{ name: "read", summary: "src/server/auth-service.ts" }],
+      }],
+    });
+    expect(partial.subagent?.results[0]).not.toHaveProperty("messages");
+    expect(JSON.stringify(partial.subagent)).not.toContain("projectAgentsDir");
+    expect(JSON.stringify(partial.subagent)).not.toContain("stderr");
+  });
+
+  it("maps completed, failed, and cancelled child states from mjakl details", () => {
+    const running = toolFromCall("sa-2", "subagent", {
+      calls: [
+        { agent: "scout", prompt: "A" },
+        { agent: "worker", prompt: "B" },
+        { agent: "reviewer", prompt: "C" },
+      ],
+    }, "2026-08-09T00:00:00.000Z", "running");
+    const completed = toolWithResult(running, {
+      content: [{ type: "text", text: "1/3 succeeded" }],
+      details: {
+        kind: "pi-subagent",
+        failed: true,
+        results: [
+          {
+            agent: "scout",
+            prompt: "A",
+            exitCode: 0,
+            messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
+          },
+          {
+            agent: "worker",
+            prompt: "B",
+            exitCode: 1,
+            processError: true,
+            errorMessage: "child crashed",
+            messages: [{ role: "assistant", content: [{ type: "text", text: "partial" }] }],
+          },
+          {
+            agent: "reviewer",
+            prompt: "C",
+            exitCode: 130,
+            stopReason: "aborted",
+            errorMessage: "Subagent was aborted.",
+            messages: [],
+          },
+        ],
+      },
+    }, true);
+
+    expect(completed.state).toBe("failed");
+    expect(completed.subagent).toMatchObject({
+      total: 3,
+      completed: 1,
+      running: 0,
+      failed: 1,
+      results: [
+        { agent: "scout", state: "completed", output: "ok" },
+        { agent: "worker", state: "failed", output: "partial", error: "child crashed" },
+        { agent: "reviewer", state: "cancelled", error: "Subagent was aborted." },
+      ],
+    });
+  });
+
+  it("replays persisted history details onto the tool call", () => {
+    const items = projectHistory([
+      {
+        type: "message",
+        id: "call",
+        timestamp: "2026-08-09T00:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "sa-1", name: "subagent", arguments: { calls: [{ agent: "scout", prompt: "Find auth" }] } }],
+        },
+      },
+      {
+        type: "message",
+        id: "result",
+        timestamp: "2026-08-09T00:00:02.000Z",
+        message: {
+          role: "toolResult",
+          toolCallId: "sa-1",
+          toolName: "subagent",
+          isError: true,
+          content: [{ type: "text", text: "0/1 succeeded\n[1: scout] failed: boom" }],
+          details: {
+            kind: "pi-subagent",
+            failed: true,
+            projectAgentsDir: "/secret/agents",
+            results: [{
+              agent: "scout",
+              prompt: "Find auth",
+              agentSource: "user",
+              exitCode: 1,
+              errorMessage: "boom",
+              processError: true,
+              stderr: "lots of stderr",
+              messages: childMessages,
+            }],
+          },
+        },
+      },
+    ]);
+
+    const tool = items.find((item) => item.kind === "tool");
+    expect(tool).toMatchObject({
+      id: "sa-1",
+      name: "subagent",
+      state: "failed",
+      subagent: {
+        kind: "pi-subagent",
+        total: 1,
+        failed: 1,
+        results: [{ agent: "scout", state: "failed", error: "boom", output: "Auth lives in auth-service." }],
+      },
+    });
+    expect(JSON.stringify(tool)).not.toContain("projectAgentsDir");
+    expect(JSON.stringify(tool)).not.toContain("lots of stderr");
+  });
+
+  it("keeps args-seeded agents when details.results is empty", () => {
+    const running = toolFromCall("sa-3", "subagent", {
+      calls: [{ agent: "scout", prompt: "Find auth" }],
+    }, "2026-08-09T00:00:00.000Z", "running");
+    const failed = toolWithResult(running, {
+      content: [{ type: "text", text: "Invalid subagent parameters: missing calls array." }],
+      details: { kind: "pi-subagent", results: [], failed: true, projectAgentsDir: null },
+    }, true);
+
+    expect(failed.state).toBe("failed");
+    expect(failed.subagent).toMatchObject({
+      total: 1,
+      running: 0,
+      failed: 1,
+      results: [{ agent: "scout", prompt: "Find auth", state: "failed", error: "Invalid subagent parameters: missing calls array." }],
+    });
+  });
+
+  it("does not attach snapshots to unrelated tools", () => {
+    const running = toolFromCall("bash-1", "bash", { command: "npm test" }, "2026-08-09T00:00:00.000Z", "running");
+    const completed = toolWithResult(running, {
+      content: [{ type: "text", text: "ok" }],
+      details: { kind: "pi-subagent", results: [{ agent: "scout", prompt: "nope", exitCode: 0, messages: [] }] },
+    }, false);
+    expect(completed).not.toHaveProperty("subagent");
+  });
+});

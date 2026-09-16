@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CircleAlert, LoaderCircle, Quote } from "lucide-react";
-import type { ToolState, ToolTimelineItem } from "../../shared/protocol";
+import type { SubagentCallView, SubagentView, ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
 import { ImagePreview } from "./image-lightbox";
 
@@ -40,9 +40,9 @@ export function ToolActivity({ items, active, narration }: ToolActivityProps) {
 }
 
 function ToolRow({ item, pending, open, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; onToggle: () => void }) {
-  return item.name === "bash"
-    ? <CommandToolRow item={item} pending={pending} open={open} onToggle={onToggle} />
-    : <GenericToolRow item={item} pending={pending} open={open} onToggle={onToggle} />;
+  if (item.name === "bash") return <CommandToolRow item={item} pending={pending} open={open} onToggle={onToggle} />;
+  if (item.subagent !== undefined) return <SubagentToolRow item={item} view={item.subagent} pending={pending} open={open} onToggle={onToggle} />;
+  return <GenericToolRow item={item} pending={pending} open={open} onToggle={onToggle} />;
 }
 
 function activityState(items: ToolTimelineItem[], active: boolean): ToolState {
@@ -52,6 +52,7 @@ function activityState(items: ToolTimelineItem[], active: boolean): ToolState {
 }
 
 function toolActivityLabel(item: ToolTimelineItem): string {
+  if (item.subagent !== undefined) return subagentActivityLabel(item.subagent);
   const target = compactTarget(item.target);
   if (item.name === "bash") return `执行了 ${compactCommand(item.inputPreview ?? item.target)}`;
   if (item.name === "read") return `读取了 ${target || "文件"}`;
@@ -61,6 +62,26 @@ function toolActivityLabel(item: ToolTimelineItem): string {
   if (item.name === "find") return "查找了项目文件";
   if (item.name === "ls") return "查看了目录";
   return item.title;
+}
+
+function subagentActivityLabel(view: SubagentView): string {
+  if (view.results.length === 1) {
+    const call = view.results[0];
+    return call === undefined ? "subagent" : `${call.agent} · ${subagentCallStateLabel(call.state)}`;
+  }
+  if (view.results.length === 0) return "subagent";
+  if (view.running > 0) return `${String(view.completed)}/${String(view.total)} 完成`;
+  if (view.failed === view.total) return `${String(view.failed)}/${String(view.total)} 失败`;
+  const cancelled = view.results.filter((call) => call.state === "cancelled").length;
+  if (cancelled === view.total) return `${String(cancelled)} 已停止`;
+  return `${String(view.completed)}/${String(view.total)} 完成`;
+}
+
+function subagentCallStateLabel(state: SubagentCallView["state"]): string {
+  if (state === "running") return "执行中";
+  if (state === "failed") return "失败";
+  if (state === "cancelled") return "已停止";
+  return "完成";
 }
 
 function compactTarget(value?: string): string {
@@ -93,6 +114,34 @@ function GenericToolRow({ item, pending, open, onToggle }: { item: ToolTimelineI
         {output === undefined ? null : <div><pre className={item.error === undefined ? "" : "tool-error-output"}>{output}</pre></div>}
       </div> : null}
     </article>
+  );
+}
+
+function SubagentToolRow({ item, view, pending, open, onToggle }: { item: ToolTimelineItem; view: SubagentView; pending: boolean; open: boolean; onToggle: () => void }) {
+  const stateIcon = compactToolStateIcon(item.state, pending);
+  return (
+    <article className={`tool-item tool-list-item ${item.state}`}>
+      <button className="tool-summary" type="button" onClick={onToggle} aria-expanded={open}>
+        {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
+        <span className="tool-title">{subagentActivityLabel(view)}</span>
+      </button>
+      {open ? <div className="tool-details inline-details">
+        {view.results.map((call, index) => <SubagentCallDetails key={`${call.agent}:${String(index)}`} call={call} />)}
+        {view.results.length === 0 && item.error !== undefined ? <div><pre className="tool-error-output">{item.error}</pre></div> : null}
+      </div> : null}
+    </article>
+  );
+}
+
+function SubagentCallDetails({ call }: { call: SubagentCallView }) {
+  const tools = call.toolCalls ?? [];
+  return (
+    <div>
+      <div className="detail-input"><span className="detail-label">{call.agent}</span>{call.prompt === "" ? null : <code>{call.prompt}</code>}</div>
+      {tools.length === 0 ? null : <div className="detail-input"><code>{tools.map((entry) => entry.summary === "" ? entry.name : `${entry.name} ${entry.summary}`).join(" · ")}</code></div>}
+      {call.output === undefined ? null : <div><pre>{call.output}</pre></div>}
+      {call.error === undefined ? null : <div><pre className="tool-error-output">{call.error}</pre></div>}
+    </div>
   );
 }
 

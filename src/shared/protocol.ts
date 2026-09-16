@@ -401,6 +401,32 @@ export interface ToolTimelineItem {
   excludeFromContext?: boolean;
   /** 工具结果携带的图片（如 read 读取图片文件时），用于在工具行内展示。 */
   images?: ImageAttachment[];
+  /** Compact @mjakl/pi-subagent snapshot. Never includes child message trees. */
+  subagent?: SubagentView;
+}
+
+export type SubagentCallState = "running" | "completed" | "failed" | "cancelled";
+
+export interface SubagentCallView {
+  agent: string;
+  prompt: string;
+  state: SubagentCallState;
+  source?: "user" | "project" | "unknown";
+  model?: string;
+  turns?: number;
+  sessionHandle?: string;
+  output?: string;
+  error?: string;
+  toolCalls?: Array<{ name: string; summary: string }>;
+}
+
+export interface SubagentView {
+  kind: "pi-subagent";
+  results: SubagentCallView[];
+  total: number;
+  completed: number;
+  running: number;
+  failed: number;
 }
 
 /** 模型推理过程：思考时展开流式展示，完成后自动收起。 */
