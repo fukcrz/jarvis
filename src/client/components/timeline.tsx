@@ -21,8 +21,6 @@ interface TimelineProps {
   onLoadMore: () => Promise<void>;
   /** Connection/hydration issue, distinct from a failed Pi run. */
   error?: string;
-  /** 切会话时先留着旧时间线，盖一层轻加载。 */
-  switching?: boolean;
   /** Short-lived recoverable state-race feedback. */
   notice?: string;
   onDismissNotice?: () => void;
@@ -102,7 +100,7 @@ function userMessagePreview(item: MessageTimelineItem): string {
   return (item.images?.length ?? 0) > 0 ? "图片消息" : "空消息";
 }
 
-export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, switching = false, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange }: TimelineProps) {
+export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const touchYRef = useRef<number | undefined>(undefined);
   const loadingEarlierRef = useRef(false);
@@ -273,7 +271,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   };
 
   return (
-    <section className={`timeline-shell${switching ? " is-switching" : ""}`} aria-busy={switching || undefined}>
+    <section className="timeline-shell">
       <TurnNavigator mobile={isMobile} anchors={userMessages} activeId={activeUserMessageId} markerPositions={markerPositions} loadingAll={loadingAllHistory || loadingMore} open={navigatorOpen} onOpenChange={(open) => { if (open) onNavigatorOpenChange?.(true); else closeNavigator(); }} onJump={jumpToUserMessage} />
       <div className="timeline" ref={scrollRef} onScroll={(event) => {
         const element = event.currentTarget;
@@ -308,7 +306,6 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
         </div>
       </div>
       {!following ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
-      {switching ? <div className="timeline-switching" aria-busy="true"><LoaderCircle className="spin" size={16} /></div> : null}
     </section>
   );
 }

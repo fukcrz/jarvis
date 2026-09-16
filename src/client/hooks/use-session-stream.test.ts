@@ -35,37 +35,26 @@ function hydrated(sessionKey: string, text: string): StreamState {
 }
 
 describe("session stream reducer", () => {
-  it("keeps the previous transcript until the next session hydrates", () => {
+  it("clears the previous transcript as soon as another session is selected", () => {
     const previous = hydrated("ws:a", "Hello");
     const selected = reduceSessionStream(previous, { type: "select", sessionKey: "ws:b" });
-    expect(selected.pendingSessionKey).toBe("ws:b");
-    expect(selected.transcript.items).toEqual(previous.transcript.items);
+    expect(selected.sessionKey).toBe("ws:b");
+    expect(selected.transcript.items).toEqual([]);
     expect(selected.connection).toBe("connecting");
-
-    const ignored = reduceSessionStream(selected, {
-      type: "events",
-      events: [{ version: 1, sessionId: "session", seq: 2, emittedAt: "2026-08-09T00:00:01.000Z", type: "assistant.delta", payload: { messageId: "a1", delta: "nope" } }],
-    });
-    expect(ignored).toBe(selected);
-
-    const liveTooSoon = reduceSessionStream(selected, { type: "connection", value: "live" });
-    expect(liveTooSoon).toBe(selected);
 
     const stale = reduceSessionStream(selected, { type: "hydrate", sessionKey: "ws:a", page: page("stale"), snapshot: snapshot() });
     expect(stale).toBe(selected);
 
     const next = reduceSessionStream(selected, { type: "hydrate", sessionKey: "ws:b", page: page("Next"), snapshot: snapshot(), connection: "live" });
-    expect(next.pendingSessionKey).toBeUndefined();
     expect(next.sessionKey).toBe("ws:b");
     expect(next.connection).toBe("live");
     expect(next.transcript.items).toEqual(page("Next").items);
   });
 
-  it("does not keep the previous session after a failed hydrate", () => {
+  it("keeps the empty transcript when hydrate fails", () => {
     const previous = hydrated("ws:a", "Hello");
     const selected = reduceSessionStream(previous, { type: "select", sessionKey: "ws:b" });
     const failed = reduceSessionStream(selected, { type: "hydrate-error", sessionKey: "ws:b", error: "无法加载此会话" });
-    expect(failed.pendingSessionKey).toBeUndefined();
     expect(failed.sessionKey).toBe("ws:b");
     expect(failed.transcript.items).toEqual([]);
     expect(failed.error).toBe("无法加载此会话");

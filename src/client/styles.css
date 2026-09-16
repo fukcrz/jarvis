@@ -323,9 +323,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .empty-workspace { min-height: 0; align-content: center; }
 .empty-workspace h2 { margin: 0; color: var(--ink); font-size: var(--ui-title); }
 .timeline-shell { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; }
-.timeline-shell > .timeline, .timeline-desktop-navigator, .jump-latest, .timeline-switching { grid-column: 1; grid-row: 1; }
-.timeline-shell.is-switching .timeline { pointer-events: none; opacity: .55; }
-.timeline-switching { z-index: 3; display: grid; place-items: center; align-self: start; justify-self: center; margin-top: 18px; width: 28px; height: 28px; border-radius: 999px; background: var(--surface-raised); color: var(--muted); pointer-events: none; }
+.timeline-shell > .timeline, .timeline-desktop-navigator, .jump-latest { grid-column: 1; grid-row: 1; }
 .timeline-desktop-navigator { position: absolute; z-index: 2; top: 34px; right: max(8px, calc((100% - 870px) / 2 - 18px)); bottom: 42px; display: none; width: 22px; pointer-events: none; }
 .timeline-navigator-track { position: absolute; top: 5px; bottom: 5px; left: 10px; width: 1px; background: linear-gradient(to bottom, transparent, var(--line-strong) 8%, var(--line-strong) 92%, transparent); }
 .timeline-navigator-marker { position: absolute; left: 0; display: grid; place-items: center; width: 22px; height: 20px; transform: translateY(-50%); border: 0; background: transparent; padding: 0; pointer-events: auto; }

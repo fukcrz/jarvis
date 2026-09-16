@@ -22,9 +22,7 @@ export interface StreamState {
   transcript: TranscriptState;
   connection: "connecting" | "live" | "reconnecting" | "offline";
   error?: string;
-  /** 当前 transcript 所属会话。切走时先留着旧内容，等新数据到了再换。 */
   sessionKey?: string;
-  pendingSessionKey?: string;
 }
 
 export interface ExtensionPanelState {
@@ -50,51 +48,34 @@ type Action =
 const initialState: StreamState = { transcript: emptyTranscript, connection: "offline" };
 
 function isCurrentSession(state: StreamState, sessionKey: string): boolean {
-  return (state.pendingSessionKey ?? state.sessionKey) === sessionKey;
+  return state.sessionKey === sessionKey;
 }
 
 export function reduceSessionStream(state: StreamState, action: Action): StreamState {
   if (action.type === "select") {
     if (action.sessionKey === undefined) return initialState;
-    if (state.sessionKey === action.sessionKey && state.pendingSessionKey === undefined) {
+    if (state.sessionKey === action.sessionKey) {
       return state.connection === "offline" ? { ...state, connection: "connecting", error: undefined } : state;
     }
     return {
-      ...state,
+      transcript: emptyTranscript,
       connection: "connecting",
-      error: undefined,
-      pendingSessionKey: state.sessionKey === action.sessionKey ? undefined : action.sessionKey,
+      sessionKey: action.sessionKey,
     };
   }
   if (action.type === "hydrate") {
     if (!isCurrentSession(state, action.sessionKey)) return state;
-    const previous = state.sessionKey === action.sessionKey ? state.transcript : emptyTranscript;
     return {
       ...state,
-      transcript: hydrateTranscript(previous, action.page, action.snapshot),
+      transcript: hydrateTranscript(state.transcript, action.page, action.snapshot),
       error: undefined,
       sessionKey: action.sessionKey,
-      pendingSessionKey: undefined,
       ...(action.connection === undefined ? {} : { connection: action.connection }),
     };
   }
   if (action.type === "hydrate-error") {
     if (!isCurrentSession(state, action.sessionKey)) return state;
-    if (state.sessionKey === action.sessionKey) return { ...state, error: action.error };
-    return {
-      ...state,
-      transcript: emptyTranscript,
-      error: action.error,
-      sessionKey: action.sessionKey,
-      pendingSessionKey: undefined,
-    };
-  }
-  if (state.pendingSessionKey !== undefined) {
-    if (action.type === "connection") {
-      if (action.value === "live") return state;
-      return { ...state, connection: action.value, ...(action.error === undefined ? {} : { error: action.error }) };
-    }
-    return state;
+    return { ...state, error: action.error };
   }
   if (action.type === "events") return { ...state, transcript: applySessionEvents(state.transcript, action.events) };
   if (action.type === "model") return { ...state, transcript: { ...state.transcript, model: { ...state.transcript.model, current: action.model } } };
@@ -469,7 +450,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   }, [refKey]);
 
   const loadEarlier = useCallback(async () => {
-    if (ref === undefined || stateRef.current.pendingSessionKey !== undefined || !stateRef.current.transcript.hasMore || loadingEarlier) return;
+    if (ref === undefined || !stateRef.current.transcript.hasMore || loadingEarlier) return;
     setLoadingEarlier(true);
     try {
       const page = await api.timeline(ref, stateRef.current.transcript.start);
