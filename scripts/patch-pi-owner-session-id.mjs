@@ -44,6 +44,14 @@ for (const piAiTypes of piAiTypePaths) {
       before: "export interface SimpleStreamOptions extends StreamOptions {\n    /** Provider-neutral tool selection for simple requests. Default: \"auto\". */\n    toolChoice?: ToolChoice;",
       after: "export interface SimpleStreamOptions extends StreamOptions {\n    /** Stable source session ID for local request routing. Unlike sessionId, this is not replaced for standalone summaries. */\n    ownerSessionId?: string;\n    /** Provider-neutral tool selection for simple requests. Default: \"auto\". */\n    toolChoice?: ToolChoice;",
     },
+    {
+      before: "export interface SimpleStreamOptions extends StreamOptions {\n    /** Provider-neutral tool selection for simple requests. When omitted, adapters use provider-specific behavior. */",
+      after: "export interface SimpleStreamOptions extends StreamOptions {\n    /** Stable source session ID for local request routing. Unlike sessionId, this is not replaced for standalone summaries. */\n    ownerSessionId?: string;\n    /** Provider-neutral tool selection for simple requests. When omitted, adapters use provider-specific behavior. */",
+    },
+    {
+      before: "export interface SimpleStreamOptions extends StreamOptions {\n    /** Provider-neutral tool selection for simple requests. When omitted, adapters use provider-specific behavior. */\n    toolChoice?: ToolChoice;",
+      after: "export interface SimpleStreamOptions extends StreamOptions {\n    /** Stable source session ID for local request routing. Unlike sessionId, this is not replaced for standalone summaries. */\n    ownerSessionId?: string;\n    /** Provider-neutral tool selection for simple requests. When omitted, adapters use provider-specific behavior. */\n    toolChoice?: ToolChoice;",
+    },
   ]);
 }
 
