@@ -1430,7 +1430,15 @@ export class SessionService {
         // Extensions can start a continuation without passing through Jarvis's
         // HTTP prompt endpoint. Pi is authoritative for that lifecycle.
         this.clearSettlementTimer(active);
-        if (active.state.runState !== "idle") return;
+        if (active.state.runState !== "idle") {
+          // 重试退避结束、重试请求真正开始：撤掉“正在重试”状态。Pi 的 auto_retry_end 要等这次
+          // 尝试成功才发，若一直挂着 retrying，就会出现“一边流式思考、一边显示正在重试”。
+          // 与 Pi TUI 在 agent_start 清 retry 指示的行为保持一致。
+          if (active.state.retrying === undefined) return;
+          active.state = { ...active.state, retrying: undefined };
+          this.events.publishSession(active.ref, { type: "run.retryEnd", runId: active.state.activeRun?.id, payload: { status: active.state } });
+          return;
+        }
         const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
         active.state = { sessionId: active.ref.sessionId, runState: "running", activeRun: run };
         this.setAttention(active, "running");

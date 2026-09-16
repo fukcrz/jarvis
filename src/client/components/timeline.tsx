@@ -425,11 +425,13 @@ function formatFailureTime(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(date);
 }
 
-function ErrorItem({ items, retrying }: { items: ErrorTimelineItem[]; retrying: boolean }) {
+function ErrorItem({ items }: { items: ErrorTimelineItem[] }) {
   const [open, setOpen] = useState(false);
   const latest = items.at(-1)!;
-  if (retrying && latest.state === "retrying") return null;
-  const stateLabel = latest.state === "retrying" ? "正在重试" : latest.state === "recovered" ? "已恢复" : "操作未完成";
+  // 重试挂起或重试尝试进行中都不展示，等这次尝试有最终结果（已恢复/失败）再显示；
+  // 否则会与“重试中”的流式内容同时出现（顶部横幅已在重试开始时消失）。
+  if (latest.state === "retrying") return null;
+  const stateLabel = latest.state === "recovered" ? "已恢复" : "操作未完成";
   const retryLabel = latest.attempt === undefined || latest.maxAttempts === undefined ? undefined : `第 ${String(latest.attempt)} / ${String(latest.maxAttempts)} 次尝试`;
   const attemptCount = items.length > 1 ? `${String(items.length)} 次尝试` : undefined;
   const details = items.length > 1 || latest.diagnostics !== undefined;
@@ -438,7 +440,7 @@ function ErrorItem({ items, retrying }: { items: ErrorTimelineItem[]; retrying: 
     : `${retryLabel}：${errorSummary(latest.message)}`;
   return <article className={`timeline-event timeline-error ${latest.state}`} role={latest.state === "failed" ? "alert" : "status"}>
     <button className="timeline-event-summary timeline-error-header" type="button" aria-expanded={open} onClick={() => setOpen((value) => details ? !value : value)}>
-      {latest.state === "recovered" ? <Check size={15} /> : latest.state === "retrying" ? <LoaderCircle className="spin" size={15} /> : <CircleAlert size={15} />}
+      {latest.state === "recovered" ? <Check size={15} /> : <CircleAlert size={15} />}
       <div className="timeline-error-copy"><strong>{stateLabel}</strong><span>{summary}</span></div>
     </button>
     {!open ? null : <div className="timeline-error-details">{items.map((item, index) => <ErrorDetails key={item.id} item={item} showAttempt={items.length > 1} index={index} />)}</div>}
@@ -977,7 +979,7 @@ interface TurnRenderContext {
 
 function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, narration?: string): ReactNode {
   if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} editing={entry.item.id === context.editingMessageId} highlighted={entry.item.id === context.highlightedMessageId} onStartEdit={() => context.setEditingMessageId(entry.item.id)} onCancelEdit={() => context.setEditingMessageId(undefined)} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
-  if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} retrying={context.status.retrying !== undefined} />;
+  if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} />;
   if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;

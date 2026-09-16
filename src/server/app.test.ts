@@ -1513,6 +1513,47 @@ describe("Jarvis HTTP and WebSocket API", () => {
     });
   });
 
+  it("clears the retrying status as soon as the retried attempt starts", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "retry-attempt-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    let listener: ((event: { type: string; [key: string]: unknown }) => void) | undefined;
+    vi.spyOn(AgentSession.prototype, "subscribe").mockImplementation((callback) => {
+      listener = callback as unknown as typeof listener;
+      return () => undefined;
+    });
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    const session = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const sessionUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}`;
+    const statusUrl = `${sessionUrl}/runtime`;
+
+    const accepted = (await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Keep going", clientRequestId: randomUUID() } })).json<{ runId: string }>();
+    await vi.waitFor(() => expect(listener).toBeDefined());
+    listener?.({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "HTTP 503: model-group route failed" } });
+    listener?.({ type: "auto_retry_start", attempt: 1, maxAttempts: 8, delayMs: 1_000, errorMessage: "HTTP 503: model-group route failed" });
+
+    const waiting = (await server.inject({ method: "GET", url: statusUrl })).json<{ status: { runState: string; retrying?: unknown } }>();
+    expect(waiting.status).toMatchObject({ runState: "running", activeRun: { id: accepted.runId }, retrying: { attempt: 1, maxAttempts: 8 } });
+
+    // 退避结束、重试请求重新开始：Pi 的 auto_retry_end 要等这次尝试成功才发，
+    // 所以 agent_start 必须自己撤掉 retrying，否则会一边流式思考一边显示“正在重试”。
+    listener?.({ type: "agent_start" });
+    const streaming = (await server.inject({ method: "GET", url: statusUrl })).json<{ status: { runState: string; retrying?: unknown } }>();
+    expect(streaming.status).toMatchObject({ runState: "running", activeRun: { id: accepted.runId } });
+    expect(streaming.status.retrying).toBeUndefined();
+
+    // 重试成功后仍按原路径收尾。
+    listener?.({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop" } });
+    listener?.({ type: "auto_retry_end", success: true, attempt: 1 });
+    listener?.({ type: "agent_settled" });
+    await vi.waitFor(async () => {
+      const settled = (await server.inject({ method: "GET", url: statusUrl })).json<{ status: { runState: string; lastError?: unknown } }>();
+      expect(settled.status).toMatchObject({ runState: "idle" });
+      expect(settled.status.lastError).toBeUndefined();
+    });
+  });
+
   it("settles a stopped run when Pi abort never resolves", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "abort-timeout-workspace");
