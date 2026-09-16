@@ -126,6 +126,18 @@ export function mergeSession(current: SessionSummary[], next: SessionSummary, vi
   return sortSessionSummaries(copy);
 }
 
+export function withoutSession(current: SessionSummary[], sessionId: string): SessionSummary[] {
+  const next = current.filter((session) => session.id !== sessionId);
+  return next.length === current.length ? current : next;
+}
+
+export function withoutDraft(current: Record<string, string>, sessionId: string): Record<string, string> {
+  if (!(sessionId in current)) return current;
+  const next = { ...current };
+  delete next[sessionId];
+  return next;
+}
+
 /**
  * HTTP 会话列表是权威快照；当前列表里尚未出现在快照中的非空项（刚创建、事件已到列表未到）保留。
  * 空草稿不落盘，快照没有则丢掉，避免幽灵新会话。已标记删除的 id 两侧都丢掉。

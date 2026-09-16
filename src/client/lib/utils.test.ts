@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSummary } from "../../shared/protocol";
-import { isSessionInFocusWindow, matchesSessionQuery, normalizeSessionSearch, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sessionListWindow, workspaceDropTarget, SESSION_FOCUS_WINDOW_MS, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
+import { errorMessage, isSessionInFocusWindow, matchesSessionQuery, normalizeSessionSearch, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sessionListWindow, workspaceDropTarget, SESSION_FOCUS_WINDOW_MS, SESSIONS_COLLAPSED_LIMIT, SESSIONS_PAGE_SIZE } from "./utils";
 
 const session: SessionSummary = {
   id: "session-1",
@@ -216,5 +216,12 @@ describe("bang command parsing", () => {
     expect(parseBashCommand("normal prompt")).toBeUndefined();
     expect(parseBashCommand("!")).toBeUndefined();
     expect(parseBashCommand("!!")).toBeUndefined();
+  });
+});
+
+describe("errorMessage", () => {
+  it("prefers Error.message and otherwise uses the fallback", () => {
+    expect(errorMessage(new Error("boom"), "失败")).toBe("boom");
+    expect(errorMessage("nope", "失败")).toBe("失败");
   });
 });

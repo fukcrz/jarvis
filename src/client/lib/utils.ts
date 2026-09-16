@@ -9,6 +9,10 @@ export function cn(...values: ClassValue[]): string {
   return twMerge(clsx(values));
 }
 
+export function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 /**
  * RFC 4122 v4 UUID。crypto.randomUUID 仅在安全上下文（HTTPS/localhost）可用，
  * 局域网 HTTP 访问时不存在，这里提供兼容兜底。
