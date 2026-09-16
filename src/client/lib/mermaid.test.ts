@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { normalizeMermaidSvg, prepareMermaidSvgForExport, renderMermaidDiagram, writeDiagramClipboard } from "./mermaid";
 
 const mermaid = vi.hoisted(() => ({
@@ -60,7 +60,7 @@ describe("writeDiagramClipboard", () => {
   });
 
   it("writes png when ClipboardItem is available", async () => {
-    const write = vi.fn(async () => undefined);
+    const write: Mock<(items: Array<{ items: Record<string, Blob> }>) => Promise<void>> = vi.fn(async () => undefined);
     vi.stubGlobal("navigator", { clipboard: { write, writeText: vi.fn() } });
     vi.stubGlobal("ClipboardItem", class ClipboardItem {
       constructor(public items: Record<string, Blob>) {}
@@ -68,8 +68,8 @@ describe("writeDiagramClipboard", () => {
     const png = new Blob(["png"], { type: "image/png" });
     await expect(writeDiagramClipboard("<svg />", png)).resolves.toBe("png");
     expect(write).toHaveBeenCalledTimes(1);
-    const payload = write.mock.calls[0]?.[0] as Array<{ items: Record<string, Blob> }>;
-    expect(payload[0]?.items["image/png"]).toBe(png);
+    const payload = write.mock.calls[0]?.[0];
+    expect(payload?.[0]?.items["image/png"]).toBe(png);
   });
 
   it("falls back to svg text when image write is unavailable", async () => {

@@ -628,11 +628,9 @@ function modelsEndpoint(baseUrl: string, api: ManagedProvider["api"]): string {
 /** 解析各 API 的模型列表响应为统一结构（id + 可选显示名）。 */
 function projectFetchedModels(body: unknown, api: ManagedProvider["api"]): FetchedModel[] {
   const names: Record<string, string | undefined> = {};
-  let rows: unknown[] = [];
   if (api === "google-generative-ai") {
     if (!isRecord(body) || !Array.isArray(body["models"])) return [];
-    rows = body["models"];
-    for (const row of rows) {
+    for (const row of body["models"]) {
       if (isRecord(row) && typeof row["name"] === "string") {
         const id = row["name"].replace(/^models\//u, "");
         if (id !== "") names[id] = typeof row["displayName"] === "string" ? row["displayName"] : undefined;
@@ -640,16 +638,14 @@ function projectFetchedModels(body: unknown, api: ManagedProvider["api"]): Fetch
     }
   } else if (api === "anthropic-messages") {
     if (!isRecord(body) || !Array.isArray(body["data"])) return [];
-    rows = body["data"];
-    for (const row of rows) {
+    for (const row of body["data"]) {
       if (isRecord(row) && typeof row["id"] === "string" && row["id"] !== "") {
         names[row["id"]] = typeof row["display_name"] === "string" ? row["display_name"] : undefined;
       }
     }
   } else {
     if (!isRecord(body) || !Array.isArray(body["data"])) return [];
-    rows = body["data"];
-    for (const row of rows) {
+    for (const row of body["data"]) {
       if (isRecord(row) && typeof row["id"] === "string" && row["id"] !== "") names[row["id"]] = undefined;
     }
   }

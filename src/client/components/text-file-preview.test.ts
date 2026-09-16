@@ -15,7 +15,8 @@ describe("local text file preview trigger", () => {
       path: "src/app.ts",
       cwd: "/ws",
       onOpen: () => {},
-    }, "src/app.ts"));
+      children: "src/app.ts",
+    }));
 
     expect(markup).toContain("<a ");
     expect(markup).toContain('href="/api/files?path=src%2Fapp.ts&amp;cwd=%2Fws"');
