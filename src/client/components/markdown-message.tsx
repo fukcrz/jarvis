@@ -67,11 +67,27 @@ function rewriteImageReference(whole: string, alt: string, target: string, cwd: 
 }
 
 /** 行内代码（`…`）不参与重写，否则行内示例会被改坏。 */
-function rewriteOutsideInlineCode(line: string, cwd: string | undefined): string {
+function outsideInlineCode(line: string, transform: (segment: string) => string): string {
   return line
     .split(/(`+[^`]*`+)/)
-    .map((segment, index) => index % 2 === 1 ? segment : segment.replace(IMAGE_PATTERN, (whole, alt: string, target: string) => rewriteImageReference(whole, alt, target, cwd)))
+    .map((segment, index) => index % 2 === 1 ? segment : transform(segment))
     .join("");
+}
+
+/** 按行处理围栏外的内容；围栏内的行原样保留（代码里的示例属于代码本身）。 */
+function mapOutsideFences(markdown: string, transform: (line: string) => string): string {
+  let fence: string | undefined;
+  return markdown.split("\n").map((line) => {
+    const match = FENCE_PATTERN.exec(line);
+    const marker = match?.[1];
+    if (fence === undefined) {
+      if (marker === undefined) return transform(line);
+      fence = marker;
+      return line;
+    }
+    if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length) fence = undefined;
+    return line;
+  }).join("\n");
 }
 
 /**
@@ -81,18 +97,19 @@ function rewriteOutsideInlineCode(line: string, cwd: string | undefined): string
  * 代码围栏与行内代码里的示例属于代码本身，必须原样保留（例如 mermaid 标签里的 `![](x.png)`）。
  */
 export function rewriteLocalImageUrls(markdown: string, cwd: string | undefined): string {
-  let fence: string | undefined;
-  return markdown.split("\n").map((line) => {
-    const match = FENCE_PATTERN.exec(line);
-    const marker = match?.[1];
-    if (fence === undefined) {
-      if (marker === undefined) return rewriteOutsideInlineCode(line, cwd);
-      fence = marker;
-      return line;
-    }
-    if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length) fence = undefined;
-    return line;
-  }).join("\n");
+  return mapOutsideFences(markdown, (line) => outsideInlineCode(line, (segment) => segment.replace(IMAGE_PATTERN, (whole, alt: string, target: string) => rewriteImageReference(whole, alt, target, cwd))));
+}
+
+/** 表格行与链接/图片目标里的星号可能承担语法结构（`| **A** |`、`[**A**](x)`），一律不动。 */
+const STRUCTURED_MARKDOWN = /^\s*\||\]\(/;
+
+/**
+ * 部分模型把 reasoning 标题与回答小标题连排输出（`**A****B**`），CommonMark 会把它当成
+ * 一个 strong 并保留字面 `****`，渲染成「A****B」粘成一串。这里把紧邻的四颗星号当作段落
+ * 分隔，拆成两段各自成段的标题；代码围栏、行内代码、表格行与链接里的星号保持原样。
+ */
+export function separateAdjacentBoldTitles(markdown: string): string {
+  return mapOutsideFences(markdown, (line) => STRUCTURED_MARKDOWN.test(line) ? line : outsideInlineCode(line, (segment) => segment.replaceAll("****", "**\n\n**")));
 }
 
 /**
@@ -334,7 +351,7 @@ function MermaidBlock({ code }: { code: string }) {
 const components = { pre: CodeBlock, code: MarkdownCode, a: LocalLink, img: MarkdownMedia };
 
 export function MarkdownMessage({ text, streaming = false, baseDir, interactiveFiles = false }: MarkdownMessageProps) {
-  const content = baseDir === undefined ? text : rewriteLocalImageUrls(text, baseDir);
+  const content = separateAdjacentBoldTitles(baseDir === undefined ? text : rewriteLocalImageUrls(text, baseDir));
   return <LocalFileCwdContext.Provider value={baseDir}>
     <InteractiveFilesContext.Provider value={interactiveFiles}>
       <MarkdownStreamingContext.Provider value={streaming}>

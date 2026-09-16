@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { MarkdownMessage, imageFallbackTarget, mediaKindForSource, rewriteLocalImageUrls } from "./markdown-message";
+import { MarkdownMessage, imageFallbackTarget, mediaKindForSource, rewriteLocalImageUrls, separateAdjacentBoldTitles } from "./markdown-message";
 
 describe("MarkdownMessage", () => {
   it("renders Markdown while a message is still streaming", () => {
@@ -94,6 +94,35 @@ describe("MarkdownMessage", () => {
     expect(rewritten).toContain("A[开始] --> B[![](shot.png)]");
     expect(rewritten).toContain("![](tilde.png)");
     expect(rewritten).toContain("`![](inline.png)`");
+  });
+
+  it("splits glued bold titles that some models emit back to back", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "**Forming side-chat architecture options****Preparing a recommendation before any edits**从现有实现看，我建议把侧聊定位成辅助会话。",
+    }));
+
+    expect(markup).toContain("<p><strong>Forming side-chat architecture options</strong></p>");
+    expect(markup).toContain("<p><strong>Preparing a recommendation before any edits</strong>从现有实现看，我建议把侧聊定位成辅助会话。</p>");
+    expect(markup).not.toContain("****");
+  });
+
+  it("separates every glued title run and keeps code, tables, and links untouched", () => {
+    expect(separateAdjacentBoldTitles("**Planning a****Planning b****Checking c**")).toBe("**Planning a**\n\n**Planning b**\n\n**Checking c**");
+
+    const markdown = [
+      "| **A****B** | 值 |",
+      "见 [**A****B**](https://example.com)",
+      "```md",
+      "**A****B**",
+      "```",
+      "行内 `**A****B**` 示例",
+    ].join("\n");
+    const separated = separateAdjacentBoldTitles(markdown);
+
+    expect(separated).toContain("| **A****B** | 值 |");
+    expect(separated).toContain("[**A****B**](https://example.com)");
+    expect(separated).toContain("```md\n**A****B**\n```");
+    expect(separated).toContain("行内 `**A****B**` 示例");
   });
 
   it("rewrites workspace-relative local image paths to the /api/files endpoint", () => {
