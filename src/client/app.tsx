@@ -569,13 +569,6 @@ export function App() {
 
   useEffect(() => {
     let disposed = false;
-    const reloadSessions = () => {
-      if (disposed || workspaces.length === 0) return;
-      void loadProjectSessions(workspaces).then((sessions) => {
-        if (disposed) return;
-        setSessionsByWorkspace((current) => mergeSessionSnapshots(current, sessions, workspaces.map((workspace) => workspace.id), deletedSessionsRef.current, viewedIdleKeysRef.current));
-      }).catch(() => undefined);
-    };
     const cleanups = workspaces.map((workspace) => {
       let socket: WebSocket | undefined;
       let reconnect: number | undefined;
@@ -702,11 +695,7 @@ export function App() {
           lastEventAt,
           now: Date.now(),
           lastReconnectAt,
-        })) {
-          reconnectNow();
-          return;
-        }
-        if (socket?.readyState === WebSocket.OPEN) reloadSessions();
+        })) reconnectNow();
       };
       connect();
       const watchdogTimer = window.setInterval(() => {
@@ -743,7 +732,7 @@ export function App() {
       disposed = true;
       for (const cleanup of cleanups) cleanup();
     };
-  }, [workspaces, loadProjectSessions]);
+  }, [workspaces]);
 
   const applyViewedSession = useCallback((session: SessionSummary) => {
     if (session.runState === "idle" && (session.attentionState === undefined || session.attentionState === "idle")) {
