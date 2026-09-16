@@ -1107,6 +1107,40 @@ describe("Jarvis HTTP and WebSocket API", () => {
     for (const session of (plain.json() as { sessions: ({ matchSnippet?: string })[] }).sessions) expect(session.matchSnippet).toBeUndefined();
   });
 
+  it("marks a stored session viewed without listing every jsonl file", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "viewed-header-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+    const listSpy = vi.spyOn(SessionManager, "list");
+
+    const viewed = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/viewed`, payload: {} });
+    expect(viewed.statusCode).toBe(200);
+    expect(viewed.json()).toMatchObject({ session: { id: source.id, workspaceId: workspace.id, runState: "idle", attentionState: "idle" } });
+    expect(listSpy).not.toHaveBeenCalled();
+
+    const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` });
+    expect(listed.statusCode).toBe(200);
+    expect((listed.json() as { sessions: Array<{ id: string; attentionState?: string }> }).sessions.find((session) => session.id === source.id)?.attentionState).toBe("idle");
+    listSpy.mockRestore();
+  });
+
+  it("opens a stored session timeline without listing every jsonl file", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "open-header-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+    const listSpy = vi.spyOn(SessionManager, "list");
+
+    const timeline = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/timeline` });
+    expect(timeline.statusCode).toBe(200);
+    expect((timeline.json() as { items: Array<{ id: string }> }).items.map((item) => item.id)).toEqual([source.user1, source.assistant1, source.user2, source.assistant2]);
+    expect(listSpy).not.toHaveBeenCalled();
+    listSpy.mockRestore();
+  });
+
   it("deletes a newly-created session before Pi persists its JSONL file", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "new-session-delete-workspace");

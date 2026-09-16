@@ -29,6 +29,7 @@ import {
   mergeSession,
   mergeSessionSnapshots,
   parseSocketHeartbeat,
+  retainSessionListCopy,
   sessionKey,
   touchViewedIdleKeys,
   shouldReconnectVisibleSocket,
@@ -365,6 +366,7 @@ export function App() {
     setForkTarget(undefined);
     setForkPending(false);
     setSessionNotice(undefined);
+    setPageError(undefined);
     setComposerCollapsed(false);
     setNewSessionFocusId(undefined);
   }, [selectedRef?.workspaceId, selectedRef?.sessionId]);
@@ -749,7 +751,10 @@ export function App() {
     } else {
       viewedIdleKeysRef.current.delete(sessionKey(session.workspaceId, session.id));
     }
-    setSessionsByWorkspace((current) => ({ ...current, [session.workspaceId]: mergeSession(current[session.workspaceId] ?? [], session, viewedIdleKeysRef.current) }));
+    setSessionsByWorkspace((current) => {
+      const existing = (current[session.workspaceId] ?? []).find((item) => item.id === session.id);
+      return { ...current, [session.workspaceId]: mergeSession(current[session.workspaceId] ?? [], retainSessionListCopy(existing, session), viewedIdleKeysRef.current) };
+    });
   }, []);
 
   const markSessionViewed = useCallback((ref: SessionRef, optimistic?: SessionSummary) => {

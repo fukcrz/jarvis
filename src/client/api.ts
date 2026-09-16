@@ -67,7 +67,12 @@ export function isSessionMissing(error: unknown): error is ApiError {
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers);
   if (options?.body !== undefined && options.body !== null && !headers.has("content-type")) headers.set("content-type", "application/json");
-  const response = await fetch(path, { ...options, headers });
+  let response: Response;
+  try {
+    response = await fetch(path, { ...options, headers });
+  } catch (error) {
+    throw new ApiError("NETWORK_ERROR", networkErrorMessage(error), 0);
+  }
   if (!response.ok) {
     // 登录态失效：通知外层切回登录页（登录/状态接口自身的 401 不算）。
     if (response.status === 401 && !path.startsWith("/api/auth/")) notifyUnauthorized();
@@ -110,6 +115,14 @@ const tunnelFieldLabels: Record<string, string> = {
   "frp.domain": "frp 域名",
   port: "目标端口",
 };
+
+function networkErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message === "Failed to fetch" || message === "Load failed" || message === "NetworkError when attempting to fetch resource.") {
+    return "无法连接服务";
+  }
+  return message.trim() === "" ? "无法连接服务" : message;
+}
 
 /** Converts backend validation details into text suitable for a settings toast. */
 function formatApiErrorMessage(code: string, message: string): string {

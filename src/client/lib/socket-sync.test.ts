@@ -6,6 +6,7 @@ import {
   mergeSession,
   mergeSessionSnapshots,
   parseSocketHeartbeat,
+  retainSessionListCopy,
   sessionKey,
   shouldFlushStreamEventImmediately,
   shouldReconnectVisibleSocket,
@@ -185,5 +186,15 @@ describe("session attention viewed idle", () => {
     expect(keys.has(sessionKey("ws", "a"))).toBe(false);
     const later = mergeSession([session("a")], session("a", { attentionState: "completed_unread" }), keys);
     expect(later[0]?.attentionState).toBe("completed_unread");
+  });
+
+  it("keeps sidebar title and preview when a cold viewed payload omits them", () => {
+    const existing = session("a", { name: "继续导入", preview: "First question" });
+    const incoming = session("a", { name: null, preview: null, attentionState: "idle" });
+    expect(retainSessionListCopy(existing, incoming)).toMatchObject({
+      name: "继续导入",
+      preview: "First question",
+      attentionState: "idle",
+    });
   });
 });

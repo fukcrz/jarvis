@@ -189,12 +189,27 @@ export class SessionService {
   }
 
   async markViewed(ref: SessionRef): Promise<SessionSummary> {
-    const active = await this.getActive(ref, false);
-    if (active.state.runState === "idle" && !active.extensionUi.hasPendingDialogs) {
-      this.setAttention(active, "idle");
-      this.publishSummary(active);
+    const key = activeKey(ref);
+    const transition = this.sessionTransitions.get(key);
+    if (transition !== undefined) await transition;
+    if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is being deleted", 409);
+
+    const pending = this.pendingOpens.get(key);
+    const active = this.active.get(key) ?? (pending === undefined ? undefined : await pending);
+    if (active !== undefined) {
+      if (active.state.runState === "idle" && !active.extensionUi.hasPendingDialogs) {
+        this.setAttention(active, "idle");
+        this.publishSummary(active);
+      }
+      return this.summaryFromActive(active);
     }
-    return this.summaryFromActive(active);
+
+    if (!isVisibleSessionId(ref.sessionId)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+    const workspace = this.workspaces.get(ref.workspaceId);
+    const path = await findSessionFile(workspace, ref.sessionId);
+    if (path === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+    await this.attention.setAttention(ref, "idle", new Date().toISOString());
+    return this.summaryFromStored(workspace, ref, path);
   }
 
   async fileReferences(workspaceId: string, query?: string): Promise<SessionFileReference[]> {
@@ -1184,14 +1199,12 @@ export class SessionService {
   }
 
   private async openActive(ref: SessionRef): Promise<ActiveSession> {
+    if (!isVisibleSessionId(ref.sessionId)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
     const workspace = this.workspaces.get(ref.workspaceId);
     const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
-    const sessions = (sessionDir === undefined
-      ? await SessionManager.list(workspace.cwd)
-      : await SessionManager.list(workspace.cwd, sessionDir)).filter((entry) => isVisibleSessionId(entry.id));
-    const match = sessions.find((entry) => entry.id === ref.sessionId);
-    if (match === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
-    const manager = sessionDir === undefined ? SessionManager.open(match.path) : SessionManager.open(match.path, sessionDir);
+    const path = await findSessionFile(workspace, ref.sessionId);
+    if (path === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+    const manager = sessionDir === undefined ? SessionManager.open(path) : SessionManager.open(path, sessionDir);
     return this.createActive(ref, workspace, manager);
   }
 
@@ -1858,6 +1871,30 @@ export class SessionService {
     };
   }
 
+  private async summaryFromStored(workspace: Workspace, ref: SessionRef, path: string): Promise<SessionSummary> {
+    const header = await readSessionFileHeader(path);
+    if (header === undefined || header.id !== ref.sessionId) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+    const persisted = await this.attention.get(ref);
+    const updatedAt = await sessionModifiedAt(path, new Date().toISOString());
+    const createdAt = header.timestamp !== undefined && Number.isFinite(Date.parse(header.timestamp))
+      ? new Date(header.timestamp).toISOString()
+      : updatedAt;
+    const attentionState = persisted.attentionState;
+    return {
+      id: ref.sessionId,
+      workspaceId: workspace.id,
+      name: null,
+      preview: null,
+      createdAt,
+      updatedAt,
+      runState: "idle",
+      attentionState,
+      ...(attentionState === "idle" || persisted.attentionAt === undefined ? {} : { attentionAt: persisted.attentionAt }),
+      ...(persisted.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: persisted.lastUserMessageAt }),
+      ...(persisted.starred === true ? { starred: true } : {}),
+    };
+  }
+
   private summaryFromActive(active: ActiveSession, previewOverride?: string): SessionSummary {
     return {
       id: active.ref.sessionId,
@@ -1959,7 +1996,7 @@ async function findSessionFile(workspace: Workspace, sessionId: string): Promise
 
 const SESSION_HEADER_SCAN_BYTES = 64 * 1024;
 
-async function readSessionFileHeader(path: string): Promise<{ id: string; cwd?: string } | undefined> {
+async function readSessionFileHeader(path: string): Promise<{ id: string; cwd?: string; timestamp?: string } | undefined> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(path, "r");
@@ -1969,7 +2006,11 @@ async function readSessionFileHeader(path: string): Promise<{ id: string; cwd?: 
     if (newline <= 0) return undefined;
     const parsed: unknown = JSON.parse(buffer.subarray(0, newline).toString("utf8"));
     if (!isRecord(parsed) || parsed["type"] !== "session" || typeof parsed["id"] !== "string" || parsed["id"] === "") return undefined;
-    return { id: parsed["id"], ...(typeof parsed["cwd"] === "string" ? { cwd: parsed["cwd"] } : {}) };
+    return {
+      id: parsed["id"],
+      ...(typeof parsed["cwd"] === "string" ? { cwd: parsed["cwd"] } : {}),
+      ...(typeof parsed["timestamp"] === "string" ? { timestamp: parsed["timestamp"] } : {}),
+    };
   } catch {
     return undefined;
   } finally {

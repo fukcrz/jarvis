@@ -237,6 +237,13 @@ describe("API client", () => {
     expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ messageId: "message:user:1", text: "Edited", clientRequestId: requestId, images: [{ mimeType: "image/png", data: "abc" }] }));
   });
 
+  it("turns a failed fetch into a connection error", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => {
+      throw new TypeError("Failed to fetch");
+    }));
+    await expect(api.settings()).rejects.toMatchObject({ name: "ApiError", code: "NETWORK_ERROR", message: "无法连接服务", status: 0 });
+  });
+
   it("sends compaction instructions and an idempotency key", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ accepted: true, runId: "8b2a18fb-9b91-4b1d-9c15-d2c6caf8e99e" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

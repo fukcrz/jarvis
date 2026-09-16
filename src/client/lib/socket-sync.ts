@@ -104,6 +104,12 @@ export function touchViewedIdleKeys(keys: Set<string>, incoming: SessionSummary)
   }
 }
 
+/** 冷会话 /viewed 只写 attention，name/preview 可能为空；侧栏已有文案时保留。 */
+export function retainSessionListCopy(existing: SessionSummary | undefined, incoming: SessionSummary): SessionSummary {
+  if (existing === undefined || incoming.name !== null || incoming.preview !== null) return incoming;
+  return { ...incoming, name: existing.name, preview: existing.preview, createdAt: existing.createdAt, updatedAt: existing.updatedAt };
+}
+
 export function mergeSession(current: SessionSummary[], next: SessionSummary, viewedIdleKeys: ReadonlySet<string> = EMPTY_VIEWED_IDLE_KEYS): SessionSummary[] {
   const keepViewedIdle = viewedIdleKeys.has(sessionKey(next.workspaceId, next.id)) && shouldKeepViewedIdle(next);
   const incoming = keepViewedIdle ? { ...next, attentionState: "idle" as const } : next;
