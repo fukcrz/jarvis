@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, Bell, ChevronDown, CircleAlert, Folder, FolderPlus, MoreVertical, Pencil, Plus, Puzzle, X } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { workspaceEventSchema } from "../shared/protocol";
-import { api, isSessionConflict, isSessionMissing, notifyUnauthorized, socketUrl } from "./api";
+import { api, isSessionConflict, notifyUnauthorized, socketUrl } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
 import { ThinkingSelector } from "./components/thinking-selector";
@@ -787,31 +787,6 @@ export function App() {
     markSessionViewed(selectedRef, selectedSession === undefined ? undefined : { ...selectedSession, runState: "idle" });
   }, [stream.transcript.status, selectedRef, selectedRefKey, markSessionViewed]);
 
-  const forgetEmptyDrafts = async (targetWorkspaceId: string, extras: SessionSummary[]) => {
-    if (extras.length === 0) return;
-    const removed: string[] = [];
-    let removeFailed = false;
-    for (const old of extras) {
-      try {
-        await api.removeSession({ workspaceId: targetWorkspaceId, sessionId: old.id });
-        removed.push(old.id);
-      } catch (error) {
-        if (isSessionMissing(error)) removed.push(old.id);
-        else removeFailed = true;
-      }
-    }
-    if (removed.length > 0) {
-      const deleted = deletedSessionsRef.current[targetWorkspaceId] ??= new Set();
-      for (const id of removed) deleted.add(id);
-      setSessionsByWorkspace((current) => {
-        let sessions = current[targetWorkspaceId] ?? [];
-        for (const id of removed) sessions = withoutSession(sessions, id);
-        return { ...current, [targetWorkspaceId]: sessions };
-      });
-    }
-    if (removeFailed) setPageError("无法刷新会话");
-  };
-
   const openCreatedSession = (targetWorkspaceId: string, nextSessionId: string) => {
     setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
     setPageError(undefined);
@@ -832,11 +807,13 @@ export function App() {
   const createSession = async (targetWorkspaceId = workspaceId) => {
     if (targetWorkspaceId === undefined || creatingSessionWorkspacesRef.current.has(targetWorkspaceId)) return;
 
-    const existingEmpties = (sessionsByWorkspace[targetWorkspaceId] ?? []).filter((session) => isEmptySession(session));
-    const reusable = existingEmpties.find((session) => session.id === sessionId) ?? existingEmpties[0];
-    if (reusable !== undefined) {
-      openCreatedSession(targetWorkspaceId, reusable.id);
-      void forgetEmptyDrafts(targetWorkspaceId, existingEmpties.filter((session) => session.id !== reusable.id));
+    const existingEmpty = (sessionsByWorkspace[targetWorkspaceId] ?? []).find((session) => isEmptySession(session));
+    if (existingEmpty !== undefined) {
+      if (workspaceId === targetWorkspaceId && sessionId === existingEmpty.id) {
+        composerFocusRef.current?.();
+        return;
+      }
+      openCreatedSession(targetWorkspaceId, existingEmpty.id);
       return;
     }
 
@@ -1313,10 +1290,10 @@ export function App() {
   const renderChatContent = () => <>
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <div className="chat-stage">
-      <Timeline key={stream.sessionKey ?? selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.pendingSessionKey === undefined && stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} switching={stream.pendingSessionKey !== undefined} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.pendingSessionKey !== undefined || stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={stream.pendingSessionKey === undefined ? requestForkMessage : undefined} onExtensionUiRespond={stream.pendingSessionKey === undefined ? stream.respondExtensionUi : undefined} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} />
+      <Timeline key={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} />
       <div className="chat-dock">
         <ExtensionPanels panels={stream.extensionPanels} />
-        <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.pendingSessionKey !== undefined || stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
+        <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />
