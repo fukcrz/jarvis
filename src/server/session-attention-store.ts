@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { SessionAttentionState, SessionRef } from "../shared/protocol.js";
+import { atomicWrite, isMissingFile } from "./fs.js";
 
 export interface SessionSortMeta {
   attentionState: SessionAttentionState;
@@ -31,6 +32,8 @@ interface PersistedSessionMeta {
 interface PersistedAttentionFile {
   version: 2;
   sessions: Record<string, PersistedSessionMeta>;
+  /** parentKey (`workspaceId:sessionId`) → side-chat session id */
+  sideChats?: Record<string, string>;
 }
 
 /** Jarvis-owned UI state. Pi JSONL remains the source of conversation history. */
@@ -129,8 +132,45 @@ export class SessionAttentionStore {
 
   async removeMany(refs: SessionRef[]): Promise<void> {
     if (refs.length === 0) return;
+    const keys = new Set(refs.map((ref) => key(ref)));
+    const sessionIds = new Set(refs.map((ref) => ref.sessionId));
     await this.update((data) => {
       for (const ref of refs) delete data.sessions[key(ref)];
+      const sideChats = data.sideChats;
+      if (sideChats === undefined) return;
+      for (const [entryKey, sideId] of Object.entries(sideChats)) {
+        if (keys.has(entryKey) || sessionIds.has(sideId)) delete sideChats[entryKey];
+      }
+    });
+  }
+
+  async getSideChatId(parent: SessionRef): Promise<string | undefined> {
+    return (await this.load()).sideChats?.[key(parent)];
+  }
+
+  async sideChatIds(workspaceId: string): Promise<Set<string>> {
+    const prefix = `${workspaceId}:`;
+    const sideChats = (await this.load()).sideChats ?? {};
+    return new Set(Object.entries(sideChats).flatMap(([entryKey, sideId]) => entryKey.startsWith(prefix) ? [sideId] : []));
+  }
+
+  async isSideChat(ref: SessionRef): Promise<boolean> {
+    const ids = await this.sideChatIds(ref.workspaceId);
+    return ids.has(ref.sessionId);
+  }
+
+  async setSideChat(parent: SessionRef, sideSessionId: string): Promise<void> {
+    await this.update((data) => {
+      const sideChats = { ...data.sideChats };
+      sideChats[key(parent)] = sideSessionId;
+      data.sideChats = sideChats;
+    });
+  }
+
+  async clearSideChat(parent: SessionRef): Promise<void> {
+    await this.update((data) => {
+      if (data.sideChats === undefined) return;
+      delete data.sideChats[key(parent)];
     });
   }
 
@@ -165,10 +205,9 @@ export class SessionAttentionStore {
   }
 
   private async persist(data: PersistedAttentionFile): Promise<void> {
+    if (data.sideChats !== undefined && Object.keys(data.sideChats).length === 0) delete data.sideChats;
     await mkdir(dirname(this.path), { recursive: true });
-    const temporary = `${this.path}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(data)}\n`, "utf8");
-    await rename(temporary, this.path);
+    await atomicWrite(this.path, `${JSON.stringify(data)}\n`);
   }
 }
 
@@ -208,7 +247,17 @@ function migratePersistedFile(value: unknown): PersistedAttentionFile | undefine
     const migrated = migratePersistedEntry(entry);
     if (migrated !== undefined) sessions[entryKey] = migrated;
   }
-  return { version: 2, sessions };
+  const sideChats = parseSideChats(record["sideChats"]);
+  return { version: 2, sessions, ...(sideChats === undefined ? {} : { sideChats }) };
+}
+
+function parseSideChats(value: unknown): Record<string, string> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const next: Record<string, string> = {};
+  for (const [entryKey, sideId] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof sideId === "string" && sideId !== "") next[entryKey] = sideId;
+  }
+  return Object.keys(next).length === 0 ? undefined : next;
 }
 
 function migratePersistedEntry(value: unknown): PersistedSessionMeta | undefined {
@@ -244,6 +293,3 @@ function numberField(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function isMissingFile(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT";
-}

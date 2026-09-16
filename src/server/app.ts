@@ -339,6 +339,9 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     return { session: await sessions.patch(ref, body) };
   });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/viewed", async (request) => ({ session: await sessions.markViewed(sessionRef(request.params)) }));
+  app.get("/api/workspaces/:workspaceId/sessions/:sessionId/side-chat", async (request) => ({ session: await sessions.peekSideChat(sessionRef(request.params)) }));
+  app.post("/api/workspaces/:workspaceId/sessions/:sessionId/side-chat", async (request) => ({ session: await sessions.ensureSideChat(sessionRef(request.params)) }));
+  app.post("/api/workspaces/:workspaceId/sessions/:sessionId/side-chat/reset", async (request) => ({ session: await sessions.resetSideChat(sessionRef(request.params)) }));
   app.delete("/api/workspaces/:workspaceId/sessions/:sessionId", async (request) => {
     await sessions.remove(sessionRef(request.params));
     return { removed: true };

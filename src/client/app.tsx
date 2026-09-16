@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, Bell, ChevronDown, CircleAlert, Folder, FolderPlus, MoreVertical, Pencil, Plus, Puzzle, X } from "lucide-react";
-import type { ComposerCommand, ImageAttachment, ModelDescriptor, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
-import { workspaceEventSchema } from "../shared/protocol";
-import { api, isSessionConflict, notifyUnauthorized, socketUrl } from "./api";
+import type { ComposerCommand, ImageAttachment, ModelDescriptor, RunState, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
+import { api, isSessionConflict } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
 import { ThinkingSelector } from "./components/thinking-selector";
@@ -16,6 +15,7 @@ import { SessionSearchDialog } from "./components/session-search-dialog";
 import { Timeline } from "./components/timeline";
 import { SettingsPage } from "./components/settings-page";
 import { FileBrowser } from "./components/file-browser";
+import { SideChatPanel, SideChatToggle } from "./components/side-chat-panel";
 import type { ExtensionPanelState } from "./hooks/use-session-stream";
 import { ContextButton } from "./components/context-button";
 import { Button } from "./components/ui/button";
@@ -28,20 +28,17 @@ import {
   clearIdleAttention,
   mergeSession,
   mergeSessionSnapshots,
-  parseSocketHeartbeat,
   retainSessionListCopy,
   sessionKey,
-  touchViewedIdleKeys,
-  shouldReconnectVisibleSocket,
-  socketHeartbeatMessage,
-  SOCKET_CLIENT_PING_INTERVAL_MS,
-  SOCKET_PING_TYPE,
-  SOCKET_PONG_TYPE,
-  SOCKET_WATCHDOG_INTERVAL_MS,
+  withoutDraft,
+  withoutSession,
 } from "./lib/socket-sync";
-import { isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sortSessionSummaries } from "./lib/utils";
+import { errorMessage, isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sortSessionSummaries } from "./lib/utils";
+import { useIsMobile } from "./hooks/use-is-mobile";
 import { useSessionStream } from "./hooks/use-session-stream";
-import { extensionToastDuration, extensionToastSourceLabel, mergeExtensionToast, type ExtensionToast, type ExtensionToastInput } from "./extension-notifications";
+import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, useSidebarResize } from "./hooks/use-sidebar-resize";
+import { useWorkspaceEvents } from "./hooks/use-workspace-events";
+import { extensionToastDuration, extensionToastSourceLabel, type ExtensionToast } from "./extension-notifications";
 
 /** Extract the entity ids carried by the current hash route. */
 function pathParams(pathname: string): { workspaceId?: string; sessionId?: string; files?: boolean } {
@@ -56,16 +53,6 @@ const COMMAND_RETRY_BASE_DELAY_MS = 750;
 const COMMAND_RETRY_MAX_DELAY_MS = 10_000;
 const EMPTY_COMPOSER_COMMANDS: ComposerCommand[] = [];
 const SESSION_FOCUS_STORAGE_KEY = "jarvis.sessions.focus";
-const SIDEBAR_WIDTH_STORAGE_KEY = "jarvis.sidebar.width";
-const SIDEBAR_DEFAULT_WIDTH = 316;
-const SIDEBAR_MIN_WIDTH = 240;
-const SIDEBAR_MAX_WIDTH = 480;
-
-interface SidebarResizeState {
-  pointerId: number;
-  startX: number;
-  startWidth: number;
-}
 
 export function App() {
   const location = useLocation();
@@ -80,11 +67,7 @@ export function App() {
   const [sessionsByWorkspace, setSessionsByWorkspace] = useState<Record<string, SessionSummary[]>>({});
   const [sessionId, setSessionId] = useState<string | undefined>(() => initialPath.sessionId ?? window.localStorage.getItem("jarvis.session") ?? undefined);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Record<string, boolean>>(() => readExpandedWorkspaces());
-  const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth());
-  const [sidebarResizing, setSidebarResizing] = useState(false);
-  const sidebarResizeRef = useRef<SidebarResizeState | undefined>(undefined);
-  const sidebarWidthRef = useRef(sidebarWidth);
-  sidebarWidthRef.current = sidebarWidth;
+  const { sidebarWidth, sidebarResizing, startSidebarResize, resizeSidebarWithKeyboard, stopSidebarResize } = useSidebarResize();
   const [focusMode, setFocusMode] = useState(readSessionFocusMode);
   const [focusNow, setFocusNow] = useState(Date.now());
   const [loading, setLoading] = useState(true);
@@ -109,74 +92,13 @@ export function App() {
   const isSettingsPage = isSettingsPath(location.pathname);
   const mobilePage: "sessions" | "chat" | "settings" = isSettingsPage ? "settings" : location.pathname.startsWith("/chat") ? "chat" : "sessions";
   const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | undefined>();
+  const [sideChatOpen, setSideChatOpen] = useState(false);
+  const [sideChatRunState, setSideChatRunState] = useState<RunState | undefined>();
   // Prevent repeated clicks from stacking unused sessions in the same workspace.
   const creatingSessionWorkspacesRef = useRef(new Set<string>());
   const previousSessionStatusRef = useRef<{ key?: string; runState?: string }>({});
-  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
+  const isMobile = useIsMobile();
 
-  const stopSidebarResize = useCallback((pointerId?: number) => {
-    const resize = sidebarResizeRef.current;
-    if (resize === undefined || (pointerId !== undefined && resize.pointerId !== pointerId)) return;
-    sidebarResizeRef.current = undefined;
-    persistSidebarWidth(sidebarWidthRef.current);
-    setSidebarResizing(false);
-    document.body.classList.remove("sidebar-resizing");
-  }, []);
-
-  const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || event.pointerType === "touch" || sidebarResizeRef.current !== undefined) return;
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    sidebarResizeRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: sidebarWidthRef.current };
-    setSidebarResizing(true);
-    document.body.classList.add("sidebar-resizing");
-  };
-
-  const resizeSidebarWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const step = 16;
-    const nextWidth = event.key === "ArrowLeft"
-      ? clampSidebarWidth(sidebarWidthRef.current - step)
-      : event.key === "ArrowRight"
-        ? clampSidebarWidth(sidebarWidthRef.current + step)
-        : event.key === "Home"
-          ? SIDEBAR_MIN_WIDTH
-          : event.key === "End"
-            ? SIDEBAR_MAX_WIDTH
-            : undefined;
-    if (nextWidth === undefined) return;
-    event.preventDefault();
-    sidebarWidthRef.current = nextWidth;
-    setSidebarWidth((current) => current === nextWidth ? current : nextWidth);
-    persistSidebarWidth(nextWidth);
-  };
-
-  useEffect(() => {
-    const onPointerMove = (event: globalThis.PointerEvent) => {
-      const resize = sidebarResizeRef.current;
-      if (resize === undefined || event.pointerId !== resize.pointerId) return;
-      event.preventDefault();
-      const nextWidth = clampSidebarWidth(resize.startWidth + event.clientX - resize.startX);
-      sidebarWidthRef.current = nextWidth;
-      setSidebarWidth((current) => current === nextWidth ? current : nextWidth);
-    };
-    const onPointerUp = (event: globalThis.PointerEvent) => stopSidebarResize(event.pointerId);
-    const onPointerCancel = (event: globalThis.PointerEvent) => stopSidebarResize(event.pointerId);
-    const onWindowBlur = () => stopSidebarResize();
-    const onVisibilityChange = () => stopSidebarResize();
-    window.addEventListener("pointermove", onPointerMove, { passive: false });
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerCancel);
-    window.addEventListener("blur", onWindowBlur);
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerCancel);
-      window.removeEventListener("blur", onWindowBlur);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      stopSidebarResize();
-    };
-  }, [stopSidebarResize]);
 
   // The URL is the source of truth for the selected workspace/session.
   useEffect(() => {
@@ -188,7 +110,7 @@ export function App() {
   // First visit (empty hash): mobile lands on the global session list; desktop restores its previous workspace.
   useEffect(() => {
     if (location.pathname !== "/") return;
-    if (window.innerWidth <= 760) {
+    if (isMobile) {
       navigate("/projects", { replace: true });
       return;
     }
@@ -197,7 +119,7 @@ export function App() {
     if (restoredWorkspace !== null && restoredSession !== null) navigate(`/chat/${restoredWorkspace}/${restoredSession}`, { replace: true });
     else if (restoredWorkspace !== null) navigate(`/sessions/${restoredWorkspace}`, { replace: true });
     else navigate("/projects", { replace: true });
-  }, [location.pathname, navigate]);
+  }, [isMobile, location.pathname, navigate]);
 
   const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const [thinkingLevelPending, setThinkingLevelPending] = useState(false);
@@ -214,7 +136,7 @@ export function App() {
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenuTarget | undefined>();
   const [mobileActionTarget, setMobileActionTarget] = useState<MobileActionTarget | undefined>();
   const [userNavigatorOpen, setUserNavigatorOpen] = useState(false);
-  const [deletePending, setDeletePending] = useState(false);
+  const deletingSessionsRef = useRef(new Set<string>());
   const [composerCommands, setComposerCommands] = useState<{ sessionKey: string; items: ComposerCommand[] } | undefined>();
   // 移动端：非底部输入框聚焦时，输入栏折叠为紧凑按钮（见 PromptEditor）。
   const [composerCollapsed, setComposerCollapsed] = useState(false);
@@ -276,6 +198,9 @@ export function App() {
       setFilesWorkspaceId(undefined);
     }
   }, [filesWorkspaceId, isSettingsPage, workspaces]);
+  useEffect(() => {
+    if (isSettingsPage || selectedRef === undefined) setSideChatOpen(false);
+  }, [isSettingsPage, selectedRef]);
 
   const recoverSessionConflict = useCallback(async (error: unknown): Promise<boolean> => {
     if (!isSessionConflict(error)) return false;
@@ -284,13 +209,6 @@ export function App() {
     return true;
   }, [stream.refresh]);
 
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 760px)");
-    const update = () => setIsMobile(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
   useEffect(() => {
     const restoreBodyPointerEvents = installBodyPointerEventsGuard();
     const removeTouchFocusGuard = installTouchFocusGuard();
@@ -425,7 +343,7 @@ export function App() {
     }).catch((error: unknown) => {
       if (workspaceOrderRequestRef.current !== requestId) return;
       setWorkspaces((current) => current.map((workspace) => workspace.id).join() === next.map((workspace) => workspace.id).join() ? previous : current);
-      setPageError(error instanceof Error ? error.message : "工作区排序失败");
+      setPageError(errorMessage(error, "工作区排序失败"));
     }).finally(() => {
       if (workspaceOrderRequestRef.current !== requestId) return;
       workspaceOrderRequestRef.current = undefined;
@@ -445,7 +363,7 @@ export function App() {
   }, [workspaces]);
 
   useEffect(() => {
-    void Promise.all([loadWorkspaces(), api.settings().then((settings) => { setAssistantName(settings.assistantName); })]).catch((error: unknown) => setPageError(error instanceof Error ? error.message : "无法加载应用设置")).finally(() => setLoading(false));
+    void Promise.all([loadWorkspaces(), api.settings().then((settings) => { setAssistantName(settings.assistantName); })]).catch((error: unknown) => setPageError(errorMessage(error, "无法加载应用设置"))).finally(() => setLoading(false));
   }, [loadWorkspaces]);
 
   useEffect(() => {
@@ -458,7 +376,7 @@ export function App() {
       if (disposed) return;
       setSessionsByWorkspace((current) => mergeSessionSnapshots(current, sessions, workspaces.map((workspace) => workspace.id), deletedSessionsRef.current, viewedIdleKeysRef.current));
     }).catch((error: unknown) => {
-      if (!disposed) setPageError(error instanceof Error ? error.message : "无法加载会话");
+      if (!disposed) setPageError(errorMessage(error, "无法加载会话"));
     });
     return () => { disposed = true; };
   }, [workspaces, loadProjectSessions]);
@@ -506,7 +424,7 @@ export function App() {
     const sessions = sessionsByWorkspace[workspace.id];
     if (sessions === undefined) return;
     if (sessionId !== undefined && sessions.some((session) => session.id === sessionId)) return;
-    if (window.innerWidth <= 760) {
+    if (isMobile) {
       if (pathSessionId !== undefined && !sessions.some((session) => session.id === pathSessionId)) {
         // The chat URL carries a stale session id (deleted, other workspace).
         setSessionId(undefined);
@@ -526,7 +444,7 @@ export function App() {
       // Desktop sidebar expansion is UI-only; never navigate for it.
       setSessionId(first);
     }
-  }, [workspaces, sessionsByWorkspace, workspaceId, sessionId, loading, location.pathname, navigate]);
+  }, [workspaces, sessionsByWorkspace, workspaceId, sessionId, loading, location.pathname, navigate, isMobile]);
 
   useEffect(() => {
     setExpandedWorkspaceIds((current) => {
@@ -567,172 +485,16 @@ export function App() {
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [globalExtensionToasts]);
 
-  useEffect(() => {
-    let disposed = false;
-    const cleanups = workspaces.map((workspace) => {
-      let socket: WebSocket | undefined;
-      let reconnect: number | undefined;
-      let pingTimer: number | undefined;
-      let lastEventAt = Date.now();
-      let lastReconnectAt = 0;
-      const stopReconnectAndPing = () => {
-        if (reconnect !== undefined) {
-          window.clearTimeout(reconnect);
-          reconnect = undefined;
-        }
-        if (pingTimer !== undefined) {
-          window.clearInterval(pingTimer);
-          pingTimer = undefined;
-        }
-      };
-      const replaceSocket = (next: WebSocket | undefined) => {
-        const previous = socket;
-        socket = next;
-        if (previous !== undefined && previous !== next) {
-          try {
-            previous.close();
-          } catch {
-            // CONNECTING 状态下 close 会抛 InvalidStateError，直接弃用旧连接。
-          }
-        }
-      };
-      const startKeepalive = (connection: WebSocket) => {
-        if (pingTimer !== undefined) window.clearInterval(pingTimer);
-        pingTimer = window.setInterval(() => {
-          if (disposed || socket !== connection || connection.readyState !== WebSocket.OPEN || document.hidden) return;
-          try {
-            connection.send(socketHeartbeatMessage(SOCKET_PING_TYPE));
-          } catch {
-            connection.close();
-          }
-        }, SOCKET_CLIENT_PING_INTERVAL_MS);
-      };
-      const connect = () => {
-        if (disposed) return;
-        stopReconnectAndPing();
-        lastReconnectAt = Date.now();
-        const connection = new WebSocket(socketUrl(`/api/workspaces/${workspace.id}/events`));
-        replaceSocket(connection);
-        connection.addEventListener("open", () => {
-          if (disposed || socket !== connection) return;
-          lastEventAt = Date.now();
-          startKeepalive(connection);
-        });
-        connection.addEventListener("message", (event) => {
-          if (disposed || socket !== connection) return;
-          try {
-            const parsed: unknown = JSON.parse(String(event.data));
-            const heartbeat = parseSocketHeartbeat(parsed);
-            if (heartbeat !== undefined) {
-              lastEventAt = Date.now();
-              if (heartbeat.type === SOCKET_PING_TYPE && connection.readyState === WebSocket.OPEN) {
-                try {
-                  connection.send(socketHeartbeatMessage(SOCKET_PONG_TYPE));
-                } catch {
-                  connection.close();
-                }
-              }
-              return;
-            }
-            const parsedEvent = workspaceEventSchema.safeParse(parsed);
-            if (!parsedEvent.success) return;
-            lastEventAt = Date.now();
-            const workspaceEvent = parsedEvent.data;
-            if (workspaceEvent.type === "extension.notify") {
-              const { notification } = workspaceEvent;
-              const tone: "info" | "warning" | "error" = notification.notifyType === "warning" || notification.notifyType === "error" ? notification.notifyType : "info";
-              const incoming: ExtensionToastInput = { id: notification.id, workspaceId: workspaceEvent.workspaceId, sessionId: notification.sessionId, message: notification.message, tone };
-              setGlobalExtensionToasts((current) => {
-                const merged = mergeExtensionToast(current[0], incoming);
-                return merged === current[0] ? current : [merged];
-              });
-              return;
-            }
-            if (workspaceEvent.type === "session.deleted") {
-              (deletedSessionsRef.current[workspace.id] ??= new Set()).add(workspaceEvent.sessionId);
-              viewedIdleKeysRef.current.delete(sessionKey(workspace.id, workspaceEvent.sessionId));
-              setSessionsByWorkspace((current) => {
-                const sessions = current[workspace.id] ?? [];
-                const next = withoutSession(sessions, workspaceEvent.sessionId);
-                return next === sessions ? current : { ...current, [workspace.id]: next };
-              });
-              setDrafts((current) => withoutDraft(current, workspaceEvent.sessionId));
-              setSessionMenu((current) => current?.workspaceId === workspace.id && current.session.id === workspaceEvent.sessionId ? undefined : current);
-              return;
-            }
-            touchViewedIdleKeys(viewedIdleKeysRef.current, workspaceEvent.session);
-            setSessionsByWorkspace((current) => ({ ...current, [workspace.id]: mergeSession(current[workspace.id] ?? [], workspaceEvent.session, viewedIdleKeysRef.current) }));
-          } catch {
-            // A malformed workspace event does not invalidate the active view.
-          }
-        });
-        connection.addEventListener("close", (event) => {
-          if (disposed || socket !== connection) return;
-          replaceSocket(undefined);
-          if (pingTimer !== undefined) {
-            window.clearInterval(pingTimer);
-            pingTimer = undefined;
-          }
-          // 4401：服务端因未登录拒绝，AuthGate 会切回登录页，不再重连。
-          if (event.code === 4401) {
-            notifyUnauthorized();
-            return;
-          }
-          reconnect = window.setTimeout(connect, 1_500);
-        });
-        connection.addEventListener("error", () => connection.close());
-      };
-      const reconnectNow = () => {
-        if (disposed) return;
-        connect();
-      };
-      const resync = () => {
-        if (disposed) return;
-        if (shouldReconnectVisibleSocket({
-          visible: document.visibilityState === "visible",
-          online: navigator.onLine,
-          readyState: socket?.readyState ?? WebSocket.CLOSED,
-          lastEventAt,
-          now: Date.now(),
-          lastReconnectAt,
-        })) reconnectNow();
-      };
-      connect();
-      const watchdogTimer = window.setInterval(() => {
-        if (disposed || document.hidden) return;
-        if (shouldReconnectVisibleSocket({
-          visible: true,
-          online: navigator.onLine,
-          readyState: socket?.readyState ?? WebSocket.CLOSED,
-          lastEventAt,
-          now: Date.now(),
-          lastReconnectAt,
-        })) reconnectNow();
-      }, SOCKET_WATCHDOG_INTERVAL_MS);
-      const onVisibilityChange = () => {
-        if (document.visibilityState === "visible") resync();
-      };
-      const onOnline = () => { resync(); };
-      const onPageShow = (event: PageTransitionEvent) => {
-        if (event.persisted) resync();
-      };
-      document.addEventListener("visibilitychange", onVisibilityChange);
-      window.addEventListener("online", onOnline);
-      window.addEventListener("pageshow", onPageShow);
-      return () => {
-        stopReconnectAndPing();
-        window.clearInterval(watchdogTimer);
-        socket?.close();
-        document.removeEventListener("visibilitychange", onVisibilityChange);
-        window.removeEventListener("online", onOnline);
-        window.removeEventListener("pageshow", onPageShow);
-      };
-    });
-    return () => {
-      disposed = true;
-      for (const cleanup of cleanups) cleanup();
-    };
-  }, [workspaces]);
+  useWorkspaceEvents({
+    workspaces,
+    deletedSessionsRef,
+    viewedIdleKeysRef,
+    setSessionsByWorkspace,
+    setDrafts,
+    setSessionMenu,
+    setGlobalExtensionToasts,
+  });
+
 
   const applyViewedSession = useCallback((session: SessionSummary) => {
     if (session.runState === "idle" && (session.attentionState === undefined || session.attentionState === "idle")) {
@@ -823,7 +585,7 @@ export function App() {
       setSessionsByWorkspace((current) => ({ ...current, [targetWorkspaceId]: mergeSession(current[targetWorkspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       openCreatedSession(targetWorkspaceId, session.id);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法创建会话");
+      setPageError(errorMessage(error, "无法创建会话"));
     } finally {
       creatingSessionWorkspacesRef.current.delete(targetWorkspaceId);
     }
@@ -845,7 +607,7 @@ export function App() {
       setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法更新收藏");
+      setPageError(errorMessage(error, "无法更新收藏"));
     }
   };
 
@@ -858,7 +620,7 @@ export function App() {
       setRenameTarget(undefined);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法重命名会话");
+      setPageError(errorMessage(error, "无法重命名会话"));
     }
   };
 
@@ -871,7 +633,7 @@ export function App() {
       setProjectRenameTarget(undefined);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法重命名项目");
+      setPageError(errorMessage(error, "无法重命名项目"));
     }
   };
 
@@ -902,7 +664,7 @@ export function App() {
       setProjectRemoveTarget(undefined);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法移除项目");
+      setPageError(errorMessage(error, "无法移除项目"));
     } finally {
       setProjectRemovePending(false);
     }
@@ -929,22 +691,25 @@ export function App() {
   };
 
   const deleteSession = async (target: { workspaceId: string; session: SessionSummary }) => {
-    if (deletePending) return;
-    setDeletePending(true);
+    const key = sessionKey(target.workspaceId, target.session.id);
+    if (deletingSessionsRef.current.has(key)) return;
+    deletingSessionsRef.current.add(key);
+    (deletedSessionsRef.current[target.workspaceId] ??= new Set()).add(target.session.id);
+    setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: withoutSession(current[target.workspaceId] ?? [], target.session.id) }));
+    setDrafts((current) => withoutDraft(current, target.session.id));
+    if (workspaceId === target.workspaceId && sessionId === target.session.id) {
+      setSessionId(undefined);
+      navigate(isMobile ? "/projects" : `/sessions/${target.workspaceId}`, { replace: true });
+    }
     try {
       await api.removeSession({ workspaceId: target.workspaceId, sessionId: target.session.id });
-      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: withoutSession(current[target.workspaceId] ?? [], target.session.id) }));
-      setDrafts((current) => withoutDraft(current, target.session.id));
-      if (workspaceId === target.workspaceId && sessionId === target.session.id) {
-        setSessionId(undefined);
-        // Mobile: back to the session list; desktop: the guard picks the next session.
-        navigate(isMobile ? "/projects" : `/sessions/${target.workspaceId}`, { replace: true });
-      }
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法删除会话");
+      deletedSessionsRef.current[target.workspaceId]?.delete(target.session.id);
+      setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], target.session, viewedIdleKeysRef.current) }));
+      setPageError(errorMessage(error, "无法删除会话"));
     } finally {
-      setDeletePending(false);
+      deletingSessionsRef.current.delete(key);
     }
   };
 
@@ -975,7 +740,7 @@ export function App() {
       setSessionCleanupTarget(undefined);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法清理会话");
+      setPageError(errorMessage(error, "无法清理会话"));
     } finally {
       setSessionCleanupPending(false);
     }
@@ -990,7 +755,7 @@ export function App() {
       setNewSessionFocusId(session.id);
       chooseSession(target.workspaceId, session.id);
     } catch (error) {
-      if (!(await recoverSessionConflict(error))) setPageError(error instanceof Error ? error.message : "无法创建分支");
+      if (!(await recoverSessionConflict(error))) setPageError(errorMessage(error, "无法创建分支"));
     }
   };
 
@@ -1036,7 +801,7 @@ export function App() {
     } catch (error) {
       stream.discardOptimisticUser(clientRequestId);
       if (await recoverSessionConflict(error)) return false;
-      setPageError(error instanceof Error ? error.message : "无法发送消息");
+      setPageError(errorMessage(error, "无法发送消息"));
       return false;
     }
   };
@@ -1051,7 +816,7 @@ export function App() {
       updateSelectedDraft([texts.join("\n\n"), selectedDraft].filter((value) => value.trim() !== "").join("\n\n"), true);
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法取回排队消息");
+      setPageError(errorMessage(error, "无法取回排队消息"));
     }
   }, [selectedRef, selectedDraft, updateSelectedDraft]);
 
@@ -1065,7 +830,7 @@ export function App() {
       }
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法移除该排队消息");
+      setPageError(errorMessage(error, "无法移除该排队消息"));
     }
   }, [selectedRef, selectedDraft, updateSelectedDraft]);
 
@@ -1078,7 +843,7 @@ export function App() {
       await api.setQueuedKind(selectedRef, messageId, message.kind === "steer" ? "followUp" : "steer");
       setPageError(undefined);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "无法切换排队方式");
+      setPageError(errorMessage(error, "无法切换排队方式"));
     }
   }, [selectedRef, stream.transcript.queue]);
 
@@ -1099,7 +864,7 @@ export function App() {
       stream.discardOptimisticUser(clientRequestId);
       await stream.refresh().catch(() => undefined);
       if (await recoverSessionConflict(error)) return false;
-      setPageError(error instanceof Error ? error.message : "无法重新生成消息");
+      setPageError(errorMessage(error, "无法重新生成消息"));
       return false;
     }
   };
@@ -1121,7 +886,7 @@ export function App() {
       setNewSessionFocusId(session.id);
       chooseSession(selectedRef.workspaceId, session.id);
     } catch (error) {
-      if (!(await recoverSessionConflict(error))) setPageError(error instanceof Error ? error.message : "无法创建分支");
+      if (!(await recoverSessionConflict(error))) setPageError(errorMessage(error, "无法创建分支"));
     } finally {
       setForkPending(false);
     }
@@ -1143,7 +908,7 @@ export function App() {
       return true;
     } catch (error) {
       if (await recoverSessionConflict(error)) return false;
-      setPageError(error instanceof Error ? error.message : "无法执行命令");
+      setPageError(errorMessage(error, "无法执行命令"));
       return false;
     }
   };
@@ -1160,7 +925,7 @@ export function App() {
       }
     } catch (error) {
       if (await recoverSessionConflict(error)) return;
-      setPageError(error instanceof Error ? error.message : "无法停止执行");
+      setPageError(errorMessage(error, "无法停止执行"));
     }
   };
 
@@ -1175,7 +940,7 @@ export function App() {
     if (selectedRefKey === undefined) return;
     const onKeyDownCapture = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (document.querySelector('[role="dialog"], [role="menu"], .extension-operation.pending, .composer-completions, .cm-tooltip-autocomplete, [data-radix-popper-content-wrapper]') !== null) return;
+      if (document.querySelector('[role="dialog"], [role="menu"], .extension-operation.pending, .composer-completions, .cm-tooltip-autocomplete, [data-radix-popper-content-wrapper], .side-chat-drawer, .side-chat-sheet') !== null) return;
       if (statusRef.current.runState === "idle") return;
       event.preventDefault();
       event.stopPropagation();
@@ -1197,7 +962,7 @@ export function App() {
       setCompactionPending(false);
       setCompactionRequest(undefined);
       if (await recoverSessionConflict(error)) return;
-      setPageError(error instanceof Error ? error.message : "无法压缩上下文");
+      setPageError(errorMessage(error, "无法压缩上下文"));
     }
   };
 
@@ -1220,7 +985,7 @@ export function App() {
       await stream.selectModel(model);
       setPageError(undefined);
     } catch (error) {
-      if (!(await recoverSessionConflict(error))) setPageError(error instanceof Error ? error.message : "无法切换模型");
+      if (!(await recoverSessionConflict(error))) setPageError(errorMessage(error, "无法切换模型"));
     } finally {
       setModelSwitchPending(false);
     }
@@ -1233,7 +998,7 @@ export function App() {
       await stream.setThinkingLevel(level);
       setPageError(undefined);
     } catch (error) {
-      if (!(await recoverSessionConflict(error))) setPageError(error instanceof Error ? error.message : "无法切换思考等级");
+      if (!(await recoverSessionConflict(error))) setPageError(errorMessage(error, "无法切换思考等级"));
     } finally {
       setThinkingLevelPending(false);
     }
@@ -1328,14 +1093,14 @@ export function App() {
               <div><h1>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined || selectedWorkspace === undefined || isEmptySession(selectedSession) ? null : <Tooltip label="重命名会话"><Button variant="ghost" size="icon" aria-label="重命名会话" onClick={() => { setRenameTarget({ workspaceId: selectedWorkspace.id, session: selectedSession }); setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); }}><Pencil size={15} /></Button></Tooltip>}</div>
             </div>
           </div>
-          {selectedRef === undefined ? null : <Tooltip label="文件"><Button variant="ghost" size="icon" aria-label="文件" onClick={() => setFilesWorkspaceId(selectedRef.workspaceId)}><Folder size={16} /></Button></Tooltip>}
+          {selectedRef === undefined ? null : <div className="chat-header-actions"><SideChatToggle open={sideChatOpen} running={sideChatRunState === "running" || sideChatRunState === "stopping"} onClick={() => { setFilesWorkspaceId(undefined); setSideChatOpen((current) => !current); }} /><Tooltip label="文件"><Button variant="ghost" size="icon" aria-label="文件" onClick={() => { setSideChatOpen(false); setFilesWorkspaceId(selectedRef.workspaceId); }}><Folder size={16} /></Button></Tooltip></div>}
         </header>}
         {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigateBackOr(navigate, () => navigate("/projects", { replace: true }))} /> : renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
         {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigateBackOr(navigate, () => navigate("/projects", { replace: true }))} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={visibleSessionsByWorkspace} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onOpenProjectMenu={(workspace) => setMobileActionTarget({ kind: "project", workspace })} onOpenSearch={() => setSearchOpen(true)} focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
-            <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => navigate("/projects", { replace: true })}><ArrowLeft size={16} /></Button>
+            <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => { setSideChatOpen(false); navigate("/projects", { replace: true }); }}><ArrowLeft size={16} /></Button>
             <button type="button" className="mobile-chat-session" aria-haspopup="dialog" aria-expanded={userNavigatorOpen} onClick={() => setUserNavigatorOpen(true)}><span>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</span><ChevronDown size={14} /></button>
             {selectedSession === undefined || selectedWorkspace === undefined ? null : <Button variant="ghost" size="icon" aria-label="当前会话操作" onClick={() => openMobileSessionMenu(selectedWorkspace.id, selectedSession)}><MoreVertical size={16} /></Button>}
           </header>
@@ -1372,8 +1137,9 @@ export function App() {
         setProjectRemoveTarget(workspace);
       }} cleanupDisabled={sessionCleanupTargets(sessionsByWorkspace[projectMenu.workspace.id] ?? [], keepSessionIdFor(projectMenu.workspace.id)).length === 0} />}
       <SessionSearchDialog open={searchOpen} onOpenChange={setSearchOpen} workspaces={workspaces} searchSessions={searchSessions} onSelectSession={(workspaceId, sessionId) => { chooseSession(workspaceId, sessionId); }} />
+      {selectedRef === undefined || isSettingsPage || (isMobile && mobilePage !== "chat") ? null : <SideChatPanel open={sideChatOpen} onOpenChange={setSideChatOpen} parentRef={selectedRef} assistantName={assistantName} workspaceCwd={selectedWorkspace?.cwd} isMobile={isMobile} onRunStateChange={setSideChatRunState} />}
       {filesWorkspaceId !== undefined ? <FileBrowser key={filesWorkspaceId} workspaceId={filesWorkspaceId} onClose={() => setFilesWorkspaceId(undefined)} /> : null}
-      <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onOpenFiles={(targetWorkspaceId) => { setMobileActionTarget(undefined); setFilesWorkspaceId(targetWorkspaceId); }} onRenameProject={(workspace) => {
+      <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onOpenFiles={(targetWorkspaceId) => { setMobileActionTarget(undefined); setSideChatOpen(false); setFilesWorkspaceId(targetWorkspaceId); }} onOpenSideChat={(targetWorkspaceId, session) => { setMobileActionTarget(undefined); setFilesWorkspaceId(undefined); chooseSession(targetWorkspaceId, session.id); setSideChatOpen(true); }} onRenameProject={(workspace) => {
         setMobileActionTarget(undefined);
         setProjectRenameTarget(workspace);
         setProjectRenameValue(workspace.label);
@@ -1436,21 +1202,9 @@ export function App() {
   );
 }
 
-function withoutSession(current: SessionSummary[], sessionId: string): SessionSummary[] {
-  const next = current.filter((session) => session.id !== sessionId);
-  return next.length === current.length ? current : next;
-}
-
 function sessionCleanupConfirmMessage(sessions: SessionSummary[], keepSessionId?: string): string {
   const count = sessionCleanupTargets(sessions, keepSessionId).length;
   return `永久删除 ${String(count)} 个闲置会话，不可恢复。`;
-}
-
-function withoutDraft(current: Record<string, string>, sessionId: string): Record<string, string> {
-  if (!(sessionId in current)) return current;
-  const next = { ...current };
-  delete next[sessionId];
-  return next;
 }
 
 function markSessionUserActivity(sessions: SessionSummary[], sessionId: string, viewedIdleKeys?: Set<string>): SessionSummary[] {
@@ -1468,29 +1222,6 @@ function mergeWorkspace(current: Workspace[], next: Workspace): Workspace[] {
   const copy = [...current];
   copy[existing] = next;
   return copy.sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
-}
-
-function persistSidebarWidth(width: number): void {
-  try {
-    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(width));
-  } catch {
-    // The sidebar still works for the current page when browser storage is unavailable.
-  }
-}
-
-function readSidebarWidth(): number {
-  try {
-    const raw = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
-    if (raw === null) return SIDEBAR_DEFAULT_WIDTH;
-    const value = Number(raw);
-    return Number.isFinite(value) ? clampSidebarWidth(value) : SIDEBAR_DEFAULT_WIDTH;
-  } catch {
-    return SIDEBAR_DEFAULT_WIDTH;
-  }
-}
-
-function clampSidebarWidth(value: number): number {
-  return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, value));
 }
 
 function readSessionFocusMode(): boolean {

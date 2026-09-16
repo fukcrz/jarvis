@@ -68,6 +68,31 @@ describe("SessionAttentionStore starring", () => {
   });
 });
 
+describe("SessionAttentionStore side chats", () => {
+  it("maps a parent session to a hidden side chat id", async () => {
+    const store = new SessionAttentionStore(directory);
+    const sideId = "44444444-4444-4444-8444-444444444444";
+    await store.setSideChat(ref, sideId);
+    await expect(store.getSideChatId(ref)).resolves.toBe(sideId);
+    await expect(store.isSideChat({ workspaceId: ref.workspaceId, sessionId: sideId })).resolves.toBe(true);
+    await expect(store.sideChatIds(ref.workspaceId)).resolves.toEqual(new Set([sideId]));
+    expect(JSON.parse(await readFile(join(directory, "jarvis-session-attention.json"), "utf8"))).toMatchObject({
+      sideChats: { [`${ref.workspaceId}:${ref.sessionId}`]: sideId },
+    });
+  });
+
+  it("clears the mapping when the parent is removed", async () => {
+    const store = new SessionAttentionStore(directory);
+    await store.setSideChat(ref, "44444444-4444-4444-8444-444444444444");
+    await store.remove(ref);
+    await expect(store.getSideChatId(ref)).resolves.toBeUndefined();
+    expect(JSON.parse(await readFile(join(directory, "jarvis-session-attention.json"), "utf8"))).toEqual({
+      version: 2,
+      sessions: {},
+    });
+  });
+});
+
 describe("SessionAttentionStore list copy", () => {
   it("keeps sidebar title and preview when attention returns to idle", async () => {
     const store = new SessionAttentionStore(directory);

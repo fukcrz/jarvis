@@ -129,6 +129,8 @@ function formatApiErrorMessage(code: string, message: string): string {
   if (code === "TUNNEL_SISH_SERVER") return "请填写 sish 服务器地址，例如 user@tun.example.com";
   if (code === "TUNNEL_FRP_SERVER") return "请填写 frps 服务器地址，例如 1.2.3.4:7000";
   if (code === "TUNNEL_INVALID_PORT") return "目标端口必须在 1-65535 之间";
+  if (code === "SIDE_CHAT_READ_ONLY") return "侧聊为只读";
+  if (code === "SIDE_CHAT_INVALID") return "无法从侧聊再开侧聊";
   if (code === "INVALID_REQUEST") {
     const details = parseValidationDetails(message);
     if (details !== undefined) return details;
@@ -239,6 +241,9 @@ export const api = {
   createSession: async (workspaceId: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`/api/workspaces/${workspaceId}/sessions`, { method: "POST", body: "{}" })).session,
   cleanupSessions: async (workspaceId: string, keepSessionId?: string): Promise<SessionCleanupResult> => request(`/api/workspaces/${workspaceId}/sessions/cleanup`, { method: "POST", body: JSON.stringify(keepSessionId === undefined ? {} : { keepSessionId }) }),
   forkSession: async (ref: SessionRef, messageId?: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`${sessionPath(ref)}/fork`, { method: "POST", body: JSON.stringify(messageId === undefined ? {} : { messageId }) })).session,
+  peekSideChat: async (ref: SessionRef): Promise<SessionSummary | null> => (await request<{ session: SessionSummary | null }>(`${sessionPath(ref)}/side-chat`)).session,
+  ensureSideChat: async (ref: SessionRef): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`${sessionPath(ref)}/side-chat`, { method: "POST", body: "{}" })).session,
+  resetSideChat: async (ref: SessionRef): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(`${sessionPath(ref)}/side-chat/reset`, { method: "POST", body: "{}" })).session,
   removeSession: async (ref: SessionRef): Promise<void> => { await request(sessionPath(ref), { method: "DELETE" }); },
   renameSession: async (ref: SessionRef, name: string): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(sessionPath(ref), { method: "PATCH", body: JSON.stringify({ name }) })).session,
   setSessionStarred: async (ref: SessionRef, starred: boolean): Promise<SessionSummary> => (await request<{ session: SessionSummary }>(sessionPath(ref), { method: "PATCH", body: JSON.stringify({ starred }) })).session,

@@ -93,12 +93,14 @@ type PanelSideEffect =
   | { kind: "title"; title: string }
   | { kind: "editor"; text: string };
 
-export function useSessionStream(ref: SessionRef | undefined, assistantName = document.title, sessionName?: string) {
+export function useSessionStream(ref: SessionRef | undefined, assistantName = document.title, sessionName?: string, options?: { manageDocumentTitle?: boolean }) {
   const [state, dispatch] = useReducer(reduceSessionStream, initialState);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [extensionPanels, setExtensionPanels] = useState<ExtensionPanelState>({ widgets: {}, statuses: {} });
   const stateRef = useRef(state);
   const sessionNameRef = useRef(sessionName);
+  const manageDocumentTitle = options?.manageDocumentTitle !== false;
+  const manageDocumentTitleRef = useRef(manageDocumentTitle);
   const refKey = ref === undefined ? undefined : `${ref.workspaceId}:${ref.sessionId}`;
   const refKeyRef = useRef(refKey);
   const requestFrame = useRef<number | undefined>(undefined);
@@ -108,11 +110,13 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
 
   useEffect(() => { stateRef.current = state; }, [state]);
   useEffect(() => { sessionNameRef.current = sessionName; }, [sessionName]);
+  useEffect(() => { manageDocumentTitleRef.current = manageDocumentTitle; }, [manageDocumentTitle]);
   useEffect(() => {
     const previous = defaultDocumentTitle.current;
     defaultDocumentTitle.current = assistantName;
+    if (!manageDocumentTitle) return;
     if (ref === undefined || document.title === previous) document.title = assistantName;
-  }, [assistantName, refKey]);
+  }, [assistantName, refKey, manageDocumentTitle]);
   useEffect(() => { refKeyRef.current = refKey; }, [refKey]);
 
   const cancelScheduledFlush = useCallback(() => {
@@ -159,8 +163,8 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
       }
     }
     if (historyRewritten || sideEffects.length > 0) {
-      setExtensionPanels((previous) => applySideEffects(historyRewritten ? { widgets: {}, statuses: {} } : previous, sideEffects));
-      if (historyRewritten) document.title = defaultDocumentTitle.current;
+      setExtensionPanels((previous) => applySideEffects(historyRewritten ? { widgets: {}, statuses: {} } : previous, sideEffects, manageDocumentTitleRef.current));
+      if (historyRewritten && manageDocumentTitleRef.current) document.title = defaultDocumentTitle.current;
     }
   }, [cancelScheduledFlush]);
 
@@ -179,7 +183,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   const applyHydration = useCallback((sessionKey: string, page: Awaited<ReturnType<typeof api.timeline>>, snapshot: Awaited<ReturnType<typeof api.runtime>>, connection?: StreamState["connection"]) => {
     dispatch({ type: "hydrate", sessionKey, page, snapshot, connection });
     setExtensionPanels(extensionPanelsFromSnapshot(snapshot.extensionUi));
-    document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
+    if (manageDocumentTitleRef.current) document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
   }, []);
   const applyHydrationRef = useRef(applyHydration);
   useEffect(() => { applyHydrationRef.current = applyHydration; }, [applyHydration]);
@@ -205,7 +209,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     dispatch({ type: "select", sessionKey: refKey });
     setExtensionPanels({ widgets: {}, statuses: {} });
     if (ref === undefined || refKey === undefined) {
-      document.title = defaultDocumentTitle.current;
+      if (manageDocumentTitleRef.current) document.title = defaultDocumentTitle.current;
       return;
     }
     let disposed = false;
@@ -541,7 +545,7 @@ function sideEffectFor(event: SessionEvent): PanelSideEffect | undefined {
   return undefined;
 }
 
-function applySideEffects(previous: ExtensionPanelState, effects: PanelSideEffect[]): ExtensionPanelState {
+function applySideEffects(previous: ExtensionPanelState, effects: PanelSideEffect[], manageDocumentTitle = true): ExtensionPanelState {
   let next: ExtensionPanelState = previous;
   let title: string | undefined;
   let editor: string | undefined;
@@ -562,7 +566,7 @@ function applySideEffects(previous: ExtensionPanelState, effects: PanelSideEffec
       editor = effect.text;
     }
   }
-  if (title !== undefined) document.title = title;
+  if (title !== undefined && manageDocumentTitle) document.title = title;
   if (editor !== undefined) next = { ...next, editorText: { text: editor, nonce: (next.editorText?.nonce ?? 0) + 1 } };
   return next;
 }

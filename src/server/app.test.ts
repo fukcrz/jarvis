@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
@@ -2138,5 +2138,96 @@ describe("tunnel entries", () => {
     expect(cleared.statusCode).toBe(200);
     expect((await restarted.inject({ method: "GET", url: "/api/workspaces" })).statusCode).toBe(200);
     expect((await restarted.inject({ method: "GET", url: "/api/auth/status" })).json()).toMatchObject({ auth: { required: false, authenticated: true } });
+  });
+});
+
+describe("side chat", () => {
+  async function addWorkspace(label: string): Promise<{ id: string; cwd: string }> {
+    const cwd = join(jarvisHome, label);
+    await mkdir(cwd);
+    const workspace = (await activeApp().inject({ method: "POST", url: "/api/workspaces", payload: { cwd, label } })).json<{ workspace: { id: string } }>().workspace;
+    return { id: workspace.id, cwd };
+  }
+
+  async function sideChatFile(sessionId: string): Promise<string | undefined> {
+    const names = await readdir(sessionDir).catch(() => [] as string[]);
+    const name = names.find((entry) => entry.endsWith(`_${sessionId}.jsonl`));
+    return name === undefined ? undefined : join(sessionDir, name);
+  }
+
+  it("creates a hidden read-only side chat that inherits the parent transcript", async () => {
+    const server = activeApp();
+    const workspace = await addWorkspace("side-chat-inherit");
+    const source = await writeConversationSession(workspace.cwd);
+    const peeked = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/side-chat` });
+    expect(peeked.statusCode).toBe(200);
+    expect(peeked.json()).toEqual({ session: null });
+
+    const created = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/side-chat` });
+    expect(created.statusCode).toBe(200);
+    const side = created.json<{ session: { id: string } }>().session;
+    expect(side.id).not.toBe(source.id);
+
+    const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` });
+    expect((listed.json() as { sessions: Array<{ id: string }> }).sessions.map((session) => session.id)).toEqual([source.id]);
+
+    const searched = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions?query=${encodeURIComponent("Second answer")}` });
+    expect((searched.json() as { sessions: Array<{ id: string }> }).sessions.map((session) => session.id)).toEqual([source.id]);
+
+    const references = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/session-files` });
+    expect((references.json() as { sessions: Array<{ id: string }> }).sessions.map((session) => session.id)).toEqual([source.id]);
+
+    const timeline = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${side.id}/timeline` });
+    expect(timeline.statusCode).toBe(200);
+    expect((timeline.json() as { items: Array<{ id: string }> }).items.map((item) => item.id)).toEqual([source.user1, source.assistant1, source.user2, source.assistant2]);
+
+    const bash = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${side.id}/bash`, payload: { command: "echo hi", clientRequestId: randomUUID() } });
+    expect(bash.statusCode).toBe(403);
+    expect(bash.json()).toMatchObject({ error: { code: "SIDE_CHAT_READ_ONLY" } });
+
+    const nested = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${side.id}/side-chat` });
+    expect(nested.statusCode).toBe(400);
+    expect(nested.json()).toMatchObject({ error: { code: "SIDE_CHAT_INVALID" } });
+  });
+
+  it("deletes the side chat with the parent and can reset it", async () => {
+    const server = activeApp();
+    const workspace = await addWorkspace("side-chat-reset");
+    const source = await writeConversationSession(workspace.cwd);
+    const created = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/side-chat` });
+    const side = created.json<{ session: { id: string } }>().session;
+    const originalPath = await sideChatFile(side.id);
+    expect(originalPath === undefined ? false : existsSync(originalPath)).toBe(true);
+
+    const reset = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/side-chat/reset` });
+    expect(reset.statusCode).toBe(200);
+    const next = reset.json<{ session: { id: string } }>().session;
+    expect(next.id).not.toBe(side.id);
+    expect(originalPath === undefined ? true : existsSync(originalPath)).toBe(false);
+    expect((await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/side-chat` })).json()).toMatchObject({ session: { id: next.id } });
+
+    const removed = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.id}/sessions/${source.id}` });
+    expect(removed.statusCode).toBe(200);
+    const leftover = (await readdir(sessionDir).catch(() => [] as string[])).filter((name) => name.endsWith(".jsonl"));
+    expect(leftover).toEqual([]);
+    const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` });
+    expect(listed.json()).toEqual({ sessions: [] });
+  });
+
+  it("deletes a side chat when cleaning up its parent", async () => {
+    const server = activeApp();
+    const workspace = await addWorkspace("side-chat-cleanup");
+    const keep = await writeConversationSession(workspace.cwd);
+    const source = await writeConversationSession(workspace.cwd);
+    const created = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/side-chat` });
+    const side = created.json<{ session: { id: string } }>().session;
+    const sidePath = await sideChatFile(side.id);
+    expect(sidePath === undefined ? false : existsSync(sidePath)).toBe(true);
+
+    const cleaned = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/cleanup`, payload: { keepSessionId: keep.id } });
+    expect(cleaned.statusCode).toBe(200);
+    expect((cleaned.json() as { removed: string[] }).removed).toEqual([source.id]);
+    expect(sidePath === undefined ? true : existsSync(sidePath)).toBe(false);
+    expect((await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` })).json()).toMatchObject({ sessions: [{ id: keep.id }] });
   });
 });

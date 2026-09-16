@@ -45,9 +45,11 @@ import type {
   ToolTimelineItem,
   Workspace,
 } from "../shared/protocol.js";
-import { emptySessionQueue, PROTOCOL_VERSION } from "../shared/protocol.js";
+import { emptySessionQueue, isRecord, PROTOCOL_VERSION } from "../shared/protocol.js";
 import { sortSessionSummaries } from "../shared/session-sort.js";
 import { AppError, asMessage } from "./errors.js";
+import { isMissingFile } from "./fs.js";
+import { stringValue, toIso } from "./values.js";
 import { EventHub } from "./event-hub.js";
 import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
 import { projectModelSnapshot } from "./model-projection.js";
@@ -63,6 +65,7 @@ interface ActiveRun {
 
 /** 所有运行类请求的幂等缓存值。 */
 type RunAccepted = { accepted: true; runId?: string; queued?: boolean; behavior?: "steer" | "followUp" };
+type PiEvent<T extends AgentSessionEvent["type"]> = Extract<AgentSessionEvent, { type: T }>;
 
 interface ActiveSession {
   ref: SessionRef;
@@ -76,6 +79,8 @@ interface ActiveSession {
   attentionAt?: string;
   lastUserMessageAt?: string;
   starred?: boolean;
+  /** Side chat: read-only tools, hidden from the session list, tied to a parent session. */
+  readOnly?: boolean;
   requestRuns: Map<string, RunAccepted>;
   liveMessages: Map<string, MessageTimelineItem>;
   /** Retry attempts which have not yet been reconciled with persisted history. */
@@ -121,6 +126,9 @@ const JARVIS_UI_NOTICE = [
   "Keep it useful: one short caption plus the image beats paragraphs of description, and skip images when they carry no information (for example, a text-only code change).",
 ].join(" ");
 
+const SIDE_CHAT_NOTICE = "This is a read-only side chat next to the main Jarvis session. You may inspect project files with read, grep, find, and ls. Do not modify files, run commands, or change the workspace.";
+const SIDE_CHAT_TOOLS = ["read", "grep", "find", "ls"] as const;
+
 const PAGE_LIMIT = 120;
 const MAX_PROMPT_LENGTH = 40_000;
 const MAX_ATTACHMENTS = 8;
@@ -152,6 +160,7 @@ export class SessionService {
   private readonly deleting = new Set<string>();
   /** Serialize operations which replace or tear down an in-memory session. */
   private readonly sessionTransitions = new Map<string, Promise<void>>();
+  private readonly sideChatEnsures = new Map<string, Promise<SessionSummary>>();
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
   private readonly attention = new SessionAttentionStore(getAgentDir());
 
@@ -169,7 +178,8 @@ export class SessionService {
   /** 侧栏列表：文件头 + 索引，不把每个 jsonl 通读成全文。 */
   private async listFromIndex(workspaceId: string): Promise<SessionSummary[]> {
     const workspace = this.workspaces.get(workspaceId);
-    const files = await listSessionFiles(workspace);
+    const sideIds = await this.attention.sideChatIds(workspaceId);
+    const files = (await listSessionFiles(workspace)).filter((file) => !sideIds.has(file.id));
     const sortMeta = await this.attention.list(workspaceId);
     const seen = new Set(files.map((file) => file.id));
     const rows = await Promise.all(files.map(async (file) => {
@@ -204,7 +214,7 @@ export class SessionService {
     const copiesToPersist = rows.flatMap((row) => row.copy === undefined ? [] : [row.copy]);
 
     for (const active of this.active.values()) {
-      if (!isVisibleSessionId(active.ref.sessionId) || active.ref.workspaceId !== workspaceId || seen.has(active.ref.sessionId)) continue;
+      if (!isVisibleSessionId(active.ref.sessionId) || active.ref.workspaceId !== workspaceId || seen.has(active.ref.sessionId) || sideIds.has(active.ref.sessionId) || active.readOnly === true) continue;
       summaries.unshift(this.summaryFromActive(active));
     }
 
@@ -217,10 +227,8 @@ export class SessionService {
   /** 全文搜索仍走 Pi list（主动搜才通读 jsonl）。 */
   private async listBySearch(workspaceId: string, needle: string): Promise<SessionSummary[]> {
     const workspace = this.workspaces.get(workspaceId);
-    const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
-    const listed = (sessionDir === undefined
-      ? await SessionManager.list(workspace.cwd)
-      : await SessionManager.list(workspace.cwd, sessionDir)).filter((entry) => isVisibleSessionId(entry.id));
+    const sideIds = await this.attention.sideChatIds(workspaceId);
+    const listed = (await listManagedSessions(workspace.cwd)).filter((entry) => isVisibleSessionId(entry.id) && !sideIds.has(entry.id));
     const sortMeta = await this.attention.list(workspaceId);
     const listedMatches = listed
       .map((entry) => ({
@@ -231,7 +239,7 @@ export class SessionService {
     const summaries = listedMatches.map(({ summary, searchText }) => attachSearchSnippet(summary, searchText, needle));
 
     for (const active of this.active.values()) {
-      if (!isVisibleSessionId(active.ref.sessionId) || active.ref.workspaceId !== workspaceId || summaries.some((summary) => summary.id === active.ref.sessionId)) continue;
+      if (!isVisibleSessionId(active.ref.sessionId) || active.ref.workspaceId !== workspaceId || sideIds.has(active.ref.sessionId) || active.readOnly === true || summaries.some((summary) => summary.id === active.ref.sessionId)) continue;
       const summary = this.summaryFromActive(active);
       const searchText = sessionBranchSearchText(summary.name, summary.preview, active.session.sessionManager.getBranch());
       if (!searchText.toLocaleLowerCase().includes(needle)) continue;
@@ -267,13 +275,11 @@ export class SessionService {
 
   async fileReferences(workspaceId: string, query?: string): Promise<SessionFileReference[]> {
     const workspace = this.workspaces.get(workspaceId);
-    const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
-    const listed = (sessionDir === undefined
-      ? await SessionManager.list(workspace.cwd)
-      : await SessionManager.list(workspace.cwd, sessionDir)).filter((entry) => isVisibleSessionId(entry.id));
+    const sideIds = await this.attention.sideChatIds(workspaceId);
+    const listed = (await listManagedSessions(workspace.cwd)).filter((entry) => isVisibleSessionId(entry.id) && !sideIds.has(entry.id));
     const activeById = new Map(
       [...this.active.values()]
-        .filter((active) => active.ref.workspaceId === workspaceId && isVisibleSessionId(active.ref.sessionId))
+        .filter((active) => active.ref.workspaceId === workspaceId && isVisibleSessionId(active.ref.sessionId) && !sideIds.has(active.ref.sessionId) && active.readOnly !== true)
         .map((active) => [active.ref.sessionId, active]),
     );
     const needle = query?.trim().toLocaleLowerCase() ?? "";
@@ -323,8 +329,7 @@ export class SessionService {
 
   async create(workspaceId: string): Promise<SessionSummary> {
     const workspace = this.workspaces.get(workspaceId);
-    const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
-    const manager = sessionDir === undefined ? SessionManager.create(workspace.cwd) : SessionManager.create(workspace.cwd, sessionDir);
+    const manager = createManagedSession(workspace.cwd);
     const active = await this.createActive({ workspaceId, sessionId: "" }, workspace, manager);
     const summary = this.summaryFromActive(active);
     this.events.publishWorkspace(workspaceId, { version: 1, type: "session.created", workspaceId, session: summary });
@@ -359,9 +364,76 @@ export class SessionService {
     return summary;
   }
 
+  async peekSideChat(parent: SessionRef): Promise<SessionSummary | null> {
+    if (!isVisibleSessionId(parent.sessionId)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+    this.workspaces.get(parent.workspaceId);
+    if (await this.attention.isSideChat(parent)) throw new AppError("SIDE_CHAT_INVALID", "Cannot open a side chat from a side chat", 400);
+    const sideId = await this.attention.getSideChatId(parent);
+    if (sideId === undefined) return null;
+    const ref = { workspaceId: parent.workspaceId, sessionId: sideId };
+    const active = this.peekActive(ref);
+    if (active !== undefined) return this.summaryFromActive(active);
+    const workspace = this.workspaces.get(parent.workspaceId);
+    const path = await findSessionFile(workspace, sideId);
+    if (path === undefined) {
+      await this.attention.clearSideChat(parent);
+      return null;
+    }
+    return this.summaryFromStored(workspace, ref, path);
+  }
+
+  async ensureSideChat(parent: SessionRef): Promise<SessionSummary> {
+    const key = activeKey(parent);
+    const pending = this.sideChatEnsures.get(key);
+    if (pending !== undefined) return pending;
+    const promise = this.createSideChat(parent).finally(() => {
+      if (this.sideChatEnsures.get(key) === promise) this.sideChatEnsures.delete(key);
+    });
+    this.sideChatEnsures.set(key, promise);
+    return promise;
+  }
+
+  async resetSideChat(parent: SessionRef): Promise<SessionSummary> {
+    if (await this.attention.isSideChat(parent)) throw new AppError("SIDE_CHAT_INVALID", "Cannot open a side chat from a side chat", 400);
+    const sideId = await this.attention.getSideChatId(parent);
+    if (sideId !== undefined) {
+      await this.deleteSession({ workspaceId: parent.workspaceId, sessionId: sideId }, undefined, { force: true, skipCascade: true });
+      await this.attention.clearSideChat(parent);
+    }
+    return this.ensureSideChat(parent);
+  }
+
+  private async createSideChat(parent: SessionRef): Promise<SessionSummary> {
+    if (!isVisibleSessionId(parent.sessionId)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+    if (await this.attention.isSideChat(parent)) throw new AppError("SIDE_CHAT_INVALID", "Cannot open a side chat from a side chat", 400);
+    const existing = await this.peekSideChat(parent);
+    if (existing !== null) {
+      return this.summaryFromActive(await this.getActive({ workspaceId: parent.workspaceId, sessionId: existing.id }));
+    }
+    const parentActive = await this.getActive(parent);
+    const branch = parentActive.session.sessionManager.getBranch();
+    const running = parentActive.state.runState !== "idle" || parentActive.session.isStreaming;
+    const entryId = sessionForkEntryId(branch, running);
+    const workspace = this.workspaces.get(parent.workspaceId);
+    let side: ActiveSession;
+    if (entryId === undefined) {
+      const manager = createManagedSession(workspace.cwd);
+      side = await this.createActive({ workspaceId: parent.workspaceId, sessionId: "" }, workspace, manager, { readOnly: true });
+    } else {
+      const sourcePath = parentActive.session.sessionFile;
+      if (sourcePath === undefined) throw new AppError("SESSION_NOT_READY", "Wait for this message to be saved before opening a side chat", 409);
+      const sessionDir = sessionDirectoryFor(parentActive.cwd, getAgentDir());
+      const manager = await this.openSnapshotWithEntry(sessionDir, sourcePath, entryId);
+      manager.createBranchedSession(entryId);
+      side = await this.createActive({ workspaceId: parent.workspaceId, sessionId: "" }, workspace, manager, { readOnly: true });
+    }
+    await this.attention.setSideChat(parent, side.ref.sessionId);
+    return this.summaryFromActive(side);
+  }
+
   async editAndResend(ref: SessionRef, messageId: string, text: string, clientRequestId: string, images?: ImageAttachment[]): Promise<PromptAccepted> {
     return this.withSessionTransition(ref, async () => {
-      const active = await this.getActive(ref, true, false);
+      const active = await this.getActive(ref, { waitForTransition: false });
       this.assertSessionIdle(active, "Editing");
       const entry = findUserMessageEntry(active.session.sessionManager.getBranch(), messageId);
       if (entry === undefined) throw new AppError("MESSAGE_NOT_FOUND", "User message not found in this session", 404);
@@ -418,10 +490,12 @@ export class SessionService {
     const files = await listSessionFiles(workspace);
     const pathById = new Map(files.map((file) => [file.id, file.path]));
     const sortMeta = await this.attention.list(workspaceId);
+    const sideIds = await this.attention.sideChatIds(workspaceId);
     const candidates = new Set(pathById.keys());
     for (const active of this.active.values()) {
       if (active.ref.workspaceId === workspaceId && isVisibleSessionId(active.ref.sessionId)) candidates.add(active.ref.sessionId);
     }
+    for (const sideId of sideIds) candidates.delete(sideId);
 
     const removed: string[] = [];
     const skipped: SessionCleanupResult["skipped"] = [];
@@ -456,8 +530,10 @@ export class SessionService {
     return { removed, skipped };
   }
 
-  private async deleteSession(ref: SessionRef, knownPath?: string): Promise<void> {
+  private async deleteSession(ref: SessionRef, knownPath?: string, options?: { force?: boolean; skipCascade?: boolean }): Promise<void> {
     if (!isVisibleSessionId(ref.sessionId)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+    await this.attention.flush();
+    const sideId = options?.skipCascade === true ? undefined : await this.attention.getSideChatId(ref);
     return this.withSessionTransition(ref, async () => {
       const key = activeKey(ref);
       if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is already being deleted", 409);
@@ -469,32 +545,39 @@ export class SessionService {
         if (pending !== undefined) await pending.catch(() => undefined);
 
         const active = this.active.get(key);
-        if (active !== undefined && this.isBusy(active)) {
+        if (active !== undefined && this.isBusy(active) && options?.force !== true) {
           throw new AppError("SESSION_BUSY", "Stop the current run before deleting this session", 409);
         }
 
         const path = knownPath ?? active?.session.sessionFile ?? await findSessionFile(workspace, ref.sessionId);
-        if (path === undefined && active === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
-
         if (active !== undefined) await this.disposeActive(active, "quit");
 
-        if (path !== undefined) {
-          try {
-            await rm(path, { force: true });
-          } catch {
-            throw new AppError("SESSION_DELETE_FAILED", "Unable to delete session history", 500);
-          }
+        try {
+          if (path !== undefined) await rm(path, { force: true });
+          await removeSessionJsonl(workspace, ref.sessionId);
+        } catch (error) {
+          if (error instanceof AppError) throw error;
+          throw new AppError("SESSION_DELETE_FAILED", "Unable to delete session history", 500);
         }
+
+        if (path === undefined && active === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
 
         this.events.publishWorkspace(ref.workspaceId, { version: 1, type: "session.deleted", workspaceId: ref.workspaceId, sessionId: ref.sessionId });
       } finally {
         this.deleting.delete(key);
       }
+    }).then(async () => {
+      if (sideId === undefined) return;
+      try {
+        await this.deleteSession({ workspaceId: ref.workspaceId, sessionId: sideId }, undefined, { force: true, skipCascade: true });
+      } catch (error) {
+        if (!(error instanceof AppError && error.code === "SESSION_NOT_FOUND")) throw error;
+      }
     });
   }
 
   async timeline(ref: SessionRef, before?: number, limit = PAGE_LIMIT): Promise<TimelinePage> {
-    const active = await this.getActive(ref, false);
+    const active = await this.getActive(ref, { waitForExtensions: false });
     const items = projectHistory(active.session.sessionManager.getBranch());
     const end = clamp(before ?? items.length, 0, items.length);
     const requestedStart = Math.max(0, end - clamp(limit, 1, 500));
@@ -536,7 +619,7 @@ export class SessionService {
   private async openSnapshotWithEntry(sessionDir: string | undefined, sourcePath: string, entryId: string): Promise<SessionManager> {
     for (let attempt = 0; attempt < FORK_SNAPSHOT_RETRIES; attempt++) {
       try {
-        const manager = sessionDir === undefined ? SessionManager.open(sourcePath) : SessionManager.open(sourcePath, sessionDir);
+        const manager = openManagedSessionAt(sourcePath, sessionDir);
         if (manager.getEntry(entryId) !== undefined) return manager;
       } catch {
         // Snapshot may be mid-rewrite (e.g. first assistant flush); retry.
@@ -551,7 +634,7 @@ export class SessionService {
     const manager = active.session.sessionManager;
     const targetSessionFile = active.session.sessionFile;
     await this.disposeActive(active, "resume", targetSessionFile);
-    await this.createActive(active.ref, this.workspaces.get(active.ref.workspaceId), manager);
+    await this.createActive(active.ref, this.workspaces.get(active.ref.workspaceId), manager, active.readOnly === true ? { readOnly: true } : undefined);
   }
 
   /**
@@ -580,11 +663,13 @@ export class SessionService {
    */
   private async disposeActive(active: ActiveSession, reason: "quit" | "resume" | "fork", targetSessionFile?: string): Promise<void> {
     this.clearSettlementTimer(active);
-    active.session.abortCompaction();
-    active.session.abortRetry();
-    active.session.abortBranchSummary();
-    active.session.abortBash();
-    await this.abortPiWithTimeout(active.session).catch(() => false);
+    if (this.isBusy(active)) {
+      active.session.abortCompaction();
+      active.session.abortRetry();
+      active.session.abortBranchSummary();
+      active.session.abortBash();
+      await this.abortPiWithTimeout(active.session).catch(() => false);
+    }
     // A startup extension dialog can keep bindExtensions() pending. Close the
     // browser bridge first so session_start can unwind before session_shutdown;
     // otherwise a late session_start could reactivate the stale runtime.
@@ -630,7 +715,7 @@ export class SessionService {
   }
 
   async runtime(ref: SessionRef): Promise<SessionStreamSnapshot> {
-    const active = await this.getActive(ref, false);
+    const active = await this.getActive(ref, { waitForExtensions: false });
     const contextUsage = this.contextUsageSnapshot(active);
     return {
       // Read all fields without an await so this projection and its seq form
@@ -711,7 +796,7 @@ export class SessionService {
     if (prompt === "" && (images === undefined || images.length === 0)) throw new AppError("PROMPT_EMPTY", "Prompt cannot be empty");
     if (prompt.length > MAX_PROMPT_LENGTH) throw new AppError("PROMPT_TOO_LARGE", `Prompt must be at most ${String(MAX_PROMPT_LENGTH)} characters`);
     const attachments = this.validateAttachments(images);
-    const active = await this.getActive(ref, true, !skipTransitionWait);
+    const active = await this.getActive(ref, { waitForTransition: !skipTransitionWait });
     const requestKey = `prompt:${clientRequestId}`;
     const previous = active.requestRuns.get(requestKey);
     if (previous !== undefined) return previous as PromptAccepted | QueuedPromptAccepted;
@@ -743,14 +828,7 @@ export class SessionService {
     this.setAttention(active, "running", run.startedAt);
     this.markUserMessage(active, run.startedAt);
     active.updatedAt = run.startedAt;
-    active.liveMessages.clear();
-    active.liveErrors.clear();
-    active.assistantStreamId = undefined;
-    active.partial = undefined;
-    active.partialThinking = undefined;
-    active.activeTools.clear();
-    active.extensionFailure = undefined;
-    active.pendingRunError = undefined;
+    this.resetLiveStream(active);
     const accepted: PromptAccepted = { accepted: true, runId: run.id };
     this.rememberRequest(active, requestKey, accepted);
 
@@ -779,28 +857,11 @@ export class SessionService {
   /** 切换一条排队消息的投递方式（followUp ↔ steer）；其余消息按原顺序重入队。 */
   async setQueuedKind(ref: SessionRef, messageId: string, kind: "steer" | "followUp"): Promise<QueuedMessage | undefined> {
     const active = await this.getActive(ref);
-    const queue = active.queue;
-    const match = [...queue.steering, ...queue.followUp].find((item) => item.id === messageId);
+    const match = [...active.queue.steering, ...active.queue.followUp].find((item) => item.id === messageId);
     if (match === undefined || match.kind === kind) return match;
-    const { steering, followUp } = active.session.clearQueue();
-    active.queueSyncSuspended = true;
-    try {
-      for (const [index, text] of steering.entries()) {
-        if (match.kind === "steer" && match.text === text && queue.steering[index]?.id === match.id) continue;
-        await active.session.steer(text);
-      }
-      for (const [index, text] of followUp.entries()) {
-        if (match.kind === "followUp" && match.text === text && queue.followUp[index]?.id === match.id) continue;
-        await active.session.followUp(text);
-      }
-      // 目标消息以新 kind 入队：steering 队列先于 followUp 投递，
-      // 所以从“后续”切到“插队”会插到所有后续消息之前。
-      if (kind === "steer") await active.session.steer(match.text);
-      else await active.session.followUp(match.text);
-    } finally {
-      active.queueSyncSuspended = false;
-      this.syncQueue(active);
-    }
+    // 目标消息以新 kind 入队：steering 队列先于 followUp 投递，
+    // 所以从“后续”切到“插队”会插到所有后续消息之前。
+    await this.replayQueue(active, match, { ...match, kind });
     return { ...match, kind };
   }
 
@@ -819,27 +880,32 @@ export class SessionService {
   /** 删除（或取回）一条排队消息；其余消息按原顺序重新入队。 */
   async removeQueued(ref: SessionRef, messageId: string): Promise<QueuedMessage | undefined> {
     const active = await this.getActive(ref);
-    const queue = active.queue;
-    const match = [...queue.steering, ...queue.followUp].find((item) => item.id === messageId);
+    const match = [...active.queue.steering, ...active.queue.followUp].find((item) => item.id === messageId);
     if (match === undefined) return undefined;
-    // Pi 只提供全量 clearQueue；取出后把其余消息按原顺序重新入队。
-    // 重入期间 Pi 会同步 emit queue_update，先挂起镜像同步避免中间态闪烁。
+    await this.replayQueue(active, match);
+    return match;
+  }
+
+  /** Pi 只提供全量 clearQueue；取出后把其余消息按原顺序重新入队。 */
+  private async replayQueue(active: ActiveSession, skip: QueuedMessage, append?: QueuedMessage): Promise<void> {
+    const queue = active.queue;
     const { steering, followUp } = active.session.clearQueue();
     active.queueSyncSuspended = true;
     try {
       for (const [index, text] of steering.entries()) {
-        if (match.kind === "steer" && match.text === text && queue.steering[index]?.id === match.id) continue;
+        if (skip.kind === "steer" && skip.text === text && queue.steering[index]?.id === skip.id) continue;
         await active.session.steer(text);
       }
       for (const [index, text] of followUp.entries()) {
-        if (match.kind === "followUp" && match.text === text && queue.followUp[index]?.id === match.id) continue;
+        if (skip.kind === "followUp" && skip.text === text && queue.followUp[index]?.id === skip.id) continue;
         await active.session.followUp(text);
       }
+      if (append?.kind === "steer") await active.session.steer(append.text);
+      else if (append?.kind === "followUp") await active.session.followUp(append.text);
     } finally {
       active.queueSyncSuspended = false;
       this.syncQueue(active);
     }
-    return match;
   }
 
   /** 把 Pi 的 queue_update 载荷同步为镜像并发布给浏览器。 */
@@ -869,6 +935,7 @@ export class SessionService {
     if (value === "") throw new AppError("COMMAND_EMPTY", "Command cannot be empty");
     if (value.length > MAX_PROMPT_LENGTH) throw new AppError("COMMAND_TOO_LARGE", `Command must be at most ${String(MAX_PROMPT_LENGTH)} characters`);
     const active = await this.getActive(ref);
+    if (active.readOnly === true) throw new AppError("SIDE_CHAT_READ_ONLY", "This side chat is read-only", 403);
     const requestKey = `bash:${clientRequestId}`;
     const previous = active.requestRuns.get(requestKey);
     if (previous !== undefined) return previous as BashAccepted;
@@ -1075,7 +1142,7 @@ export class SessionService {
   async resolveExtensionUi(ref: SessionRef, id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> {
     // This endpoint must not wait for bindExtensions(): a startup dialog is
     // precisely what may be keeping that promise pending.
-    const active = await this.getActive(ref, false);
+    const active = await this.getActive(ref, { waitForExtensions: false });
     if (!active.extensionUi.respond({ id, ...response })) {
       // A stale id and a malformed response deliberately share the same public
       // result: callers cannot probe another pending dialog's shape.
@@ -1223,7 +1290,9 @@ export class SessionService {
     return this.active.get(activeKey(ref));
   }
 
-  private async getActive(ref: SessionRef, waitForExtensions = true, waitForTransition = true): Promise<ActiveSession> {
+  private async getActive(ref: SessionRef, options: { waitForExtensions?: boolean; waitForTransition?: boolean } = {}): Promise<ActiveSession> {
+    const waitForExtensions = options.waitForExtensions ?? true;
+    const waitForTransition = options.waitForTransition ?? true;
     const key = activeKey(ref);
     if (waitForTransition) {
       const transition = this.sessionTransitions.get(key);
@@ -1255,15 +1324,14 @@ export class SessionService {
   private async openActive(ref: SessionRef): Promise<ActiveSession> {
     if (!isVisibleSessionId(ref.sessionId)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
     const workspace = this.workspaces.get(ref.workspaceId);
-    const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
     const path = await findSessionFile(workspace, ref.sessionId);
     if (path === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
-    const manager = sessionDir === undefined ? SessionManager.open(path) : SessionManager.open(path, sessionDir);
-    return this.createActive(ref, workspace, manager);
+    return this.createActive(ref, workspace, openManagedSession(workspace.cwd, path));
   }
 
-  private async createActive(ref: SessionRef, workspace: Workspace, manager: SessionManager): Promise<ActiveSession> {
+  private async createActive(ref: SessionRef, workspace: Workspace, manager: SessionManager, options?: { readOnly?: boolean }): Promise<ActiveSession> {
     const agentDir = getAgentDir();
+    const readOnly = options?.readOnly === true || (ref.sessionId !== "" && await this.attention.isSideChat(ref));
     const modelRuntime = await this.getModelRuntime(agentDir);
     const settingsManager = SettingsManager.create(workspace.cwd, agentDir);
     const enabledModels = settingsManager.getEnabledModels();
@@ -1276,7 +1344,7 @@ export class SessionService {
       cwd: workspace.cwd,
       agentDir,
       settingsManager,
-      appendSystemPrompt: [JARVIS_UI_NOTICE],
+      appendSystemPrompt: readOnly ? [JARVIS_UI_NOTICE, SIDE_CHAT_NOTICE] : [JARVIS_UI_NOTICE],
     });
     await resourceLoader.reload();
     const { session } = await createAgentSession({
@@ -1286,6 +1354,7 @@ export class SessionService {
       sessionManager: manager,
       settingsManager,
       resourceLoader,
+      ...(readOnly ? { tools: [...SIDE_CHAT_TOOLS], excludeTools: ["bash", "edit", "write", "powershell"] } : {}),
       ...(scopedModels.length === 0 ? {} : { scopedModels }),
     });
     this.bindOwnerSessionId(session);
@@ -1357,6 +1426,7 @@ export class SessionService {
       pendingRunError: undefined,
       settlementTimer: undefined,
       compactionHandoff: false,
+      ...(readOnly ? { readOnly: true } : {}),
       createdAt,
       updatedAt: await sessionModifiedAt(session.sessionFile, now),
     };
@@ -1369,7 +1439,9 @@ export class SessionService {
     };
     // Register before binding so startup UI/events have a live ActiveSession,
     // but make all callers await extensionReady before using this session.
-    active.extensionReady = session.bindExtensions({ mode: "rpc", uiContext: extensionUi.context, onError: onExtensionError }).catch((error: unknown) => {
+    active.extensionReady = session.bindExtensions({ mode: "rpc", uiContext: extensionUi.context, onError: onExtensionError }).then(() => {
+      if (readOnly) session.setActiveToolsByName([...SIDE_CHAT_TOOLS]);
+    }).catch((error: unknown) => {
       console.warn("Pi extension binding failed", error);
     });
     return active;
@@ -1426,318 +1498,45 @@ export class SessionService {
   private handlePiEvent(active: ActiveSession, event: AgentSessionEvent): void {
     active.updatedAt = new Date().toISOString();
     switch (event.type) {
-      case "agent_start": {
-        // Extensions can start a continuation without passing through Jarvis's
-        // HTTP prompt endpoint. Pi is authoritative for that lifecycle.
-        this.clearSettlementTimer(active);
-        if (active.state.runState !== "idle") {
-          // 重试退避结束、重试请求真正开始：撤掉“正在重试”状态。Pi 的 auto_retry_end 要等这次
-          // 尝试成功才发，若一直挂着 retrying，就会出现“一边流式思考、一边显示正在重试”。
-          // 与 Pi TUI 在 agent_start 清 retry 指示的行为保持一致。
-          if (active.state.retrying === undefined) return;
-          active.state = { ...active.state, retrying: undefined };
-          this.events.publishSession(active.ref, { type: "run.retryEnd", runId: active.state.activeRun?.id, payload: { status: active.state } });
-          return;
-        }
-        const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
-        active.state = { sessionId: active.ref.sessionId, runState: "running", activeRun: run };
-        this.setAttention(active, "running");
-        active.liveMessages.clear();
-        active.liveErrors.clear();
-        active.assistantStreamId = undefined;
-        active.partial = undefined;
-        active.partialThinking = undefined;
-        active.activeTools.clear();
-        active.extensionFailure = undefined;
-        active.pendingRunError = undefined;
-        this.events.publishSession(active.ref, { type: "run.started", runId: run.id, payload: { status: active.state } });
-        this.publishSummary(active);
+      case "agent_start":
+        this.onAgentStart(active);
         return;
-      }
-      case "message_update": {
-        const runId = active.state.activeRun?.id;
-        if (runId === undefined) return;
-        const identity = messageFromPi(event.message, "assistant", "");
-        const assistantId = active.assistantStreamId ??= identity.id;
-
-        if (event.assistantMessageEvent.type === "thinking_delta") {
-          const thinkingId = `${assistantId}:thinking`;
-          active.partialThinking ??= {
-            kind: "thinking",
-            id: thinkingId,
-            createdAt: identity.createdAt,
-            state: "running",
-            text: "",
-          };
-          active.partialThinking.text += event.assistantMessageEvent.delta;
-          this.events.publishSession(active.ref, { type: "thinking.delta", runId, payload: { thinkingId, createdAt: active.partialThinking.createdAt, delta: event.assistantMessageEvent.delta } });
-          return;
-        }
-        if (event.assistantMessageEvent.type !== "text_delta") return;
-        if (active.partialThinking !== undefined) {
-          const thinking = { ...active.partialThinking, state: "completed" as const };
-          active.partialThinking = undefined;
-          this.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: { thinkingId: thinking.id, createdAt: thinking.createdAt, text: thinking.text } });
-        }
-        const partial = active.partial ?? {
-          kind: "message" as const,
-          id: assistantId,
-          role: "assistant" as const,
-          createdAt: identity.createdAt,
-          text: "",
-        };
-        partial.text += event.assistantMessageEvent.delta;
-        active.partial = partial;
-        this.events.publishSession(active.ref, { type: "assistant.delta", runId, payload: { messageId: partial.id, delta: event.assistantMessageEvent.delta } });
+      case "message_update":
+        this.onMessageUpdate(active, event);
         return;
-      }
-      case "message_end": {
-        const runId = active.state.activeRun?.id;
-        if (runId === undefined) return;
-        if (isUserMessage(event.message)) {
-          const { text, images } = userContentFromContent(event.message.content);
-          if (text === "" && images.length === 0) return;
-          const message = {
-            ...messageFromPi(event.message, "user", text),
-            ...(images.length === 0 ? {} : { images }),
-          };
-          active.liveMessages.set(message.id, message);
-          this.events.publishSession(active.ref, { type: "message.created", runId, payload: { message } });
-          // Pi emits message_end before it persists the message. Publish the
-          // first prompt immediately with an explicit preview so the browser
-          // does not have to wait for the whole agent run to settle before
-          // replacing the "新会话" fallback title.
-          if (firstUserMessage(active.session.sessionManager.getBranch()) === null && text !== "") {
-            const summary = this.summaryFromActive(active, text);
-            this.publishSummary(active, summary);
-            this.persistListCopy(active, summary);
-          }
-          return;
-        }
-        if (!isAssistantMessage(event.message)) return;
-        const identity = messageFromPi(event.message, "assistant", "", active.partial?.createdAt);
-        const assistantId = active.assistantStreamId ?? identity.id;
-        // 思考块定稿：以最终 content 里的 thinking 部分为准（流式期间部分 provider
-        // 只在 message_end 才返回思考内容），兜底用流式累积的文本。
-        const thinkingText = thinkingTextFromContent(event.message.content);
-        if (active.partialThinking !== undefined || thinkingText !== "") {
-          const thinking: ThinkingTimelineItem = {
-            kind: "thinking",
-            id: `${assistantId}:thinking`,
-            createdAt: active.partialThinking?.createdAt ?? identity.createdAt,
-            state: "completed",
-            text: thinkingText !== "" ? thinkingText : (active.partialThinking?.text ?? ""),
-          };
-          active.partialThinking = undefined;
-          this.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: { thinkingId: thinking.id, createdAt: thinking.createdAt, text: thinking.text } });
-        }
-        const text = assistantTextFromContent(event.message.content);
-        const completed = text === ""
-          ? undefined
-          : messageFromPi(event.message, "assistant", text, active.partial?.createdAt);
-        if (completed !== undefined) {
-          const message = active.partial === undefined ? { ...completed, id: assistantId } : { ...completed, id: active.partial.id, createdAt: active.partial.createdAt };
-          active.liveMessages.set(message.id, message);
-          active.partial = undefined;
-          this.events.publishSession(active.ref, { type: "assistant.completed", runId, payload: { message } });
-        }
-        // Assistant usage is the source for Pi's context estimate; refresh it.
-        this.publishContextUsage(active, runId);
-        if (stringValue(event.message["stopReason"]) === "error") {
-          // Pi may auto-retry or compact after a failed message. Retain a
-          // structured attempt now; auto_retry_start upgrades it to retrying.
-          for (const previous of active.liveErrors.values()) {
-            if (previous.state !== "retrying") continue;
-            const settled = { ...previous, state: "failed" as const };
-            active.liveErrors.set(settled.id, settled);
-            this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: settled } });
-          }
-          const error = { ...errorFromPi(event.message, identity.createdAt, assistantId), groupId: runId };
-          active.liveErrors.set(error.id, error);
-          this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: error } });
-          active.pendingRunError = { code: error.code, message: error.message };
-        } else if (stringValue(event.message["stopReason"]) !== "aborted") {
-          // A successful continuation recovers all earlier attempts in this run.
-          for (const error of active.liveErrors.values()) {
-            if (error.state === "recovered") continue;
-            const recovered = { ...error, state: "recovered" as const };
-            active.liveErrors.set(recovered.id, recovered);
-            this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: recovered } });
-          }
-          active.pendingRunError = undefined;
-        }
-        active.assistantStreamId = undefined;
+      case "message_end":
+        this.onMessageEnd(active, event);
         return;
-      }
-      case "tool_execution_start": {
-        const tool = toolFromCall(
-          event.toolCallId,
-          event.toolName,
-          event.args,
-          new Date().toISOString(),
-          "running",
-          event.toolName === "bash" ? { cwd: active.cwd } : undefined,
-        );
-        active.activeTools.set(tool.id, tool);
-        this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool: toExternalTimelineItem(tool, active.ref) } });
+      case "tool_execution_start":
+        this.onToolExecutionStart(active, event);
         return;
-      }
-      case "tool_execution_update": {
-        const previous = active.activeTools.get(event.toolCallId) ?? toolFromCall(event.toolCallId, event.toolName, event.args);
-        const tool = toolWithPartial(previous, event.partialResult);
-        active.activeTools.set(tool.id, tool);
-        this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool: toExternalTimelineItem(tool, active.ref) } });
+      case "tool_execution_update":
+        this.onToolExecutionUpdate(active, event);
         return;
-      }
-      case "tool_execution_end": {
-        const previous = active.activeTools.get(event.toolCallId) ?? toolFromCall(event.toolCallId, event.toolName, undefined, new Date().toISOString(), "running", event.toolName === "bash" ? { cwd: active.cwd } : undefined);
-        const startedAt = Date.parse(previous.createdAt);
-        const durationMs = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : undefined;
-        const tool = toolWithResult(previous, event.result, event.isError, durationMs);
-        active.activeTools.set(tool.id, tool);
-        this.events.publishSession(active.ref, { type: "tool.upsert", runId: active.state.activeRun?.id, payload: { tool: toExternalTimelineItem(tool, active.ref) } });
+      case "tool_execution_end":
+        this.onToolExecutionEnd(active, event);
         return;
-      }
-      case "compaction_start": {
-        // Extension ctx.compact() resumes immediately after the agent_settled
-        // event. It owns the run that would otherwise settle on this timer.
-        if (active.settlementTimer !== undefined) {
-          this.clearSettlementTimer(active);
-          active.compactionHandoff = true;
-        }
-        const startedAt = active.state.compacting?.reason === event.reason
-          ? active.state.compacting.startedAt
-          : new Date().toISOString();
-        active.state = {
-          ...active.state,
-          compacting: { reason: event.reason, startedAt },
-        };
-        if (active.compactionAbortRequested) this.cancelCompaction(active);
-        this.events.publishSession(active.ref, {
-          type: "run.compactionStarted",
-          ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
-          payload: { status: active.state },
-        });
-        this.publishSummary(active);
+      case "compaction_start":
+        this.onCompactionStart(active, event);
         return;
-      }
-      case "compaction_end": {
-        const runId = active.state.activeRun?.id;
-        const errorMessage = event.errorMessage;
-        const handoff = active.compactionHandoff;
-        active.compactionHandoff = false;
-        active.compactionAbortRequested = false;
-        active.state = { ...active.state, compacting: undefined };
-        if (event.result !== undefined) {
-          const saved = [...active.session.sessionManager.getBranch()]
-            .reverse()
-            .find((entry) => entry.type === "compaction" && entry.summary === event.result?.summary);
-          const item = contextSummaryFromEntry(saved);
-          if (item !== undefined) this.events.publishSession(active.ref, { type: "timeline.upsert", ...(runId === undefined ? {} : { runId }), payload: { item } });
-        } else if (!event.aborted && errorMessage !== undefined) {
-          if (event.reason === "overflow") {
-            // Overflow recovery has no usable answer; the interrupted run fails.
-            active.pendingRunError = { code: "PI_COMPACTION_FAILED", message: errorMessage };
-          } else if (event.reason === "threshold") {
-            // A threshold compaction happens after a valid answer. Preserve it as
-            // visible context feedback rather than reclassifying the answer as failed.
-            active.state = {
-              ...active.state,
-              lastError: { code: "PI_COMPACTION_FAILED", message: errorMessage, occurredAt: new Date().toISOString() },
-            };
-          } else {
-            active.pendingRunError = { code: "PI_COMPACTION_FAILED", message: errorMessage };
-          }
-        }
-        this.events.publishSession(active.ref, {
-          type: "run.compactionEnded",
-          ...(runId === undefined ? {} : { runId }),
-          payload: { status: active.state, aborted: event.aborted, ...(errorMessage === undefined ? {} : { errorMessage }), willRetry: event.willRetry },
-        });
-        // After compaction the usage estimate resets; push the fresh value.
-        this.publishContextUsage(active, runId);
-        this.publishSummary(active);
-        // A plugin continuation is scheduled after its onComplete callback
-        // returns. Give it one event turn to start; otherwise settle/fail the
-        // original run with the final compaction outcome.
-        if (handoff) {
-          if (event.aborted) active.pendingRunError = undefined;
-          this.deferAgentSettlement(active);
-        }
+      case "compaction_end":
+        this.onCompactionEnd(active, event);
         return;
-      }
-      case "summarization_retry_scheduled": {
-        if (active.state.compacting === undefined) return;
-        active.state = {
-          ...active.state,
-          compacting: {
-            ...active.state.compacting,
-            retrying: retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage),
-          },
-        };
-        this.events.publishSession(active.ref, {
-          type: "run.compactionRetrying",
-          ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
-          payload: { status: active.state },
-        });
-        this.publishSummary(active);
+      case "summarization_retry_scheduled":
+        this.onSummarizationRetryScheduled(active, event);
         return;
-      }
       case "summarization_retry_attempt_start":
-      case "summarization_retry_finished": {
-        if (active.state.compacting?.retrying === undefined) return;
-        active.state = {
-          ...active.state,
-          compacting: { ...active.state.compacting, retrying: undefined },
-        };
-        this.events.publishSession(active.ref, {
-          type: "run.compactionRetrying",
-          ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
-          payload: { status: active.state },
-        });
-        this.publishSummary(active);
+      case "summarization_retry_finished":
+        this.onSummarizationRetryCleared(active);
         return;
-      }
-      case "auto_retry_start": {
-        const runId = active.state.activeRun?.id;
-        if (runId === undefined) return;
-        // The failed attempt must not remain visually live while Pi waits for
-        // the next attempt. The client receives run.retrying and removes the
-        // old partial/thinking presentation from its active stream state.
-        active.assistantStreamId = undefined;
-        active.partial = undefined;
-        active.partialThinking = undefined;
-        const retrying = retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage);
-        active.state = { ...active.state, retrying };
-        const latestError = [...active.liveErrors.values()].at(-1);
-        if (latestError !== undefined) {
-          const item = { ...latestError, state: "retrying" as const, attempt: retrying.attempt, maxAttempts: retrying.maxAttempts, retryAt: retrying.retryAt };
-          active.liveErrors.set(item.id, item);
-          this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item } });
-        }
-        this.events.publishSession(active.ref, { type: "run.retrying", runId, payload: { status: active.state } });
-        this.publishSummary(active);
+      case "auto_retry_start":
+        this.onAutoRetryStart(active, event);
         return;
-      }
-      case "auto_retry_end": {
-        const runId = active.state.activeRun?.id;
-        if (runId === undefined) return;
-        active.state = { ...active.state, retrying: undefined };
-        if (!event.success) {
-          const latestError = [...active.liveErrors.values()].at(-1);
-          if (latestError?.state === "retrying") {
-            const item = { ...latestError, state: "failed" as const };
-            active.liveErrors.set(item.id, item);
-            this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item } });
-          }
-        }
-        this.events.publishSession(active.ref, { type: "run.retryEnd", runId, payload: { status: active.state } });
-        this.publishSummary(active);
+      case "auto_retry_end":
+        this.onAutoRetryEnd(active, event);
         return;
-      }
       case "queue_update":
-        if (active.queueSyncSuspended) return;
-        this.syncQueue(active);
+        if (!active.queueSyncSuspended) this.syncQueue(active);
         return;
       case "agent_settled":
         this.deferAgentSettlement(active);
@@ -1752,6 +1551,318 @@ export class SessionService {
       default:
         return;
     }
+  }
+
+  private resetLiveStream(active: ActiveSession): void {
+    active.liveMessages.clear();
+    active.liveErrors.clear();
+    active.assistantStreamId = undefined;
+    active.partial = undefined;
+    active.partialThinking = undefined;
+    active.activeTools.clear();
+    active.extensionFailure = undefined;
+    active.pendingRunError = undefined;
+  }
+
+  private publishTool(active: ActiveSession, tool: ToolTimelineItem, runId = active.state.activeRun?.id): void {
+    active.activeTools.set(tool.id, tool);
+    this.events.publishSession(active.ref, { type: "tool.upsert", runId, payload: { tool: toExternalTimelineItem(tool, active.ref) } });
+  }
+
+  private onAgentStart(active: ActiveSession): void {
+    // Extensions can start a continuation without passing through Jarvis's
+    // HTTP prompt endpoint. Pi is authoritative for that lifecycle.
+    this.clearSettlementTimer(active);
+    if (active.state.runState !== "idle") {
+      // 重试退避结束、重试请求真正开始：撤掉“正在重试”状态。Pi 的 auto_retry_end 要等这次
+      // 尝试成功才发，若一直挂着 retrying，就会出现“一边流式思考、一边显示正在重试”。
+      // 与 Pi TUI 在 agent_start 清 retry 指示的行为保持一致。
+      if (active.state.retrying === undefined) return;
+      active.state = { ...active.state, retrying: undefined };
+      this.events.publishSession(active.ref, { type: "run.retryEnd", runId: active.state.activeRun?.id, payload: { status: active.state } });
+      return;
+    }
+    const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
+    active.state = { sessionId: active.ref.sessionId, runState: "running", activeRun: run };
+    this.setAttention(active, "running");
+    this.resetLiveStream(active);
+    this.events.publishSession(active.ref, { type: "run.started", runId: run.id, payload: { status: active.state } });
+    this.publishSummary(active);
+  }
+
+  private onMessageUpdate(active: ActiveSession, event: PiEvent<"message_update">): void {
+    const runId = active.state.activeRun?.id;
+    if (runId === undefined) return;
+    const identity = messageFromPi(event.message, "assistant", "");
+    const assistantId = active.assistantStreamId ??= identity.id;
+
+    if (event.assistantMessageEvent.type === "thinking_delta") {
+      const thinkingId = `${assistantId}:thinking`;
+      active.partialThinking ??= {
+        kind: "thinking",
+        id: thinkingId,
+        createdAt: identity.createdAt,
+        state: "running",
+        text: "",
+      };
+      active.partialThinking.text += event.assistantMessageEvent.delta;
+      this.events.publishSession(active.ref, { type: "thinking.delta", runId, payload: { thinkingId, createdAt: active.partialThinking.createdAt, delta: event.assistantMessageEvent.delta } });
+      return;
+    }
+    if (event.assistantMessageEvent.type !== "text_delta") return;
+    if (active.partialThinking !== undefined) {
+      const thinking = { ...active.partialThinking, state: "completed" as const };
+      active.partialThinking = undefined;
+      this.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: { thinkingId: thinking.id, createdAt: thinking.createdAt, text: thinking.text } });
+    }
+    const partial = active.partial ?? {
+      kind: "message" as const,
+      id: assistantId,
+      role: "assistant" as const,
+      createdAt: identity.createdAt,
+      text: "",
+    };
+    partial.text += event.assistantMessageEvent.delta;
+    active.partial = partial;
+    this.events.publishSession(active.ref, { type: "assistant.delta", runId, payload: { messageId: partial.id, delta: event.assistantMessageEvent.delta } });
+  }
+
+  private onMessageEnd(active: ActiveSession, event: PiEvent<"message_end">): void {
+    const runId = active.state.activeRun?.id;
+    if (runId === undefined) return;
+    if (isUserMessage(event.message)) {
+      this.onUserMessageEnd(active, event.message, runId);
+      return;
+    }
+    if (isAssistantMessage(event.message)) this.onAssistantMessageEnd(active, event.message, runId);
+  }
+
+  private onUserMessageEnd(active: ActiveSession, message: { role: "user"; content: unknown; timestamp?: number | string }, runId: string): void {
+    const { text, images } = userContentFromContent(message.content);
+    if (text === "" && images.length === 0) return;
+    const item = {
+      ...messageFromPi(message, "user", text),
+      ...(images.length === 0 ? {} : { images }),
+    };
+    active.liveMessages.set(item.id, item);
+    this.events.publishSession(active.ref, { type: "message.created", runId, payload: { message: item } });
+    // Pi emits message_end before it persists the message. Publish the
+    // first prompt immediately with an explicit preview so the browser
+    // does not have to wait for the whole agent run to settle before
+    // replacing the "新会话" fallback title.
+    if (firstUserMessage(active.session.sessionManager.getBranch()) === null && text !== "") {
+      const summary = this.summaryFromActive(active, text);
+      this.publishSummary(active, summary);
+      this.persistListCopy(active, summary);
+    }
+  }
+
+  private onAssistantMessageEnd(active: ActiveSession, message: { role: "assistant"; content: unknown; timestamp?: number | string }, runId: string): void {
+    const identity = messageFromPi(message, "assistant", "", active.partial?.createdAt);
+    const assistantId = active.assistantStreamId ?? identity.id;
+    const stopReason = stringValue((message as Record<string, unknown>)["stopReason"]);
+    // 思考块定稿：以最终 content 里的 thinking 部分为准（流式期间部分 provider
+    // 只在 message_end 才返回思考内容），兜底用流式累积的文本。
+    const thinkingText = thinkingTextFromContent(message.content);
+    if (active.partialThinking !== undefined || thinkingText !== "") {
+      const thinking: ThinkingTimelineItem = {
+        kind: "thinking",
+        id: `${assistantId}:thinking`,
+        createdAt: active.partialThinking?.createdAt ?? identity.createdAt,
+        state: "completed",
+        text: thinkingText !== "" ? thinkingText : (active.partialThinking?.text ?? ""),
+      };
+      active.partialThinking = undefined;
+      this.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: { thinkingId: thinking.id, createdAt: thinking.createdAt, text: thinking.text } });
+    }
+    const text = assistantTextFromContent(message.content);
+    const completed = text === ""
+      ? undefined
+      : messageFromPi(message, "assistant", text, active.partial?.createdAt);
+    if (completed !== undefined) {
+      const item = active.partial === undefined ? { ...completed, id: assistantId } : { ...completed, id: active.partial.id, createdAt: active.partial.createdAt };
+      active.liveMessages.set(item.id, item);
+      active.partial = undefined;
+      this.events.publishSession(active.ref, { type: "assistant.completed", runId, payload: { message: item } });
+    }
+    this.publishContextUsage(active, runId);
+    if (stopReason === "error") {
+      this.markAssistantAttemptFailed(active, message, identity.createdAt, assistantId, runId);
+    } else if (stopReason !== "aborted") {
+      this.markAssistantAttemptsRecovered(active, runId);
+    }
+    active.assistantStreamId = undefined;
+  }
+
+  private markAssistantAttemptFailed(active: ActiveSession, message: unknown, createdAt: string, assistantId: string, runId: string): void {
+    for (const previous of active.liveErrors.values()) {
+      if (previous.state !== "retrying") continue;
+      const settled = { ...previous, state: "failed" as const };
+      active.liveErrors.set(settled.id, settled);
+      this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: settled } });
+    }
+    const error = { ...errorFromPi(message, createdAt, assistantId), groupId: runId };
+    active.liveErrors.set(error.id, error);
+    this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: error } });
+    active.pendingRunError = { code: error.code, message: error.message };
+  }
+
+  private markAssistantAttemptsRecovered(active: ActiveSession, runId: string): void {
+    for (const error of active.liveErrors.values()) {
+      if (error.state === "recovered") continue;
+      const recovered = { ...error, state: "recovered" as const };
+      active.liveErrors.set(recovered.id, recovered);
+      this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: recovered } });
+    }
+    active.pendingRunError = undefined;
+  }
+
+  private onToolExecutionStart(active: ActiveSession, event: PiEvent<"tool_execution_start">): void {
+    this.publishTool(active, toolFromCall(
+      event.toolCallId,
+      event.toolName,
+      event.args,
+      new Date().toISOString(),
+      "running",
+      event.toolName === "bash" ? { cwd: active.cwd } : undefined,
+    ));
+  }
+
+  private onToolExecutionUpdate(active: ActiveSession, event: PiEvent<"tool_execution_update">): void {
+    const previous = active.activeTools.get(event.toolCallId) ?? toolFromCall(event.toolCallId, event.toolName, event.args);
+    this.publishTool(active, toolWithPartial(previous, event.partialResult));
+  }
+
+  private onToolExecutionEnd(active: ActiveSession, event: PiEvent<"tool_execution_end">): void {
+    const previous = active.activeTools.get(event.toolCallId) ?? toolFromCall(event.toolCallId, event.toolName, undefined, new Date().toISOString(), "running", event.toolName === "bash" ? { cwd: active.cwd } : undefined);
+    const startedAt = Date.parse(previous.createdAt);
+    const durationMs = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : undefined;
+    this.publishTool(active, toolWithResult(previous, event.result, event.isError, durationMs));
+  }
+
+  private onCompactionStart(active: ActiveSession, event: PiEvent<"compaction_start">): void {
+    // Extension ctx.compact() resumes immediately after the agent_settled
+    // event. It owns the run that would otherwise settle on this timer.
+    if (active.settlementTimer !== undefined) {
+      this.clearSettlementTimer(active);
+      active.compactionHandoff = true;
+    }
+    const startedAt = active.state.compacting?.reason === event.reason
+      ? active.state.compacting.startedAt
+      : new Date().toISOString();
+    active.state = {
+      ...active.state,
+      compacting: { reason: event.reason, startedAt },
+    };
+    if (active.compactionAbortRequested) this.cancelCompaction(active);
+    this.events.publishSession(active.ref, {
+      type: "run.compactionStarted",
+      ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
+      payload: { status: active.state },
+    });
+    this.publishSummary(active);
+  }
+
+  private onCompactionEnd(active: ActiveSession, event: PiEvent<"compaction_end">): void {
+    const runId = active.state.activeRun?.id;
+    const errorMessage = event.errorMessage;
+    const handoff = active.compactionHandoff;
+    active.compactionHandoff = false;
+    active.compactionAbortRequested = false;
+    active.state = { ...active.state, compacting: undefined };
+    if (event.result !== undefined) {
+      const saved = [...active.session.sessionManager.getBranch()]
+        .reverse()
+        .find((entry) => entry.type === "compaction" && entry.summary === event.result?.summary);
+      const item = contextSummaryFromEntry(saved);
+      if (item !== undefined) this.events.publishSession(active.ref, { type: "timeline.upsert", ...(runId === undefined ? {} : { runId }), payload: { item } });
+    } else if (!event.aborted && errorMessage !== undefined) {
+      if (event.reason === "overflow") {
+        active.pendingRunError = { code: "PI_COMPACTION_FAILED", message: errorMessage };
+      } else if (event.reason === "threshold") {
+        active.state = {
+          ...active.state,
+          lastError: { code: "PI_COMPACTION_FAILED", message: errorMessage, occurredAt: new Date().toISOString() },
+        };
+      } else {
+        active.pendingRunError = { code: "PI_COMPACTION_FAILED", message: errorMessage };
+      }
+    }
+    this.events.publishSession(active.ref, {
+      type: "run.compactionEnded",
+      ...(runId === undefined ? {} : { runId }),
+      payload: { status: active.state, aborted: event.aborted, ...(errorMessage === undefined ? {} : { errorMessage }), willRetry: event.willRetry },
+    });
+    this.publishContextUsage(active, runId);
+    this.publishSummary(active);
+    if (handoff) {
+      if (event.aborted) active.pendingRunError = undefined;
+      this.deferAgentSettlement(active);
+    }
+  }
+
+  private onSummarizationRetryScheduled(active: ActiveSession, event: PiEvent<"summarization_retry_scheduled">): void {
+    if (active.state.compacting === undefined) return;
+    active.state = {
+      ...active.state,
+      compacting: {
+        ...active.state.compacting,
+        retrying: retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage),
+      },
+    };
+    this.publishCompactionRetrying(active);
+  }
+
+  private onSummarizationRetryCleared(active: ActiveSession): void {
+    if (active.state.compacting?.retrying === undefined) return;
+    active.state = {
+      ...active.state,
+      compacting: { ...active.state.compacting, retrying: undefined },
+    };
+    this.publishCompactionRetrying(active);
+  }
+
+  private publishCompactionRetrying(active: ActiveSession): void {
+    this.events.publishSession(active.ref, {
+      type: "run.compactionRetrying",
+      ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
+      payload: { status: active.state },
+    });
+    this.publishSummary(active);
+  }
+
+  private onAutoRetryStart(active: ActiveSession, event: PiEvent<"auto_retry_start">): void {
+    const runId = active.state.activeRun?.id;
+    if (runId === undefined) return;
+    active.assistantStreamId = undefined;
+    active.partial = undefined;
+    active.partialThinking = undefined;
+    const retrying = retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage);
+    active.state = { ...active.state, retrying };
+    const latestError = [...active.liveErrors.values()].at(-1);
+    if (latestError !== undefined) {
+      const item = { ...latestError, state: "retrying" as const, attempt: retrying.attempt, maxAttempts: retrying.maxAttempts, retryAt: retrying.retryAt };
+      active.liveErrors.set(item.id, item);
+      this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item } });
+    }
+    this.events.publishSession(active.ref, { type: "run.retrying", runId, payload: { status: active.state } });
+    this.publishSummary(active);
+  }
+
+  private onAutoRetryEnd(active: ActiveSession, event: PiEvent<"auto_retry_end">): void {
+    const runId = active.state.activeRun?.id;
+    if (runId === undefined) return;
+    active.state = { ...active.state, retrying: undefined };
+    if (!event.success) {
+      const latestError = [...active.liveErrors.values()].at(-1);
+      if (latestError?.state === "retrying") {
+        const item = { ...latestError, state: "failed" as const };
+        active.liveErrors.set(item.id, item);
+        this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item } });
+      }
+    }
+    this.events.publishSession(active.ref, { type: "run.retryEnd", runId, payload: { status: active.state } });
+    this.publishSummary(active);
   }
 
   private settleRun(active: ActiveSession, runId: string | undefined): void {
@@ -1923,6 +2034,7 @@ export class SessionService {
   private publishSummary(active: ActiveSession, supplied?: SessionSummary): void {
     const summary = supplied ?? this.summaryFromActive(active);
     this.events.publishSession(active.ref, { type: "session.updated", payload: { status: active.state, session: summary } });
+    if (active.readOnly === true) return;
     this.events.publishWorkspace(active.ref.workspaceId, { version: 1, type: "session.updated", workspaceId: active.ref.workspaceId, session: summary });
   }
 
@@ -2014,6 +2126,28 @@ function sessionDirectoryFor(cwd: string, agentDir: string): string | undefined 
   return resolveConfiguredSessionDir(configured, base);
 }
 
+function managedSessionDir(cwd: string): string | undefined {
+  return sessionDirectoryFor(cwd, getAgentDir());
+}
+
+function createManagedSession(cwd: string): SessionManager {
+  const sessionDir = managedSessionDir(cwd);
+  return sessionDir === undefined ? SessionManager.create(cwd) : SessionManager.create(cwd, sessionDir);
+}
+
+function openManagedSessionAt(path: string, sessionDir: string | undefined): SessionManager {
+  return sessionDir === undefined ? SessionManager.open(path) : SessionManager.open(path, sessionDir);
+}
+
+function openManagedSession(cwd: string, path: string): SessionManager {
+  return openManagedSessionAt(path, managedSessionDir(cwd));
+}
+
+function listManagedSessions(cwd: string): ReturnType<typeof SessionManager.list> {
+  const sessionDir = managedSessionDir(cwd);
+  return sessionDir === undefined ? SessionManager.list(cwd) : SessionManager.list(cwd, sessionDir);
+}
+
 function readSessionDir(path: string): string | undefined {
   if (!existsSync(path)) return undefined;
   try {
@@ -2085,9 +2219,46 @@ async function listSessionFiles(workspace: Workspace): Promise<SessionFileIndex[
   return files.filter((file): file is SessionFileIndex => file !== undefined);
 }
 
+function sessionJsonlDirectories(workspace: Workspace): string[] {
+  const directories = new Set<string>([
+    sessionFilesDirectory(workspace),
+    defaultSessionDir(workspace.cwd, getAgentDir()),
+  ]);
+  const environmentValue = process.env["PI_CODING_AGENT_SESSION_DIR"];
+  if (environmentValue !== undefined && environmentValue.trim() !== "") {
+    directories.add(resolveConfiguredSessionDir(environmentValue, workspace.cwd));
+  }
+  return [...directories];
+}
+
+async function removeSessionJsonl(workspace: Workspace, sessionId: string): Promise<void> {
+  for (const directory of sessionJsonlDirectories(workspace)) {
+    let names: string[];
+    try {
+      names = await readdir(directory);
+    } catch (error) {
+      if (isMissingFile(error)) continue;
+      throw error;
+    }
+    for (const name of names) {
+      if (!name.endsWith(`_${sessionId}.jsonl`)) continue;
+      await rm(join(directory, name), { force: true });
+    }
+  }
+}
+
 async function findSessionFile(workspace: Workspace, sessionId: string): Promise<string | undefined> {
-  const files = await listSessionFiles(workspace);
-  return files.find((file) => file.id === sessionId)?.path;
+  const directory = sessionFilesDirectory(workspace);
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (isMissingFile(error)) return undefined;
+    throw error;
+  }
+  const match = names.find((name) => name.endsWith(`_${sessionId}.jsonl`));
+  if (match !== undefined) return join(directory, match);
+  return (await listSessionFiles(workspace)).find((file) => file.id === sessionId)?.path;
 }
 
 const SESSION_HEADER_SCAN_BYTES = 64 * 1024;
@@ -2315,28 +2486,10 @@ function attachSearchSnippet(summary: SessionSummary, searchText: string, needle
   return snippet === undefined ? summary : { ...summary, matchSnippet: snippet };
 }
 
-function isMissingFile(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as Record<string, unknown>)["code"] === "ENOENT";
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
 function decodeImageData(mimeType: string, data: string): { mimeType: string; bytes: Buffer } {
   const bytes = Buffer.from(data.includes(",") ? data.slice(data.indexOf(",") + 1) : data, "base64");
   if (bytes.length === 0) throw new AppError("MEDIA_NOT_FOUND", "Image not found", 404);
   return { mimeType, bytes };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function toIso(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
-  if (typeof value === "string" && Number.isFinite(Date.parse(value))) return new Date(value).toISOString();
-  return new Date().toISOString();
 }
 
 function runtimeFailureCode(error: unknown): string {
