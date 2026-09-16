@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { open, readdir, rm, stat } from "node:fs/promises";
+import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import {
@@ -52,7 +53,7 @@ import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTEN
 import { projectModelSnapshot } from "./model-projection.js";
 import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, decodeTimelineMediaItemId, errorFromPi, messageFromPi, projectHistory, thinkingTextFromContent, toExternalTimelineItem, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
-import { SessionAttentionStore, type SessionSortMeta } from "./session-attention-store.js";
+import { SessionAttentionStore, type SessionListCopy, type SessionSortMeta } from "./session-attention-store.js";
 
 interface ActiveRun {
   id: string;
@@ -160,28 +161,80 @@ export class SessionService {
   ) {}
 
   async list(workspaceId: string, query?: string): Promise<SessionSummary[]> {
+    const needle = query?.trim().toLocaleLowerCase();
+    if (needle !== undefined && needle !== "") return this.listBySearch(workspaceId, needle);
+    return this.listFromIndex(workspaceId);
+  }
+
+  /** 侧栏列表：文件头 + 索引，不把每个 jsonl 通读成全文。 */
+  private async listFromIndex(workspaceId: string): Promise<SessionSummary[]> {
+    const workspace = this.workspaces.get(workspaceId);
+    const files = await listSessionFiles(workspace);
+    const sortMeta = await this.attention.list(workspaceId);
+    const seen = new Set(files.map((file) => file.id));
+    const rows = await Promise.all(files.map(async (file) => {
+      const ref = { workspaceId, sessionId: file.id };
+      const active = this.active.get(activeKey(ref));
+      if (active !== undefined) return { summary: this.summaryFromActive(active) };
+      const persisted = sortMeta.get(file.id);
+      let name = persisted?.name;
+      let preview = persisted?.preview;
+      let copy: { ref: SessionRef; copy: SessionListCopy } | undefined;
+      if (persisted?.listCopyMtime !== file.mtimeMs) {
+        const scanned = await readSessionListCopy(file.path);
+        name = scanned.name ?? undefined;
+        preview = scanned.preview ?? undefined;
+        copy = { ref, copy: { name: scanned.name, preview: scanned.preview, listCopyMtime: file.mtimeMs } };
+      }
+      const createdAt = file.timestamp !== undefined && Number.isFinite(Date.parse(file.timestamp))
+        ? new Date(file.timestamp)
+        : new Date(file.mtimeIso);
+      return {
+        summary: this.summaryFromList(workspace, {
+          id: file.id,
+          ...(name === undefined ? {} : { name }),
+          firstMessage: preview ?? "",
+          created: createdAt,
+          modified: new Date(file.mtimeIso),
+        }, persisted),
+        copy,
+      };
+    }));
+    const summaries = rows.map((row) => row.summary);
+    const copiesToPersist = rows.flatMap((row) => row.copy === undefined ? [] : [row.copy]);
+
+    for (const active of this.active.values()) {
+      if (!isVisibleSessionId(active.ref.sessionId) || active.ref.workspaceId !== workspaceId || seen.has(active.ref.sessionId)) continue;
+      summaries.unshift(this.summaryFromActive(active));
+    }
+
+    if (copiesToPersist.length > 0) {
+      void this.attention.setListCopies(copiesToPersist).catch((error: unknown) => console.warn("Could not persist session list copy", error));
+    }
+    return sortSessionSummaries(summaries);
+  }
+
+  /** 全文搜索仍走 Pi list（主动搜才通读 jsonl）。 */
+  private async listBySearch(workspaceId: string, needle: string): Promise<SessionSummary[]> {
     const workspace = this.workspaces.get(workspaceId);
     const sessionDir = sessionDirectoryFor(workspace.cwd, getAgentDir());
     const listed = (sessionDir === undefined
       ? await SessionManager.list(workspace.cwd)
       : await SessionManager.list(workspace.cwd, sessionDir)).filter((entry) => isVisibleSessionId(entry.id));
     const sortMeta = await this.attention.list(workspaceId);
-    const needle = query?.trim().toLocaleLowerCase();
-    // SessionInfo.allMessagesText 已包含会话全部 user/assistant 消息文本（list 时读入），
-    // 全文搜索在此直接命中，不增加额外磁盘开销。
     const listedMatches = listed
       .map((entry) => ({
         summary: this.summaryFromList(workspace, entry, sortMeta.get(entry.id)),
         searchText: `${entry.name ?? ""}\n${entry.firstMessage ?? ""}\n${entry.allMessagesText}`,
       }))
-      .filter(({ searchText }) => needle === undefined || needle === "" || searchText.toLocaleLowerCase().includes(needle));
+      .filter(({ searchText }) => searchText.toLocaleLowerCase().includes(needle));
     const summaries = listedMatches.map(({ summary, searchText }) => attachSearchSnippet(summary, searchText, needle));
 
     for (const active of this.active.values()) {
       if (!isVisibleSessionId(active.ref.sessionId) || active.ref.workspaceId !== workspaceId || summaries.some((summary) => summary.id === active.ref.sessionId)) continue;
       const summary = this.summaryFromActive(active);
       const searchText = sessionBranchSearchText(summary.name, summary.preview, active.session.sessionManager.getBranch());
-      if (needle !== undefined && needle !== "" && !searchText.toLocaleLowerCase().includes(needle)) continue;
+      if (!searchText.toLocaleLowerCase().includes(needle)) continue;
       summaries.unshift(attachSearchSnippet(summary, searchText, needle));
     }
 
@@ -334,6 +387,7 @@ export class SessionService {
     active.session.setSessionName(value);
     const summary = this.summaryFromActive(active);
     this.publishSummary(active, summary);
+    this.persistListCopy(active, summary);
     return summary;
   }
 
@@ -1446,7 +1500,9 @@ export class SessionService {
           // does not have to wait for the whole agent run to settle before
           // replacing the "新会话" fallback title.
           if (firstUserMessage(active.session.sessionManager.getBranch()) === null && text !== "") {
-            this.publishSummary(active, this.summaryFromActive(active, text));
+            const summary = this.summaryFromActive(active, text);
+            this.publishSummary(active, summary);
+            this.persistListCopy(active, summary);
           }
           return;
         }
@@ -1683,6 +1739,7 @@ export class SessionService {
         return;
       case "session_info_changed":
         this.publishSummary(active);
+        this.persistListCopy(active, this.summaryFromActive(active));
         return;
       default:
         return;
@@ -1722,6 +1779,7 @@ export class SessionService {
     }
     this.events.publishSession(active.ref, { type: "run.settled", runId, payload: { status: active.state } });
     this.publishSummary(active);
+    this.persistListCopy(active, this.summaryFromActive(active));
   }
 
   private failRun(active: ActiveSession, runId: string | undefined, code: string, message: string): void {
@@ -1754,6 +1812,7 @@ export class SessionService {
       this.publishQueue(active);
     }
     this.events.publishSession(active.ref, { type: "run.failed", runId, payload: { status: active.state } });
+    this.persistListCopy(active, this.summaryFromActive(active));
     this.publishSummary(active);
   }
 
@@ -1844,6 +1903,15 @@ export class SessionService {
     void this.attention.setLastUserMessageAt(active.ref, at).catch((error: unknown) => console.warn("Could not persist last user message time", error));
   }
 
+  private persistListCopy(active: ActiveSession, summary: SessionSummary): void {
+    const path = active.session.sessionFile;
+    if (path === undefined) return;
+    void sessionFileMtimeMs(path).then((mtimeMs) => {
+      if (mtimeMs === undefined) return;
+      return this.attention.setListCopies([{ ref: active.ref, copy: { name: summary.name, preview: summary.preview, listCopyMtime: mtimeMs } }]);
+    }).catch((error: unknown) => console.warn("Could not persist session list copy", error));
+  }
+
   private publishSummary(active: ActiveSession, supplied?: SessionSummary): void {
     const summary = supplied ?? this.summaryFromActive(active);
     this.events.publishSession(active.ref, { type: "session.updated", payload: { status: active.state, session: summary } });
@@ -1860,7 +1928,7 @@ export class SessionService {
       id: entry.id,
       workspaceId: workspace.id,
       name: entry.name ?? null,
-      preview: entry.firstMessage === "" ? null : entry.firstMessage,
+      preview: entry.firstMessage === "" || entry.firstMessage === "(no messages)" ? null : entry.firstMessage,
       createdAt: entry.created.toISOString(),
       updatedAt: entry.modified.toISOString(),
       runState: active?.state.runState ?? "idle",
@@ -1883,8 +1951,8 @@ export class SessionService {
     return {
       id: ref.sessionId,
       workspaceId: workspace.id,
-      name: null,
-      preview: null,
+      name: persisted.name ?? null,
+      preview: persisted.preview ?? null,
       createdAt,
       updatedAt,
       runState: "idle",
@@ -1968,7 +2036,15 @@ function shouldFilterSessionCwd(workspace: Workspace, directory: string): boolea
   return sessionDirectoryFor(workspace.cwd, getAgentDir()) !== undefined && resolve(directory) !== resolve(defaultSessionDir(workspace.cwd, getAgentDir()));
 }
 
-async function listSessionFiles(workspace: Workspace): Promise<Array<{ id: string; path: string }>> {
+interface SessionFileIndex {
+  id: string;
+  path: string;
+  mtimeMs: number;
+  mtimeIso: string;
+  timestamp?: string;
+}
+
+async function listSessionFiles(workspace: Workspace): Promise<SessionFileIndex[]> {
   const directory = sessionFilesDirectory(workspace);
   const filterCwd = shouldFilterSessionCwd(workspace, directory);
   const resolvedCwd = resolve(workspace.cwd);
@@ -1984,9 +2060,21 @@ async function listSessionFiles(workspace: Workspace): Promise<Array<{ id: strin
     const header = await readSessionFileHeader(path);
     if (header === undefined || !isVisibleSessionId(header.id)) return undefined;
     if (filterCwd && (header.cwd === undefined || header.cwd === "" || resolve(header.cwd) !== resolvedCwd)) return undefined;
-    return { id: header.id, path };
+    let stats: Awaited<ReturnType<typeof stat>>;
+    try {
+      stats = await stat(path);
+    } catch {
+      return undefined;
+    }
+    return {
+      id: header.id,
+      path,
+      mtimeMs: stats.mtimeMs,
+      mtimeIso: stats.mtime.toISOString(),
+      ...(header.timestamp === undefined ? {} : { timestamp: header.timestamp }),
+    };
   }));
-  return files.filter((file): file is { id: string; path: string } => file !== undefined);
+  return files.filter((file): file is SessionFileIndex => file !== undefined);
 }
 
 async function findSessionFile(workspace: Workspace, sessionId: string): Promise<string | undefined> {
@@ -2025,6 +2113,63 @@ async function sessionModifiedAt(sessionFile: string | undefined, fallback: stri
   } catch {
     return fallback;
   }
+}
+
+async function sessionFileMtimeMs(path: string): Promise<number | undefined> {
+  try {
+    return (await stat(path)).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 只取侧栏需要的名称和首条用户消息，不拼全文。 */
+async function readSessionListCopy(path: string): Promise<{ name: string | null; preview: string | null }> {
+  let stream: ReturnType<typeof createReadStream> | undefined;
+  let lines: ReturnType<typeof createInterface> | undefined;
+  let name: string | null = null;
+  let preview: string | null = null;
+  try {
+    stream = createReadStream(path, { encoding: "utf8" });
+    lines = createInterface({ input: stream, crlfDelay: Infinity });
+    for await (const line of lines) {
+      const parsed = parseJsonlRecord(line);
+      if (parsed === undefined) continue;
+      if (parsed["type"] === "session_info") {
+        name = sessionInfoName(parsed);
+        continue;
+      }
+      if (preview !== null || parsed["type"] !== "message") continue;
+      const message = parsed["message"];
+      if (!isRecord(message) || message["role"] !== "user") continue;
+      const text = userContentFromContent(message["content"]).text.trim();
+      if (text !== "") preview = text;
+    }
+  } catch {
+    return { name, preview };
+  } finally {
+    lines?.close();
+    stream?.destroy();
+  }
+  return { name, preview };
+}
+
+function parseJsonlRecord(line: string): Record<string, unknown> | undefined {
+  const trimmed = line.trim();
+  if (trimmed === "") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sessionInfoName(entry: Record<string, unknown>): string | null {
+  const name = entry["name"];
+  if (typeof name !== "string") return null;
+  const trimmed = name.trim();
+  return trimmed === "" ? null : trimmed;
 }
 
 function retryStatus(attempt: number, maxAttempts: number, delayMs: number, errorMessage: string): RetryStatus {

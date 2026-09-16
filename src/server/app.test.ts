@@ -1126,6 +1126,28 @@ describe("Jarvis HTTP and WebSocket API", () => {
     listSpy.mockRestore();
   });
 
+  it("lists stored sessions from headers and list copy instead of reading every jsonl", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "list-index-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+    const listSpy = vi.spyOn(SessionManager, "list");
+
+    const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({
+      sessions: [{ id: source.id, workspaceId: workspace.id, name: null, preview: "First question", runState: "idle" }],
+    });
+    expect(listSpy).not.toHaveBeenCalled();
+
+    const searched = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions?query=${encodeURIComponent("Second answer")}` });
+    expect(searched.statusCode).toBe(200);
+    expect((searched.json() as { sessions: Array<{ id: string }> }).sessions.map((session) => session.id)).toContain(source.id);
+    expect(listSpy).toHaveBeenCalled();
+    listSpy.mockRestore();
+  });
+
   it("opens a stored session timeline without listing every jsonl file", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "open-header-workspace");

@@ -7,6 +7,15 @@ export interface SessionSortMeta {
   attentionAt?: string;
   lastUserMessageAt?: string;
   starred?: boolean;
+  name?: string;
+  preview?: string;
+  listCopyMtime?: number;
+}
+
+export interface SessionListCopy {
+  name: string | null;
+  preview: string | null;
+  listCopyMtime: number;
 }
 
 interface PersistedSessionMeta {
@@ -14,6 +23,9 @@ interface PersistedSessionMeta {
   attentionAt?: string;
   lastUserMessageAt?: string;
   starred?: true;
+  name?: string;
+  preview?: string;
+  listCopyMtime?: number;
 }
 
 interface PersistedAttentionFile {
@@ -50,6 +62,7 @@ export class SessionAttentionStore {
       // Running / waiting are reconstructed from the live session and must not survive a restart.
       if (state !== "completed_unread" && state !== "failed") {
         const next = compactPersistedMeta({
+          ...listCopyFields(current),
           ...(current.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: current.lastUserMessageAt }),
           ...(current.starred === true ? { starred: true } : {}),
         });
@@ -77,12 +90,36 @@ export class SessionAttentionStore {
         return;
       }
       const next = compactPersistedMeta({
+        ...listCopyFields(current),
         ...(current.attentionState === undefined ? {} : { attentionState: current.attentionState }),
         ...(current.attentionAt === undefined ? {} : { attentionAt: current.attentionAt }),
         ...(current.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: current.lastUserMessageAt }),
       });
       if (next === undefined) delete data.sessions[entryKey];
       else data.sessions[entryKey] = next;
+    });
+  }
+
+  async setListCopies(entries: Array<{ ref: SessionRef; copy: SessionListCopy }>): Promise<void> {
+    if (entries.length === 0) return;
+    await this.update((data) => {
+      for (const { ref, copy } of entries) {
+        const entryKey = key(ref);
+        const current = data.sessions[entryKey] ?? {};
+        const next = compactPersistedMeta({
+          ...(current.attentionState === undefined ? {} : { attentionState: current.attentionState }),
+          ...(current.attentionAt === undefined ? {} : { attentionAt: current.attentionAt }),
+          ...(current.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: current.lastUserMessageAt }),
+          ...(current.starred === true ? { starred: true } : {}),
+          ...listCopyFields({
+            ...(copy.name === null || copy.name === "" ? {} : { name: copy.name }),
+            ...(copy.preview === null || copy.preview === "" ? {} : { preview: copy.preview }),
+            listCopyMtime: copy.listCopyMtime,
+          }),
+        });
+        if (next === undefined) delete data.sessions[entryKey];
+        else data.sessions[entryKey] = next;
+      }
     });
   }
 
@@ -139,6 +176,14 @@ function key(ref: SessionRef): string {
   return `${ref.workspaceId}:${ref.sessionId}`;
 }
 
+function listCopyFields(entry: PersistedSessionMeta): PersistedSessionMeta {
+  return {
+    ...(typeof entry.name === "string" && entry.name !== "" ? { name: entry.name } : {}),
+    ...(typeof entry.preview === "string" && entry.preview !== "" ? { preview: entry.preview } : {}),
+    ...(typeof entry.listCopyMtime === "number" && Number.isFinite(entry.listCopyMtime) ? { listCopyMtime: entry.listCopyMtime } : {}),
+  };
+}
+
 function metaFromPersisted(entry: PersistedSessionMeta | undefined): SessionSortMeta {
   if (entry === undefined) return { attentionState: "idle" };
   return {
@@ -146,6 +191,7 @@ function metaFromPersisted(entry: PersistedSessionMeta | undefined): SessionSort
     ...(entry.attentionAt === undefined ? {} : { attentionAt: entry.attentionAt }),
     ...(entry.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: entry.lastUserMessageAt }),
     ...(entry.starred === true ? { starred: true } : {}),
+    ...listCopyFields(entry),
   };
 }
 
@@ -177,11 +223,25 @@ function migratePersistedEntry(value: unknown): PersistedSessionMeta | undefined
     next.attentionState = state;
     next.attentionAt = stringTime(item["attentionAt"]) ?? stringTime(item["updatedAt"]);
   }
+  const name = stringField(item["name"]);
+  if (name !== undefined) next.name = name;
+  const preview = stringField(item["preview"]);
+  if (preview !== undefined) next.preview = preview;
+  const listCopyMtime = numberField(item["listCopyMtime"]);
+  if (listCopyMtime !== undefined) next.listCopyMtime = listCopyMtime;
   return Object.keys(next).length === 0 ? undefined : next;
 }
 
 function stringTime(value: unknown): string | undefined {
   return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : undefined;
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function isMissingFile(error: unknown): boolean {
