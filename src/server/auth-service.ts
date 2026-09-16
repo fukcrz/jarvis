@@ -1,9 +1,10 @@
 import { createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AuthStatus } from "../shared/protocol.js";
 import { AppError } from "./errors.js";
+import { atomicWrite, isMissingFile } from "./fs.js";
 
 /** 浏览器会话 Cookie 名。 */
 export const AUTH_COOKIE_NAME = "jarvis_auth";
@@ -249,10 +250,7 @@ export class AuthService {
   }
 
   private async persist(): Promise<void> {
-    const stored = this.state();
-    const temporary = `${this.authPath}.${String(process.pid)}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(stored, undefined, 2)}\n`, "utf8");
-    await rename(temporary, this.authPath);
+    await atomicWrite(this.authPath, `${JSON.stringify(this.state(), undefined, 2)}\n`);
   }
 }
 
@@ -298,6 +296,3 @@ function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
   });
 }
 
-function isMissingFile(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: unknown })["code"] === "ENOENT";
-}

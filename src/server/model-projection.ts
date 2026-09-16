@@ -1,4 +1,6 @@
 import type { ModelDescriptor, SessionModelSnapshot } from "../shared/protocol.js";
+import { isRecord } from "../shared/protocol.js";
+import { stringValue } from "./values.js";
 
 /** Project Pi model objects into the stable browser-facing protocol. */
 export function projectModelSnapshot(current: unknown, available: readonly unknown[], inScopeKeys?: ReadonlySet<string>): SessionModelSnapshot {
@@ -38,10 +40,3 @@ function modelKey(model: ModelDescriptor): string {
   return `${model.provider}\u0000${model.id}`;
 }
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

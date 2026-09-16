@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir, resolveModelScopeWithDiagnostics, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthEvent, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
 import type { AppSettings, AuthLoginOperation, EnabledModelRef, EnabledModelsStatus, FetchedModel, ManagedCompat, ManagedMaxTokensField, ManagedModel, ManagedProvider, ManagedThinkingFormat, ProviderOverride, ProviderStatus } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
+import { atomicWrite, isMissingFile } from "./fs.js";
+import { isRecord } from "../shared/protocol.js";
 
 interface StoredSettings { version: 1; assistantName: string; }
 type ModelConfig = Record<string, unknown> & { providers: Record<string, Record<string, unknown>> };
@@ -72,7 +74,7 @@ export class SettingsService {
     const credentialType = new Map(credentials.map((credential) => [credential.providerId, credential.type]));
     return runtime.getProviders().map((provider) => {
       const auth = runtime.getProviderAuthStatus(provider.id);
-      const configured = record(modelConfig.providers[provider.id]) ? modelConfig.providers[provider.id] : undefined;
+      const configured = isRecord(modelConfig.providers[provider.id]) ? modelConfig.providers[provider.id] : undefined;
       const hasPlaceholder = configured?.["apiKey"] === CUSTOM_API_KEY_PLACEHOLDER && credentialType.has(provider.id) === false;
       const custom = isManagedCustomProvider(configured);
       const override = custom ? undefined : projectProviderOverride(configured);
@@ -103,13 +105,13 @@ export class SettingsService {
     const provider = validateManagedProvider(input);
     const config = await this.readModelsConfig();
     const existingValue = config.providers[provider.id];
-    const existing = record(existingValue) ? existingValue : {};
+    const existing = isRecord(existingValue) ? existingValue : {};
     const existingModels = Array.isArray(existing["models"]) ? existing["models"] : [];
     const existingModelsById = new Map(existingModels.flatMap((model) => (
-      record(model) && typeof model["id"] === "string" ? [[model["id"], model] as const] : []
+      isRecord(model) && typeof model["id"] === "string" ? [[model["id"], model] as const] : []
     )));
     const models = provider.models.map((model) => {
-      const savedModel: Record<string, unknown> = record(existingModelsById.get(model.id))
+      const savedModel: Record<string, unknown> = isRecord(existingModelsById.get(model.id))
         ? { ...existingModelsById.get(model.id) }
         : {};
       savedModel["id"] = model.id;
@@ -147,7 +149,7 @@ export class SettingsService {
     const config = await this.readModelsConfig();
     const existingValue = config.providers[providerId];
     if (isManagedCustomProvider(existingValue)) throw new AppError("PROVIDER_IS_CUSTOM", "Use the custom provider editor for this connection", 400);
-    const existing: Record<string, unknown> = record(existingValue) ? { ...existingValue } : {};
+    const existing: Record<string, unknown> = isRecord(existingValue) ? { ...existingValue } : {};
     const override = validateProviderOverride(input);
     if (override.baseUrl === undefined) delete existing["baseUrl"];
     else existing["baseUrl"] = override.baseUrl;
@@ -192,7 +194,7 @@ export class SettingsService {
       this.readModelsConfig(),
     ]);
     if (provider === undefined) throw new AppError("PROVIDER_NOT_FOUND", "Provider not found", 404);
-    const configured = record(config.providers[providerId]) ? config.providers[providerId] : {};
+    const configured = isRecord(config.providers[providerId]) ? config.providers[providerId] : {};
     const configuredUrl = typeof configured["baseUrl"] === "string" && configured["baseUrl"].trim() !== "" ? configured["baseUrl"].trim() : undefined;
     const providerUrl = typeof provider.baseUrl === "string" && provider.baseUrl !== "" ? provider.baseUrl : undefined;
     const authUrl = typeof auth?.auth.baseUrl === "string" && auth.auth.baseUrl !== "" ? auth.auth.baseUrl : undefined;
@@ -372,8 +374,8 @@ export class SettingsService {
     try {
       const raw = await readFile(this.modelsPath, "utf8");
       const parsed = JSON.parse(parseJsonc(raw)) as unknown;
-      if (!record(parsed)) throw new AppError("MODEL_CONFIGURATION_INVALID", "models.json must contain an object", 400);
-      const providers = record(parsed["providers"]) ? parsed["providers"] : {};
+      if (!isRecord(parsed)) throw new AppError("MODEL_CONFIGURATION_INVALID", "models.json must contain an object", 400);
+      const providers = isRecord(parsed["providers"]) ? parsed["providers"] : {};
       return Object.assign({}, parsed, { providers }) as ModelConfig;
     } catch (error) {
       if (isMissingFile(error)) return { providers: {} };
@@ -399,7 +401,7 @@ function projectModel(model: { id: string; name: string; reasoning: boolean; inp
 function projectManagedProvider(id: string, value: Record<string, unknown>): ManagedProvider | undefined {
   if (!isManagedCustomProvider(value) || typeof value["baseUrl"] !== "string" || !isApi(value["api"])) return undefined;
   const models = Array.isArray(value["models"]) ? value["models"].flatMap((model): ManagedModel[] => {
-    if (!record(model) || typeof model["id"] !== "string") return [];
+    if (!isRecord(model) || typeof model["id"] !== "string") return [];
     const input = Array.isArray(model["input"]) ? model["input"] : [];
     return [{
       id: model["id"],
@@ -497,7 +499,7 @@ const THINKING_FORMATS = new Set<ManagedThinkingFormat>(["openai", "openrouter",
 const MAX_TOKENS_FIELDS = new Set<ManagedMaxTokensField>(["max_completion_tokens", "max_tokens"]);
 
 function isManagedCustomProvider(value: unknown): boolean {
-  return record(value) && isApi(value["api"]);
+  return isRecord(value) && isApi(value["api"]);
 }
 
 function isEmptyProviderRecord(value: Record<string, unknown>): boolean {
@@ -505,7 +507,7 @@ function isEmptyProviderRecord(value: Record<string, unknown>): boolean {
 }
 
 function projectHeaders(value: unknown): Record<string, string> | undefined {
-  if (!record(value)) return undefined;
+  if (!isRecord(value)) return undefined;
   const headers: Record<string, string> = {};
   for (const [name, headerValue] of Object.entries(value)) {
     if (typeof headerValue === "string" && headerValue !== "") headers[name] = headerValue;
@@ -514,7 +516,7 @@ function projectHeaders(value: unknown): Record<string, string> | undefined {
 }
 
 function projectManagedCompat(value: unknown): ManagedCompat | undefined {
-  if (!record(value)) return undefined;
+  if (!isRecord(value)) return undefined;
   const compat: ManagedCompat = {};
   if (typeof value["supportsDeveloperRole"] === "boolean") compat.supportsDeveloperRole = value["supportsDeveloperRole"];
   if (typeof value["supportsReasoningEffort"] === "boolean") compat.supportsReasoningEffort = value["supportsReasoningEffort"];
@@ -531,7 +533,7 @@ function projectManagedCompat(value: unknown): ManagedCompat | undefined {
 }
 
 function projectProviderOverride(value: unknown): ProviderOverride | undefined {
-  if (!record(value) || isManagedCustomProvider(value)) return undefined;
+  if (!isRecord(value) || isManagedCustomProvider(value)) return undefined;
   const rawUrl = value["baseUrl"];
   const baseUrl = typeof rawUrl === "string" && rawUrl.trim() !== "" ? rawUrl : undefined;
   const headers = projectHeaders(value["headers"]);
@@ -610,7 +612,7 @@ function applyManagedHeaders(target: Record<string, unknown>, headers: Record<st
 }
 
 function applyManagedCompat(target: Record<string, unknown>, compat: ManagedCompat | undefined): void {
-  const existing = record(target["compat"]) ? { ...target["compat"] } : {};
+  const existing = isRecord(target["compat"]) ? { ...target["compat"] } : {};
   for (const key of COMPAT_KEYS) delete existing[key];
   if (compat !== undefined) Object.assign(existing, compat);
   if (Object.keys(existing).length === 0) delete target["compat"];
@@ -628,27 +630,27 @@ function projectFetchedModels(body: unknown, api: ManagedProvider["api"]): Fetch
   const names: Record<string, string | undefined> = {};
   let rows: unknown[] = [];
   if (api === "google-generative-ai") {
-    if (!record(body) || !Array.isArray(body["models"])) return [];
+    if (!isRecord(body) || !Array.isArray(body["models"])) return [];
     rows = body["models"];
     for (const row of rows) {
-      if (record(row) && typeof row["name"] === "string") {
+      if (isRecord(row) && typeof row["name"] === "string") {
         const id = row["name"].replace(/^models\//u, "");
         if (id !== "") names[id] = typeof row["displayName"] === "string" ? row["displayName"] : undefined;
       }
     }
   } else if (api === "anthropic-messages") {
-    if (!record(body) || !Array.isArray(body["data"])) return [];
+    if (!isRecord(body) || !Array.isArray(body["data"])) return [];
     rows = body["data"];
     for (const row of rows) {
-      if (record(row) && typeof row["id"] === "string" && row["id"] !== "") {
+      if (isRecord(row) && typeof row["id"] === "string" && row["id"] !== "") {
         names[row["id"]] = typeof row["display_name"] === "string" ? row["display_name"] : undefined;
       }
     }
   } else {
-    if (!record(body) || !Array.isArray(body["data"])) return [];
+    if (!isRecord(body) || !Array.isArray(body["data"])) return [];
     rows = body["data"];
     for (const row of rows) {
-      if (record(row) && typeof row["id"] === "string" && row["id"] !== "") names[row["id"]] = undefined;
+      if (isRecord(row) && typeof row["id"] === "string" && row["id"] !== "") names[row["id"]] = undefined;
     }
   }
   return Object.entries(names)
@@ -706,10 +708,3 @@ function parseJsonc(value: string): string {
   }
   return result.replace(/,(\s*[}\]])/g, "$1");
 }
-async function atomicWrite(path: string, content: string): Promise<void> {
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporary, content, "utf8");
-  await rename(temporary, path);
-}
-function isMissingFile(error: unknown): boolean { return record(error) && error["code"] === "ENOENT"; }
-function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }

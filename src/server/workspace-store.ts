@@ -1,9 +1,10 @@
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Workspace } from "../shared/protocol.js";
 import { AppError } from "./errors.js";
+import { atomicWrite, isMissingFile } from "./fs.js";
 
 interface PersistedWorkspaces {
   version: 1;
@@ -106,11 +107,9 @@ export class WorkspaceStore {
   }
 
   private async persist(): Promise<void> {
-    const temporary = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
     this.normalizeSortOrder();
     const payload: PersistedWorkspaces = { version: 1, workspaces: this.workspaces };
-    await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    await rename(temporary, this.filePath);
+    await atomicWrite(this.filePath, `${JSON.stringify(payload, null, 2)}\n`);
   }
 
   private normalizeSortOrder(): void {
@@ -142,10 +141,3 @@ function defaultLabel(cwd: string): string {
   return basename(cwd) || cwd;
 }
 
-function isMissingFile(error: unknown): boolean {
-  return isRecord(error) && error["code"] === "ENOENT";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}

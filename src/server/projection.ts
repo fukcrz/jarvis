@@ -1,4 +1,5 @@
-import type { ContextSummaryTimelineItem, ErrorTimelineItem, ImageAttachment, MessageTimelineItem, SessionRef, ThinkingTimelineItem, TimelineItem, ToolState, ToolTimelineItem } from "../shared/protocol.js";
+import { isRecord, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
+import { stringValue, toIso } from "./values.js";
 
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
 
@@ -463,12 +464,6 @@ function shortValue(value: unknown): string {
   return "";
 }
 
-function toIso(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
-  if (typeof value === "string" && Number.isFinite(Date.parse(value))) return new Date(value).toISOString();
-  return new Date().toISOString();
-}
-
 function truncate(value: string): string {
   return value.length <= MAX_TOOL_OUTPUT_CHARS ? value : `${value.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n\n[Output truncated by Jarvis]`;
 }
@@ -512,14 +507,6 @@ export function toExternalTimelineItems(items: readonly TimelineItem[], ref: Ses
   return items.map((item) => toExternalTimelineItem(item, ref));
 }
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
 function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
