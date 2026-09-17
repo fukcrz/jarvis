@@ -32,6 +32,8 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
       suppressErrorRendering: true,
       theme: "base",
       fontFamily: "system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei UI', sans-serif",
+      // mindmap 连线用 cScale（节点底色）而不是 lineColor；darkMode 还会再压暗，必须写进 SVG 样式。
+      themeCSS: ".edge, [class*=\"section-edge-\"] { stroke: #ffffff !important; }",
       themeVariables: {
         darkMode: true,
         background: "#0b0d14",
@@ -44,7 +46,8 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
         tertiaryColor: "#121624",
         tertiaryTextColor: "#f5efea",
         tertiaryBorderColor: "#2a3248",
-        lineColor: "#d0c7ff",
+        lineColor: "#ffffff",
+        arrowheadColor: "#ffffff",
         textColor: "#f5efea",
         noteBkgColor: "#302e20",
         noteTextColor: "#f4be70",

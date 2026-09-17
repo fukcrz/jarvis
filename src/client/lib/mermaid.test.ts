@@ -120,6 +120,11 @@ describe("renderMermaidDiagram", () => {
     expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({
       startOnLoad: false,
       suppressErrorRendering: true,
+      themeCSS: expect.stringContaining("stroke: #ffffff"),
+      themeVariables: expect.objectContaining({
+        lineColor: "#ffffff",
+        arrowheadColor: "#ffffff",
+      }),
     }));
     expect(mermaid.render).toHaveBeenCalledTimes(2);
   });
