@@ -5,7 +5,7 @@ import { ArrowUp, Command, FileCode2, History, LoaderCircle, MessageSquare, Plus
 import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionFileReference, SessionQueue, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { composerDraftSyncAction } from "../lib/composer-draft";
-import { imageDataUrl, MAX_ATTACHMENTS, prepareImage } from "../lib/image";
+import { imageDataUrl, prepareImage } from "../lib/image";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { ImagePreview } from "./image-lightbox";
 import { Button } from "./ui/button";
@@ -269,20 +269,13 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
 
   const handleFiles = useCallback((files: File[]) => {
     if (files.length === 0) return;
-    const remaining = MAX_ATTACHMENTS - attachmentsRef.current.length - preparingRef.current;
-    if (remaining <= 0) {
-      onAttachmentError(`一条消息最多附带 ${String(MAX_ATTACHMENTS)} 张图片`);
-      return;
-    }
-    const accepted = files.slice(0, remaining);
-    if (accepted.length < files.length) onAttachmentError(`一条消息最多附带 ${String(MAX_ATTACHMENTS)} 张图片`);
-    preparingRef.current += accepted.length;
+    preparingRef.current += files.length;
     setPreparingCount(preparingRef.current);
-    void Promise.all(accepted.map((file) => prepareImage(file)
+    void Promise.all(files.map((file) => prepareImage(file)
       .then((attachment) => ({ ok: true as const, attachment }))
       .catch((error: unknown) => ({ ok: false as const, message: error instanceof Error ? error.message : "图片处理失败" }))))
       .then((results) => {
-        preparingRef.current -= accepted.length;
+        preparingRef.current -= files.length;
         setPreparingCount(preparingRef.current);
         const prepared = results.filter((result): result is { ok: true; attachment: ImageAttachment } => result.ok).map((result) => result.attachment);
         const failures = results.filter((result): result is { ok: false; message: string } => !result.ok).map((result) => result.message);

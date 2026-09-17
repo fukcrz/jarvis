@@ -1,6 +1,5 @@
 import type { ImageAttachment } from "../../shared/protocol";
 
-export const MAX_ATTACHMENTS = 8;
 export const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 const MAX_GIF_BYTES = 8 * 1024 * 1024;
 const MAX_DIMENSION = 1920;

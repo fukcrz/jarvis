@@ -131,7 +131,6 @@ const SIDE_CHAT_TOOLS = ["read", "grep", "find", "ls"] as const;
 
 const PAGE_LIMIT = 120;
 const MAX_PROMPT_LENGTH = 40_000;
-const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_DATA_LENGTH = 14_000_000; // ≈ 10 MiB decoded
 const MAX_BASH_OUTPUT_CHARS = 100_000; // 流式气泡的最大输出长度，落盘结果由 Pi 自行截断
 const PI_ABORT_TIMEOUT_MS = 8_000;
@@ -980,7 +979,6 @@ export class SessionService {
 
   private validateAttachments(images: ImageAttachment[] | undefined): Array<ImageAttachment & { data: string }> {
     const attachments = images ?? [];
-    if (attachments.length > MAX_ATTACHMENTS) throw new AppError("ATTACHMENTS_TOO_MANY", `A message can include at most ${String(MAX_ATTACHMENTS)} images`);
     const accepted: Array<ImageAttachment & { data: string }> = [];
     for (const image of attachments) {
       if (!ALLOWED_IMAGE_TYPES.has(image.mimeType)) {
