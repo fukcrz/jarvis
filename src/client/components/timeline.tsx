@@ -334,20 +334,26 @@ function TurnNavigator({ mobile, anchors, activeId, markerPositions, loadingAll,
   </Dialog>;
 }
 
-function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
+function ElapsedClock({ startedAt }: { startedAt?: string }) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
+    if (startedAt === undefined) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [feedback.startedAt, feedback.label, feedback.tone]);
+  }, [startedAt]);
 
-  const elapsed = formatRunElapsed(feedback.startedAt, now);
+  const elapsed = formatRunElapsed(startedAt, now);
+  if (elapsed === undefined) return null;
+  return <time className="run-elapsed">{elapsed}</time>;
+}
+
+function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
   return <div className={`working-indicator ${feedback.tone}`} role="status" aria-live="polite">
     <LoaderCircle className="spin" size={15} />
     <span>{feedback.label}</span>
-    {elapsed === undefined ? null : <time>{elapsed}</time>}
+    <ElapsedClock startedAt={feedback.startedAt} />
   </div>;
 }
 
@@ -362,13 +368,16 @@ function CompactingIndicator({ compacting }: { compacting: NonNullable<SessionSt
       ? "上下文已满，正在压缩后重试"
       : "上下文接近上限，正在自动压缩";
   const retrying = compacting.retrying;
-  return <RunStatusIndicator className="compacting-indicator" icon={<LoaderCircle className="spin" size={15} />} label={label} detail={retrying === undefined ? undefined : `摘要生成失败，正在重试（${String(retrying.attempt)}/${String(retrying.maxAttempts)}）：${retrying.errorMessage}`} retrying={retrying} />;
+  return <RunStatusIndicator className="compacting-indicator" icon={<LoaderCircle className="spin" size={15} />} label={label} startedAt={compacting.startedAt} detail={retrying === undefined ? undefined : `摘要生成失败，正在重试（${String(retrying.attempt)}/${String(retrying.maxAttempts)}）：${retrying.errorMessage}`} retrying={retrying} />;
 }
 
-function RunStatusIndicator({ className, icon, label, detail, retrying }: { className: string; icon: ReactNode; label: string; detail?: string; retrying?: NonNullable<SessionStatus["retrying"]> }) {
+function RunStatusIndicator({ className, icon, label, startedAt, detail, retrying }: { className: string; icon: ReactNode; label: string; startedAt?: string; detail?: string; retrying?: NonNullable<SessionStatus["retrying"]> }) {
   return <div className={className} role="status" aria-live="polite">
     <span className="run-status-icon">{icon}</span>
-    <span className="run-status-copy"><strong>{label}</strong>{detail === undefined ? null : <span>{detail}</span>}</span>
+    <span className="run-status-copy">
+      <span className="run-status-heading"><strong>{label}</strong>{startedAt === undefined ? null : <ElapsedClock startedAt={startedAt} />}</span>
+      {detail === undefined ? null : <span className="run-status-detail">{detail}</span>}
+    </span>
     {retrying === undefined ? null : <RetryCountdown retrying={retrying} />}
   </div>;
 }
@@ -1069,6 +1078,7 @@ function ThinkingItem({ item, baseDir }: { item: ThinkingTimelineItem; baseDir?:
       <button className="thinking-summary" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <span className="thinking-state-icon">{item.state === "running" ? <LoaderCircle size={14} className="spin" /> : <Brain size={14} />}</span>
         <span className="thinking-title">{item.state === "running" ? "思考中" : "思考"}</span>
+        {item.state === "running" ? <ElapsedClock startedAt={item.createdAt} /> : null}
       </button>
       {open ? <div className="thinking-details"><div className="message-content"><MarkdownMessage text={item.text} streaming={item.state === "running"} baseDir={baseDir} /></div></div> : null}
     </article>
