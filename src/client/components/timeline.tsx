@@ -315,7 +315,11 @@ function TurnNavigator({ mobile, anchors, activeId, markerPositions, loadingAll,
   const active = activeUserMessageAnchor(anchors, activeId);
   useLayoutEffect(() => {
     if (!mobile || !open) return;
-    listRef.current?.querySelector<HTMLElement>(".timeline-mobile-navigator-item.active")?.scrollIntoView({ block: "nearest" });
+    // Wait for the dialog portal to mount before revealing the current message.
+    const frame = requestAnimationFrame(() => {
+      listRef.current?.querySelector<HTMLElement>(".timeline-mobile-navigator-item.active")?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [activeId, anchors.length, mobile, open]);
   if (!mobile) {
     if (anchors.length === 0) return null;

@@ -838,7 +838,18 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
   .mobile-page { display: flex; flex-direction: column; height: 100vh; height: var(--vvh, 100dvh); min-height: 0; background: transparent; }
   .mobile-chat-page { display: flex; flex-direction: column; height: 100vh; height: var(--vvh, 100dvh); min-height: 0; }
   .mobile-chat-content { display: grid; flex: 1; min-height: 0; height: auto; overflow: hidden; }
-  .turn-navigator-dialog { top: auto; right: 0; bottom: 0; left: 0; width: 100vw; max-width: none; max-height: min(78dvh, 680px); transform: none; border-radius: 12px 12px 0 0; padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); }
+  .turn-navigator-dialog {
+    top: calc(var(--ui-bar-mobile) + env(safe-area-inset-top) + 6px);
+    right: max(10px, env(safe-area-inset-right));
+    bottom: auto;
+    left: max(10px, env(safe-area-inset-left));
+    width: auto;
+    max-width: none;
+    max-height: min(520px, calc(var(--vvh, 100dvh) * .6), calc(var(--vvh, 100dvh) - var(--ui-bar-mobile) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 16px));
+    transform: none;
+    border-radius: 12px;
+    padding: 12px;
+  }
   .timeline-mobile-navigator-status { padding: 0 2px 4px; color: var(--subtle); font-size: 11px; }
   .timeline-mobile-navigator-empty { padding: 28px 8px; color: var(--subtle); font-size: 13px; text-align: center; }
   .timeline-mobile-navigator-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 -4px; padding: 0 4px; -webkit-overflow-scrolling: touch; }
