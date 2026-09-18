@@ -713,7 +713,8 @@ export function App() {
     }
   };
 
-  const keepSessionIdFor = (projectId: string): string | undefined => selectedRef?.workspaceId === projectId ? selectedRef.sessionId : undefined;
+  // 桌面端保留当前打开的会话；移动端从列表清理，不保留上次打开的会话。
+  const keepSessionIdFor = (projectId: string): string | undefined => isMobile || selectedRef?.workspaceId !== projectId ? undefined : selectedRef.sessionId;
 
   const openSessionCleanup = (workspace: Workspace) => {
     if (sessionCleanupTargets(sessionsByWorkspace[workspace.id] ?? [], keepSessionIdFor(workspace.id)).length === 0) return;
