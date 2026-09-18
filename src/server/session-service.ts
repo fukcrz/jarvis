@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream, existsSync, readFileSync } from "node:fs";
-import { open, readdir, rm, stat } from "node:fs/promises";
-import { createInterface } from "node:readline";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -28,7 +25,6 @@ import type {
   PromptAccepted,
   QueuedMessage,
   QueuedPromptAccepted,
-  RetryStatus,
   SessionFileReference,
   SessionAttentionState,
   SessionQueue,
@@ -40,7 +36,6 @@ import type {
   SessionThinkingSnapshot,
   ThinkingLevel,
   ThinkingTimelineItem,
-  TimelineItem,
   TimelinePage,
   ToolTimelineItem,
   Workspace,
@@ -48,7 +43,6 @@ import type {
 import { emptySessionQueue, isRecord, PROTOCOL_VERSION } from "../shared/protocol.js";
 import { sortSessionSummaries } from "../shared/session-sort.js";
 import { AppError, asMessage } from "./errors.js";
-import { isMissingFile } from "./fs.js";
 import { stringValue, toIso } from "./values.js";
 import { EventHub } from "./event-hub.js";
 import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
@@ -56,6 +50,43 @@ import { projectModelSnapshot } from "./model-projection.js";
 import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, decodeTimelineMediaItemId, errorFromPi, messageFromPi, projectHistory, thinkingTextFromContent, toExternalTimelineItem, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
 import { SessionAttentionStore, type SessionListCopy, type SessionSortMeta } from "./session-attention-store.js";
+import {
+  createManagedSession,
+  findSessionFile,
+  listManagedSessions,
+  listSessionFiles,
+  openManagedSession,
+  openManagedSessionAt,
+  readSessionFileHeader,
+  readSessionListCopy,
+  removeSessionJsonl,
+  sessionDirectoryFor,
+  sessionFileMtimeMs,
+  sessionModifiedAt,
+} from "./session-files.js";
+import {
+  activeKey,
+  attachSearchSnippet,
+  clamp,
+  decodeImageData,
+  expandToUserBoundary,
+  findUserMessageEntry,
+  findVisibleMessageEntryId,
+  firstUserMessage,
+  isAssistantMessage,
+  isCompactionCancellation,
+  isOperationCancellation,
+  isUserMessage,
+  isVisibleSessionId,
+  mergeQueuedMessages,
+  queuedMessage,
+  retryStatus,
+  runtimeFailureCode,
+  sameThinkingLevels,
+  sessionBranchSearchText,
+  sessionForkEntryId,
+  sleep,
+} from "./session-helpers.js";
 
 interface ActiveRun {
   id: string;
@@ -446,7 +477,7 @@ export class SessionService {
         payload: { items: toExternalTimelineItems(projectHistory(active.session.sessionManager.getBranch()), active.ref), status: { sessionId: active.ref.sessionId, runState: "idle" } },
       });
       await this.reopenAtCurrentBranch(active);
-      return this.prompt(ref, text, clientRequestId, images, undefined, true) as Promise<PromptAccepted>;
+      return this.prompt(ref, text, clientRequestId, images, { skipTransitionWait: true }) as Promise<PromptAccepted>;
     });
   }
 
@@ -790,12 +821,13 @@ export class SessionService {
     return this.thinkingSnapshot(active);
   }
 
-  async prompt(ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[], behavior?: "steer" | "followUp", skipTransitionWait = false): Promise<PromptAccepted | QueuedPromptAccepted> {
+  async prompt(ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[], options?: { behavior?: "steer" | "followUp"; skipTransitionWait?: boolean }): Promise<PromptAccepted | QueuedPromptAccepted> {
     const prompt = text.trim();
     if (prompt === "" && (images === undefined || images.length === 0)) throw new AppError("PROMPT_EMPTY", "Prompt cannot be empty");
     if (prompt.length > MAX_PROMPT_LENGTH) throw new AppError("PROMPT_TOO_LARGE", `Prompt must be at most ${String(MAX_PROMPT_LENGTH)} characters`);
     const attachments = this.validateAttachments(images);
-    const active = await this.getActive(ref, { waitForTransition: !skipTransitionWait });
+    const behavior = options?.behavior;
+    const active = await this.getActive(ref, { waitForTransition: options?.skipTransitionWait !== true });
     const requestKey = `prompt:${clientRequestId}`;
     const previous = active.requestRuns.get(requestKey);
     if (previous !== undefined) return previous as PromptAccepted | QueuedPromptAccepted;
@@ -2096,414 +2128,4 @@ export class SessionService {
       ...(active.starred === true ? { starred: true } : {}),
     };
   }
-}
-
-function activeKey(ref: SessionRef): string {
-  return `${ref.workspaceId}:${ref.sessionId}`;
-}
-
-/** pi-subagent uses this namespace for persistent child-agent sessions. */
-function isVisibleSessionId(sessionId: string): boolean {
-  return !sessionId.startsWith("subagent.");
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Match Pi's environment-over-settings session directory precedence. */
-function sessionDirectoryFor(cwd: string, agentDir: string): string | undefined {
-  const environmentValue = process.env["PI_CODING_AGENT_SESSION_DIR"];
-  if (environmentValue !== undefined && environmentValue.trim() !== "") return resolveConfiguredSessionDir(environmentValue, cwd);
-
-  const globalSettings = readSessionDir(join(agentDir, "settings.json"));
-  const projectSettings = readSessionDir(join(cwd, ".pi", "settings.json"));
-  const configured = projectSettings ?? globalSettings;
-  if (configured === undefined) return undefined;
-  const base = projectSettings === undefined ? agentDir : join(cwd, ".pi");
-  return resolveConfiguredSessionDir(configured, base);
-}
-
-function managedSessionDir(cwd: string): string | undefined {
-  return sessionDirectoryFor(cwd, getAgentDir());
-}
-
-function createManagedSession(cwd: string): SessionManager {
-  const sessionDir = managedSessionDir(cwd);
-  return sessionDir === undefined ? SessionManager.create(cwd) : SessionManager.create(cwd, sessionDir);
-}
-
-function openManagedSessionAt(path: string, sessionDir: string | undefined): SessionManager {
-  return sessionDir === undefined ? SessionManager.open(path) : SessionManager.open(path, sessionDir);
-}
-
-function openManagedSession(cwd: string, path: string): SessionManager {
-  return openManagedSessionAt(path, managedSessionDir(cwd));
-}
-
-function listManagedSessions(cwd: string): ReturnType<typeof SessionManager.list> {
-  const sessionDir = managedSessionDir(cwd);
-  return sessionDir === undefined ? SessionManager.list(cwd) : SessionManager.list(cwd, sessionDir);
-}
-
-function readSessionDir(path: string): string | undefined {
-  if (!existsSync(path)) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
-    const value = (parsed as Record<string, unknown>)["sessionDir"];
-    return typeof value === "string" && value.trim() !== "" ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveConfiguredSessionDir(value: string, baseDir: string): string {
-  const expanded = value === "~" ? homedir() : value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
-  return isAbsolute(expanded) ? resolve(expanded) : resolve(baseDir, expanded);
-}
-
-function defaultSessionDir(cwd: string, agentDir: string): string {
-  const encoded = `--${resolve(cwd).replace(/^[\\/]/, "").replace(/[\\/:]/g, "-")}--`;
-  return join(agentDir, "sessions", encoded);
-}
-
-function sessionFilesDirectory(workspace: Workspace): string {
-  return sessionDirectoryFor(workspace.cwd, getAgentDir()) ?? defaultSessionDir(workspace.cwd, getAgentDir());
-}
-
-function shouldFilterSessionCwd(workspace: Workspace, directory: string): boolean {
-  return sessionDirectoryFor(workspace.cwd, getAgentDir()) !== undefined && resolve(directory) !== resolve(defaultSessionDir(workspace.cwd, getAgentDir()));
-}
-
-interface SessionFileIndex {
-  id: string;
-  path: string;
-  mtimeMs: number;
-  mtimeIso: string;
-  timestamp?: string;
-}
-
-async function listSessionFiles(workspace: Workspace): Promise<SessionFileIndex[]> {
-  const directory = sessionFilesDirectory(workspace);
-  const filterCwd = shouldFilterSessionCwd(workspace, directory);
-  const resolvedCwd = resolve(workspace.cwd);
-  let names: string[];
-  try {
-    names = await readdir(directory);
-  } catch (error) {
-    if (isMissingFile(error)) return [];
-    throw error;
-  }
-  const files = await Promise.all(names.filter((name) => name.endsWith(".jsonl")).map(async (name) => {
-    const path = join(directory, name);
-    const header = await readSessionFileHeader(path);
-    if (header === undefined || !isVisibleSessionId(header.id)) return undefined;
-    if (filterCwd && (header.cwd === undefined || header.cwd === "" || resolve(header.cwd) !== resolvedCwd)) return undefined;
-    let stats: Awaited<ReturnType<typeof stat>>;
-    try {
-      stats = await stat(path);
-    } catch {
-      return undefined;
-    }
-    return {
-      id: header.id,
-      path,
-      mtimeMs: stats.mtimeMs,
-      mtimeIso: stats.mtime.toISOString(),
-      ...(header.timestamp === undefined ? {} : { timestamp: header.timestamp }),
-    };
-  }));
-  return files.filter((file): file is SessionFileIndex => file !== undefined);
-}
-
-function sessionJsonlDirectories(workspace: Workspace): string[] {
-  const directories = new Set<string>([
-    sessionFilesDirectory(workspace),
-    defaultSessionDir(workspace.cwd, getAgentDir()),
-  ]);
-  const environmentValue = process.env["PI_CODING_AGENT_SESSION_DIR"];
-  if (environmentValue !== undefined && environmentValue.trim() !== "") {
-    directories.add(resolveConfiguredSessionDir(environmentValue, workspace.cwd));
-  }
-  return [...directories];
-}
-
-async function removeSessionJsonl(workspace: Workspace, sessionId: string): Promise<void> {
-  for (const directory of sessionJsonlDirectories(workspace)) {
-    let names: string[];
-    try {
-      names = await readdir(directory);
-    } catch (error) {
-      if (isMissingFile(error)) continue;
-      throw error;
-    }
-    for (const name of names) {
-      if (!name.endsWith(`_${sessionId}.jsonl`)) continue;
-      await rm(join(directory, name), { force: true });
-    }
-  }
-}
-
-async function findSessionFile(workspace: Workspace, sessionId: string): Promise<string | undefined> {
-  const directory = sessionFilesDirectory(workspace);
-  let names: string[];
-  try {
-    names = await readdir(directory);
-  } catch (error) {
-    if (isMissingFile(error)) return undefined;
-    throw error;
-  }
-  const match = names.find((name) => name.endsWith(`_${sessionId}.jsonl`));
-  if (match !== undefined) return join(directory, match);
-  return (await listSessionFiles(workspace)).find((file) => file.id === sessionId)?.path;
-}
-
-const SESSION_HEADER_SCAN_BYTES = 64 * 1024;
-
-async function readSessionFileHeader(path: string): Promise<{ id: string; cwd?: string; timestamp?: string } | undefined> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(path, "r");
-    const buffer = Buffer.alloc(SESSION_HEADER_SCAN_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const newline = buffer.subarray(0, bytesRead).indexOf(0x0a);
-    if (newline <= 0) return undefined;
-    const parsed: unknown = JSON.parse(buffer.subarray(0, newline).toString("utf8"));
-    if (!isRecord(parsed) || parsed["type"] !== "session" || typeof parsed["id"] !== "string" || parsed["id"] === "") return undefined;
-    return {
-      id: parsed["id"],
-      ...(typeof parsed["cwd"] === "string" ? { cwd: parsed["cwd"] } : {}),
-      ...(typeof parsed["timestamp"] === "string" ? { timestamp: parsed["timestamp"] } : {}),
-    };
-  } catch {
-    return undefined;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
-}
-
-async function sessionModifiedAt(sessionFile: string | undefined, fallback: string): Promise<string> {
-  if (sessionFile === undefined) return fallback;
-  try {
-    return (await stat(sessionFile)).mtime.toISOString();
-  } catch {
-    return fallback;
-  }
-}
-
-async function sessionFileMtimeMs(path: string): Promise<number | undefined> {
-  try {
-    return (await stat(path)).mtimeMs;
-  } catch {
-    return undefined;
-  }
-}
-
-/** 只取侧栏需要的名称和首条用户消息，不拼全文。 */
-async function readSessionListCopy(path: string): Promise<{ name: string | null; preview: string | null }> {
-  let stream: ReturnType<typeof createReadStream> | undefined;
-  let lines: ReturnType<typeof createInterface> | undefined;
-  let name: string | null = null;
-  let preview: string | null = null;
-  try {
-    stream = createReadStream(path, { encoding: "utf8" });
-    lines = createInterface({ input: stream, crlfDelay: Infinity });
-    for await (const line of lines) {
-      const parsed = parseJsonlRecord(line);
-      if (parsed === undefined) continue;
-      if (parsed["type"] === "session_info") {
-        name = sessionInfoName(parsed);
-        continue;
-      }
-      if (preview !== null || parsed["type"] !== "message") continue;
-      const message = parsed["message"];
-      if (!isRecord(message) || message["role"] !== "user") continue;
-      const text = userContentFromContent(message["content"]).text.trim();
-      if (text !== "") preview = text;
-    }
-  } catch {
-    return { name, preview };
-  } finally {
-    lines?.close();
-    stream?.destroy();
-  }
-  return { name, preview };
-}
-
-function parseJsonlRecord(line: string): Record<string, unknown> | undefined {
-  const trimmed = line.trim();
-  if (trimmed === "") return undefined;
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function sessionInfoName(entry: Record<string, unknown>): string | null {
-  const name = entry["name"];
-  if (typeof name !== "string") return null;
-  const trimmed = name.trim();
-  return trimmed === "" ? null : trimmed;
-}
-
-function retryStatus(attempt: number, maxAttempts: number, delayMs: number, errorMessage: string): RetryStatus {
-  return {
-    attempt,
-    maxAttempts,
-    delayMs,
-    retryAt: new Date(Date.now() + delayMs).toISOString(),
-    errorMessage,
-  };
-}
-
-function isCompactionCancellation(error: unknown): boolean {
-  if (error instanceof Error && error.name === "AbortError") return true;
-  return asMessage(error) === "Compaction cancelled";
-}
-
-function sameThinkingLevels(left: readonly ThinkingLevel[], right: readonly ThinkingLevel[]): boolean {
-  return left.length === right.length && left.every((level, index) => level === right[index]);
-}
-
-/** 稳定 id：同一文本重复排队也保持独立条目。 */
-function queuedMessage(kind: "steer" | "followUp", text: string): QueuedMessage {
-  let hash = 5381;
-  for (let index = 0; index < text.length; index += 1) hash = ((hash << 5) + hash + text.charCodeAt(index)) >>> 0;
-  const createdAt = new Date().toISOString();
-  return { id: `${kind}:${hash.toString(36)}:${createdAt}`, kind, text, createdAt };
-}
-
-/** 增量合并：按顺序复用已有条目（文本相同）以保持 id 稳定，新增/剩余条目补全新 id。 */
-function mergeQueuedMessages(previous: QueuedMessage[], current: readonly string[], kind: "steer" | "followUp"): QueuedMessage[] {
-  const result: QueuedMessage[] = [];
-  const used = new Set<number>();
-  for (const text of current) {
-    const matchIndex = previous.findIndex((item, index) => !used.has(index) && item.kind === kind && item.text === text);
-    if (matchIndex === -1) {
-      result.push(queuedMessage(kind, text));
-    } else {
-      used.add(matchIndex);
-      result.push(previous[matchIndex]!);
-    }
-  }
-  return result;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  if (!Number.isFinite(value)) return maximum;
-  return Math.max(minimum, Math.min(maximum, Math.floor(value)));
-}
-
-function expandToUserBoundary(items: TimelineItem[], start: number): number {
-  if (start === 0 || items[start]?.kind === "message" && items[start].role === "user") return start;
-  for (let index = start - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item?.kind === "message" && item.role === "user") return index;
-  }
-  return 0;
-}
-
-function findVisibleMessageEntryId(entries: readonly unknown[], messageId: string): string | undefined {
-  for (const entry of entries) {
-    if (!isRecord(entry) || entry["type"] !== "message") continue;
-    const projected = projectHistory([entry]).find((item): item is MessageTimelineItem => item.kind === "message");
-    if (projected?.id === messageId) return stringValue(entry["id"]) || undefined;
-  }
-  return undefined;
-}
-
-/**
- * Fork point for session-level forking.
- * Idle sessions copy every message on the branch (including the last assistant reply).
- * While running, the latest user message starts the in-flight turn, so back off
- * to its parent — the branch never contains in-progress content, only the last settled turn.
- */
-function sessionForkEntryId(branch: readonly unknown[], running: boolean): string | undefined {
-  if (!running) {
-    for (let i = branch.length - 1; i >= 0; i--) {
-      const entry = branch[i];
-      if (!isRecord(entry) || entry["type"] !== "message") continue;
-      const id = stringValue(entry["id"]);
-      return id === "" ? undefined : id;
-    }
-    return undefined;
-  }
-  for (let i = branch.length - 1; i >= 0; i--) {
-    const entry = branch[i];
-    if (!isRecord(entry) || entry["type"] !== "message") continue;
-    const message = entry["message"];
-    if (!isRecord(message) || message["role"] !== "user") continue;
-    const parentId = entry["parentId"];
-    return typeof parentId === "string" ? parentId : undefined;
-  }
-  return undefined;
-}
-
-function findUserMessageEntry(entries: readonly unknown[], messageId: string): Record<string, unknown> | undefined {
-  for (const entry of entries) {
-    if (!isRecord(entry) || entry["type"] !== "message") continue;
-    const message = entry["message"];
-    if (!isRecord(message) || message["role"] !== "user") continue;
-    const projected = projectHistory([entry]).find((item): item is MessageTimelineItem => item.kind === "message");
-    if (projected?.id === messageId) return entry;
-  }
-  return undefined;
-}
-
-function firstUserMessage(entries: readonly unknown[]): string | null {
-  const history = projectHistory(entries);
-  return history.find((item): item is MessageTimelineItem => item.kind === "message" && item.role === "user")?.text ?? null;
-}
-
-/** 内存中活跃会话的全文检索文本：名称 + 首条消息 + 全部 user/assistant 消息文本。 */
-function sessionBranchSearchText(name: string | null, preview: string | null, entries: readonly unknown[]): string {
-  const text = projectHistory(entries)
-    .filter((item): item is MessageTimelineItem => item.kind === "message")
-    .map((item) => item.text)
-    .join("\n");
-  return `${name ?? ""}\n${preview ?? ""}\n${text}`;
-}
-
-/** 命中关键词时提取其周围上下文（±48 字符），用于搜索结果中展示命中原因。 */
-function snippetAround(text: string, needle: string, radius = 48): string | undefined {
-  const index = text.toLocaleLowerCase().indexOf(needle);
-  if (index < 0) return undefined;
-  const start = Math.max(0, index - radius);
-  const end = Math.min(text.length, index + needle.length + radius);
-  const piece = text.slice(start, end).replace(/\s+/g, " ").trim();
-  return `${start > 0 ? "…" : ""}${piece}${end < text.length ? "…" : ""}`;
-}
-
-/** 搜索结果附带命中片段（非搜索响应保持原样，不污染普通列表数据）。 */
-function attachSearchSnippet(summary: SessionSummary, searchText: string, needle: string | undefined): SessionSummary {
-  if (needle === undefined || needle === "") return summary;
-  const snippet = snippetAround(searchText, needle);
-  return snippet === undefined ? summary : { ...summary, matchSnippet: snippet };
-}
-
-function decodeImageData(mimeType: string, data: string): { mimeType: string; bytes: Buffer } {
-  const bytes = Buffer.from(data.includes(",") ? data.slice(data.indexOf(",") + 1) : data, "base64");
-  if (bytes.length === 0) throw new AppError("MEDIA_NOT_FOUND", "Image not found", 404);
-  return { mimeType, bytes };
-}
-
-function runtimeFailureCode(error: unknown): string {
-  return isUnsupportedExtensionInteraction(error) ? UNSUPPORTED_EXTENSION_INTERACTION : "PI_RUNTIME_ERROR";
-}
-
-function isOperationCancellation(error: unknown): boolean {
-  if (error instanceof Error && error.name === "AbortError") return true;
-  const message = asMessage(error);
-  return message === "Operation aborted" || message === "This operation was aborted";
-}
-
-function isAssistantMessage(message: unknown): message is { role: "assistant"; content: unknown; timestamp?: number | string } {
-  return typeof message === "object" && message !== null && (message as Record<string, unknown>)["role"] === "assistant";
-}
-
-function isUserMessage(message: unknown): message is { role: "user"; content: unknown; timestamp?: number | string } {
-  return typeof message === "object" && message !== null && (message as Record<string, unknown>)["role"] === "user";
 }
