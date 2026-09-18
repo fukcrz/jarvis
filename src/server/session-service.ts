@@ -2,15 +2,12 @@ import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  createAgentSession,
-  DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
   resolveModelScopeWithDiagnostics,
   SessionManager,
   SettingsManager,
   type AgentSession,
-  type ExtensionError,
 } from "@earendil-works/pi-coding-agent";
 import type {
   BashAccepted,
@@ -35,11 +32,9 @@ import type {
   Workspace,
 } from "../shared/protocol.js";
 import { emptySessionQueue, isRecord, PROTOCOL_VERSION } from "../shared/protocol.js";
-import { sortSessionSummaries } from "../shared/session-sort.js";
 import { AppError, asMessage } from "./errors.js";
 import { stringValue, toIso } from "./values.js";
 import { EventHub } from "./event-hub.js";
-import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
 import { projectModelSnapshot } from "./model-projection.js";
 import { bashExecutionItem, decodeTimelineMediaItemId, projectHistory, toExternalTimelineItem, toExternalTimelineItems } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
@@ -49,7 +44,6 @@ import {
   FORK_SNAPSHOT_RETRY_DELAY_MS,
   JARVIS_COMPACT_COMMAND,
   JARVIS_RELOAD_COMMAND,
-  JARVIS_UI_NOTICE,
   MAX_ATTACHMENT_DATA_LENGTH,
   MAX_BASH_OUTPUT_CHARS,
   MAX_PROMPT_LENGTH,
@@ -57,36 +51,28 @@ import {
   PI_ABORT_TIMEOUT_MS,
   SETTLEMENT_MAX_WAIT_MS,
   SETTLEMENT_RETRY_INTERVAL_MS,
-  SIDE_CHAT_NOTICE,
-  SIDE_CHAT_TOOLS,
   type ActiveRun,
   type ActiveSession,
   type RunAccepted,
 } from "./session-active.js";
-import { SessionAttentionStore, type SessionListCopy, type SessionSortMeta } from "./session-attention-store.js";
+import { SessionAttentionStore, type SessionSortMeta } from "./session-attention-store.js";
 import {
   createManagedSession,
   findSessionFile,
-  listManagedSessions,
   listSessionFiles,
   openManagedSession,
   openManagedSessionAt,
-  readSessionFileHeader,
-  readSessionListCopy,
   removeSessionJsonl,
   sessionDirectoryFor,
   sessionFileMtimeMs,
-  sessionModifiedAt,
 } from "./session-files.js";
 import {
   activeKey,
-  attachSearchSnippet,
   clamp,
   decodeImageData,
   expandToUserBoundary,
   findUserMessageEntry,
   findVisibleMessageEntryId,
-  firstUserMessage,
   isCompactionCancellation,
   isOperationCancellation,
   isVisibleSessionId,
@@ -94,10 +80,11 @@ import {
   queuedMessage,
   runtimeFailureCode,
   sameThinkingLevels,
-  sessionBranchSearchText,
   sessionForkEntryId,
   sleep,
 } from "./session-helpers.js";
+import { listFileReferences, listWorkspaceSessions, summaryFromActive, summaryFromList, summaryFromStored } from "./session-catalog.js";
+import { bindOwnerSessionId, createActiveSession } from "./session-open.js";
 import { SessionPiEvents } from "./session-pi-events.js";
 
 export class SessionService {
@@ -134,83 +121,7 @@ export class SessionService {
   }
 
   async list(workspaceId: string, query?: string): Promise<SessionSummary[]> {
-    const needle = query?.trim().toLocaleLowerCase();
-    if (needle !== undefined && needle !== "") return this.listBySearch(workspaceId, needle);
-    return this.listFromIndex(workspaceId);
-  }
-
-  /** 侧栏列表：文件头 + 索引，不把每个 jsonl 通读成全文。 */
-  private async listFromIndex(workspaceId: string): Promise<SessionSummary[]> {
-    const workspace = this.workspaces.get(workspaceId);
-    const sideIds = await this.attention.sideChatIds(workspaceId);
-    const files = (await listSessionFiles(workspace)).filter((file) => !sideIds.has(file.id));
-    const sortMeta = await this.attention.list(workspaceId);
-    const seen = new Set(files.map((file) => file.id));
-    const rows = await Promise.all(files.map(async (file) => {
-      const ref = { workspaceId, sessionId: file.id };
-      const active = this.active.get(activeKey(ref));
-      if (active !== undefined) return { summary: this.summaryFromActive(active) };
-      const persisted = sortMeta.get(file.id);
-      let name = persisted?.name;
-      let preview = persisted?.preview;
-      let copy: { ref: SessionRef; copy: SessionListCopy } | undefined;
-      if (persisted?.listCopyMtime !== file.mtimeMs) {
-        const scanned = await readSessionListCopy(file.path);
-        name = scanned.name ?? undefined;
-        preview = scanned.preview ?? undefined;
-        copy = { ref, copy: { name: scanned.name, preview: scanned.preview, listCopyMtime: file.mtimeMs } };
-      }
-      const createdAt = file.timestamp !== undefined && Number.isFinite(Date.parse(file.timestamp))
-        ? new Date(file.timestamp)
-        : new Date(file.mtimeIso);
-      return {
-        summary: this.summaryFromList(workspace, {
-          id: file.id,
-          ...(name === undefined ? {} : { name }),
-          firstMessage: preview ?? "",
-          created: createdAt,
-          modified: new Date(file.mtimeIso),
-        }, persisted),
-        copy,
-      };
-    }));
-    const summaries = rows.map((row) => row.summary);
-    const copiesToPersist = rows.flatMap((row) => row.copy === undefined ? [] : [row.copy]);
-
-    for (const active of this.active.values()) {
-      if (!isVisibleSessionId(active.ref.sessionId) || active.ref.workspaceId !== workspaceId || seen.has(active.ref.sessionId) || sideIds.has(active.ref.sessionId) || active.readOnly === true) continue;
-      summaries.unshift(this.summaryFromActive(active));
-    }
-
-    if (copiesToPersist.length > 0) {
-      void this.attention.setListCopies(copiesToPersist).catch((error: unknown) => console.warn("Could not persist session list copy", error));
-    }
-    return sortSessionSummaries(summaries);
-  }
-
-  /** 全文搜索仍走 Pi list（主动搜才通读 jsonl）。 */
-  private async listBySearch(workspaceId: string, needle: string): Promise<SessionSummary[]> {
-    const workspace = this.workspaces.get(workspaceId);
-    const sideIds = await this.attention.sideChatIds(workspaceId);
-    const listed = (await listManagedSessions(workspace.cwd)).filter((entry) => isVisibleSessionId(entry.id) && !sideIds.has(entry.id));
-    const sortMeta = await this.attention.list(workspaceId);
-    const listedMatches = listed
-      .map((entry) => ({
-        summary: this.summaryFromList(workspace, entry, sortMeta.get(entry.id)),
-        searchText: `${entry.name ?? ""}\n${entry.firstMessage ?? ""}\n${entry.allMessagesText}`,
-      }))
-      .filter(({ searchText }) => searchText.toLocaleLowerCase().includes(needle));
-    const summaries = listedMatches.map(({ summary, searchText }) => attachSearchSnippet(summary, searchText, needle));
-
-    for (const active of this.active.values()) {
-      if (!isVisibleSessionId(active.ref.sessionId) || active.ref.workspaceId !== workspaceId || sideIds.has(active.ref.sessionId) || active.readOnly === true || summaries.some((summary) => summary.id === active.ref.sessionId)) continue;
-      const summary = this.summaryFromActive(active);
-      const searchText = sessionBranchSearchText(summary.name, summary.preview, active.session.sessionManager.getBranch());
-      if (!searchText.toLocaleLowerCase().includes(needle)) continue;
-      summaries.unshift(attachSearchSnippet(summary, searchText, needle));
-    }
-
-    return sortSessionSummaries(summaries);
+    return listWorkspaceSessions(this.catalogDeps(), workspaceId, query);
   }
 
   async markViewed(ref: SessionRef): Promise<SessionSummary> {
@@ -238,35 +149,7 @@ export class SessionService {
   }
 
   async fileReferences(workspaceId: string, query?: string): Promise<SessionFileReference[]> {
-    const workspace = this.workspaces.get(workspaceId);
-    const sideIds = await this.attention.sideChatIds(workspaceId);
-    const listed = (await listManagedSessions(workspace.cwd)).filter((entry) => isVisibleSessionId(entry.id) && !sideIds.has(entry.id));
-    const activeById = new Map(
-      [...this.active.values()]
-        .filter((active) => active.ref.workspaceId === workspaceId && isVisibleSessionId(active.ref.sessionId) && !sideIds.has(active.ref.sessionId) && active.readOnly !== true)
-        .map((active) => [active.ref.sessionId, active]),
-    );
-    const needle = query?.trim().toLocaleLowerCase() ?? "";
-    return listed
-      .map((entry) => ({
-        id: entry.id,
-        name: entry.name ?? null,
-        preview: entry.firstMessage || null,
-        path: entry.path,
-        active: activeById.get(entry.id),
-      }))
-      .concat([...activeById.values()]
-        .filter((active) => !listed.some((entry) => entry.id === active.ref.sessionId) && active.session.sessionFile !== undefined)
-        .map((active) => ({
-          id: active.ref.sessionId,
-          name: active.session.sessionName ?? null,
-          preview: firstUserMessage(active.session.sessionManager.getBranch()),
-          path: active.session.sessionFile!,
-          active,
-        })))
-      .filter((entry) => needle === "" || `${entry.name ?? ""}\n${entry.preview ?? ""}`.toLocaleLowerCase().includes(needle))
-      .sort((left, right) => (right.active?.updatedAt ?? "").localeCompare(left.active?.updatedAt ?? ""))
-      .map(({ id, name, preview, path }) => ({ id, name, preview, path }));
+    return listFileReferences(this.catalogDeps(), workspaceId, query);
   }
 
   /** Shared Pi runtime used by the global settings surface. */
@@ -1030,7 +913,7 @@ export class SessionService {
   private async executeReload(active: ActiveSession, runId: string): Promise<void> {
     try {
       await active.session.reload();
-      this.bindOwnerSessionId(active.session);
+      bindOwnerSessionId(this.ownerBoundSessions, active.session);
       if (active.state.activeRun?.id !== runId) return;
       this.events.publishWorkspace(active.ref.workspaceId, {
         version: PROTOCOL_VERSION,
@@ -1294,137 +1177,16 @@ export class SessionService {
   }
 
   private async createActive(ref: SessionRef, workspace: Workspace, manager: SessionManager, options?: { readOnly?: boolean }): Promise<ActiveSession> {
-    const agentDir = getAgentDir();
-    const readOnly = options?.readOnly === true || (ref.sessionId !== "" && await this.attention.isSideChat(ref));
-    const modelRuntime = await this.getModelRuntime(agentDir);
-    const settingsManager = SettingsManager.create(workspace.cwd, agentDir);
-    const enabledModels = settingsManager.getEnabledModels();
-    const { scopedModels, diagnostics } = enabledModels !== undefined && enabledModels.length > 0
-      ? await resolveModelScopeWithDiagnostics(enabledModels, modelRuntime)
-      : { scopedModels: [], diagnostics: [] };
-    for (const diagnostic of diagnostics) console.warn(`Model scope warning: ${diagnostic.message}`);
-
-    const resourceLoader = new DefaultResourceLoader({
-      cwd: workspace.cwd,
-      agentDir,
-      settingsManager,
-      appendSystemPrompt: readOnly ? [JARVIS_UI_NOTICE, SIDE_CHAT_NOTICE] : [JARVIS_UI_NOTICE],
-    });
-    await resourceLoader.reload();
-    const { session } = await createAgentSession({
-      cwd: workspace.cwd,
-      agentDir,
-      modelRuntime,
-      sessionManager: manager,
-      settingsManager,
-      resourceLoader,
-      ...(readOnly ? { tools: [...SIDE_CHAT_TOOLS], excludeTools: ["bash", "edit", "write", "powershell"] } : {}),
-      ...(scopedModels.length === 0 ? {} : { scopedModels }),
-    });
-    this.bindOwnerSessionId(session);
-    const publishExtensionUi = (message: ExtensionUiMessage) => {
-      // Notifications are application-level transient feedback. They use the
-      // workspace stream so they are independent of the selected session.
-      if (message.type === "request" && message.request.method === "notify") {
-        this.events.publishWorkspace(active.ref.workspaceId, {
-          version: 1,
-          type: "extension.notify",
-          workspaceId: active.ref.workspaceId,
-          notification: {
-            id: message.request.id,
-            message: message.request.message,
-            ...(message.request.notifyType === undefined ? {} : { notifyType: message.request.notifyType }),
-            sessionId: active.ref.sessionId,
-          },
-        });
-        return;
-      }
-      // `bindExtensions` runs only after `active` is registered below, so startup
-      // dialogs never disappear or deadlock.
-      if (message.type === "request") {
-        if (message.request.method === "select" || message.request.method === "confirm" || message.request.method === "input" || message.request.method === "editor") {
-          this.setAttention(active, "waiting_interaction");
-          this.publishSummary(active);
-        }
-        this.events.publishSession(active.ref, { type: "extension.uiRequest", payload: { request: message.request } });
-      } else {
-        this.events.publishSession(active.ref, {
-          type: "extension.uiSettled",
-          payload: { id: message.id, outcome: message.outcome, ...(message.value === undefined ? {} : { value: message.value }), ...(message.confirmed === undefined ? {} : { confirmed: message.confirmed }) },
-        });
-        if (!active.extensionUi.hasPendingDialogs) {
-          this.setAttention(active, active.state.runState === "idle" ? "idle" : "running");
-          this.publishSummary(active);
-        }
-      }
-    };
-    const extensionUi = new ExtensionUiBridge(publishExtensionUi);
-    const actualRef: SessionRef = { workspaceId: workspace.id, sessionId: session.sessionId };
-    const now = new Date().toISOString();
-    const headerTimestamp = manager.getHeader()?.timestamp;
-    const createdAt = typeof headerTimestamp === "string" && Number.isFinite(Date.parse(headerTimestamp)) ? new Date(headerTimestamp).toISOString() : now;
-    const sortMeta = await this.attention.get(actualRef);
-    const active: ActiveSession = {
-      ref: actualRef,
-      cwd: workspace.cwd,
-      session,
-      modelRuntime,
-      modelSwitching: false,
-      extensionUi,
-      extensionReady: Promise.resolve(),
-      unsubscribe: () => undefined,
-      state: { sessionId: session.sessionId, runState: "idle" },
-      attentionState: sortMeta.attentionState,
-      ...(sortMeta.attentionAt === undefined ? {} : { attentionAt: sortMeta.attentionAt }),
-      ...(sortMeta.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: sortMeta.lastUserMessageAt }),
-      ...(sortMeta.starred === true ? { starred: true } : {}),
-      requestRuns: new Map(),
-      liveMessages: new Map(),
-      liveErrors: new Map(),
-      assistantStreamId: undefined,
-      activeTools: new Map(),
-      activeBash: undefined,
-      queue: emptySessionQueue,
-      queueSyncSuspended: false,
-      compactionAbortRequested: false,
-      pendingRunError: undefined,
-      settlementTimer: undefined,
-      compactionHandoff: false,
-      ...(readOnly ? { readOnly: true } : {}),
-      createdAt,
-      updatedAt: await sessionModifiedAt(session.sessionFile, now),
-    };
-    active.unsubscribe = session.subscribe((event) => this.piEvents.handle(active, event));
-    this.active.set(activeKey(actualRef), active);
-    const onExtensionError = (error: ExtensionError) => {
-      console.warn("Pi extension error", error);
-      if (!isUnsupportedExtensionInteraction(error)) return;
-      active.extensionFailure = { code: UNSUPPORTED_EXTENSION_INTERACTION, message: error.error };
-    };
-    // Register before binding so startup UI/events have a live ActiveSession,
-    // but make all callers await extensionReady before using this session.
-    active.extensionReady = session.bindExtensions({ mode: "rpc", uiContext: extensionUi.context, onError: onExtensionError }).then(() => {
-      if (readOnly) session.setActiveToolsByName([...SIDE_CHAT_TOOLS]);
-    }).catch((error: unknown) => {
-      console.warn("Pi extension binding failed", error);
-    });
-    return active;
-  }
-
-  /**
-   * Keep every provider request tied to this AgentSession. Pi's compaction
-   * intentionally substitutes a random sessionId for isolated summary requests,
-   * so model-group routing needs a separate stable owner identifier.
-   */
-  private bindOwnerSessionId(session: AgentSession): void {
-    if (this.ownerBoundSessions.has(session)) return;
-    this.ownerBoundSessions.add(session);
-    const ownerSessionId = session.sessionId;
-    const stream = session.agent.streamFunction;
-    session.agent.streamFunction = (model, context, options) => stream(model, context, {
-      ...options,
-      ownerSessionId,
-    });
+    return createActiveSession({
+      attention: this.attention,
+      events: this.events,
+      active: this.active,
+      ownerBoundSessions: this.ownerBoundSessions,
+      piEvents: this.piEvents,
+      getModelRuntime: (agentDir) => this.getModelRuntime(agentDir),
+      setAttention: (active, state) => this.setAttention(active, state),
+      publishSummary: (active) => this.publishSummary(active),
+    }, ref, workspace, manager, options);
   }
 
   private modelSnapshot(active: ActiveSession) {
@@ -1651,63 +1413,18 @@ export class SessionService {
   }
 
   private summaryFromList(workspace: Workspace, entry: { id: string; name?: string; firstMessage: string; created: Date; modified: Date }, persisted?: SessionSortMeta): SessionSummary {
-    const active = this.active.get(activeKey({ workspaceId: workspace.id, sessionId: entry.id }));
-    const attentionState = active?.attentionState ?? persisted?.attentionState ?? "idle";
-    const attentionAt = active?.attentionAt ?? persisted?.attentionAt;
-    const lastUserMessageAt = active?.lastUserMessageAt ?? persisted?.lastUserMessageAt;
-    const starred = active?.starred === true || persisted?.starred === true;
-    return {
-      id: entry.id,
-      workspaceId: workspace.id,
-      name: entry.name ?? null,
-      preview: entry.firstMessage === "" || entry.firstMessage === "(no messages)" ? null : entry.firstMessage,
-      createdAt: entry.created.toISOString(),
-      updatedAt: entry.modified.toISOString(),
-      runState: active?.state.runState ?? "idle",
-      attentionState,
-      ...(attentionState === "idle" || attentionAt === undefined ? {} : { attentionAt }),
-      ...(lastUserMessageAt === undefined ? {} : { lastUserMessageAt }),
-      ...(starred ? { starred: true } : {}),
-    };
+    return summaryFromList(this.active, workspace, entry, persisted);
   }
 
   private async summaryFromStored(workspace: Workspace, ref: SessionRef, path: string): Promise<SessionSummary> {
-    const header = await readSessionFileHeader(path);
-    if (header === undefined || header.id !== ref.sessionId) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
-    const persisted = await this.attention.get(ref);
-    const updatedAt = await sessionModifiedAt(path, new Date().toISOString());
-    const createdAt = header.timestamp !== undefined && Number.isFinite(Date.parse(header.timestamp))
-      ? new Date(header.timestamp).toISOString()
-      : updatedAt;
-    const attentionState = persisted.attentionState;
-    return {
-      id: ref.sessionId,
-      workspaceId: workspace.id,
-      name: persisted.name ?? null,
-      preview: persisted.preview ?? null,
-      createdAt,
-      updatedAt,
-      runState: "idle",
-      attentionState,
-      ...(attentionState === "idle" || persisted.attentionAt === undefined ? {} : { attentionAt: persisted.attentionAt }),
-      ...(persisted.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: persisted.lastUserMessageAt }),
-      ...(persisted.starred === true ? { starred: true } : {}),
-    };
+    return summaryFromStored(this.catalogDeps(), workspace, ref, path);
   }
 
   private summaryFromActive(active: ActiveSession, previewOverride?: string): SessionSummary {
-    return {
-      id: active.ref.sessionId,
-      workspaceId: active.ref.workspaceId,
-      name: active.session.sessionName ?? null,
-      preview: previewOverride ?? firstUserMessage(active.session.sessionManager.getBranch()),
-      createdAt: active.createdAt,
-      updatedAt: active.updatedAt,
-      runState: active.state.runState,
-      attentionState: active.attentionState,
-      ...(active.attentionState === "idle" || active.attentionAt === undefined ? {} : { attentionAt: active.attentionAt }),
-      ...(active.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: active.lastUserMessageAt }),
-      ...(active.starred === true ? { starred: true } : {}),
-    };
+    return summaryFromActive(active, previewOverride);
+  }
+
+  private catalogDeps() {
+    return { workspaces: this.workspaces, attention: this.attention, active: this.active };
   }
 }
