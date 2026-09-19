@@ -1,6 +1,6 @@
 import { isRecord, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
 import { attachSubagentView, subagentViewFromArgs } from "./subagent-view.js";
-import { stringValue, toIso } from "./values.js";
+import { numberValue, stringValue, toIso } from "./values.js";
 
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
 
@@ -510,6 +510,3 @@ export function toExternalTimelineItems(items: readonly TimelineItem[], ref: Ses
   return items.map((item) => toExternalTimelineItem(item, ref));
 }
 
-function numberValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}

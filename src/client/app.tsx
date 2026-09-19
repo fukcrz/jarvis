@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowLeft, Bell, ChevronDown, CircleAlert, Folder, FolderPlus, MoreVertical, Pencil, Plus, Puzzle, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Folder, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, RunState, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { api, isSessionConflict } from "./api";
 import { PromptEditor } from "./components/prompt-editor";
@@ -16,7 +16,7 @@ import { Timeline } from "./components/timeline";
 import { SettingsPage } from "./components/settings-page";
 import { FileBrowser } from "./components/file-browser";
 import { SideChatPanel, SideChatToggle } from "./components/side-chat-panel";
-import type { ExtensionPanelState } from "./hooks/use-session-stream";
+import { ExtensionPanels, ExtensionToasts } from "./components/extension-chrome";
 import { ContextButton } from "./components/context-button";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
@@ -33,26 +33,18 @@ import {
   withoutDraft,
   withoutSession,
 } from "./lib/socket-sync";
-import { errorMessage, isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel, sortSessionSummaries } from "./lib/utils";
+import { pathParams, readDrafts, readExpandedWorkspaces, readSessionFocusMode, SESSION_FOCUS_STORAGE_KEY } from "./lib/app-storage";
+import { markSessionUserActivity, mergeWorkspace, sessionCleanupConfirmMessage } from "./lib/session-list";
+import { errorMessage, isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel } from "./lib/utils";
 import { useIsMobile } from "./hooks/use-is-mobile";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, useSidebarResize } from "./hooks/use-sidebar-resize";
 import { useWorkspaceEvents } from "./hooks/use-workspace-events";
-import { extensionToastDuration, extensionToastSourceLabel, type ExtensionToast } from "./extension-notifications";
-
-/** Extract the entity ids carried by the current hash route. */
-function pathParams(pathname: string): { workspaceId?: string; sessionId?: string; files?: boolean } {
-  const parts = pathname.split("/").filter(Boolean);
-  if (parts[0] === "chat" && parts.length >= 3) return { workspaceId: parts[1], sessionId: parts[2] };
-  if (parts[0] === "sessions" && parts.length >= 2) return { workspaceId: parts[1] };
-  if (parts[0] === "files" && parts.length >= 2) return { workspaceId: parts[1], files: true };
-  return {};
-}
+import { extensionToastDuration, type ExtensionToast } from "./extension-notifications";
 
 const COMMAND_RETRY_BASE_DELAY_MS = 750;
 const COMMAND_RETRY_MAX_DELAY_MS = 10_000;
 const EMPTY_COMPOSER_COMMANDS: ComposerCommand[] = [];
-const SESSION_FOCUS_STORAGE_KEY = "jarvis.sessions.focus";
 
 export function App() {
   const location = useLocation();
@@ -1201,87 +1193,4 @@ export function App() {
       </Dialog>
     </main>
   );
-}
-
-function sessionCleanupConfirmMessage(sessions: SessionSummary[], keepSessionId?: string): string {
-  const count = sessionCleanupTargets(sessions, keepSessionId).length;
-  return `永久删除 ${String(count)} 个闲置会话，不可恢复。`;
-}
-
-function markSessionUserActivity(sessions: SessionSummary[], sessionId: string, viewedIdleKeys?: Set<string>): SessionSummary[] {
-  const at = new Date().toISOString();
-  return sortSessionSummaries(sessions.map((session) => {
-    if (session.id !== sessionId) return session;
-    viewedIdleKeys?.delete(sessionKey(session.workspaceId, session.id));
-    return { ...session, runState: "running" as const, attentionState: "running" as const, attentionAt: at, lastUserMessageAt: at, updatedAt: at };
-  }));
-}
-
-function mergeWorkspace(current: Workspace[], next: Workspace): Workspace[] {
-  const existing = current.findIndex((workspace) => workspace.id === next.id);
-  if (existing === -1) return [...current, next].sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
-  const copy = [...current];
-  copy[existing] = next;
-  return copy.sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
-}
-
-function readSessionFocusMode(): boolean {
-  try {
-    return window.localStorage.getItem(SESSION_FOCUS_STORAGE_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function readExpandedWorkspaces(): Record<string, boolean> {
-  try {
-    const raw = window.localStorage.getItem("jarvis.projects.expanded");
-    const parsed: unknown = raw === null ? undefined : JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === "boolean")) as Record<string, boolean>;
-  } catch {
-    return {};
-  }
-}
-
-function readDrafts(): Record<string, string> {
-  try {
-    const raw = window.localStorage.getItem("jarvis.drafts");
-    const parsed = raw === null ? undefined : JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, string> : {};
-  } catch {
-    return {};
-  }
-}
-
-function ExtensionPanels({ panels }: { panels: ExtensionPanelState }) {
-  const widgets = Object.entries(panels.widgets);
-  const statuses = Object.entries(panels.statuses);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  if (widgets.length === 0 && statuses.length === 0) return null;
-  return <aside className="extension-panels" aria-label="扩展内容">
-    <div className="extension-widget-track">
-      {statuses.map(([key, text]) => <span className="extension-status" key={`status:${key}`} title={key}><Puzzle size={11} /><span>{text}</span></span>)}
-      {widgets.map(([key, widget]) => <section key={`widget:${key}`} className={`extension-widget ${collapsed[key] === true ? "collapsed" : ""}`} title={key}>
-        <button type="button" className="extension-widget-heading" onClick={() => setCollapsed((current) => ({ ...current, [key]: !current[key] }))} aria-expanded={collapsed[key] !== true}>
-          <span>{key}</span><small>{collapsed[key] === true ? "展开" : "收起"}</small>
-        </button>
-        {collapsed[key] === true ? null : <pre className="extension-widget-body">{widget.lines.join("\n")}</pre>}
-      </section>)}
-    </div>
-  </aside>;
-}
-
-function ExtensionToasts({ toasts, sessionsByWorkspace, onOpenSession, onDismiss }: { toasts: ExtensionToast[]; sessionsByWorkspace: Record<string, SessionSummary[]>; onOpenSession: (workspaceId: string, sessionId: string) => void; onDismiss: (id: string) => void }) {
-  if (toasts.length === 0) return null;
-  return <div className="extension-toast-stack" aria-label="扩展通知" aria-live="polite">
-    {toasts.map((toast) => {
-      const Icon = toast.tone === "info" ? Bell : CircleAlert;
-      const session = toast.sessionId === undefined ? undefined : sessionsByWorkspace[toast.workspaceId]?.find((candidate) => candidate.id === toast.sessionId);
-      const sourceLabel = extensionToastSourceLabel(session?.name);
-      return <div key={toast.id} className={`toast-surface extension-toast ${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"}>
-        <Icon size={14} className="toast-surface-icon" /><div className="extension-toast-copy">{toast.count > 1 || toast.sessionId === undefined || sourceLabel === undefined ? null : <button type="button" className="extension-toast-source" onClick={() => onOpenSession(toast.workspaceId, toast.sessionId!)}>{sourceLabel}</button>}{toast.count > 1 ? <strong className="extension-toast-count">收到 {toast.count} 条扩展通知</strong> : <span className="extension-toast-message">{toast.message}</span>}</div><button type="button" aria-label="关闭通知" onClick={() => onDismiss(toast.id)}><X size={14} /></button>
-      </div>;
-    })}
-  </div>;
 }

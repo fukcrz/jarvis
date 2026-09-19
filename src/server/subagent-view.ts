@@ -1,4 +1,5 @@
 import { isRecord, type SubagentCallView, type SubagentView, type ToolTimelineItem } from "../shared/protocol.js";
+import { numberValue, stringValue } from "./values.js";
 
 const MAX_SUBAGENT_PROMPT_CHARS = 160;
 const MAX_SUBAGENT_OUTPUT_CHARS = 500;
@@ -169,10 +170,3 @@ function truncateText(value: string, max: number): string {
   return `${value.slice(0, Math.max(0, max - 1))}…`;
 }
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function numberValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}

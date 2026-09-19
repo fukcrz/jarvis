@@ -410,7 +410,7 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/prompt", async (request) => {
     const ref = sessionRef(request.params);
     const body = promptInput.parse(request.body);
-    return sessions.prompt(ref, body.text, body.clientRequestId, body.images, body.behavior);
+    return sessions.prompt(ref, body.text, body.clientRequestId, body.images, { behavior: body.behavior });
   });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/queue/dequeue", async (request) => {
     const ref = sessionRef(request.params);

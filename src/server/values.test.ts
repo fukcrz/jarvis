@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isMissingFile } from "./fs.js";
-import { stringValue, toIso } from "./values.js";
+import { numberValue, stringValue, toIso } from "./values.js";
 
 describe("stringValue", () => {
   it("returns strings unchanged and everything else as empty", () => {
@@ -9,6 +9,14 @@ describe("stringValue", () => {
     expect(stringValue(1)).toBe("");
     expect(stringValue(undefined)).toBe("");
     expect(stringValue(null)).toBe("");
+  });
+});
+
+describe("numberValue", () => {
+  it("returns finite numbers only", () => {
+    expect(numberValue(3)).toBe(3);
+    expect(numberValue(Number.NaN)).toBeUndefined();
+    expect(numberValue("3")).toBeUndefined();
   });
 });
 

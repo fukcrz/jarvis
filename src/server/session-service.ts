@@ -1,156 +1,91 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream, existsSync, readFileSync } from "node:fs";
-import { open, readdir, rm, stat } from "node:fs/promises";
-import { createInterface } from "node:readline";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import {
-  createAgentSession,
-  DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
   resolveModelScopeWithDiagnostics,
   SessionManager,
   SettingsManager,
   type AgentSession,
-  type AgentSessionEvent,
-  type ExtensionError,
 } from "@earendil-works/pi-coding-agent";
 import type {
   BashAccepted,
   CompactAccepted,
   ComposerCommand,
   ContextUsage,
-  ErrorTimelineItem,
   ImageAttachment,
-  MessageTimelineItem,
   ModelDescriptor,
   PromptAccepted,
   QueuedMessage,
   QueuedPromptAccepted,
-  RetryStatus,
   SessionFileReference,
   SessionAttentionState,
-  SessionQueue,
   SessionRef,
-  SessionStatus,
   SessionStreamSnapshot,
   SessionCleanupResult,
   SessionSummary,
   SessionThinkingSnapshot,
   ThinkingLevel,
-  ThinkingTimelineItem,
-  TimelineItem,
   TimelinePage,
   ToolTimelineItem,
   Workspace,
 } from "../shared/protocol.js";
 import { emptySessionQueue, isRecord, PROTOCOL_VERSION } from "../shared/protocol.js";
-import { sortSessionSummaries } from "../shared/session-sort.js";
 import { AppError, asMessage } from "./errors.js";
-import { isMissingFile } from "./fs.js";
 import { stringValue, toIso } from "./values.js";
 import { EventHub } from "./event-hub.js";
-import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
 import { projectModelSnapshot } from "./model-projection.js";
-import { assistantTextFromContent, bashExecutionItem, contextSummaryFromEntry, decodeTimelineMediaItemId, errorFromPi, messageFromPi, projectHistory, thinkingTextFromContent, toExternalTimelineItem, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
+import { bashExecutionItem, decodeTimelineMediaItemId, projectHistory, toExternalTimelineItem, toExternalTimelineItems } from "./projection.js";
 import { WorkspaceStore } from "./workspace-store.js";
-import { SessionAttentionStore, type SessionListCopy, type SessionSortMeta } from "./session-attention-store.js";
-
-interface ActiveRun {
-  id: string;
-  startedAt: string;
-  kind: "llm" | "bash" | "compaction" | "reload";
-}
-
-/** 所有运行类请求的幂等缓存值。 */
-type RunAccepted = { accepted: true; runId?: string; queued?: boolean; behavior?: "steer" | "followUp" };
-type PiEvent<T extends AgentSessionEvent["type"]> = Extract<AgentSessionEvent, { type: T }>;
-
-interface ActiveSession {
-  ref: SessionRef;
-  cwd: string;
-  session: AgentSession;
-  modelRuntime: ModelRuntime;
-  modelSwitching: boolean;
-  unsubscribe: () => void;
-  state: SessionStatus;
-  attentionState: SessionAttentionState;
-  attentionAt?: string;
-  lastUserMessageAt?: string;
-  starred?: boolean;
-  /** Side chat: read-only tools, hidden from the session list, tied to a parent session. */
-  readOnly?: boolean;
-  requestRuns: Map<string, RunAccepted>;
-  liveMessages: Map<string, MessageTimelineItem>;
-  /** Retry attempts which have not yet been reconciled with persisted history. */
-  liveErrors: Map<string, ErrorTimelineItem>;
-  /** Stable identity shared by thinking/text/message_end for one assistant response. */
-  assistantStreamId?: string;
-  partial?: MessageTimelineItem;
-  /** 当前 run 正在流式的思考块（message_end 定稿前）。 */
-  partialThinking?: ThinkingTimelineItem;
-  /** 排队等待投递的用户消息镜像（来自 Pi 的 queue_update 事件）。 */
-  queue: SessionQueue;
-  /** clearQueue+重入队期间暂停镜像同步，避免发布中间态。 */
-  queueSyncSuspended: boolean;
-  activeTools: Map<string, ToolTimelineItem>;
-  /** 正在执行的用户 !cmd 命令（流式输出尚未落盘）。 */
-  activeBash?: ToolTimelineItem;
-  /** Retains a stop click that arrives before Pi installs its compaction abort controller. */
-  compactionAbortRequested: boolean;
-  extensionFailure?: { code: string; message: string };
-  /** 扩展 ctx.ui 请求桥（对话框待浏览器响应）。 */
-  extensionUi: ExtensionUiBridge;
-  /** Extension startup must finish before callers can use or replace this session. */
-  extensionReady: Promise<void>;
-  /** Error from the last assistant message; applied at agent_settled once Pi's retries/compaction finish. */
-  pendingRunError?: { code: string; message: string };
-  /** A deferred settle lets extension-triggered compaction claim the active run. */
-  settlementTimer?: ReturnType<typeof setTimeout>;
-  /** The current compaction took over immediately after an agent_settled handoff. */
-  compactionHandoff: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/**
- * 通过 SDK 的 `appendSystemPrompt` 注入到系统提示词的 Jarvis UI 说明。
- * 常驻基础提示词之后（`<project_context>` 之前），告知 AI 当前运行环境。
- */
-const JARVIS_UI_NOTICE = [
-  "You are running inside Jarvis, a local web UI for persistent Pi sessions, not the Pi TUI. The user reads your reply as rendered Markdown in a timeline and does not see raw tool output.",
-  "Your reply is rendered as GitHub-flavored Markdown: headings, tables, task lists, links, fenced code with syntax highlighting, and ```mermaid blocks rendered as real diagrams. Prefer mermaid for flows, sequences, state machines, class and ER diagrams, and hierarchical mind maps instead of ASCII art, and keep each diagram small enough to read (label the nodes, no decorative churn). When a tree-shaped overview would help the user see structure at a glance, draw a mermaid `mindmap` (indentation is hierarchy). Unquoted `()`, `[]`, or `{{}}` in mindmap labels are shape markers — quote the node text if those characters belong in the words.",
-  "Images: embed them with standard Markdown image syntax. ![](relative/path.png) resolves against the current workspace root; ![](/absolute/path.png) and ![](file:///absolute/path.png) resolve against the machine filesystem, so artifacts outside the workspace are fine too. Video and audio use the same syntax and render as inline players (![](clip.mp4), ![](voice.mp3), plus http(s) and data: URLs), so never hand over a bare path or a download link for media either. Other local files linked as [name](relative/path.pdf) open in a preview or download. Jarvis serves these through its /api/files endpoint and renders them inline, so the user sees them directly.",
-  "Show, do not describe. Whenever a task produces or inspects visual output — a screenshot or browser render, a rendered UI, a chart, a diagram, a before/after comparison, a video or audio clip, image or PDF processing, generated graphics, or any question about what something looks like — put ![](path) in the reply. If you already saved an image or a clip, attach it: never answer with a bare file path for media the user asked to see. After visual verification, the image is the evidence; a description alone is not enough.",
-  "Keep it useful: one short caption plus the image beats paragraphs of description, and skip images when they carry no information (for example, a text-only code change).",
-].join(" ");
-
-const SIDE_CHAT_NOTICE = "This is a read-only side chat next to the main Jarvis session. You may inspect project files with read, grep, find, and ls. Do not modify files, run commands, or change the workspace.";
-const SIDE_CHAT_TOOLS = ["read", "grep", "find", "ls"] as const;
-
-const PAGE_LIMIT = 120;
-const MAX_PROMPT_LENGTH = 40_000;
-const MAX_ATTACHMENT_DATA_LENGTH = 14_000_000; // ≈ 10 MiB decoded
-const MAX_BASH_OUTPUT_CHARS = 100_000; // 流式气泡的最大输出长度，落盘结果由 Pi 自行截断
-const PI_ABORT_TIMEOUT_MS = 8_000;
-const SETTLEMENT_RETRY_INTERVAL_MS = 100;
-const SETTLEMENT_MAX_WAIT_MS = 10_000;
-const FORK_SNAPSHOT_RETRIES = 4;
-const FORK_SNAPSHOT_RETRY_DELAY_MS = 50;
-const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/heic", "image/heif"]);
-const JARVIS_COMPACT_COMMAND: ComposerCommand = {
-  name: "compact",
-  description: "压缩当前会话上下文",
-  source: "jarvis",
-};
-
-/** 重载 AGENTS.md / 插件 / 技能 / 提示词等资源（对齐 Pi TUI 的 /reload）。 */
-const JARVIS_RELOAD_COMMAND: ComposerCommand = {
-  name: "reload",
-  description: "重新加载 AGENTS.md / 插件 / 技能 / 提示词",
-  source: "jarvis",
-};
+import {
+  ALLOWED_IMAGE_TYPES,
+  FORK_SNAPSHOT_RETRIES,
+  FORK_SNAPSHOT_RETRY_DELAY_MS,
+  JARVIS_COMPACT_COMMAND,
+  JARVIS_RELOAD_COMMAND,
+  MAX_ATTACHMENT_DATA_LENGTH,
+  MAX_BASH_OUTPUT_CHARS,
+  MAX_PROMPT_LENGTH,
+  PAGE_LIMIT,
+  PI_ABORT_TIMEOUT_MS,
+  SETTLEMENT_MAX_WAIT_MS,
+  SETTLEMENT_RETRY_INTERVAL_MS,
+  type ActiveRun,
+  type ActiveSession,
+  type RunAccepted,
+} from "./session-active.js";
+import { SessionAttentionStore, type SessionSortMeta } from "./session-attention-store.js";
+import {
+  createManagedSession,
+  findSessionFile,
+  listSessionFiles,
+  openManagedSession,
+  openManagedSessionAt,
+  removeSessionJsonl,
+  sessionDirectoryFor,
+  sessionFileMtimeMs,
+} from "./session-files.js";
+import {
+  activeKey,
+  clamp,
+  decodeImageData,
+  expandToUserBoundary,
+  findUserMessageEntry,
+  findVisibleMessageEntryId,
+  isCompactionCancellation,
+  isOperationCancellation,
+  isVisibleSessionId,
+  mergeQueuedMessages,
+  queuedMessage,
+  runtimeFailureCode,
+  sameThinkingLevels,
+  sessionForkEntryId,
+  sleep,
+} from "./session-helpers.js";
+import { listFileReferences, listWorkspaceSessions, summaryFromActive, summaryFromList, summaryFromStored } from "./session-catalog.js";
+import { bindOwnerSessionId, createActiveSession } from "./session-open.js";
+import { SessionPiEvents } from "./session-pi-events.js";
 
 export class SessionService {
   private readonly active = new Map<string, ActiveSession>();
@@ -162,90 +97,31 @@ export class SessionService {
   private readonly sideChatEnsures = new Map<string, Promise<SessionSummary>>();
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
   private readonly attention = new SessionAttentionStore(getAgentDir());
+  private readonly piEvents: SessionPiEvents;
 
   constructor(
     private readonly workspaces: WorkspaceStore,
     private readonly events: EventHub,
-  ) {}
+  ) {
+    this.piEvents = new SessionPiEvents({
+      events: this.events,
+      clearSettlementTimer: (active) => this.clearSettlementTimer(active),
+      setAttention: (active, state, at) => this.setAttention(active, state, at),
+      resetLiveStream: (active) => this.resetLiveStream(active),
+      publishSummary: (active, supplied) => this.publishSummary(active, supplied),
+      persistListCopy: (active, summary) => this.persistListCopy(active, summary),
+      summaryFromActive: (active, preview) => this.summaryFromActive(active, preview),
+      thinkingSnapshot: (active) => this.thinkingSnapshot(active),
+      publishContextUsage: (active, runId) => this.publishContextUsage(active, runId),
+      publishTool: (active, tool, runId) => this.publishTool(active, tool, runId),
+      cancelCompaction: (active) => this.cancelCompaction(active),
+      syncQueue: (active) => this.syncQueue(active),
+      deferAgentSettlement: (active) => this.deferAgentSettlement(active),
+    });
+  }
 
   async list(workspaceId: string, query?: string): Promise<SessionSummary[]> {
-    const needle = query?.trim().toLocaleLowerCase();
-    if (needle !== undefined && needle !== "") return this.listBySearch(workspaceId, needle);
-    return this.listFromIndex(workspaceId);
-  }
-
-  /** 侧栏列表：文件头 + 索引，不把每个 jsonl 通读成全文。 */
-  private async listFromIndex(workspaceId: string): Promise<SessionSummary[]> {
-    const workspace = this.workspaces.get(workspaceId);
-    const sideIds = await this.attention.sideChatIds(workspaceId);
-    const files = (await listSessionFiles(workspace)).filter((file) => !sideIds.has(file.id));
-    const sortMeta = await this.attention.list(workspaceId);
-    const seen = new Set(files.map((file) => file.id));
-    const rows = await Promise.all(files.map(async (file) => {
-      const ref = { workspaceId, sessionId: file.id };
-      const active = this.active.get(activeKey(ref));
-      if (active !== undefined) return { summary: this.summaryFromActive(active) };
-      const persisted = sortMeta.get(file.id);
-      let name = persisted?.name;
-      let preview = persisted?.preview;
-      let copy: { ref: SessionRef; copy: SessionListCopy } | undefined;
-      if (persisted?.listCopyMtime !== file.mtimeMs) {
-        const scanned = await readSessionListCopy(file.path);
-        name = scanned.name ?? undefined;
-        preview = scanned.preview ?? undefined;
-        copy = { ref, copy: { name: scanned.name, preview: scanned.preview, listCopyMtime: file.mtimeMs } };
-      }
-      const createdAt = file.timestamp !== undefined && Number.isFinite(Date.parse(file.timestamp))
-        ? new Date(file.timestamp)
-        : new Date(file.mtimeIso);
-      return {
-        summary: this.summaryFromList(workspace, {
-          id: file.id,
-          ...(name === undefined ? {} : { name }),
-          firstMessage: preview ?? "",
-          created: createdAt,
-          modified: new Date(file.mtimeIso),
-        }, persisted),
-        copy,
-      };
-    }));
-    const summaries = rows.map((row) => row.summary);
-    const copiesToPersist = rows.flatMap((row) => row.copy === undefined ? [] : [row.copy]);
-
-    for (const active of this.active.values()) {
-      if (!isVisibleSessionId(active.ref.sessionId) || active.ref.workspaceId !== workspaceId || seen.has(active.ref.sessionId) || sideIds.has(active.ref.sessionId) || active.readOnly === true) continue;
-      summaries.unshift(this.summaryFromActive(active));
-    }
-
-    if (copiesToPersist.length > 0) {
-      void this.attention.setListCopies(copiesToPersist).catch((error: unknown) => console.warn("Could not persist session list copy", error));
-    }
-    return sortSessionSummaries(summaries);
-  }
-
-  /** 全文搜索仍走 Pi list（主动搜才通读 jsonl）。 */
-  private async listBySearch(workspaceId: string, needle: string): Promise<SessionSummary[]> {
-    const workspace = this.workspaces.get(workspaceId);
-    const sideIds = await this.attention.sideChatIds(workspaceId);
-    const listed = (await listManagedSessions(workspace.cwd)).filter((entry) => isVisibleSessionId(entry.id) && !sideIds.has(entry.id));
-    const sortMeta = await this.attention.list(workspaceId);
-    const listedMatches = listed
-      .map((entry) => ({
-        summary: this.summaryFromList(workspace, entry, sortMeta.get(entry.id)),
-        searchText: `${entry.name ?? ""}\n${entry.firstMessage ?? ""}\n${entry.allMessagesText}`,
-      }))
-      .filter(({ searchText }) => searchText.toLocaleLowerCase().includes(needle));
-    const summaries = listedMatches.map(({ summary, searchText }) => attachSearchSnippet(summary, searchText, needle));
-
-    for (const active of this.active.values()) {
-      if (!isVisibleSessionId(active.ref.sessionId) || active.ref.workspaceId !== workspaceId || sideIds.has(active.ref.sessionId) || active.readOnly === true || summaries.some((summary) => summary.id === active.ref.sessionId)) continue;
-      const summary = this.summaryFromActive(active);
-      const searchText = sessionBranchSearchText(summary.name, summary.preview, active.session.sessionManager.getBranch());
-      if (!searchText.toLocaleLowerCase().includes(needle)) continue;
-      summaries.unshift(attachSearchSnippet(summary, searchText, needle));
-    }
-
-    return sortSessionSummaries(summaries);
+    return listWorkspaceSessions(this.catalogDeps(), workspaceId, query);
   }
 
   async markViewed(ref: SessionRef): Promise<SessionSummary> {
@@ -273,35 +149,7 @@ export class SessionService {
   }
 
   async fileReferences(workspaceId: string, query?: string): Promise<SessionFileReference[]> {
-    const workspace = this.workspaces.get(workspaceId);
-    const sideIds = await this.attention.sideChatIds(workspaceId);
-    const listed = (await listManagedSessions(workspace.cwd)).filter((entry) => isVisibleSessionId(entry.id) && !sideIds.has(entry.id));
-    const activeById = new Map(
-      [...this.active.values()]
-        .filter((active) => active.ref.workspaceId === workspaceId && isVisibleSessionId(active.ref.sessionId) && !sideIds.has(active.ref.sessionId) && active.readOnly !== true)
-        .map((active) => [active.ref.sessionId, active]),
-    );
-    const needle = query?.trim().toLocaleLowerCase() ?? "";
-    return listed
-      .map((entry) => ({
-        id: entry.id,
-        name: entry.name ?? null,
-        preview: entry.firstMessage || null,
-        path: entry.path,
-        active: activeById.get(entry.id),
-      }))
-      .concat([...activeById.values()]
-        .filter((active) => !listed.some((entry) => entry.id === active.ref.sessionId) && active.session.sessionFile !== undefined)
-        .map((active) => ({
-          id: active.ref.sessionId,
-          name: active.session.sessionName ?? null,
-          preview: firstUserMessage(active.session.sessionManager.getBranch()),
-          path: active.session.sessionFile!,
-          active,
-        })))
-      .filter((entry) => needle === "" || `${entry.name ?? ""}\n${entry.preview ?? ""}`.toLocaleLowerCase().includes(needle))
-      .sort((left, right) => (right.active?.updatedAt ?? "").localeCompare(left.active?.updatedAt ?? ""))
-      .map(({ id, name, preview, path }) => ({ id, name, preview, path }));
+    return listFileReferences(this.catalogDeps(), workspaceId, query);
   }
 
   /** Shared Pi runtime used by the global settings surface. */
@@ -446,7 +294,7 @@ export class SessionService {
         payload: { items: toExternalTimelineItems(projectHistory(active.session.sessionManager.getBranch()), active.ref), status: { sessionId: active.ref.sessionId, runState: "idle" } },
       });
       await this.reopenAtCurrentBranch(active);
-      return this.prompt(ref, text, clientRequestId, images, undefined, true) as Promise<PromptAccepted>;
+      return this.prompt(ref, text, clientRequestId, images, { skipTransitionWait: true }) as Promise<PromptAccepted>;
     });
   }
 
@@ -790,12 +638,13 @@ export class SessionService {
     return this.thinkingSnapshot(active);
   }
 
-  async prompt(ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[], behavior?: "steer" | "followUp", skipTransitionWait = false): Promise<PromptAccepted | QueuedPromptAccepted> {
+  async prompt(ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[], options?: { behavior?: "steer" | "followUp"; skipTransitionWait?: boolean }): Promise<PromptAccepted | QueuedPromptAccepted> {
     const prompt = text.trim();
     if (prompt === "" && (images === undefined || images.length === 0)) throw new AppError("PROMPT_EMPTY", "Prompt cannot be empty");
     if (prompt.length > MAX_PROMPT_LENGTH) throw new AppError("PROMPT_TOO_LARGE", `Prompt must be at most ${String(MAX_PROMPT_LENGTH)} characters`);
     const attachments = this.validateAttachments(images);
-    const active = await this.getActive(ref, { waitForTransition: !skipTransitionWait });
+    const behavior = options?.behavior;
+    const active = await this.getActive(ref, { waitForTransition: options?.skipTransitionWait !== true });
     const requestKey = `prompt:${clientRequestId}`;
     const previous = active.requestRuns.get(requestKey);
     if (previous !== undefined) return previous as PromptAccepted | QueuedPromptAccepted;
@@ -1064,7 +913,7 @@ export class SessionService {
   private async executeReload(active: ActiveSession, runId: string): Promise<void> {
     try {
       await active.session.reload();
-      this.bindOwnerSessionId(active.session);
+      bindOwnerSessionId(this.ownerBoundSessions, active.session);
       if (active.state.activeRun?.id !== runId) return;
       this.events.publishWorkspace(active.ref.workspaceId, {
         version: PROTOCOL_VERSION,
@@ -1328,137 +1177,16 @@ export class SessionService {
   }
 
   private async createActive(ref: SessionRef, workspace: Workspace, manager: SessionManager, options?: { readOnly?: boolean }): Promise<ActiveSession> {
-    const agentDir = getAgentDir();
-    const readOnly = options?.readOnly === true || (ref.sessionId !== "" && await this.attention.isSideChat(ref));
-    const modelRuntime = await this.getModelRuntime(agentDir);
-    const settingsManager = SettingsManager.create(workspace.cwd, agentDir);
-    const enabledModels = settingsManager.getEnabledModels();
-    const { scopedModels, diagnostics } = enabledModels !== undefined && enabledModels.length > 0
-      ? await resolveModelScopeWithDiagnostics(enabledModels, modelRuntime)
-      : { scopedModels: [], diagnostics: [] };
-    for (const diagnostic of diagnostics) console.warn(`Model scope warning: ${diagnostic.message}`);
-
-    const resourceLoader = new DefaultResourceLoader({
-      cwd: workspace.cwd,
-      agentDir,
-      settingsManager,
-      appendSystemPrompt: readOnly ? [JARVIS_UI_NOTICE, SIDE_CHAT_NOTICE] : [JARVIS_UI_NOTICE],
-    });
-    await resourceLoader.reload();
-    const { session } = await createAgentSession({
-      cwd: workspace.cwd,
-      agentDir,
-      modelRuntime,
-      sessionManager: manager,
-      settingsManager,
-      resourceLoader,
-      ...(readOnly ? { tools: [...SIDE_CHAT_TOOLS], excludeTools: ["bash", "edit", "write", "powershell"] } : {}),
-      ...(scopedModels.length === 0 ? {} : { scopedModels }),
-    });
-    this.bindOwnerSessionId(session);
-    const publishExtensionUi = (message: ExtensionUiMessage) => {
-      // Notifications are application-level transient feedback. They use the
-      // workspace stream so they are independent of the selected session.
-      if (message.type === "request" && message.request.method === "notify") {
-        this.events.publishWorkspace(active.ref.workspaceId, {
-          version: 1,
-          type: "extension.notify",
-          workspaceId: active.ref.workspaceId,
-          notification: {
-            id: message.request.id,
-            message: message.request.message,
-            ...(message.request.notifyType === undefined ? {} : { notifyType: message.request.notifyType }),
-            sessionId: active.ref.sessionId,
-          },
-        });
-        return;
-      }
-      // `bindExtensions` runs only after `active` is registered below, so startup
-      // dialogs never disappear or deadlock.
-      if (message.type === "request") {
-        if (message.request.method === "select" || message.request.method === "confirm" || message.request.method === "input" || message.request.method === "editor") {
-          this.setAttention(active, "waiting_interaction");
-          this.publishSummary(active);
-        }
-        this.events.publishSession(active.ref, { type: "extension.uiRequest", payload: { request: message.request } });
-      } else {
-        this.events.publishSession(active.ref, {
-          type: "extension.uiSettled",
-          payload: { id: message.id, outcome: message.outcome, ...(message.value === undefined ? {} : { value: message.value }), ...(message.confirmed === undefined ? {} : { confirmed: message.confirmed }) },
-        });
-        if (!active.extensionUi.hasPendingDialogs) {
-          this.setAttention(active, active.state.runState === "idle" ? "idle" : "running");
-          this.publishSummary(active);
-        }
-      }
-    };
-    const extensionUi = new ExtensionUiBridge(publishExtensionUi);
-    const actualRef: SessionRef = { workspaceId: workspace.id, sessionId: session.sessionId };
-    const now = new Date().toISOString();
-    const headerTimestamp = manager.getHeader()?.timestamp;
-    const createdAt = typeof headerTimestamp === "string" && Number.isFinite(Date.parse(headerTimestamp)) ? new Date(headerTimestamp).toISOString() : now;
-    const sortMeta = await this.attention.get(actualRef);
-    const active: ActiveSession = {
-      ref: actualRef,
-      cwd: workspace.cwd,
-      session,
-      modelRuntime,
-      modelSwitching: false,
-      extensionUi,
-      extensionReady: Promise.resolve(),
-      unsubscribe: () => undefined,
-      state: { sessionId: session.sessionId, runState: "idle" },
-      attentionState: sortMeta.attentionState,
-      ...(sortMeta.attentionAt === undefined ? {} : { attentionAt: sortMeta.attentionAt }),
-      ...(sortMeta.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: sortMeta.lastUserMessageAt }),
-      ...(sortMeta.starred === true ? { starred: true } : {}),
-      requestRuns: new Map(),
-      liveMessages: new Map(),
-      liveErrors: new Map(),
-      assistantStreamId: undefined,
-      activeTools: new Map(),
-      activeBash: undefined,
-      queue: emptySessionQueue,
-      queueSyncSuspended: false,
-      compactionAbortRequested: false,
-      pendingRunError: undefined,
-      settlementTimer: undefined,
-      compactionHandoff: false,
-      ...(readOnly ? { readOnly: true } : {}),
-      createdAt,
-      updatedAt: await sessionModifiedAt(session.sessionFile, now),
-    };
-    active.unsubscribe = session.subscribe((event) => this.handlePiEvent(active, event));
-    this.active.set(activeKey(actualRef), active);
-    const onExtensionError = (error: ExtensionError) => {
-      console.warn("Pi extension error", error);
-      if (!isUnsupportedExtensionInteraction(error)) return;
-      active.extensionFailure = { code: UNSUPPORTED_EXTENSION_INTERACTION, message: error.error };
-    };
-    // Register before binding so startup UI/events have a live ActiveSession,
-    // but make all callers await extensionReady before using this session.
-    active.extensionReady = session.bindExtensions({ mode: "rpc", uiContext: extensionUi.context, onError: onExtensionError }).then(() => {
-      if (readOnly) session.setActiveToolsByName([...SIDE_CHAT_TOOLS]);
-    }).catch((error: unknown) => {
-      console.warn("Pi extension binding failed", error);
-    });
-    return active;
-  }
-
-  /**
-   * Keep every provider request tied to this AgentSession. Pi's compaction
-   * intentionally substitutes a random sessionId for isolated summary requests,
-   * so model-group routing needs a separate stable owner identifier.
-   */
-  private bindOwnerSessionId(session: AgentSession): void {
-    if (this.ownerBoundSessions.has(session)) return;
-    this.ownerBoundSessions.add(session);
-    const ownerSessionId = session.sessionId;
-    const stream = session.agent.streamFunction;
-    session.agent.streamFunction = (model, context, options) => stream(model, context, {
-      ...options,
-      ownerSessionId,
-    });
+    return createActiveSession({
+      attention: this.attention,
+      events: this.events,
+      active: this.active,
+      ownerBoundSessions: this.ownerBoundSessions,
+      piEvents: this.piEvents,
+      getModelRuntime: (agentDir) => this.getModelRuntime(agentDir),
+      setAttention: (active, state) => this.setAttention(active, state),
+      publishSummary: (active) => this.publishSummary(active),
+    }, ref, workspace, manager, options);
   }
 
   private modelSnapshot(active: ActiveSession) {
@@ -1493,64 +1221,6 @@ export class SessionService {
     return this.modelRuntimePromise;
   }
 
-  private handlePiEvent(active: ActiveSession, event: AgentSessionEvent): void {
-    active.updatedAt = new Date().toISOString();
-    switch (event.type) {
-      case "agent_start":
-        this.onAgentStart(active);
-        return;
-      case "message_update":
-        this.onMessageUpdate(active, event);
-        return;
-      case "message_end":
-        this.onMessageEnd(active, event);
-        return;
-      case "tool_execution_start":
-        this.onToolExecutionStart(active, event);
-        return;
-      case "tool_execution_update":
-        this.onToolExecutionUpdate(active, event);
-        return;
-      case "tool_execution_end":
-        this.onToolExecutionEnd(active, event);
-        return;
-      case "compaction_start":
-        this.onCompactionStart(active, event);
-        return;
-      case "compaction_end":
-        this.onCompactionEnd(active, event);
-        return;
-      case "summarization_retry_scheduled":
-        this.onSummarizationRetryScheduled(active, event);
-        return;
-      case "summarization_retry_attempt_start":
-      case "summarization_retry_finished":
-        this.onSummarizationRetryCleared(active);
-        return;
-      case "auto_retry_start":
-        this.onAutoRetryStart(active, event);
-        return;
-      case "auto_retry_end":
-        this.onAutoRetryEnd(active, event);
-        return;
-      case "queue_update":
-        if (!active.queueSyncSuspended) this.syncQueue(active);
-        return;
-      case "agent_settled":
-        this.deferAgentSettlement(active);
-        return;
-      case "thinking_level_changed":
-        this.events.publishSession(active.ref, { type: "thinking.changed", payload: { thinking: this.thinkingSnapshot(active) } });
-        return;
-      case "session_info_changed":
-        this.publishSummary(active);
-        this.persistListCopy(active, this.summaryFromActive(active));
-        return;
-      default:
-        return;
-    }
-  }
-
   private resetLiveStream(active: ActiveSession): void {
     active.liveMessages.clear();
     active.liveErrors.clear();
@@ -1562,305 +1232,10 @@ export class SessionService {
     active.pendingRunError = undefined;
   }
 
-  private publishTool(active: ActiveSession, tool: ToolTimelineItem, runId = active.state.activeRun?.id): void {
+  private publishTool(active: ActiveSession, tool: ToolTimelineItem, runId?: string): void {
+    const id = runId ?? active.state.activeRun?.id;
     active.activeTools.set(tool.id, tool);
-    this.events.publishSession(active.ref, { type: "tool.upsert", runId, payload: { tool: toExternalTimelineItem(tool, active.ref) } });
-  }
-
-  private onAgentStart(active: ActiveSession): void {
-    // Extensions can start a continuation without passing through Jarvis's
-    // HTTP prompt endpoint. Pi is authoritative for that lifecycle.
-    this.clearSettlementTimer(active);
-    if (active.state.runState !== "idle") {
-      // 重试退避结束、重试请求真正开始：撤掉“正在重试”状态。Pi 的 auto_retry_end 要等这次
-      // 尝试成功才发，若一直挂着 retrying，就会出现“一边流式思考、一边显示正在重试”。
-      // 与 Pi TUI 在 agent_start 清 retry 指示的行为保持一致。
-      if (active.state.retrying === undefined) return;
-      active.state = { ...active.state, retrying: undefined };
-      this.events.publishSession(active.ref, { type: "run.retryEnd", runId: active.state.activeRun?.id, payload: { status: active.state } });
-      return;
-    }
-    const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
-    active.state = { sessionId: active.ref.sessionId, runState: "running", activeRun: run };
-    this.setAttention(active, "running");
-    this.resetLiveStream(active);
-    this.events.publishSession(active.ref, { type: "run.started", runId: run.id, payload: { status: active.state } });
-    this.publishSummary(active);
-  }
-
-  private onMessageUpdate(active: ActiveSession, event: PiEvent<"message_update">): void {
-    const runId = active.state.activeRun?.id;
-    if (runId === undefined) return;
-    const identity = messageFromPi(event.message, "assistant", "");
-    const assistantId = active.assistantStreamId ??= identity.id;
-
-    if (event.assistantMessageEvent.type === "thinking_delta") {
-      const thinkingId = `${assistantId}:thinking`;
-      active.partialThinking ??= {
-        kind: "thinking",
-        id: thinkingId,
-        createdAt: identity.createdAt,
-        state: "running",
-        text: "",
-      };
-      active.partialThinking.text += event.assistantMessageEvent.delta;
-      this.events.publishSession(active.ref, { type: "thinking.delta", runId, payload: { thinkingId, createdAt: active.partialThinking.createdAt, delta: event.assistantMessageEvent.delta } });
-      return;
-    }
-    if (event.assistantMessageEvent.type !== "text_delta") return;
-    if (active.partialThinking !== undefined) {
-      const thinking = { ...active.partialThinking, state: "completed" as const };
-      active.partialThinking = undefined;
-      this.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: { thinkingId: thinking.id, createdAt: thinking.createdAt, text: thinking.text } });
-    }
-    const partial = active.partial ?? {
-      kind: "message" as const,
-      id: assistantId,
-      role: "assistant" as const,
-      createdAt: identity.createdAt,
-      text: "",
-    };
-    partial.text += event.assistantMessageEvent.delta;
-    active.partial = partial;
-    this.events.publishSession(active.ref, { type: "assistant.delta", runId, payload: { messageId: partial.id, delta: event.assistantMessageEvent.delta } });
-  }
-
-  private onMessageEnd(active: ActiveSession, event: PiEvent<"message_end">): void {
-    const runId = active.state.activeRun?.id;
-    if (runId === undefined) return;
-    if (isUserMessage(event.message)) {
-      this.onUserMessageEnd(active, event.message, runId);
-      return;
-    }
-    if (isAssistantMessage(event.message)) this.onAssistantMessageEnd(active, event.message, runId);
-  }
-
-  private onUserMessageEnd(active: ActiveSession, message: { role: "user"; content: unknown; timestamp?: number | string }, runId: string): void {
-    const { text, images } = userContentFromContent(message.content);
-    if (text === "" && images.length === 0) return;
-    const item = {
-      ...messageFromPi(message, "user", text),
-      ...(images.length === 0 ? {} : { images }),
-    };
-    active.liveMessages.set(item.id, item);
-    this.events.publishSession(active.ref, { type: "message.created", runId, payload: { message: item } });
-    // Pi emits message_end before it persists the message. Publish the
-    // first prompt immediately with an explicit preview so the browser
-    // does not have to wait for the whole agent run to settle before
-    // replacing the "新会话" fallback title.
-    if (firstUserMessage(active.session.sessionManager.getBranch()) === null && text !== "") {
-      const summary = this.summaryFromActive(active, text);
-      this.publishSummary(active, summary);
-      this.persistListCopy(active, summary);
-    }
-  }
-
-  private onAssistantMessageEnd(active: ActiveSession, message: { role: "assistant"; content: unknown; timestamp?: number | string }, runId: string): void {
-    const identity = messageFromPi(message, "assistant", "", active.partial?.createdAt);
-    const assistantId = active.assistantStreamId ?? identity.id;
-    const stopReason = stringValue((message as Record<string, unknown>)["stopReason"]);
-    // 思考块定稿：以最终 content 里的 thinking 部分为准（流式期间部分 provider
-    // 只在 message_end 才返回思考内容），兜底用流式累积的文本。
-    const thinkingText = thinkingTextFromContent(message.content);
-    if (active.partialThinking !== undefined || thinkingText !== "") {
-      const thinking: ThinkingTimelineItem = {
-        kind: "thinking",
-        id: `${assistantId}:thinking`,
-        createdAt: active.partialThinking?.createdAt ?? identity.createdAt,
-        state: "completed",
-        text: thinkingText !== "" ? thinkingText : (active.partialThinking?.text ?? ""),
-      };
-      active.partialThinking = undefined;
-      this.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: { thinkingId: thinking.id, createdAt: thinking.createdAt, text: thinking.text } });
-    }
-    const text = assistantTextFromContent(message.content);
-    const completed = text === ""
-      ? undefined
-      : messageFromPi(message, "assistant", text, active.partial?.createdAt);
-    if (completed !== undefined) {
-      const item = active.partial === undefined ? { ...completed, id: assistantId } : { ...completed, id: active.partial.id, createdAt: active.partial.createdAt };
-      active.liveMessages.set(item.id, item);
-      active.partial = undefined;
-      this.events.publishSession(active.ref, { type: "assistant.completed", runId, payload: { message: item } });
-    }
-    this.publishContextUsage(active, runId);
-    if (stopReason === "error") {
-      this.markAssistantAttemptFailed(active, message, identity.createdAt, assistantId, runId);
-    } else if (stopReason !== "aborted") {
-      this.markAssistantAttemptsRecovered(active, runId);
-    }
-    active.assistantStreamId = undefined;
-  }
-
-  private markAssistantAttemptFailed(active: ActiveSession, message: unknown, createdAt: string, assistantId: string, runId: string): void {
-    for (const previous of active.liveErrors.values()) {
-      if (previous.state !== "retrying") continue;
-      const settled = { ...previous, state: "failed" as const };
-      active.liveErrors.set(settled.id, settled);
-      this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: settled } });
-    }
-    const error = { ...errorFromPi(message, createdAt, assistantId), groupId: runId };
-    active.liveErrors.set(error.id, error);
-    this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: error } });
-    active.pendingRunError = { code: error.code, message: error.message };
-  }
-
-  private markAssistantAttemptsRecovered(active: ActiveSession, runId: string): void {
-    for (const error of active.liveErrors.values()) {
-      if (error.state === "recovered") continue;
-      const recovered = { ...error, state: "recovered" as const };
-      active.liveErrors.set(recovered.id, recovered);
-      this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item: recovered } });
-    }
-    active.pendingRunError = undefined;
-  }
-
-  private onToolExecutionStart(active: ActiveSession, event: PiEvent<"tool_execution_start">): void {
-    this.publishTool(active, toolFromCall(
-      event.toolCallId,
-      event.toolName,
-      event.args,
-      new Date().toISOString(),
-      "running",
-      event.toolName === "bash" ? { cwd: active.cwd } : undefined,
-    ));
-  }
-
-  private onToolExecutionUpdate(active: ActiveSession, event: PiEvent<"tool_execution_update">): void {
-    const previous = active.activeTools.get(event.toolCallId) ?? toolFromCall(event.toolCallId, event.toolName, event.args);
-    this.publishTool(active, toolWithPartial(previous, event.partialResult));
-  }
-
-  private onToolExecutionEnd(active: ActiveSession, event: PiEvent<"tool_execution_end">): void {
-    const previous = active.activeTools.get(event.toolCallId) ?? toolFromCall(event.toolCallId, event.toolName, undefined, new Date().toISOString(), "running", event.toolName === "bash" ? { cwd: active.cwd } : undefined);
-    const startedAt = Date.parse(previous.createdAt);
-    const durationMs = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : undefined;
-    this.publishTool(active, toolWithResult(previous, event.result, event.isError, durationMs));
-  }
-
-  private onCompactionStart(active: ActiveSession, event: PiEvent<"compaction_start">): void {
-    // Extension ctx.compact() resumes immediately after the agent_settled
-    // event. It owns the run that would otherwise settle on this timer.
-    if (active.settlementTimer !== undefined) {
-      this.clearSettlementTimer(active);
-      active.compactionHandoff = true;
-    }
-    const startedAt = active.state.compacting?.reason === event.reason
-      ? active.state.compacting.startedAt
-      : new Date().toISOString();
-    active.state = {
-      ...active.state,
-      compacting: { reason: event.reason, startedAt },
-    };
-    if (active.compactionAbortRequested) this.cancelCompaction(active);
-    this.events.publishSession(active.ref, {
-      type: "run.compactionStarted",
-      ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
-      payload: { status: active.state },
-    });
-    this.publishSummary(active);
-  }
-
-  private onCompactionEnd(active: ActiveSession, event: PiEvent<"compaction_end">): void {
-    const runId = active.state.activeRun?.id;
-    const errorMessage = event.errorMessage;
-    const handoff = active.compactionHandoff;
-    active.compactionHandoff = false;
-    active.compactionAbortRequested = false;
-    active.state = { ...active.state, compacting: undefined };
-    if (event.result !== undefined) {
-      const saved = [...active.session.sessionManager.getBranch()]
-        .reverse()
-        .find((entry) => entry.type === "compaction" && entry.summary === event.result?.summary);
-      const item = contextSummaryFromEntry(saved);
-      if (item !== undefined) this.events.publishSession(active.ref, { type: "timeline.upsert", ...(runId === undefined ? {} : { runId }), payload: { item } });
-    } else if (!event.aborted && errorMessage !== undefined) {
-      if (event.reason === "overflow") {
-        active.pendingRunError = { code: "PI_COMPACTION_FAILED", message: errorMessage };
-      } else if (event.reason === "threshold") {
-        active.state = {
-          ...active.state,
-          lastError: { code: "PI_COMPACTION_FAILED", message: errorMessage, occurredAt: new Date().toISOString() },
-        };
-      } else {
-        active.pendingRunError = { code: "PI_COMPACTION_FAILED", message: errorMessage };
-      }
-    }
-    this.events.publishSession(active.ref, {
-      type: "run.compactionEnded",
-      ...(runId === undefined ? {} : { runId }),
-      payload: { status: active.state, aborted: event.aborted, ...(errorMessage === undefined ? {} : { errorMessage }), willRetry: event.willRetry },
-    });
-    this.publishContextUsage(active, runId);
-    this.publishSummary(active);
-    if (handoff) {
-      if (event.aborted) active.pendingRunError = undefined;
-      this.deferAgentSettlement(active);
-    }
-  }
-
-  private onSummarizationRetryScheduled(active: ActiveSession, event: PiEvent<"summarization_retry_scheduled">): void {
-    if (active.state.compacting === undefined) return;
-    active.state = {
-      ...active.state,
-      compacting: {
-        ...active.state.compacting,
-        retrying: retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage),
-      },
-    };
-    this.publishCompactionRetrying(active);
-  }
-
-  private onSummarizationRetryCleared(active: ActiveSession): void {
-    if (active.state.compacting?.retrying === undefined) return;
-    active.state = {
-      ...active.state,
-      compacting: { ...active.state.compacting, retrying: undefined },
-    };
-    this.publishCompactionRetrying(active);
-  }
-
-  private publishCompactionRetrying(active: ActiveSession): void {
-    this.events.publishSession(active.ref, {
-      type: "run.compactionRetrying",
-      ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
-      payload: { status: active.state },
-    });
-    this.publishSummary(active);
-  }
-
-  private onAutoRetryStart(active: ActiveSession, event: PiEvent<"auto_retry_start">): void {
-    const runId = active.state.activeRun?.id;
-    if (runId === undefined) return;
-    active.assistantStreamId = undefined;
-    active.partial = undefined;
-    active.partialThinking = undefined;
-    const retrying = retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage);
-    active.state = { ...active.state, retrying };
-    const latestError = [...active.liveErrors.values()].at(-1);
-    if (latestError !== undefined) {
-      const item = { ...latestError, state: "retrying" as const, attempt: retrying.attempt, maxAttempts: retrying.maxAttempts, retryAt: retrying.retryAt };
-      active.liveErrors.set(item.id, item);
-      this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item } });
-    }
-    this.events.publishSession(active.ref, { type: "run.retrying", runId, payload: { status: active.state } });
-    this.publishSummary(active);
-  }
-
-  private onAutoRetryEnd(active: ActiveSession, event: PiEvent<"auto_retry_end">): void {
-    const runId = active.state.activeRun?.id;
-    if (runId === undefined) return;
-    active.state = { ...active.state, retrying: undefined };
-    if (!event.success) {
-      const latestError = [...active.liveErrors.values()].at(-1);
-      if (latestError?.state === "retrying") {
-        const item = { ...latestError, state: "failed" as const };
-        active.liveErrors.set(item.id, item);
-        this.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item } });
-      }
-    }
-    this.events.publishSession(active.ref, { type: "run.retryEnd", runId, payload: { status: active.state } });
-    this.publishSummary(active);
+    this.events.publishSession(active.ref, { type: "tool.upsert", runId: id, payload: { tool: toExternalTimelineItem(tool, active.ref) } });
   }
 
   private settleRun(active: ActiveSession, runId: string | undefined): void {
@@ -2007,12 +1382,13 @@ export class SessionService {
     active.settlementTimer = undefined;
   }
 
-  private setAttention(active: ActiveSession, state: SessionAttentionState, at = new Date().toISOString()): void {
+  private setAttention(active: ActiveSession, state: SessionAttentionState, at?: string): void {
+    const when = at ?? new Date().toISOString();
     if (active.attentionState === state) return;
     active.attentionState = state;
     if (state === "idle") delete active.attentionAt;
-    else active.attentionAt = at;
-    void this.attention.setAttention(active.ref, state, at).catch((error: unknown) => console.warn("Could not persist session attention state", error));
+    else active.attentionAt = when;
+    void this.attention.setAttention(active.ref, state, when).catch((error: unknown) => console.warn("Could not persist session attention state", error));
   }
 
   private markUserMessage(active: ActiveSession, at: string): void {
@@ -2037,473 +1413,18 @@ export class SessionService {
   }
 
   private summaryFromList(workspace: Workspace, entry: { id: string; name?: string; firstMessage: string; created: Date; modified: Date }, persisted?: SessionSortMeta): SessionSummary {
-    const active = this.active.get(activeKey({ workspaceId: workspace.id, sessionId: entry.id }));
-    const attentionState = active?.attentionState ?? persisted?.attentionState ?? "idle";
-    const attentionAt = active?.attentionAt ?? persisted?.attentionAt;
-    const lastUserMessageAt = active?.lastUserMessageAt ?? persisted?.lastUserMessageAt;
-    const starred = active?.starred === true || persisted?.starred === true;
-    return {
-      id: entry.id,
-      workspaceId: workspace.id,
-      name: entry.name ?? null,
-      preview: entry.firstMessage === "" || entry.firstMessage === "(no messages)" ? null : entry.firstMessage,
-      createdAt: entry.created.toISOString(),
-      updatedAt: entry.modified.toISOString(),
-      runState: active?.state.runState ?? "idle",
-      attentionState,
-      ...(attentionState === "idle" || attentionAt === undefined ? {} : { attentionAt }),
-      ...(lastUserMessageAt === undefined ? {} : { lastUserMessageAt }),
-      ...(starred ? { starred: true } : {}),
-    };
+    return summaryFromList(this.active, workspace, entry, persisted);
   }
 
   private async summaryFromStored(workspace: Workspace, ref: SessionRef, path: string): Promise<SessionSummary> {
-    const header = await readSessionFileHeader(path);
-    if (header === undefined || header.id !== ref.sessionId) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
-    const persisted = await this.attention.get(ref);
-    const updatedAt = await sessionModifiedAt(path, new Date().toISOString());
-    const createdAt = header.timestamp !== undefined && Number.isFinite(Date.parse(header.timestamp))
-      ? new Date(header.timestamp).toISOString()
-      : updatedAt;
-    const attentionState = persisted.attentionState;
-    return {
-      id: ref.sessionId,
-      workspaceId: workspace.id,
-      name: persisted.name ?? null,
-      preview: persisted.preview ?? null,
-      createdAt,
-      updatedAt,
-      runState: "idle",
-      attentionState,
-      ...(attentionState === "idle" || persisted.attentionAt === undefined ? {} : { attentionAt: persisted.attentionAt }),
-      ...(persisted.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: persisted.lastUserMessageAt }),
-      ...(persisted.starred === true ? { starred: true } : {}),
-    };
+    return summaryFromStored(this.catalogDeps(), workspace, ref, path);
   }
 
   private summaryFromActive(active: ActiveSession, previewOverride?: string): SessionSummary {
-    return {
-      id: active.ref.sessionId,
-      workspaceId: active.ref.workspaceId,
-      name: active.session.sessionName ?? null,
-      preview: previewOverride ?? firstUserMessage(active.session.sessionManager.getBranch()),
-      createdAt: active.createdAt,
-      updatedAt: active.updatedAt,
-      runState: active.state.runState,
-      attentionState: active.attentionState,
-      ...(active.attentionState === "idle" || active.attentionAt === undefined ? {} : { attentionAt: active.attentionAt }),
-      ...(active.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: active.lastUserMessageAt }),
-      ...(active.starred === true ? { starred: true } : {}),
-    };
+    return summaryFromActive(active, previewOverride);
   }
-}
 
-function activeKey(ref: SessionRef): string {
-  return `${ref.workspaceId}:${ref.sessionId}`;
-}
-
-/** pi-subagent uses this namespace for persistent child-agent sessions. */
-function isVisibleSessionId(sessionId: string): boolean {
-  return !sessionId.startsWith("subagent.");
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Match Pi's environment-over-settings session directory precedence. */
-function sessionDirectoryFor(cwd: string, agentDir: string): string | undefined {
-  const environmentValue = process.env["PI_CODING_AGENT_SESSION_DIR"];
-  if (environmentValue !== undefined && environmentValue.trim() !== "") return resolveConfiguredSessionDir(environmentValue, cwd);
-
-  const globalSettings = readSessionDir(join(agentDir, "settings.json"));
-  const projectSettings = readSessionDir(join(cwd, ".pi", "settings.json"));
-  const configured = projectSettings ?? globalSettings;
-  if (configured === undefined) return undefined;
-  const base = projectSettings === undefined ? agentDir : join(cwd, ".pi");
-  return resolveConfiguredSessionDir(configured, base);
-}
-
-function managedSessionDir(cwd: string): string | undefined {
-  return sessionDirectoryFor(cwd, getAgentDir());
-}
-
-function createManagedSession(cwd: string): SessionManager {
-  const sessionDir = managedSessionDir(cwd);
-  return sessionDir === undefined ? SessionManager.create(cwd) : SessionManager.create(cwd, sessionDir);
-}
-
-function openManagedSessionAt(path: string, sessionDir: string | undefined): SessionManager {
-  return sessionDir === undefined ? SessionManager.open(path) : SessionManager.open(path, sessionDir);
-}
-
-function openManagedSession(cwd: string, path: string): SessionManager {
-  return openManagedSessionAt(path, managedSessionDir(cwd));
-}
-
-function listManagedSessions(cwd: string): ReturnType<typeof SessionManager.list> {
-  const sessionDir = managedSessionDir(cwd);
-  return sessionDir === undefined ? SessionManager.list(cwd) : SessionManager.list(cwd, sessionDir);
-}
-
-function readSessionDir(path: string): string | undefined {
-  if (!existsSync(path)) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
-    const value = (parsed as Record<string, unknown>)["sessionDir"];
-    return typeof value === "string" && value.trim() !== "" ? value : undefined;
-  } catch {
-    return undefined;
+  private catalogDeps() {
+    return { workspaces: this.workspaces, attention: this.attention, active: this.active };
   }
-}
-
-function resolveConfiguredSessionDir(value: string, baseDir: string): string {
-  const expanded = value === "~" ? homedir() : value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
-  return isAbsolute(expanded) ? resolve(expanded) : resolve(baseDir, expanded);
-}
-
-function defaultSessionDir(cwd: string, agentDir: string): string {
-  const encoded = `--${resolve(cwd).replace(/^[\\/]/, "").replace(/[\\/:]/g, "-")}--`;
-  return join(agentDir, "sessions", encoded);
-}
-
-function sessionFilesDirectory(workspace: Workspace): string {
-  return sessionDirectoryFor(workspace.cwd, getAgentDir()) ?? defaultSessionDir(workspace.cwd, getAgentDir());
-}
-
-function shouldFilterSessionCwd(workspace: Workspace, directory: string): boolean {
-  return sessionDirectoryFor(workspace.cwd, getAgentDir()) !== undefined && resolve(directory) !== resolve(defaultSessionDir(workspace.cwd, getAgentDir()));
-}
-
-interface SessionFileIndex {
-  id: string;
-  path: string;
-  mtimeMs: number;
-  mtimeIso: string;
-  timestamp?: string;
-}
-
-async function listSessionFiles(workspace: Workspace): Promise<SessionFileIndex[]> {
-  const directory = sessionFilesDirectory(workspace);
-  const filterCwd = shouldFilterSessionCwd(workspace, directory);
-  const resolvedCwd = resolve(workspace.cwd);
-  let names: string[];
-  try {
-    names = await readdir(directory);
-  } catch (error) {
-    if (isMissingFile(error)) return [];
-    throw error;
-  }
-  const files = await Promise.all(names.filter((name) => name.endsWith(".jsonl")).map(async (name) => {
-    const path = join(directory, name);
-    const header = await readSessionFileHeader(path);
-    if (header === undefined || !isVisibleSessionId(header.id)) return undefined;
-    if (filterCwd && (header.cwd === undefined || header.cwd === "" || resolve(header.cwd) !== resolvedCwd)) return undefined;
-    let stats: Awaited<ReturnType<typeof stat>>;
-    try {
-      stats = await stat(path);
-    } catch {
-      return undefined;
-    }
-    return {
-      id: header.id,
-      path,
-      mtimeMs: stats.mtimeMs,
-      mtimeIso: stats.mtime.toISOString(),
-      ...(header.timestamp === undefined ? {} : { timestamp: header.timestamp }),
-    };
-  }));
-  return files.filter((file): file is SessionFileIndex => file !== undefined);
-}
-
-function sessionJsonlDirectories(workspace: Workspace): string[] {
-  const directories = new Set<string>([
-    sessionFilesDirectory(workspace),
-    defaultSessionDir(workspace.cwd, getAgentDir()),
-  ]);
-  const environmentValue = process.env["PI_CODING_AGENT_SESSION_DIR"];
-  if (environmentValue !== undefined && environmentValue.trim() !== "") {
-    directories.add(resolveConfiguredSessionDir(environmentValue, workspace.cwd));
-  }
-  return [...directories];
-}
-
-async function removeSessionJsonl(workspace: Workspace, sessionId: string): Promise<void> {
-  for (const directory of sessionJsonlDirectories(workspace)) {
-    let names: string[];
-    try {
-      names = await readdir(directory);
-    } catch (error) {
-      if (isMissingFile(error)) continue;
-      throw error;
-    }
-    for (const name of names) {
-      if (!name.endsWith(`_${sessionId}.jsonl`)) continue;
-      await rm(join(directory, name), { force: true });
-    }
-  }
-}
-
-async function findSessionFile(workspace: Workspace, sessionId: string): Promise<string | undefined> {
-  const directory = sessionFilesDirectory(workspace);
-  let names: string[];
-  try {
-    names = await readdir(directory);
-  } catch (error) {
-    if (isMissingFile(error)) return undefined;
-    throw error;
-  }
-  const match = names.find((name) => name.endsWith(`_${sessionId}.jsonl`));
-  if (match !== undefined) return join(directory, match);
-  return (await listSessionFiles(workspace)).find((file) => file.id === sessionId)?.path;
-}
-
-const SESSION_HEADER_SCAN_BYTES = 64 * 1024;
-
-async function readSessionFileHeader(path: string): Promise<{ id: string; cwd?: string; timestamp?: string } | undefined> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(path, "r");
-    const buffer = Buffer.alloc(SESSION_HEADER_SCAN_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const newline = buffer.subarray(0, bytesRead).indexOf(0x0a);
-    if (newline <= 0) return undefined;
-    const parsed: unknown = JSON.parse(buffer.subarray(0, newline).toString("utf8"));
-    if (!isRecord(parsed) || parsed["type"] !== "session" || typeof parsed["id"] !== "string" || parsed["id"] === "") return undefined;
-    return {
-      id: parsed["id"],
-      ...(typeof parsed["cwd"] === "string" ? { cwd: parsed["cwd"] } : {}),
-      ...(typeof parsed["timestamp"] === "string" ? { timestamp: parsed["timestamp"] } : {}),
-    };
-  } catch {
-    return undefined;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
-}
-
-async function sessionModifiedAt(sessionFile: string | undefined, fallback: string): Promise<string> {
-  if (sessionFile === undefined) return fallback;
-  try {
-    return (await stat(sessionFile)).mtime.toISOString();
-  } catch {
-    return fallback;
-  }
-}
-
-async function sessionFileMtimeMs(path: string): Promise<number | undefined> {
-  try {
-    return (await stat(path)).mtimeMs;
-  } catch {
-    return undefined;
-  }
-}
-
-/** 只取侧栏需要的名称和首条用户消息，不拼全文。 */
-async function readSessionListCopy(path: string): Promise<{ name: string | null; preview: string | null }> {
-  let stream: ReturnType<typeof createReadStream> | undefined;
-  let lines: ReturnType<typeof createInterface> | undefined;
-  let name: string | null = null;
-  let preview: string | null = null;
-  try {
-    stream = createReadStream(path, { encoding: "utf8" });
-    lines = createInterface({ input: stream, crlfDelay: Infinity });
-    for await (const line of lines) {
-      const parsed = parseJsonlRecord(line);
-      if (parsed === undefined) continue;
-      if (parsed["type"] === "session_info") {
-        name = sessionInfoName(parsed);
-        continue;
-      }
-      if (preview !== null || parsed["type"] !== "message") continue;
-      const message = parsed["message"];
-      if (!isRecord(message) || message["role"] !== "user") continue;
-      const text = userContentFromContent(message["content"]).text.trim();
-      if (text !== "") preview = text;
-    }
-  } catch {
-    return { name, preview };
-  } finally {
-    lines?.close();
-    stream?.destroy();
-  }
-  return { name, preview };
-}
-
-function parseJsonlRecord(line: string): Record<string, unknown> | undefined {
-  const trimmed = line.trim();
-  if (trimmed === "") return undefined;
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function sessionInfoName(entry: Record<string, unknown>): string | null {
-  const name = entry["name"];
-  if (typeof name !== "string") return null;
-  const trimmed = name.trim();
-  return trimmed === "" ? null : trimmed;
-}
-
-function retryStatus(attempt: number, maxAttempts: number, delayMs: number, errorMessage: string): RetryStatus {
-  return {
-    attempt,
-    maxAttempts,
-    delayMs,
-    retryAt: new Date(Date.now() + delayMs).toISOString(),
-    errorMessage,
-  };
-}
-
-function isCompactionCancellation(error: unknown): boolean {
-  if (error instanceof Error && error.name === "AbortError") return true;
-  return asMessage(error) === "Compaction cancelled";
-}
-
-function sameThinkingLevels(left: readonly ThinkingLevel[], right: readonly ThinkingLevel[]): boolean {
-  return left.length === right.length && left.every((level, index) => level === right[index]);
-}
-
-/** 稳定 id：同一文本重复排队也保持独立条目。 */
-function queuedMessage(kind: "steer" | "followUp", text: string): QueuedMessage {
-  let hash = 5381;
-  for (let index = 0; index < text.length; index += 1) hash = ((hash << 5) + hash + text.charCodeAt(index)) >>> 0;
-  const createdAt = new Date().toISOString();
-  return { id: `${kind}:${hash.toString(36)}:${createdAt}`, kind, text, createdAt };
-}
-
-/** 增量合并：按顺序复用已有条目（文本相同）以保持 id 稳定，新增/剩余条目补全新 id。 */
-function mergeQueuedMessages(previous: QueuedMessage[], current: readonly string[], kind: "steer" | "followUp"): QueuedMessage[] {
-  const result: QueuedMessage[] = [];
-  const used = new Set<number>();
-  for (const text of current) {
-    const matchIndex = previous.findIndex((item, index) => !used.has(index) && item.kind === kind && item.text === text);
-    if (matchIndex === -1) {
-      result.push(queuedMessage(kind, text));
-    } else {
-      used.add(matchIndex);
-      result.push(previous[matchIndex]!);
-    }
-  }
-  return result;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  if (!Number.isFinite(value)) return maximum;
-  return Math.max(minimum, Math.min(maximum, Math.floor(value)));
-}
-
-function expandToUserBoundary(items: TimelineItem[], start: number): number {
-  if (start === 0 || items[start]?.kind === "message" && items[start].role === "user") return start;
-  for (let index = start - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item?.kind === "message" && item.role === "user") return index;
-  }
-  return 0;
-}
-
-function findVisibleMessageEntryId(entries: readonly unknown[], messageId: string): string | undefined {
-  for (const entry of entries) {
-    if (!isRecord(entry) || entry["type"] !== "message") continue;
-    const projected = projectHistory([entry]).find((item): item is MessageTimelineItem => item.kind === "message");
-    if (projected?.id === messageId) return stringValue(entry["id"]) || undefined;
-  }
-  return undefined;
-}
-
-/**
- * Fork point for session-level forking.
- * Idle sessions copy every message on the branch (including the last assistant reply).
- * While running, the latest user message starts the in-flight turn, so back off
- * to its parent — the branch never contains in-progress content, only the last settled turn.
- */
-function sessionForkEntryId(branch: readonly unknown[], running: boolean): string | undefined {
-  if (!running) {
-    for (let i = branch.length - 1; i >= 0; i--) {
-      const entry = branch[i];
-      if (!isRecord(entry) || entry["type"] !== "message") continue;
-      const id = stringValue(entry["id"]);
-      return id === "" ? undefined : id;
-    }
-    return undefined;
-  }
-  for (let i = branch.length - 1; i >= 0; i--) {
-    const entry = branch[i];
-    if (!isRecord(entry) || entry["type"] !== "message") continue;
-    const message = entry["message"];
-    if (!isRecord(message) || message["role"] !== "user") continue;
-    const parentId = entry["parentId"];
-    return typeof parentId === "string" ? parentId : undefined;
-  }
-  return undefined;
-}
-
-function findUserMessageEntry(entries: readonly unknown[], messageId: string): Record<string, unknown> | undefined {
-  for (const entry of entries) {
-    if (!isRecord(entry) || entry["type"] !== "message") continue;
-    const message = entry["message"];
-    if (!isRecord(message) || message["role"] !== "user") continue;
-    const projected = projectHistory([entry]).find((item): item is MessageTimelineItem => item.kind === "message");
-    if (projected?.id === messageId) return entry;
-  }
-  return undefined;
-}
-
-function firstUserMessage(entries: readonly unknown[]): string | null {
-  const history = projectHistory(entries);
-  return history.find((item): item is MessageTimelineItem => item.kind === "message" && item.role === "user")?.text ?? null;
-}
-
-/** 内存中活跃会话的全文检索文本：名称 + 首条消息 + 全部 user/assistant 消息文本。 */
-function sessionBranchSearchText(name: string | null, preview: string | null, entries: readonly unknown[]): string {
-  const text = projectHistory(entries)
-    .filter((item): item is MessageTimelineItem => item.kind === "message")
-    .map((item) => item.text)
-    .join("\n");
-  return `${name ?? ""}\n${preview ?? ""}\n${text}`;
-}
-
-/** 命中关键词时提取其周围上下文（±48 字符），用于搜索结果中展示命中原因。 */
-function snippetAround(text: string, needle: string, radius = 48): string | undefined {
-  const index = text.toLocaleLowerCase().indexOf(needle);
-  if (index < 0) return undefined;
-  const start = Math.max(0, index - radius);
-  const end = Math.min(text.length, index + needle.length + radius);
-  const piece = text.slice(start, end).replace(/\s+/g, " ").trim();
-  return `${start > 0 ? "…" : ""}${piece}${end < text.length ? "…" : ""}`;
-}
-
-/** 搜索结果附带命中片段（非搜索响应保持原样，不污染普通列表数据）。 */
-function attachSearchSnippet(summary: SessionSummary, searchText: string, needle: string | undefined): SessionSummary {
-  if (needle === undefined || needle === "") return summary;
-  const snippet = snippetAround(searchText, needle);
-  return snippet === undefined ? summary : { ...summary, matchSnippet: snippet };
-}
-
-function decodeImageData(mimeType: string, data: string): { mimeType: string; bytes: Buffer } {
-  const bytes = Buffer.from(data.includes(",") ? data.slice(data.indexOf(",") + 1) : data, "base64");
-  if (bytes.length === 0) throw new AppError("MEDIA_NOT_FOUND", "Image not found", 404);
-  return { mimeType, bytes };
-}
-
-function runtimeFailureCode(error: unknown): string {
-  return isUnsupportedExtensionInteraction(error) ? UNSUPPORTED_EXTENSION_INTERACTION : "PI_RUNTIME_ERROR";
-}
-
-function isOperationCancellation(error: unknown): boolean {
-  if (error instanceof Error && error.name === "AbortError") return true;
-  const message = asMessage(error);
-  return message === "Operation aborted" || message === "This operation was aborted";
-}
-
-function isAssistantMessage(message: unknown): message is { role: "assistant"; content: unknown; timestamp?: number | string } {
-  return typeof message === "object" && message !== null && (message as Record<string, unknown>)["role"] === "assistant";
-}
-
-function isUserMessage(message: unknown): message is { role: "user"; content: unknown; timestamp?: number | string } {
-  return typeof message === "object" && message !== null && (message as Record<string, unknown>)["role"] === "user";
 }
