@@ -37,6 +37,8 @@ interface TimelineProps {
 
 /** Distance from the bottom (px) within which the list is considered "following" the latest content. */
 const NEAR_BOTTOM_PX = 72;
+/** Hide the jump-to-latest control while the list is still close to the bottom. */
+const JUMP_LATEST_PX = 160;
 /** Load the preceding page just before the user reaches the start of the timeline. */
 const HISTORY_LOAD_TOP_PX = 72;
 
@@ -59,6 +61,11 @@ export function shouldLoadEarlierAtTop(element: Pick<HTMLElement, "scrollTop">, 
 /** True when the viewport is close enough to the latest content to resume auto-follow. */
 export function isFollowingLatest(element: Pick<HTMLElement, "clientHeight" | "scrollHeight" | "scrollTop">, thresholdPx = NEAR_BOTTOM_PX): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight < thresholdPx;
+}
+
+/** True when the jump-to-latest control should be visible. */
+export function shouldShowJumpLatest(element: Pick<HTMLElement, "clientHeight" | "scrollHeight" | "scrollTop">, thresholdPx = JUMP_LATEST_PX): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight > thresholdPx;
 }
 
 function stopFollowingOnGesture(element: HTMLDivElement, setFollowing: (value: boolean) => void, deltaY: number) {
@@ -108,6 +115,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   const activeNavigationTimerRef = useRef<number | undefined>(undefined);
   const activeNavigationIdRef = useRef<string | undefined>(undefined);
   const [following, setFollowing] = useState(true);
+  const [showJumpLatest, setShowJumpLatest] = useState(false);
   const followingRef = useRef(following);
   followingRef.current = following;
   const [editingMessageId, setEditingMessageId] = useState<string>();
@@ -186,8 +194,13 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
     const element = scrollRef.current;
     // Pin only when content/status changes while already following. Entering the
     // near-bottom zone via user scroll must not jump the remaining distance.
-    if (element === null || !followingRef.current) return;
+    if (element === null) return;
+    if (!followingRef.current) {
+      setShowJumpLatest(shouldShowJumpLatest(element));
+      return;
+    }
     element.scrollTop = element.scrollHeight;
+    setShowJumpLatest(false);
   }, [items, streamingMessageId, feedback?.label, statusIndicatorKey]);
 
   const loadEarlier = async () => {
@@ -199,7 +212,10 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
       await onLoadMore();
     } finally {
       requestAnimationFrame(() => {
-        if (scrollRef.current === element && element !== null) element.scrollTop = element.scrollHeight - offset;
+        if (scrollRef.current === element && element !== null) {
+          element.scrollTop = element.scrollHeight - offset;
+          setShowJumpLatest(shouldShowJumpLatest(element));
+        }
         loadingEarlierRef.current = false;
         setFillViewportRevision((value) => value + 1);
       });
@@ -276,6 +292,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
       <div className="timeline" ref={scrollRef} onScroll={(event) => {
         const element = event.currentTarget;
         setFollowing(isFollowingLatest(element));
+        setShowJumpLatest(shouldShowJumpLatest(element));
         updateActiveUserMessage();
         loadWhenNearTop(element);
       }} onWheel={(event) => {
@@ -305,7 +322,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
           </div>
         </div>
       </div>
-      {!following ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
+      {showJumpLatest ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setShowJumpLatest(false); setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
     </section>
   );
 }

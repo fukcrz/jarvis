@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { activeUserMessageAnchor, ACTIVITY_NARRATION_MAX_CHARS, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isShortAssistantNarration, isToolActivityRunning, isTurnPinned, mobileUserMessageRows, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
+import { activeUserMessageAnchor, ACTIVITY_NARRATION_MAX_CHARS, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isShortAssistantNarration, isToolActivityRunning, isTurnPinned, mobileUserMessageRows, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -118,6 +118,18 @@ describe("isFollowingLatest", () => {
     expect(isFollowingLatest({ ...viewport, scrollTop: 528 })).toBe(false);
     expect(isFollowingLatest({ ...viewport, scrollTop: 529 })).toBe(true);
     expect(isFollowingLatest({ ...viewport, scrollTop: 600 })).toBe(true);
+  });
+});
+
+describe("shouldShowJumpLatest", () => {
+  it("hides the button while the viewport is at most 160px from the bottom", () => {
+    const viewport = { scrollHeight: 1_200, clientHeight: 600 };
+    expect(shouldShowJumpLatest({ ...viewport, scrollTop: 440 })).toBe(false);
+    expect(shouldShowJumpLatest({ ...viewport, scrollTop: 439 })).toBe(true);
+  });
+
+  it("hides the button at the latest content", () => {
+    expect(shouldShowJumpLatest({ scrollHeight: 600, clientHeight: 600, scrollTop: 0 })).toBe(false);
   });
 });
 
