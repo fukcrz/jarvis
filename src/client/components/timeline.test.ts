@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { activeUserMessageAnchor, ACTIVITY_NARRATION_MAX_CHARS, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isShortAssistantNarration, isToolActivityRunning, isTurnPinned, mobileUserMessageRows, shouldFoldTurnProcess, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
+import { activeUserMessageAnchor, ACTIVITY_NARRATION_MAX_CHARS, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isShortAssistantNarration, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -130,6 +130,24 @@ describe("shouldShowJumpLatest", () => {
 
   it("hides the button at the latest content", () => {
     expect(shouldShowJumpLatest({ scrollHeight: 600, clientHeight: 600, scrollTop: 0 })).toBe(false);
+  });
+});
+
+describe("jumpLatestBottomForDock", () => {
+  it("places the button above the dock with a small gap", () => {
+    expect(jumpLatestBottomForDock(900, 700)).toBe(212);
+  });
+
+  it("does not return a negative offset when the dock reaches the shell top", () => {
+    expect(jumpLatestBottomForDock(900, 960)).toBe(0);
+  });
+});
+
+describe("shouldHideJumpLatestForComposer", () => {
+  it("hides only on mobile after the editor exceeds 140px", () => {
+    expect(shouldHideJumpLatestForComposer(true, 140)).toBe(false);
+    expect(shouldHideJumpLatestForComposer(true, 141)).toBe(true);
+    expect(shouldHideJumpLatestForComposer(false, 300)).toBe(false);
   });
 });
 

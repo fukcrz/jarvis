@@ -39,6 +39,10 @@ interface TimelineProps {
 const NEAR_BOTTOM_PX = 72;
 /** Hide the jump-to-latest control while the list is still close to the bottom. */
 const JUMP_LATEST_PX = 160;
+/** Keep the jump-to-latest control above the composer dock. */
+const JUMP_LATEST_DOCK_GAP_PX = 12;
+/** On mobile, preserve the expanded editor's vertical space over the jump control. */
+const MOBILE_COMPOSER_HIDE_PX = 140;
 /** Load the preceding page just before the user reaches the start of the timeline. */
 const HISTORY_LOAD_TOP_PX = 72;
 
@@ -66,6 +70,14 @@ export function isFollowingLatest(element: Pick<HTMLElement, "clientHeight" | "s
 /** True when the jump-to-latest control should be visible. */
 export function shouldShowJumpLatest(element: Pick<HTMLElement, "clientHeight" | "scrollHeight" | "scrollTop">, thresholdPx = JUMP_LATEST_PX): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight > thresholdPx;
+}
+
+export function jumpLatestBottomForDock(shellBottom: number, dockTop: number, gapPx = JUMP_LATEST_DOCK_GAP_PX): number {
+  return Math.max(0, shellBottom - dockTop + gapPx);
+}
+
+export function shouldHideJumpLatestForComposer(isMobile: boolean, composerHeight: number, thresholdPx = MOBILE_COMPOSER_HIDE_PX): boolean {
+  return isMobile && composerHeight > thresholdPx;
 }
 
 function stopFollowingOnGesture(element: HTMLDivElement, setFollowing: (value: boolean) => void, deltaY: number) {
@@ -116,6 +128,8 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   const activeNavigationIdRef = useRef<string | undefined>(undefined);
   const [following, setFollowing] = useState(true);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
+  const [jumpLatestBottom, setJumpLatestBottom] = useState<number>();
+  const [hideJumpLatestForComposer, setHideJumpLatestForComposer] = useState(false);
   const followingRef = useRef(following);
   followingRef.current = following;
   const [editingMessageId, setEditingMessageId] = useState<string>();
@@ -189,6 +203,35 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
     if (highlightTimerRef.current !== undefined) window.clearTimeout(highlightTimerRef.current);
     if (activeNavigationTimerRef.current !== undefined) window.clearTimeout(activeNavigationTimerRef.current);
   }, []);
+
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (element === null) return;
+    const shell = element.closest<HTMLElement>(".timeline-shell");
+    if (shell === null) return;
+    const stage = element.closest<HTMLElement>(".chat-stage");
+    if (stage === null) return;
+    const dock = stage.querySelector<HTMLElement>(".chat-dock");
+    if (dock === null) return;
+    const updateDockLayout = () => {
+      const shellRect = shell.getBoundingClientRect();
+      const dockRect = dock.getBoundingClientRect();
+      const composerEditor = dock.querySelector<HTMLElement>(".composer-editor");
+      const nextBottom = jumpLatestBottomForDock(shellRect.bottom, dockRect.top);
+      const nextHide = shouldHideJumpLatestForComposer(isMobile, composerEditor?.getBoundingClientRect().height ?? 0);
+      setJumpLatestBottom((current) => current === nextBottom ? current : nextBottom);
+      setHideJumpLatestForComposer((current) => current === nextHide ? current : nextHide);
+    };
+    updateDockLayout();
+    const observer = new ResizeObserver(updateDockLayout);
+    observer.observe(shell);
+    observer.observe(dock);
+    window.addEventListener("resize", updateDockLayout);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateDockLayout);
+    };
+  }, [isMobile]);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
@@ -322,7 +365,7 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
           </div>
         </div>
       </div>
-      {showJumpLatest ? <Button variant="ghost" size="icon" className="jump-latest" aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setShowJumpLatest(false); setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
+      {showJumpLatest && !hideJumpLatestForComposer ? <Button variant="ghost" size="icon" className="jump-latest" style={jumpLatestBottom === undefined ? undefined : { bottom: `${String(jumpLatestBottom)}px` }} aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setShowJumpLatest(false); setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
     </section>
   );
 }
