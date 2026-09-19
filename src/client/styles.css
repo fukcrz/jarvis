@@ -853,7 +853,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
   .timeline-mobile-navigator-status { padding: 0 2px 4px; color: var(--subtle); font-size: 11px; }
   .timeline-mobile-navigator-empty { padding: 28px 8px; color: var(--subtle); font-size: 13px; text-align: center; }
   .timeline-mobile-navigator-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 -4px; padding: 0 4px; -webkit-overflow-scrolling: touch; }
-  .timeline-mobile-navigator-item { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 8px; width: 100%; min-height: 48px; border: 0; border-radius: 8px; background: transparent; padding: 10px 8px; color: var(--muted); text-align: left; }
+  .timeline-mobile-navigator-item { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 8px; width: 100%; border: 0; border-radius: 8px; background: transparent; padding: 10px 8px; color: var(--muted); text-align: left; }
   .timeline-mobile-navigator-item > span { color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding-top: 2px; }
   .timeline-mobile-navigator-item strong { display: -webkit-box; overflow: hidden; color: inherit; font-size: 13px; font-weight: 500; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .timeline-mobile-navigator-item.active { background: var(--accent-soft); color: var(--accent-strong); }
