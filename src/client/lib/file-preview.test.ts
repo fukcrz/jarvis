@@ -50,6 +50,20 @@ describe("localFilePathFromHref", () => {
     expect(localFilePathFromHref("file:///tmp/app.ts?line=2#L2")).toBe("/tmp/app.ts");
   });
 
+  it("strips a Unix root before a Windows drive and accepts file: variants", () => {
+    expect(localFilePathFromHref("/D:/work/src/main.ts")).toBe("D:/work/src/main.ts");
+    expect(localFilePathFromHref("/d:/work/a.png")).toBe("d:/work/a.png");
+    expect(localFilePathFromHref("//D:/work/a.png")).toBe("D:/work/a.png");
+    expect(localFilePathFromHref(String.raw`/D:\work\a.png`)).toBe(String.raw`D:\work\a.png`);
+    expect(localFilePathFromHref("%2FD%3A%2Fwork%2Fa.png")).toBe("D:/work/a.png");
+    expect(localFilePathFromHref('"/D:/work/a.png"')).toBe("D:/work/a.png");
+    expect(localFilePathFromHref("</D:/work/a.png>")).toBe("D:/work/a.png");
+    expect(localFilePathFromHref("file:/C:/work/src/main.ts")).toBe("C:/work/src/main.ts");
+    expect(localFilePathFromHref("file:C:/work/src/main.ts")).toBe("C:/work/src/main.ts");
+    expect(localFilePathFromHref("file://C:/work/src/main.ts")).toBe("C:/work/src/main.ts");
+    expect(localFilePathFromHref("file://localhost/C:/work/src/main.ts")).toBe("C:/work/src/main.ts");
+  });
+
   it("removes line suffixes without confusing Windows drive letters", () => {
     expect(localFilePathFromHref("src/app.ts:12")).toBe("src/app.ts");
     expect(localFilePathFromHref("src/app.ts:12:4")).toBe("src/app.ts");

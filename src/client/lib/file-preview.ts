@@ -1,3 +1,5 @@
+import { canonicalizeLocalPathInput, stripRedundantRootBeforeWindowsDrive, unwrapPathDelimiters } from "../../shared/local-path";
+
 /** 文件预览类别：文本类走 JSON 接口取内容，媒体类通过 /api/files 内联渲染。 */
 export type PreviewKind = "text" | "markdown" | "table" | "image" | "pdf" | "audio" | "video" | "unsupported";
 
@@ -46,15 +48,17 @@ export interface LocalFileReference {
  */
 export function localFileReferenceFromHref(href: string | undefined): LocalFileReference | undefined {
   if (href === undefined || href.trim() === "") return undefined;
-  const trimmed = href.trim();
-  if (/^(?:https?:\/\/|data:|blob:|mailto:|javascript:|#|\/\/)/i.test(trimmed) || trimmed.startsWith("/api/")) return undefined;
-  const location = splitFileLocation(trimmed);
-  const decodedForScheme = decodeFileReference(location.path);
-  if (/^file:\/\//i.test(decodedForScheme)) return mergeFileLocation(fileUrlPath(decodedForScheme), location);
+  const unwrapped = unwrapPathDelimiters(href);
+  if (unwrapped === "") return undefined;
+  const location = splitFileLocation(unwrapped);
+  const decodedForScheme = canonicalizeLocalPathInput(decodeFileReference(location.path));
+  if (decodedForScheme === "") return undefined;
+  if (/^(?:https?:\/\/|data:|blob:|mailto:|javascript:|#|\/\/)/i.test(decodedForScheme) || decodedForScheme.startsWith("/api/")) return undefined;
+  if (/^file:/i.test(decodedForScheme)) return mergeFileLocation(fileUrlPath(decodedForScheme), location);
   // Windows 盘符是本地路径中唯一允许出现「协议式冒号」的非 file:// 形式。
   // Markdown 解析器可能把反斜杠写成 %5C，因此协议判断使用一次解码后的值。
   if (/^[a-z][a-z\d+.-]*:/i.test(decodedForScheme) && !/^[a-z]:[\\/]/i.test(decodedForScheme)) return undefined;
-  return mergeFileLocation(parseFileLocation(decodedForScheme.trim()), location);
+  return mergeFileLocation(parseFileLocation(decodedForScheme), location);
 }
 
 export function localFilePathFromHref(href: string | undefined): string | undefined {
@@ -62,21 +66,24 @@ export function localFilePathFromHref(href: string | undefined): string | undefi
 }
 
 function fileUrlPath(value: string): LocalFileReference | undefined {
-  const withoutScheme = stripQueryAndFragment(value.slice("file://".length));
-  const slash = withoutScheme.indexOf("/");
-  const authority = slash === -1 ? withoutScheme : withoutScheme.slice(0, slash);
-  const rawPath = slash === -1 ? "" : withoutScheme.slice(slash);
-  const decodedAuthority = decodeFileReference(authority);
+  const body = stripQueryAndFragment(value.replace(/^file:/i, ""));
   let path: string;
-  if (decodedAuthority !== "" && !/^localhost$/i.test(decodedAuthority)) {
-    if (/^[a-z]:$/i.test(decodedAuthority)) path = `${decodedAuthority}${rawPath}`;
-    else path = `\\\\${decodedAuthority}${rawPath.replaceAll("/", "\\")}`;
+  if (body.startsWith("//")) {
+    const rest = body.slice(2);
+    const slash = rest.search(/[\\/]/);
+    const authority = slash === -1 ? rest : rest.slice(0, slash);
+    const rawPath = slash === -1 ? "" : rest.slice(slash);
+    const decodedAuthority = decodeFileReference(authority);
+    if (decodedAuthority !== "" && !/^localhost$/i.test(decodedAuthority)) {
+      const uncPrefix = "\\" + "\\";
+      path = /^[a-z]:$/i.test(decodedAuthority) ? `${decodedAuthority}${rawPath}` : `${uncPrefix}${decodedAuthority}${rawPath.replaceAll("/", "\\")}`;
+    } else {
+      path = rawPath;
+    }
   } else {
-    path = rawPath;
+    path = body;
   }
-  // file:///C:/... 在 Windows 上多出的根斜杠不能传给 Node 当作 /C:/...。
-  if (/^\/[a-z]:[\\/]/i.test(path)) path = path.slice(1);
-  const decoded = decodeFileReference(path).trim();
+  const decoded = stripRedundantRootBeforeWindowsDrive(decodeFileReference(path).trim());
   return decoded === "" ? undefined : parseFileLocation(decoded);
 }
 

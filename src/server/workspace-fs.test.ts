@@ -1,5 +1,8 @@
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { platform, tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { fileMatchScore, parseByteRange } from "./workspace-fs.js";
+import { fileMatchScore, parseByteRange, resolveFileRequestPath } from "./workspace-fs.js";
 
 describe("parseByteRange", () => {
   it("parses closed, open, and suffix ranges", () => {
@@ -28,5 +31,26 @@ describe("fileMatchScore", () => {
 
   it("scores empty queries by path depth", () => {
     expect(fileMatchScore("a/b.ts", "")).toBe(2 * 100 + 6);
+  });
+});
+
+describe("resolveFileRequestPath", () => {
+  it.runIf(platform() === "win32")("opens /D:/ and Git Bash / WSL drive paths", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jarvis-path-"));
+    try {
+      const file = join(dir, "a.png");
+      await writeFile(file, "x");
+      const resolved = await realpath(file);
+      const posix = file.replaceAll("\\", "/");
+      const gitBash = posix.replace(/^([a-zA-Z]):/, (_, drive: string) => `/${drive.toLowerCase()}`);
+      const wsl = posix.replace(/^([a-zA-Z]):/, (_, drive: string) => `/mnt/${drive.toLowerCase()}`);
+      const cygwin = posix.replace(/^([a-zA-Z]):/, (_, drive: string) => `/cygdrive/${drive.toLowerCase()}`);
+      expect(await resolveFileRequestPath(`/${posix}`, undefined)).toBe(resolved);
+      expect(await resolveFileRequestPath(gitBash, undefined)).toBe(resolved);
+      expect(await resolveFileRequestPath(wsl, undefined)).toBe(resolved);
+      expect(await resolveFileRequestPath(cygwin, undefined)).toBe(resolved);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

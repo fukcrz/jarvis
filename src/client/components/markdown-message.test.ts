@@ -132,6 +132,12 @@ describe("MarkdownMessage", () => {
     expect(rewritten).toContain("![备份](/api/files?path=backup%2Fcopy.png&cwd=%2Fhome%2Fuser%2Fworkspace)");
   });
 
+  it("rewrites /D:/ Windows paths without treating them as Unix absolute paths", () => {
+    const rewritten = rewriteLocalImageUrls("![a](/D:/projects/shop/.var/admin-login.png)", "D:\\ws");
+    expect(rewritten).toContain("![a](/api/files?path=D%3A%2Fprojects%2Fshop%2F.var%2Fadmin-login.png)");
+    expect(rewritten).not.toContain("cwd=");
+  });
+
   it("rewrites absolute and file:// paths without a cwd and leaves remote/data URLs alone", () => {
     const rewritten = rewriteLocalImageUrls(
       "![a](/tmp/图 片.png) ![b](file:///var/data/x.webp) ![c](https://example.com/y.png) ![d](data:image/png;base64,AAAA) ![e](/api/files?path=z.png)",

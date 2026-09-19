@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { lstat, readdir, realpath, rm, stat } from "node:fs/promises";
 import { platform } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { canonicalizeLocalPathInput } from "../shared/local-path.js";
 import type { DirectoryListing, WorkspaceDirectoryListing, WorkspaceFile, WorkspaceFileContent } from "../shared/protocol.js";
 import { AppError } from "./errors.js";
 import { isMissingFile } from "./fs.js";
@@ -180,13 +181,44 @@ export function isAbsoluteFilePath(value: string): boolean {
   return value.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }
 
-export async function resolveFileRequestPath(requestedPath: string, cwd: string | undefined): Promise<string> {
-  const candidate = isAbsoluteFilePath(requestedPath) ? requestedPath : resolve(cwd ?? process.cwd(), requestedPath);
-  try {
-    return await realpath(candidate);
-  } catch {
-    throw new AppError("FILE_NOT_FOUND", "File not found", 404);
+/** Git Bash `/d/foo`、WSL `/mnt/d/foo`、Cygwin `/cygdrive/d/foo` → `d:/foo`。 */
+function windowsPosixDriveAliases(path: string): string[] {
+  const aliases: string[] = [];
+  const push = (drive: string | undefined, rest: string | undefined) => {
+    if (drive === undefined) return;
+    const alias = `${drive}:${rest ?? "/"}`;
+    if (alias !== path && !aliases.includes(alias)) aliases.push(alias);
+  };
+  const wsl = /^\/mnt\/([a-zA-Z])(\/.*)?$/i.exec(path);
+  push(wsl?.[1], wsl?.[2]);
+  const cygwin = /^\/cygdrive\/([a-zA-Z])(\/.*)?$/i.exec(path);
+  push(cygwin?.[1], cygwin?.[2]);
+  if (wsl === null && cygwin === null) {
+    const gitBash = /^\/([a-zA-Z])(\/.*)$/.exec(path);
+    push(gitBash?.[1], gitBash?.[2]);
   }
+  return aliases;
+}
+
+function fileRequestCandidates(requestedPath: string, cwd: string | undefined): string[] {
+  const normalized = canonicalizeLocalPathInput(requestedPath);
+  const paths = [normalized];
+  if (platform() === "win32") {
+    for (const alias of windowsPosixDriveAliases(normalized)) paths.push(alias);
+  }
+  return paths.map((path) => isAbsoluteFilePath(path) ? path : resolve(cwd ?? process.cwd(), path));
+}
+
+export async function resolveFileRequestPath(requestedPath: string, cwd: string | undefined): Promise<string> {
+  let lastError: unknown;
+  for (const candidate of fileRequestCandidates(requestedPath, cwd)) {
+    try {
+      return await realpath(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof AppError ? lastError : new AppError("FILE_NOT_FOUND", "File not found", 404);
 }
 
 export function fileResponseMimeType(ext: string): string {
@@ -311,7 +343,7 @@ function publicPath(value: string): string {
 }
 
 function resolveExistingCandidate(root: string, requestedPath: string): string {
-  const trimmed = requestedPath.trim();
+  const trimmed = canonicalizeLocalPathInput(requestedPath);
   if (trimmed === "" || trimmed === ".") return root;
   return isAbsoluteFilePath(trimmed) ? trimmed : resolve(root, trimmed);
 }
