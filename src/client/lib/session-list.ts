@@ -1,5 +1,6 @@
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { sessionCleanupTargets, sessionKey, sortSessionSummaries } from "./utils";
+import { sessionKey } from "./socket-sync";
+import { sessionCleanupTargets, sortSessionSummaries } from "./utils";
 
 export function sessionCleanupConfirmMessage(sessions: SessionSummary[], keepSessionId?: string): string {
   const count = sessionCleanupTargets(sessions, keepSessionId).length;
