@@ -14,6 +14,7 @@ import { Tooltip } from "./ui/tooltip";
 import { useIsMobile } from "../hooks/use-is-mobile";
 
 interface TimelineProps {
+  sessionKey?: string;
   items: TimelineItem[];
   streamingMessageId?: string;
   hasMore: boolean;
@@ -119,7 +120,7 @@ function userMessagePreview(item: MessageTimelineItem): string {
   return (item.images?.length ?? 0) > 0 ? "图片消息" : "空消息";
 }
 
-export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange }: TimelineProps) {
+export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const touchYRef = useRef<number | undefined>(undefined);
   const loadingEarlierRef = useRef(false);
@@ -145,6 +146,24 @@ export function Timeline({ items, streamingMessageId, hasMore, loadingMore, onLo
   const feedback = getRunFeedback(status, items, streamingMessageId);
   const hasMatchingTimelineFailure = status.lastError !== undefined && items.some((item) => item.kind === "error" && item.state === "failed" && item.code === status.lastError!.code && item.message === status.lastError!.message);
   const statusIndicatorKey = `${status.runState}:${status.compacting?.reason ?? ""}:${status.compacting?.retrying?.retryAt ?? ""}:${status.retrying?.retryAt ?? ""}:${status.lastError?.occurredAt ?? ""}:${error ?? ""}:${notice ?? ""}`;
+
+  useLayoutEffect(() => {
+    if (highlightTimerRef.current !== undefined) window.clearTimeout(highlightTimerRef.current);
+    if (activeNavigationTimerRef.current !== undefined) window.clearTimeout(activeNavigationTimerRef.current);
+    activeNavigationIdRef.current = undefined;
+    loadingEarlierRef.current = false;
+    // The component is now reused across sessions. Reset the imperative scroll
+    // state as well as React state, otherwise an old scrolled-up session can
+    // leave the newly selected session stranded at its previous offset.
+    followingRef.current = true;
+    if (scrollRef.current !== null) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    setFollowing(true);
+    setShowJumpLatest(false);
+    setEditingMessageId(undefined);
+    setHighlightedMessageId(undefined);
+    setActiveUserMessageId(undefined);
+    setMarkerPositions({});
+  }, [sessionKey]);
 
   const updateActiveUserMessage = () => {
     const element = scrollRef.current;

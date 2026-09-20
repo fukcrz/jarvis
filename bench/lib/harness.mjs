@@ -152,7 +152,10 @@ export async function runSamples(options) {
   }
   const eventLoopDelay = monitor.stop();
   const after = process.memoryUsage();
-  if (samples.length === 0) throw new Error(`${options.name}: no successful measured samples (${String(errors.length)} errors)`);
+  if (samples.length === 0) {
+    const details = errors.slice(0, 3).map((entry) => `[${String(entry.index)}] ${entry.message}`).join("; ");
+    throw new Error(`${options.name}: no successful measured samples (${String(errors.length)} errors)${details === "" ? "" : `: ${details}`}`);
+  }
   return {
     name: options.name,
     description: options.description,

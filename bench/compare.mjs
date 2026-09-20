@@ -3,7 +3,7 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const FRONTEND_PRIMARY_METRICS = ["navigationMs", "switchMs", "historyPrependMs", "socketToDomMs", "inputToStableMs"];
+const FRONTEND_PRIMARY_METRICS = ["navigationMs", "switchMs", "switchBackMs", "historyPrependMs", "socketToDomMs", "inputToStableMs"];
 
 export async function compareReports(beforePath, afterPath) {
   const [before, after] = await Promise.all([readJson(beforePath), readJson(afterPath)]);

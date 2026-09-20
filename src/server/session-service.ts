@@ -29,6 +29,7 @@ import type {
   ThinkingLevel,
   TimelinePage,
   ToolTimelineItem,
+  TimelineItem,
   Workspace,
 } from "../shared/protocol.js";
 import { emptySessionQueue, isRecord, PROTOCOL_VERSION } from "../shared/protocol.js";
@@ -291,7 +292,7 @@ export class SessionService {
       active.extensionUi.reset();
       this.events.publishSession(active.ref, {
         type: "session.rewritten",
-        payload: { items: toExternalTimelineItems(projectHistory(active.session.sessionManager.getBranch()), active.ref), status: { sessionId: active.ref.sessionId, runState: "idle" } },
+        payload: { items: toExternalTimelineItems(this.timelineItems(active), active.ref), status: { sessionId: active.ref.sessionId, runState: "idle" } },
       });
       await this.reopenAtCurrentBranch(active);
       return this.prompt(ref, text, clientRequestId, images, { skipTransitionWait: true }) as Promise<PromptAccepted>;
@@ -425,7 +426,7 @@ export class SessionService {
 
   async timeline(ref: SessionRef, before?: number, limit = PAGE_LIMIT): Promise<TimelinePage> {
     const active = await this.getActive(ref, { waitForExtensions: false });
-    const items = projectHistory(active.session.sessionManager.getBranch());
+    const items = this.timelineItems(active);
     const end = clamp(before ?? items.length, 0, items.length);
     const requestedStart = Math.max(0, end - clamp(limit, 1, 500));
     const start = expandToUserBoundary(items, requestedStart);
@@ -441,7 +442,7 @@ export class SessionService {
     if (active === undefined) throw new AppError("MEDIA_NOT_FOUND", "Image not found", 404);
     const live = active.activeTools.get(itemId)?.images?.[index];
     if (live?.data !== undefined && live.data !== "") return decodeImageData(live.mimeType, live.data);
-    const history = projectHistory(active.session.sessionManager.getBranch());
+    const history = this.timelineItems(active);
     const item = history.find((entry): entry is ToolTimelineItem => entry.kind === "tool" && entry.id === itemId);
     const image = item?.images?.[index];
     if (image?.data === undefined || image.data === "") throw new AppError("MEDIA_NOT_FOUND", "Image not found", 404);
@@ -1119,6 +1120,20 @@ export class SessionService {
 
   private contextUsageSnapshot(active: ActiveSession): ContextUsage | undefined {
     return active.session.getContextUsage();
+  }
+
+  /**
+   * Session branches are append-only. A projection remains valid while its
+   * leaf id is unchanged, so repeated pagination and hydration requests do
+   * not have to traverse and project the full branch again.
+   */
+  private timelineItems(active: ActiveSession): TimelineItem[] {
+    const leafId = active.session.sessionManager.getLeafId();
+    const cached = active.timelineCache;
+    if (cached?.leafId === leafId) return cached.items;
+    const items = projectHistory(active.session.sessionManager.getBranch());
+    active.timelineCache = { leafId, items };
+    return items;
   }
 
   /** Push the latest estimated context usage to browsers (fires rarely). */

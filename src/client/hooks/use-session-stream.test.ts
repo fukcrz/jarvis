@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionStreamSnapshot, TimelinePage } from "../../shared/protocol";
 import { emptyTranscript } from "../transcript";
-import { reduceSessionStream, type StreamState } from "./use-session-stream";
+import { reduceSessionStream, shouldApplySessionRefresh, type StreamState } from "./use-session-stream";
 
 function page(text: string): TimelinePage {
   return {
@@ -51,12 +51,33 @@ describe("session stream reducer", () => {
     expect(next.transcript.items).toEqual(page("Next").items);
   });
 
-  it("keeps the empty transcript when hydrate fails", () => {
+  it("restores a cached transcript while another session hydrates", () => {
     const previous = hydrated("ws:a", "Hello");
-    const selected = reduceSessionStream(previous, { type: "select", sessionKey: "ws:b" });
+    const cached = hydrated("ws:b", "Cached").transcript;
+    const selected = reduceSessionStream(previous, { type: "select", sessionKey: "ws:b", transcript: cached });
+    expect(selected.sessionKey).toBe("ws:b");
+    expect(selected.connection).toBe("connecting");
+    expect(selected.transcript.items).toEqual(page("Cached").items);
+
+    const stale = reduceSessionStream(selected, { type: "hydrate", sessionKey: "ws:a", page: page("stale"), snapshot: snapshot() });
+    expect(stale).toBe(selected);
     const failed = reduceSessionStream(selected, { type: "hydrate-error", sessionKey: "ws:b", error: "无法加载此会话" });
-    expect(failed.sessionKey).toBe("ws:b");
-    expect(failed.transcript.items).toEqual([]);
+    expect(failed.transcript.items).toEqual(page("Cached").items);
     expect(failed.error).toBe("无法加载此会话");
+  });
+
+  it("ignores an earlier-history response from a no-longer-selected session", () => {
+    const selected = hydrated("ws:b", "Current");
+    const stale = reduceSessionStream(selected, { type: "prepend", sessionKey: "ws:a", page: page("Stale") });
+    expect(stale).toBe(selected);
+  });
+
+  it("accepts only the latest refresh for the same session and history generation", () => {
+    const current = { currentKey: "ws:a", currentHistoryGeneration: 4, currentRequestGeneration: 2 };
+    const base = { selectedKey: "ws:a", selectedHistoryGeneration: 4, requestGeneration: 2, ...current };
+    expect(shouldApplySessionRefresh(base)).toBe(true);
+    expect(shouldApplySessionRefresh({ ...base, requestGeneration: 1 })).toBe(false);
+    expect(shouldApplySessionRefresh({ ...base, selectedHistoryGeneration: 3 })).toBe(false);
+    expect(shouldApplySessionRefresh({ ...base, currentKey: "ws:b" })).toBe(false);
   });
 });

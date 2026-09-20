@@ -31,17 +31,22 @@ export const emptyTranscript: TranscriptState = {
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
   const extensionItems: ExtensionUiTimelineItem[] = snapshot.extensionUi?.cards ?? (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }));
   const live = [...snapshot.liveMessages, ...(snapshot.liveErrors ?? []), ...(snapshot.partialThinking === undefined ? [] : [snapshot.partialThinking]), ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial]), ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
-  // History and the snapshot are authoritative after a reconnect. Keeping an
-  // old in-memory tail here can resurrect an already-settled partial/tool.
+  // History and the snapshot are authoritative after a reconnect. A cached
+  // transcript may include earlier pages; retain them only when the server
+  // version and size still match, otherwise a rewrite could revive old items.
   // Unconfirmed optimistic user messages are the exception: drop them only
   // once a matching persisted/live user message is present, otherwise a
   // mobile resync would make the just-sent bubble vanish.
-  const authoritative = mergeTimeline(page.items, live, extensionItems);
+  const preserveEarlier = previous.seq === snapshot.seq
+    && previous.total === page.total
+    && previous.start < page.start;
+  const history = preserveEarlier ? mergeTimeline(previous.items, page.items) : page.items;
+  const authoritative = mergeTimeline(history, live, extensionItems);
   return {
     items: sortTimelineByCreatedAt(mergeTimeline(authoritative, unmatchedOptimisticUserMessages(previous.items, authoritative))),
-    start: page.start,
+    start: preserveEarlier ? previous.start : page.start,
     total: page.total,
-    hasMore: page.hasMore,
+    hasMore: preserveEarlier ? previous.hasMore : page.hasMore,
     seq: Math.max(previous.seq, snapshot.seq),
     status: snapshot.status,
     model: snapshot.model,

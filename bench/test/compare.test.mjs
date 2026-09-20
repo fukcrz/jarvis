@@ -62,6 +62,40 @@ describe("benchmark comparisons", () => {
     }
   });
 
+  it("uses switch-back timing for same-page roundtrip scenarios", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "jarvis-bench-compare-"));
+    try {
+      const beforePath = await writeReport(directory, "before.json", {
+        kind: "ui",
+        profile: "standard",
+        scenarios: [{
+          name: "session-roundtrip-desktop",
+          metrics: metrics(100, 110, 120),
+          errors: [],
+          frontend: { switchBackMs: metrics(40, 50, 60), browserErrors: [] },
+        }],
+      });
+      const afterPath = await writeReport(directory, "after.json", {
+        kind: "ui",
+        profile: "standard",
+        scenarios: [{
+          name: "session-roundtrip-desktop",
+          metrics: metrics(90, 100, 110),
+          errors: [],
+          frontend: { switchBackMs: metrics(25, 35, 45), browserErrors: [] },
+        }],
+      });
+
+      const result = await compareReports(beforePath, afterPath);
+      const scenario = result.scenarios[0];
+      assert.equal(scenario.primary.before, "switchBackMs");
+      assert.equal(scenario.primary.after, "switchBackMs");
+      assert.equal(scenario.primary.values.p95.delta, -15);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("handles added and removed scenarios without throwing", async () => {
     const directory = await mkdtemp(join(tmpdir(), "jarvis-bench-compare-"));
     try {

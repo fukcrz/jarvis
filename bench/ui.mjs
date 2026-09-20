@@ -78,7 +78,7 @@ async function main() {
           const started = await page.evaluate(() => performance.now());
           if (viewport.isMobile) {
             await page.goto(`${environment.baseUrl}/#/projects`, { waitUntil: "domcontentloaded" });
-            const row = page.locator(".mobile-session-row").filter({ hasText: targetLabel }).locator(".mobile-session-select");
+            const row = page.locator(`.mobile-session-row[data-session-id="${target.sessionId}"]`).locator(".mobile-session-select");
             await expandMobileSessionWindow(page, targetLabel, row);
             await row.waitFor({ state: "visible", timeout: 15_000 });
             await row.click();
@@ -94,6 +94,49 @@ async function main() {
           await waitForSocket(page, eventPath(target));
           const finished = await page.evaluate(() => performance.now());
           return { switchMs: finished - started, ...(await capture()) };
+        }),
+      });
+      decorateFrontendScenario(scenario);
+      scenarios.push(scenario);
+    }
+
+    for (const viewport of [DESKTOP, MOBILE]) {
+      const target = alternateRef(environment.fixtures, ref);
+      const targetMarker = fixtureTurnMarker(environment.fixtures, target, Math.max(profile.turnsPerSession, 16));
+      const sourceMarker = fixtureTurnMarker(environment.fixtures, ref, Math.max(profile.turnsPerSession, 16));
+      const scenario = await runSamples({
+        name: `session-roundtrip-${viewport.name}`,
+        description: "Switch A→B→A in one browser page and verify the previously visited transcript is restored without stale-session errors.",
+        profile: args.profile,
+        warmup,
+        iterations,
+        metadata: { viewport, mode: "production-build", target: "session-roundtrip", cacheLimit: 8 },
+        sample: () => withPage(browser, environment, ref, viewport, args.cpuThrottle, async ({ page, capture }) => {
+          await openChat(page, environment, ref);
+          await selectSession(page, environment, target, viewport, fixtureSessionLabel(environment.fixtures, target));
+          await waitForMarker(page, targetMarker, "target timeline marker");
+
+          let releaseSourceTimeline;
+          let sourceTimelineBlocked = false;
+          const sourceTimelineGate = new Promise((resolve) => { releaseSourceTimeline = resolve; });
+          await page.route("**/timeline*", async (route) => {
+            const url = route.request().url();
+            if (url.includes(`/sessions/${ref.sessionId}/timeline`) && !sourceTimelineBlocked) {
+              sourceTimelineBlocked = true;
+              await sourceTimelineGate;
+            }
+            await route.continue();
+          });
+          const sourceOpenCount = await socketOpenCount(page, eventPath(ref));
+          const started = await page.evaluate(() => performance.now());
+          await selectSession(page, environment, ref, viewport, fixtureSessionLabel(environment.fixtures, ref));
+          await waitForMarker(page, sourceMarker, "source cached timeline marker", targetMarker);
+          if (!sourceTimelineBlocked) throw new Error("Roundtrip did not issue a source timeline request");
+          releaseSourceTimeline();
+          await waitForSocketCount(page, eventPath(ref), sourceOpenCount + 1);
+          await waitForFrames(page, 2);
+          const finished = await page.evaluate(() => performance.now());
+          return { switchBackMs: finished - started, cacheRestored: true, ...(await capture()) };
         }),
       });
       decorateFrontendScenario(scenario);
@@ -297,17 +340,80 @@ async function expandDesktopSessionWindow(page, workspaceId, target) {
   }
 }
 
-async function expandMobileSessionWindow(page, targetLabel, target) {
-  for (let attempt = 0; attempt < 20 && !(await target.isVisible().catch(() => false)); attempt += 1) {
-    const expand = page.locator(".mobile-session-group").first().locator(".mobile-session-window-action").filter({ hasText: "展开更多会话" });
-    await expand.waitFor({ state: "visible", timeout: 15_000 });
-    await expand.click();
+async function selectSession(page, environment, ref, viewport, label) {
+  if (viewport.isMobile) {
+    const backToSessions = page.locator('.mobile-chat-header button[aria-label="返回会话列表"]');
+    if (await backToSessions.isVisible().catch(() => false)) {
+      await backToSessions.click();
+    } else if (!page.url().includes("#/projects")) {
+      await page.goto(`${environment.baseUrl}/#/projects`, { waitUntil: "domcontentloaded" });
+    }
+    const row = page.locator(`.mobile-session-row[data-session-id="${ref.sessionId}"]`).locator(".mobile-session-select");
+    await expandMobileSessionWindow(page, label, row);
+    await row.waitFor({ state: "visible", timeout: 15_000 });
+    await row.click();
+  } else {
+    const row = page.locator(`.session-row[data-session-id="${ref.sessionId}"]`);
+    await expandDesktopSessionWindow(page, ref.workspaceId, row);
+    await row.waitFor({ state: "visible", timeout: 15_000 });
+    await row.click();
   }
+  await waitForSessionRoute(page, ref.sessionId);
+  await page.locator(".composer-editor .cm-content").waitFor({ state: "visible", timeout: 15_000 });
+  await page.locator(".timeline").waitFor({ state: "visible", timeout: 15_000 });
+}
+
+async function waitForSessionRoute(page, sessionId) {
+  try {
+    await page.waitForFunction((expectedSessionId) => window.location.hash.includes(expectedSessionId), sessionId, { timeout: 30_000 });
+  } catch (error) {
+    throw new Error(`session route not observed: expected ${sessionId}, current ${page.url()}; ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+}
+
+async function expandMobileSessionWindow(page, targetLabel, target) {
+  const group = page.locator(".mobile-session-group").first();
+  await group.waitFor({ state: "visible", timeout: 15_000 });
+  const toggle = group.locator(".mobile-session-group-toggle");
+  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
+  for (let attempt = 0; attempt < 20 && !(await target.isVisible().catch(() => false)); attempt += 1) {
+    const expand = group.locator(".mobile-session-window-action").filter({ hasText: "展开更多会话" });
+    if (await expand.isVisible().catch(() => false)) {
+      await expand.click();
+      continue;
+    }
+    await target.waitFor({ state: "visible", timeout: 15_000 });
+  }
+  await target.waitFor({ state: "visible", timeout: 15_000 });
   void targetLabel;
+}
+
+async function waitForMarker(page, marker, label, absentMarker) {
+  try {
+    await page.waitForFunction(({ expected, absent }) => {
+      const text = document.querySelector(".timeline")?.textContent ?? "";
+      return text.includes(expected) && (absent === undefined || !text.includes(absent));
+    }, { expected: marker, absent: absentMarker }, { timeout: 30_000 });
+  } catch (error) {
+    throw new Error(`${label} not observed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
 }
 
 async function waitForSocket(page, path) {
   await page.waitForFunction((expectedPath) => window.__jarvisBench?.socketOpenPaths?.some((value) => value.includes(expectedPath)) === true, path, { timeout: 15_000 });
+}
+
+async function socketOpenCount(page, path) {
+  return page.evaluate((expectedPath) => window.__jarvisBench?.socketOpenPaths?.filter((value) => value.includes(expectedPath)).length ?? 0, path);
+}
+
+async function waitForSocketCount(page, path, count) {
+  try {
+    await page.waitForFunction(({ expectedPath, expectedCount }) => (window.__jarvisBench?.socketOpenPaths?.filter((value) => value.includes(expectedPath)).length ?? 0) >= expectedCount, { expectedPath: path, expectedCount: count }, { timeout: 30_000 });
+  } catch (error) {
+    const actual = await socketOpenCount(page, path).catch(() => -1);
+    throw new Error(`socket reopen not observed for ${path}: expected ${String(count)}, actual ${String(actual)}; ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
 }
 
 async function armProbe(page, probeId) {
@@ -368,6 +474,7 @@ function decorateFrontendScenario(scenario) {
   scenario.frontend = {
     navigationMs: summary(scenario.samples.map((sample) => sample.navigationMs)),
     switchMs: summary(scenario.samples.map((sample) => sample.switchMs)),
+    switchBackMs: summary(scenario.samples.map((sample) => sample.switchBackMs)),
     historyPrependMs: summary(scenario.samples.map((sample) => sample.historyPrependMs)),
     socketToDomMs: summary(scenario.samples.map((sample) => sample.socketToDomMs)),
     clientToDomMs: summary(scenario.samples.map((sample) => sample.clientToDomMs)),
@@ -409,6 +516,11 @@ function alternateRef(fixtures, selected) {
 function fixtureSessionLabel(fixtures, ref) {
   const index = fixtures.sessionRefs.findIndex((candidate) => candidate.sessionId === ref.sessionId);
   return `Benchmark session ${String(index < 0 ? 1 : index + 1)}`;
+}
+
+function fixtureTurnMarker(fixtures, ref, turnNumber) {
+  const index = fixtures.sessionRefs.findIndex((candidate) => candidate.sessionId === ref.sessionId);
+  return `Benchmark session ${String(index < 0 ? 1 : index + 1)}, turn ${String(turnNumber)}`;
 }
 
 function eventPath(ref) {
@@ -469,7 +581,8 @@ async function appendFrontendTable(reportFile, scenarios) {
     const frontend = scenario.frontend ?? {};
     const primary = frontend.navigationMs?.count ? frontend.navigationMs
       : frontend.switchMs?.count ? frontend.switchMs
-        : frontend.historyPrependMs?.count ? frontend.historyPrependMs
+        : frontend.switchBackMs?.count ? frontend.switchBackMs
+          : frontend.historyPrependMs?.count ? frontend.historyPrependMs
           : frontend.socketToDomMs?.count ? frontend.socketToDomMs
             : frontend.inputToStableMs;
     lines.push(`| ${scenario.name} | ${scenario.metrics?.count ?? 0} | ${formatNumber(primary?.p50)} | ${formatNumber(primary?.p95)} | ${formatNumber(frontend.cdp?.TaskDuration?.p95)} | ${formatNumber(frontend.cdp?.ScriptDuration?.p95)} | ${formatNumber(frontend.cdp?.LayoutDuration?.p95)} | ${formatNumber(frontend.cdp?.JSHeapUsedSize?.p95)} | ${frontend.longTasks?.count ?? 0} | ${frontend.browserErrors?.length ?? 0} |`);

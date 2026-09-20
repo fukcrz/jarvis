@@ -8,6 +8,7 @@ import type {
   SessionRef,
   SessionStatus,
   ThinkingTimelineItem,
+  TimelineItem,
   ToolTimelineItem,
 } from "../shared/protocol.js";
 import type { ExtensionUiBridge } from "./extension-ui.js";
@@ -50,6 +51,8 @@ export interface ActiveSession {
   /** clearQueue+重入队期间暂停镜像同步，避免发布中间态。 */
   queueSyncSuspended: boolean;
   activeTools: Map<string, ToolTimelineItem>;
+  /** Memoized projection of the current immutable branch. The leaf id is its version. */
+  timelineCache?: { leafId: string | null; items: TimelineItem[] };
   /** 正在执行的用户 !cmd 命令（流式输出尚未落盘）。 */
   activeBash?: ToolTimelineItem;
   /** Retains a stop click that arrives before Pi installs its compaction abort controller. */

@@ -33,11 +33,11 @@ Each runner writes `summary.json` and `report.md` to its output directory.
 - `http.mjs` compares Fastify `app.inject` with real loopback `fetch` for health, workspace, session, timeline, runtime, and file-search endpoints.
 - `disk.mjs` measures cold app/fixture reconstruction and warm session, timeline, runtime, and workspace search reads.
 - `websocket.mjs` measures connection setup, real WebSocket fan-out at multiple subscriber counts, delivery completeness, sequence order, payload bytes, latency, event-loop delay, and direct in-process EventHub cost.
-- `ui.mjs` measures desktop/mobile production navigation, session switching, history prepend, assistant delta delivery, burst coalescing, rich Markdown rendering, composer input, CDP runtime deltas, Long Tasks, layout shifts, resources, DOM scale, and browser errors.
+- `ui.mjs` measures desktop/mobile production navigation, session switching, same-page A→B→A transcript-cache restoration, stale-response protection, history prepend, assistant delta delivery, burst coalescing, rich Markdown rendering, composer input, CDP runtime deltas, Long Tasks, layout shifts, resources, DOM scale, and browser errors.
 
 ## Comparing runs
 
-Compare two `summary.json` files from the same runner and profile on the same machine class. The comparator rejects mismatched runner kinds or profiles and uses UI business metrics such as `socketToDomMs` when available:
+Compare two `summary.json` files from the same runner and profile on the same machine class. The comparator rejects mismatched runner kinds or profiles and uses UI business metrics such as `switchBackMs` for same-page roundtrips and `socketToDomMs` for stream scenarios:
 
 ```text
 node bench/compare.mjs before/summary.json after/summary.json --out .tmp/benchmarks/compare

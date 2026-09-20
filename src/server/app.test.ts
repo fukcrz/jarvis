@@ -1163,6 +1163,34 @@ describe("Jarvis HTTP and WebSocket API", () => {
     listSpy.mockRestore();
   });
 
+  it("reuses the active timeline projection until the session leaf changes", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "timeline-cache-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+    const baseUrl = `/api/workspaces/${workspace.id}/sessions/${source.id}`;
+    const getBranchSpy = vi.spyOn(SessionManager.prototype, "getBranch");
+
+    const first = await server.inject({ method: "GET", url: `${baseUrl}/timeline` });
+    expect(first.statusCode).toBe(200);
+    const afterFirst = getBranchSpy.mock.calls.length;
+
+    const second = await server.inject({ method: "GET", url: `${baseUrl}/timeline?before=2` });
+    expect(second.statusCode).toBe(200);
+    expect(getBranchSpy.mock.calls.length).toBe(afterFirst);
+
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
+    const edited = await server.inject({ method: "POST", url: `${baseUrl}/edit-and-resend`, payload: { messageId: source.user2, text: "Edited question", clientRequestId: randomUUID() } });
+    expect(edited.statusCode).toBe(200);
+    const afterEdit = getBranchSpy.mock.calls.length;
+
+    const refreshed = await server.inject({ method: "GET", url: `${baseUrl}/timeline` });
+    expect(refreshed.statusCode).toBe(200);
+    expect(getBranchSpy.mock.calls.length).toBeGreaterThan(afterEdit);
+    expect((refreshed.json() as { items: Array<{ id: string }> }).items.map((item) => item.id)).toEqual([source.user1, source.assistant1]);
+  });
+
   it("deletes a newly-created session before Pi persists its JSONL file", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "new-session-delete-workspace");

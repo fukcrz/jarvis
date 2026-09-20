@@ -33,13 +33,13 @@ export interface ExtensionPanelState {
 }
 
 type Action =
-  | { type: "select"; sessionKey?: string }
+  | { type: "select"; sessionKey?: string; transcript?: TranscriptState }
   | { type: "hydrate"; sessionKey: string; page: Awaited<ReturnType<typeof api.timeline>>; snapshot: Awaited<ReturnType<typeof api.runtime>>; connection?: StreamState["connection"] }
   | { type: "hydrate-error"; sessionKey: string; error: string }
   | { type: "events"; events: SessionEvent[] }
   | { type: "model"; model: ModelDescriptor }
   | { type: "thinking"; thinking: SessionThinkingSnapshot }
-  | { type: "prepend"; page: Awaited<ReturnType<typeof api.timeline>> }
+  | { type: "prepend"; sessionKey: string; page: Awaited<ReturnType<typeof api.timeline>> }
   | { type: "optimistic-user"; id: string; text: string; images: import("../../shared/protocol").ImageAttachment[] }
   | { type: "discard-optimistic-user"; id: string }
   | { type: "replace-user"; messageId: string; id: string; text: string; images: import("../../shared/protocol").ImageAttachment[] }
@@ -51,6 +51,19 @@ function isCurrentSession(state: StreamState, sessionKey: string): boolean {
   return state.sessionKey === sessionKey;
 }
 
+export function shouldApplySessionRefresh(input: {
+  selectedKey: string;
+  currentKey?: string;
+  selectedHistoryGeneration: number;
+  currentHistoryGeneration: number;
+  requestGeneration: number;
+  currentRequestGeneration: number;
+}): boolean {
+  return input.currentKey === input.selectedKey
+    && input.currentHistoryGeneration === input.selectedHistoryGeneration
+    && input.currentRequestGeneration === input.requestGeneration;
+}
+
 export function reduceSessionStream(state: StreamState, action: Action): StreamState {
   if (action.type === "select") {
     if (action.sessionKey === undefined) return initialState;
@@ -58,7 +71,7 @@ export function reduceSessionStream(state: StreamState, action: Action): StreamS
       return state.connection === "offline" ? { ...state, connection: "connecting", error: undefined } : state;
     }
     return {
-      transcript: emptyTranscript,
+      transcript: action.transcript ?? emptyTranscript,
       connection: "connecting",
       sessionKey: action.sessionKey,
     };
@@ -80,7 +93,7 @@ export function reduceSessionStream(state: StreamState, action: Action): StreamS
   if (action.type === "events") return { ...state, transcript: applySessionEvents(state.transcript, action.events) };
   if (action.type === "model") return { ...state, transcript: { ...state.transcript, model: { ...state.transcript.model, current: action.model } } };
   if (action.type === "thinking") return { ...state, transcript: { ...state.transcript, thinking: action.thinking } };
-  if (action.type === "prepend") return { ...state, transcript: prependTranscript(state.transcript, action.page) };
+  if (action.type === "prepend") return !isCurrentSession(state, action.sessionKey) ? state : { ...state, transcript: prependTranscript(state.transcript, action.page) };
   if (action.type === "optimistic-user") return { ...state, transcript: addOptimisticUserMessage(state.transcript, action.id, action.text, action.images) };
   if (action.type === "discard-optimistic-user") return { ...state, transcript: removeOptimisticUserMessage(state.transcript, action.id) };
   if (action.type === "replace-user") return { ...state, transcript: replaceUserMessageWithOptimistic(state.transcript, action.messageId, action.id, action.text, action.images) };
@@ -98,6 +111,9 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [extensionPanels, setExtensionPanels] = useState<ExtensionPanelState>({ widgets: {}, statuses: {} });
   const stateRef = useRef(state);
+  const transcriptCache = useRef(new Map<string, TranscriptState>());
+  const historyLoadGeneration = useRef(0);
+  const refreshGeneration = useRef(0);
   const sessionNameRef = useRef(sessionName);
   const manageDocumentTitle = options?.manageDocumentTitle !== false;
   const manageDocumentTitleRef = useRef(manageDocumentTitle);
@@ -108,7 +124,32 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   const queuedEvents = useRef<SessionEvent[]>([]);
   const defaultDocumentTitle = useRef(assistantName);
 
-  useEffect(() => { stateRef.current = state; }, [state]);
+  const rememberTranscript = useCallback((sessionKey: string, transcript: TranscriptState) => {
+    // Do not snapshot transient streaming cards. A later hydrate is the only
+    // authoritative source for a run that continued while this session was
+    // inactive.
+    if (transcript.status.runState !== "idle" || transcript.streamingMessageId !== undefined) {
+      transcriptCache.current.delete(sessionKey);
+      return;
+    }
+    const cached: TranscriptState = {
+      ...transcript,
+      items: transcript.items.filter((item) => item.kind !== "extension-ui"),
+    };
+    transcriptCache.current.delete(sessionKey);
+    transcriptCache.current.set(sessionKey, cached);
+    // Keep the optimization bounded when a user visits many sessions.
+    while (transcriptCache.current.size > 8) {
+      const oldest = transcriptCache.current.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      transcriptCache.current.delete(oldest);
+    }
+  }, []);
+
+  useEffect(() => {
+    stateRef.current = state;
+    if (state.sessionKey !== undefined) rememberTranscript(state.sessionKey, state.transcript);
+  }, [rememberTranscript, state]);
   useEffect(() => { sessionNameRef.current = sessionName; }, [sessionName]);
   useEffect(() => { manageDocumentTitleRef.current = manageDocumentTitle; }, [manageDocumentTitle]);
   useEffect(() => {
@@ -192,12 +233,15 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   const refresh = useCallback(async (connection?: StreamState["connection"]) => {
     if (ref === undefined || refKey === undefined) return;
     const selectedKey = refKey;
+    const selectedGeneration = historyLoadGeneration.current;
+    const requestGeneration = refreshGeneration.current + 1;
+    refreshGeneration.current = requestGeneration;
     try {
       const [page, snapshot] = await Promise.all([api.timeline(ref, undefined, INITIAL_TIMELINE_LIMIT), api.runtime(ref)]);
-      if (refKeyRef.current !== selectedKey) return;
+      if (!shouldApplySessionRefresh({ selectedKey, currentKey: refKeyRef.current, selectedHistoryGeneration: selectedGeneration, currentHistoryGeneration: historyLoadGeneration.current, requestGeneration, currentRequestGeneration: refreshGeneration.current })) return;
       applyHydration(selectedKey, page, snapshot, connection);
     } catch (error: unknown) {
-      if (refKeyRef.current !== selectedKey) return;
+      if (!shouldApplySessionRefresh({ selectedKey, currentKey: refKeyRef.current, selectedHistoryGeneration: selectedGeneration, currentHistoryGeneration: historyLoadGeneration.current, requestGeneration, currentRequestGeneration: refreshGeneration.current })) return;
       dispatch({ type: "hydrate-error", sessionKey: selectedKey, error: error instanceof Error ? error.message : "无法加载此会话" });
     }
   }, [applyHydration, refKey]);
@@ -206,7 +250,11 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   useEffect(() => {
     queuedEvents.current = [];
     cancelScheduledFlush();
-    dispatch({ type: "select", sessionKey: refKey });
+    const current = stateRef.current;
+    if (current.sessionKey !== undefined) rememberTranscript(current.sessionKey, current.transcript);
+    historyLoadGeneration.current += 1;
+    setLoadingEarlier(false);
+    dispatch({ type: "select", sessionKey: refKey, ...(refKey === undefined ? {} : { transcript: transcriptCache.current.get(refKey) }) });
     setExtensionPanels({ widgets: {}, statuses: {} });
     if (ref === undefined || refKey === undefined) {
       if (manageDocumentTitleRef.current) document.title = defaultDocumentTitle.current;
@@ -455,12 +503,15 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
 
   const loadEarlier = useCallback(async () => {
     if (ref === undefined || !stateRef.current.transcript.hasMore || loadingEarlier) return;
+    const selectedKey = refKey;
+    if (selectedKey === undefined) return;
+    const generation = historyLoadGeneration.current;
     setLoadingEarlier(true);
     try {
       const page = await api.timeline(ref, stateRef.current.transcript.start);
-      dispatch({ type: "prepend", page });
+      if (historyLoadGeneration.current === generation && refKeyRef.current === selectedKey) dispatch({ type: "prepend", sessionKey: selectedKey, page });
     } finally {
-      setLoadingEarlier(false);
+      if (historyLoadGeneration.current === generation && refKeyRef.current === selectedKey) setLoadingEarlier(false);
     }
   }, [refKey, loadingEarlier]);
 

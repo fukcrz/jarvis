@@ -226,6 +226,66 @@ describe("transcript reducer", () => {
     expect(hydrated.items).toEqual([expect.objectContaining({ id: "user", text: "Just sent" })]);
   });
 
+  it("retains cached earlier pages when the timeline version and total are unchanged", () => {
+    const previous = {
+      ...emptyTranscript,
+      items: [
+        { kind: "message" as const, id: "older", role: "user" as const, createdAt: "2026-08-09T00:00:00.000Z", text: "Older" },
+        { kind: "message" as const, id: "middle", role: "assistant" as const, createdAt: "2026-08-09T00:00:01.000Z", text: "Middle" },
+        { kind: "message" as const, id: "latest", role: "user" as const, createdAt: "2026-08-09T00:00:02.000Z", text: "Latest" },
+      ],
+      start: 0,
+      total: 3,
+      hasMore: true,
+      seq: 7,
+    };
+    const hydrated = hydrateTranscript(previous, {
+      items: [previous.items[2]!],
+      start: 2,
+      total: 3,
+      hasMore: true,
+    }, {
+      seq: 7,
+      status: { sessionId: "session", runState: "idle" },
+      model: { available: [] },
+      thinking: { current: "off", available: ["off"] },
+      liveMessages: [],
+      activeTools: [],
+    });
+
+    expect(hydrated.items.map((item) => item.id)).toEqual(["older", "middle", "latest"]);
+    expect(hydrated.start).toBe(0);
+    expect(hydrated.total).toBe(3);
+    expect(hydrated.hasMore).toBe(true);
+  });
+
+  it("drops cached earlier pages after the server timeline version changes", () => {
+    const previous = {
+      ...emptyTranscript,
+      items: [{ kind: "message" as const, id: "old", role: "user" as const, createdAt: "2026-08-09T00:00:00.000Z", text: "Old" }],
+      start: 0,
+      total: 1,
+      seq: 7,
+    };
+    const hydrated = hydrateTranscript(previous, {
+      items: [{ kind: "message", id: "new", role: "user", createdAt: "2026-08-09T00:00:01.000Z", text: "New" }],
+      start: 0,
+      total: 1,
+      hasMore: false,
+    }, {
+      seq: 8,
+      status: { sessionId: "session", runState: "idle" },
+      model: { available: [] },
+      thinking: { current: "off", available: ["off"] },
+      liveMessages: [],
+      activeTools: [],
+    });
+
+    expect(hydrated.items.map((item) => item.id)).toEqual(["new"]);
+    expect(hydrated.start).toBe(0);
+    expect(hydrated.hasMore).toBe(false);
+  });
+
   it("adds the server message.created payload without relying on an optimistic echo", () => {
     const result = applySessionEvents(emptyTranscript, [{
       version: 1,

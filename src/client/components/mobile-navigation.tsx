@@ -193,7 +193,7 @@ interface MobileSessionRowProps {
 
 function MobileSessionRow(props: MobileSessionRowProps) {
   const { session } = props;
-  return <div className="mobile-session-row">
+  return <div className="mobile-session-row" data-session-id={session.id}>
     <button type="button" className="mobile-session-select" onClick={props.onSelect}><span className="mobile-session-copy"><strong>{session.starred === true ? <Star className="session-star" size={11} fill="currentColor" aria-hidden="true" /> : null}<span>{sessionLabel(session.name, session.preview)}</span></strong>{isSessionRunning(session) ? null : <small>{formatRelativeTime(session.updatedAt)}</small>}</span>{sessionAttentionLabel(session) === undefined ? null : <span className={`sidebar-activity attention-${session.attentionState ?? "idle"} ${session.runState}`} role="status" aria-label={sessionAttentionLabel(session)} />}</button>
     <Button variant="ghost" size="icon" className="mobile-session-menu" aria-label={`管理会话 ${sessionLabel(session.name, session.preview)}`} onClick={props.onMenu}><MoreVertical size={16} /></Button>
   </div>;
