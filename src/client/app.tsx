@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, ChevronDown, Folder, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, RunState, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { api, isSessionConflict } from "./api";
+import { listenDesktopOpenSession } from "./desktop";
 import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
 import { ThinkingSelector } from "./components/thinking-selector";
@@ -49,6 +50,9 @@ const EMPTY_COMPOSER_COMMANDS: ComposerCommand[] = [];
 export function App() {
   const location = useLocation();
   const navigate = useNavigate();
+  useEffect(() => listenDesktopOpenSession((nextWorkspaceId, nextSessionId) => {
+    navigate(`/chat/${nextWorkspaceId}/${nextSessionId}`);
+  }), [navigate]);
   const initialPath = pathParams(location.pathname);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   // 会话列表基准快照可能晚于会话事件返回：快照在途时创建/删除的会话以事件流

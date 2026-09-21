@@ -1,3 +1,5 @@
+import { isDesktopShell } from "./lib/desktop-shell";
+
 /**
  * 会话运行结束的浏览器通知（Notification API）。
  *
@@ -6,6 +8,7 @@
  * - 需要用户授予通知权限（在设置页开启开关时请求，浏览器要求用户手势）；
  * - 多个标签页同时在线时通过 BroadcastChannel 协调，同一 run 只弹一次
  *   （声明最早的那个标签页负责弹出）。
+ * - 桌面壳由 Rust 宿主发系统通知，这里直接跳过。
  */
 
 const ENABLED_KEY = "jarvis:notifications:enabled";
@@ -144,6 +147,7 @@ function showRunNotification(info: RunNotificationInfo): void {
  *   延迟协调窗口（窗口结束后由最早声明者弹出）。
  */
 export function notifyRunFinished(info: RunNotificationInfo): NotificationResult {
+  if (isDesktopShell()) return "skipped";
   const permission = notificationPermission();
   if (permission === "unsupported") return "unsupported";
   if (!isNotificationEnabled()) return "skipped";

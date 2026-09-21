@@ -4,6 +4,8 @@ import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, CircleAlert, FolderGit2, F
 import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderOverride, ProviderStatus, Workspace } from "../../shared/protocol";
 import { api } from "../api";
 import { isSettingsPath, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsPath, type SettingsRoute } from "../lib/settings-routes";
+import { setDesktopNotificationEnabled } from "../desktop";
+import { isDesktopShell } from "../lib/desktop-shell";
 import { isNotificationEnabled, requestNotificationPermission, setNotificationEnabled } from "../notifications";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
@@ -330,6 +332,12 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
     }
   };
   const toggleNotifications = async (enabled: boolean) => {
+    if (isDesktopShell()) {
+      await setDesktopNotificationEnabled(enabled);
+      setNotificationEnabled(enabled);
+      setNotificationsEnabledState(enabled);
+      return;
+    }
     if (enabled) {
       const permission = await requestNotificationPermission();
       if (permission !== "granted") return;
