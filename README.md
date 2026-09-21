@@ -58,6 +58,15 @@ client drops back to the login page instead of reconnecting in a loop.
 Clearing the password in Settings → 安全 (the *关闭认证* button) turns
 authentication off again.
 
+## Desktop (Windows)
+
+Optional Tauri shell: tray, system notifications, and GitHub Releases auto-update. See [docs/desktop.md](docs/desktop.md).
+
+```bash
+npm run build
+npm run desktop:dev
+```
+
 ## Development
 
 ```bash
