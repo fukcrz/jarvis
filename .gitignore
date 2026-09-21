@@ -22,6 +22,7 @@ tmp/
 logs/prod-*.log
 logs/watch-flash.ps1
 src-tauri/target/
-src-tauri/runtime-staging/
+src-tauri/runtime-staging/*
+!src-tauri/runtime-staging/.gitkeep
 src-tauri/*.key
 src-tauri/*.key.pub

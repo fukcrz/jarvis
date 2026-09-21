@@ -14,7 +14,6 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
-use tauri_plugin_process::ProcessExt;
 use tauri_plugin_updater::UpdaterExt;
 
 const DEFAULT_PORT: u16 = 9528;
@@ -81,15 +80,14 @@ pub fn run() {
     })
     .build(tauri::generate_context!())
     .expect("error while building Jarvis desktop")
-    .run(|app, event| {
-      if let tauri::RunEvent::ExitRequested { api, .. } = event {
+    .run(|app, event| match event {
+      tauri::RunEvent::ExitRequested { api, .. } => {
         if !app.state::<AppState>().quitting.load(Ordering::Relaxed) {
           api.prevent_exit();
         }
       }
-      if let tauri::RunEvent::Exit = event {
-        stop_current_sidecar(app);
-      }
+      tauri::RunEvent::Exit => stop_current_sidecar(app),
+      _ => {}
     });
 }
 
@@ -280,8 +278,7 @@ async fn check_update(app: AppHandle, silent: bool) -> Result<(), String> {
     return Ok(());
   }
   update.download_and_install(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
-  app.restart();
-  #[allow(unreachable_code)]
+  app.request_restart();
   Ok(())
 }
 

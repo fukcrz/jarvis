@@ -24,6 +24,7 @@ pub enum DesktopEvent {
     #[serde(rename = "sessionId")]
     session_id: String,
     #[serde(rename = "runId")]
+    #[allow(dead_code)]
     run_id: String,
     failed: bool,
     #[serde(rename = "sessionName")]
