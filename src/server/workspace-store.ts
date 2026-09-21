@@ -21,7 +21,7 @@ export class WorkspaceStore {
     this.filePath = filePath;
   }
 
-  async initialize(defaultCwd: string): Promise<void> {
+  async initialize(defaultCwd: string, label?: string): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
     try {
       const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as PersistedWorkspaces;
@@ -34,9 +34,10 @@ export class WorkspaceStore {
       }
     } catch (error) {
       if (!isMissingFile(error)) throw error;
+      await mkdir(defaultCwd, { recursive: true });
       const cwd = await resolveDirectory(defaultCwd);
       const now = new Date().toISOString();
-      this.workspaces = [{ id: randomUUID(), cwd, label: defaultLabel(cwd), sortOrder: 0, createdAt: now, updatedAt: now, lastOpenedAt: now }];
+      this.workspaces = [{ id: randomUUID(), cwd, label: normalizeLabel(label, cwd), sortOrder: 0, createdAt: now, updatedAt: now, lastOpenedAt: now }];
       await this.persist();
     }
   }

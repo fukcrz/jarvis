@@ -792,6 +792,14 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(opened.json()).toMatchObject({ workspace: { id: workspace.workspace.id, lastOpenedAt: expect.any(String) } });
   });
 
+  it("seeds a default workspace at the Pi agent directory", async () => {
+    const listed = await activeApp().inject({ method: "GET", url: "/api/workspaces" });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({
+      workspaces: [expect.objectContaining({ cwd: join(jarvisHome, "agent"), label: "pi agent", sortOrder: 0 })],
+    });
+  });
+
   it("returns API validation errors and persists workspace changes", async () => {
     const server = activeApp();
     const health = await server.inject({ method: "GET", url: "/api/health" });

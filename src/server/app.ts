@@ -7,6 +7,7 @@ import helmet from "@fastify/helmet";
 import websocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
 import { z } from "zod";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { MANAGED_APIS, MANAGED_MAX_TOKENS_FIELDS, MANAGED_THINKING_FORMATS, THINKING_LEVELS, TUNNEL_METHODS } from "../shared/protocol.js";
 import type { ApiErrorBody, SessionRef } from "../shared/protocol.js";
 import { AuthService } from "./auth-service.js";
@@ -110,7 +111,7 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   const app = Fastify({ logger: { level: process.env["LOG_LEVEL"] ?? "info" }, bodyLimit: 25 * 1024 * 1024 });
   const production = process.env["NODE_ENV"] === "production";
   const workspaces = new WorkspaceStore();
-  await workspaces.initialize(process.cwd());
+  await workspaces.initialize(getAgentDir(), "pi agent");
   const events = new EventHub();
   const sessions = new SessionService(workspaces, events);
   const settings = new SettingsService(() => sessions.globalModelRuntime(), () => sessions.refreshModelConfiguration());

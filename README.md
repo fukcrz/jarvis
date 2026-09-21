@@ -86,7 +86,7 @@ npm run prod:foreground
 The same build is what the preview packages ship (`npm pack` runs `prepack`,
 which builds `dist/` automatically).
 
-Jarvis stores only its Workspace registry in `~/.jarvis/workspaces.json`. Pi JSONL remains the authoritative conversation history. Do not write to the same Pi session concurrently from Jarvis and the Pi CLI.
+Jarvis stores only its Workspace registry in `~/.jarvis/workspaces.json`. On first run it registers the Pi agent directory (`~/.pi/agent`, or `PI_CODING_AGENT_DIR`) as a workspace named `pi agent`. Pi JSONL remains the authoritative conversation history. Do not write to the same Pi session concurrently from Jarvis and the Pi CLI.
 
 ## Pi CLI compatibility
 
