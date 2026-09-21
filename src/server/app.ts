@@ -15,6 +15,7 @@ import { AppError, asMessage, errorStatusCode } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { applyAuthCookie, authorizeSocket, clearAuthCookie, readAuthCookie } from "./http-auth.js";
 import { SessionService } from "./session-service.js";
+import { desktopEnabled } from "./desktop-bridge.js";
 import { registerSelfRestart } from "./self-restart.js";
 import { WorkspaceStore } from "./workspace-store.js";
 import { SettingsService } from "./settings-service.js";
@@ -148,7 +149,9 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     if (state.token !== undefined) applyAuthCookie(reply, state.token, request);
   });
 
-  app.get("/api/health", async () => ({ ok: true, version: 1 }));
+  app.get("/api/health", async () => desktopEnabled()
+    ? { ok: true, version: 1, desktop: true, running: sessions.runningCount() }
+    : { ok: true, version: 1 });
 
   app.get("/api/auth/status", async (request) => ({ auth: auth.status(readAuthCookie(request.headers.cookie)), assistantName: settings.getSettings().assistantName }));
   app.post("/api/auth/login", async (request, reply) => {

@@ -38,6 +38,7 @@ import { stringValue, toIso } from "./values.js";
 import { EventHub } from "./event-hub.js";
 import { projectModelSnapshot } from "./model-projection.js";
 import { bashExecutionItem, decodeTimelineMediaItemId, projectHistory, toExternalTimelineItem, toExternalTimelineItems } from "./projection.js";
+import { emitDesktopEvent } from "./desktop-bridge.js";
 import { WorkspaceStore } from "./workspace-store.js";
 import {
   ALLOWED_IMAGE_TYPES,
@@ -119,6 +120,14 @@ export class SessionService {
       syncQueue: (active) => this.syncQueue(active),
       deferAgentSettlement: (active) => this.deferAgentSettlement(active),
     });
+  }
+
+  runningCount(): number {
+    let count = 0;
+    for (const active of this.active.values()) {
+      if (active.state.runState !== "idle") count += 1;
+    }
+    return count;
   }
 
   async list(workspaceId: string, query?: string): Promise<SessionSummary[]> {
@@ -1287,6 +1296,7 @@ export class SessionService {
     this.events.publishSession(active.ref, { type: "run.settled", runId, payload: { status: active.state } });
     this.publishSummary(active);
     this.persistListCopy(active, this.summaryFromActive(active));
+    this.emitDesktopRun(active, runId, false);
   }
 
   private failRun(active: ActiveSession, runId: string | undefined, code: string, message: string): void {
@@ -1321,6 +1331,7 @@ export class SessionService {
     this.events.publishSession(active.ref, { type: "run.failed", runId, payload: { status: active.state } });
     this.persistListCopy(active, this.summaryFromActive(active));
     this.publishSummary(active);
+    this.emitDesktopRun(active, runId, true, message);
   }
 
   private cancelCompaction(active: ActiveSession): void {
@@ -1437,6 +1448,20 @@ export class SessionService {
 
   private summaryFromActive(active: ActiveSession, previewOverride?: string): SessionSummary {
     return summaryFromActive(active, previewOverride);
+  }
+
+  private emitDesktopRun(active: ActiveSession, runId: string, failed: boolean, errorMessage?: string): void {
+    const summary = this.summaryFromActive(active);
+    emitDesktopEvent({
+      type: "run-finished",
+      workspaceId: active.ref.workspaceId,
+      sessionId: active.ref.sessionId,
+      runId,
+      failed,
+      ...(summary.name ? { sessionName: summary.name } : {}),
+      ...(summary.preview ? { text: summary.preview } : {}),
+      ...(errorMessage === undefined || errorMessage === "" ? {} : { errorMessage }),
+    });
   }
 
   private catalogDeps() {

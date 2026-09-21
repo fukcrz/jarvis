@@ -1,4 +1,5 @@
 import { buildApp } from "./app.js";
+import { emitDesktopEvent } from "./desktop-bridge.js";
 import { forwardPiCliInvocation } from "./pi-cli-forward.js";
 import type { FastifyInstance } from "fastify";
 
@@ -43,6 +44,7 @@ const address = app.server.address();
 const actualPort = typeof address === "object" && address !== null && typeof address.port === "number" ? address.port : port;
 // 设置目标端口；若开启了自动穿透，这里会直接拉起隧道。
 await app.jarvis.tunnel.initialize(actualPort);
+emitDesktopEvent({ type: "ready", port: actualPort });
 
 /**
  * 自重启（JARVIS_SELF_RESTART=1）时新进程可能与旧进程短暂争抢端口：

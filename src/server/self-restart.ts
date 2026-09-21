@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import { PROTOCOL_VERSION } from "../shared/protocol.js";
+import { desktopEnabled, emitDesktopEvent } from "./desktop-bridge.js";
 import { AppError } from "./errors.js";
 import type { EventHub } from "./event-hub.js";
 
@@ -30,6 +31,10 @@ export function registerSelfRestart(app: FastifyInstance, events: EventHub): voi
       type: "extension.notify",
       notification: { id: randomUUID(), message: "服务即将重启，连接将短暂中断后自动恢复…" },
     });
+    if (desktopEnabled()) {
+      emitDesktopEvent({ type: "restart" });
+      return reply.code(202).send({ restarting: true });
+    }
     void scheduleRestart(app, events, () => { restarting = false; });
     return reply.code(202).send({ restarting: true });
   });
