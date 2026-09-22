@@ -26,6 +26,32 @@ function snapshotWithQueue(queue?: SessionQueue): SessionStreamSnapshot {
 }
 
 describe("transcript reducer", () => {
+  it("reuses cached timeline item objects when hydrate text matches", () => {
+    const user = { kind: "message" as const, id: "m1", role: "user" as const, createdAt: "2026-08-09T00:00:00.000Z", text: "Hello" };
+    const previous = { ...emptyTranscript, items: [user], seq: 4, total: 1 };
+    const result = hydrateTranscript(previous, {
+      items: [{ kind: "message", id: "m1", role: "user", createdAt: "2026-08-09T00:00:00.000Z", text: "Hello" }],
+      start: 0,
+      total: 1,
+      hasMore: false,
+    }, snapshotWithQueue());
+    expect(result.items[0]).toBe(user);
+  });
+
+  it("keeps earlier message identity when applying an assistant delta", () => {
+    const user = { kind: "message" as const, id: "m1", role: "user" as const, createdAt: "2026-08-09T00:00:00.000Z", text: "Hello" };
+    const result = applySessionEvents({ ...emptyTranscript, items: [user], seq: 4 }, [{
+      version: 1,
+      sessionId: "session",
+      seq: 5,
+      emittedAt: "2026-08-09T00:00:01.000Z",
+      type: "assistant.delta",
+      payload: { messageId: "a1", delta: "Hi" },
+    }]);
+    expect(result.items[0]).toBe(user);
+    expect(result.items[1]).toMatchObject({ id: "a1", text: "Hi" });
+  });
+
   it("drops events at or below the snapshot watermark and merges a tool by id", () => {
     const hydrated = hydrateTranscript(emptyTranscript, {
       items: [{ kind: "message", id: "m1", role: "user", createdAt: "2026-08-09T00:00:00.000Z", text: "Hello" }],

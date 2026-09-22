@@ -41,7 +41,7 @@ export function hydrateTranscript(previous: TranscriptState, page: TimelinePage,
     && previous.total === page.total
     && previous.start < page.start;
   const history = preserveEarlier ? mergeTimeline(previous.items, page.items) : page.items;
-  const authoritative = mergeTimeline(history, live, extensionItems);
+  const authoritative = reuseUnchangedTimelineItems(previous.items, mergeTimeline(history, live, extensionItems));
   return {
     items: sortTimelineByCreatedAt(mergeTimeline(authoritative, unmatchedOptimisticUserMessages(previous.items, authoritative))),
     start: preserveEarlier ? previous.start : page.start,
@@ -130,8 +130,7 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const message: MessageTimelineItem = existing === undefined
       ? { kind: "message", id: messageId, role: "assistant", createdAt: event.emittedAt, text: delta }
       : { ...existing, text: existing.text + delta };
-    const items = next.items.map((item) => item.kind === "thinking" && item.state === "running" ? { ...item, state: "completed" as const } : item);
-    return { ...next, items: mergeTimeline(items, [message]), streamingMessageId: messageId };
+    return { ...next, items: upsertStreamingMessage(next.items, message), streamingMessageId: messageId };
   }
   if (event.type === "assistant.completed") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -260,6 +259,56 @@ function mergeTimeline(...groups: TimelineItem[][]): TimelineItem[] {
     for (const item of group) upsert(result, item);
   }
   return result;
+}
+
+function reuseUnchangedTimelineItems(previous: TimelineItem[], next: TimelineItem[]): TimelineItem[] {
+  if (previous.length === 0) return next;
+  const byId = new Map(previous.map((item) => [item.id, item]));
+  let reused = false;
+  const items = next.map((item) => {
+    const prior = byId.get(item.id);
+    if (prior !== undefined && sameTimelineItem(prior, item)) {
+      reused = true;
+      return prior;
+    }
+    return item;
+  });
+  return reused ? items : next;
+}
+
+function sameTimelineItem(left: TimelineItem, right: TimelineItem): boolean {
+  if (left === right) return true;
+  if (left.kind !== right.kind || left.id !== right.id || left.createdAt !== right.createdAt) return false;
+  if (left.kind === "message" && right.kind === "message") {
+    return left.role === right.role && left.text === right.text && sameImages(left.images, right.images);
+  }
+  if (left.kind === "thinking" && right.kind === "thinking") {
+    return left.state === right.state && left.text === right.text;
+  }
+  if (left.kind === "tool" && right.kind === "tool") {
+    return left.state === right.state && left.name === right.name && left.output === right.output && sameImages(left.images, right.images);
+  }
+  return false;
+}
+
+function sameImages(left: ImageAttachment[] | undefined, right: ImageAttachment[] | undefined): boolean {
+  if (left === right) return true;
+  if (left === undefined || right === undefined || left.length !== right.length) return false;
+  return left.every((image, index) => {
+    const other = right[index];
+    return other !== undefined && image.mimeType === other.mimeType && image.url === other.url && image.data === other.data;
+  });
+}
+
+function upsertStreamingMessage(items: TimelineItem[], message: MessageTimelineItem): TimelineItem[] {
+  const completedThinking = items.some((item) => item.kind === "thinking" && item.state === "running")
+    ? items.map((item) => item.kind === "thinking" && item.state === "running" ? { ...item, state: "completed" as const } : item)
+    : items;
+  const index = completedThinking.findIndex((item) => item.id === message.id);
+  if (index === -1) return mergeTimeline(completedThinking, [message]);
+  const next = completedThinking.slice();
+  next[index] = message;
+  return next;
 }
 
 /** Runtime-only cards need to rejoin persisted history at their original time. */

@@ -17,6 +17,16 @@ describe("MarkdownMessage", () => {
     expect(markup).toContain('class="streaming-cursor"');
   });
 
+  it("does not highlight fenced code while the message is still streaming", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      streaming: true,
+      text: "```ts\nconst n: number = 1;\n```",
+    }));
+
+    expect(markup).toContain("const n: number = 1;");
+    expect(markup).not.toContain("hljs-");
+  });
+
   it("highlights fenced code blocks with language label and copy button", () => {
     const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
       text: "```ts\nconst n: number = 1;\n```",

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
 import { copyMermaidDiagram, renderMermaidDiagram } from "../lib/mermaid";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -31,7 +31,8 @@ const sanitizeSchema: Schema = {
     a: [...(defaultSchema.attributes?.["a"] ?? []), "target", "rel"],
   },
 };
-const rehypePlugins: PluggableList = [[rehypeSanitize, sanitizeSchema], rehypeHighlight];
+const rehypePluginsComplete: PluggableList = [[rehypeSanitize, sanitizeSchema], rehypeHighlight];
+const rehypePluginsStreaming: PluggableList = [[rehypeSanitize, sanitizeSchema]];
 // react-markdown 默认的 urlTransform 只放行 http/https 等协议，data URI 会被替换成空串；
 // 这里只放行 data:image/*（base64 内嵌图），其余 URL 行为保持默认（javascript: 等仍被拦截）。
 const urlTransform = (url: string): string =>
@@ -350,14 +351,14 @@ function MermaidBlock({ code }: { code: string }) {
 
 const components = { pre: CodeBlock, code: MarkdownCode, a: LocalLink, img: MarkdownMedia };
 
-export function MarkdownMessage({ text, streaming = false, baseDir, interactiveFiles = false }: MarkdownMessageProps) {
+export const MarkdownMessage = memo(function MarkdownMessage({ text, streaming = false, baseDir, interactiveFiles = false }: MarkdownMessageProps) {
   const content = separateAdjacentBoldTitles(baseDir === undefined ? text : rewriteLocalImageUrls(text, baseDir));
   return <LocalFileCwdContext.Provider value={baseDir}>
     <InteractiveFilesContext.Provider value={interactiveFiles}>
       <MarkdownStreamingContext.Provider value={streaming}>
-        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={components}>{content}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={streaming ? rehypePluginsStreaming : rehypePluginsComplete} urlTransform={urlTransform} components={components}>{content}</ReactMarkdown>
         {streaming ? <span className="streaming-cursor" aria-hidden="true" /> : null}
       </MarkdownStreamingContext.Provider>
     </InteractiveFilesContext.Provider>
   </LocalFileCwdContext.Provider>;
-}
+});
