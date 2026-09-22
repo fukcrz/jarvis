@@ -278,17 +278,14 @@ function reuseUnchangedTimelineItems(previous: TimelineItem[], next: TimelineIte
 
 function sameTimelineItem(left: TimelineItem, right: TimelineItem): boolean {
   if (left === right) return true;
-  if (left.kind !== right.kind || left.id !== right.id || left.createdAt !== right.createdAt) return false;
-  if (left.kind === "message" && right.kind === "message") {
-    return left.role === right.role && left.text === right.text && sameImages(left.images, right.images);
-  }
-  if (left.kind === "thinking" && right.kind === "thinking") {
-    return left.state === right.state && left.text === right.text;
-  }
-  if (left.kind === "tool" && right.kind === "tool") {
-    return left.state === right.state && left.name === right.name && left.output === right.output && sameImages(left.images, right.images);
-  }
-  return false;
+  // Only messages are reused. Tool/thinking cards have extra fields (title,
+  // subagent, error) that a partial compare would leave stale on hydrate.
+  return left.kind === "message" && right.kind === "message"
+    && left.id === right.id
+    && left.createdAt === right.createdAt
+    && left.role === right.role
+    && left.text === right.text
+    && sameImages(left.images, right.images);
 }
 
 function sameImages(left: ImageAttachment[] | undefined, right: ImageAttachment[] | undefined): boolean {

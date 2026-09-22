@@ -38,6 +38,26 @@ describe("transcript reducer", () => {
     expect(result.items[0]).toBe(user);
   });
 
+  it("does not reuse a tool item when hydrate only changes the title", () => {
+    const tool = {
+      kind: "tool" as const,
+      id: "t1",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      name: "read",
+      title: "Read file",
+      state: "completed" as const,
+      output: "done",
+    };
+    const result = hydrateTranscript({ ...emptyTranscript, items: [tool], seq: 2, total: 1 }, {
+      items: [{ ...tool, title: "Read other file" }],
+      start: 0,
+      total: 1,
+      hasMore: false,
+    }, snapshotWithQueue());
+    expect(result.items[0]).not.toBe(tool);
+    expect(result.items[0]).toMatchObject({ title: "Read other file" });
+  });
+
   it("keeps earlier message identity when applying an assistant delta", () => {
     const user = { kind: "message" as const, id: "m1", role: "user" as const, createdAt: "2026-08-09T00:00:00.000Z", text: "Hello" };
     const result = applySessionEvents({ ...emptyTranscript, items: [user], seq: 4 }, [{
