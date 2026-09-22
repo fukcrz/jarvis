@@ -41,6 +41,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "node scripts/ui-smoke.mjs",
+    "test:ui:attention": "node scripts/ui-attention-smoke.mjs",
     "lint": "eslint src --max-warnings=0",
     "test:ui:extension": "node scripts/ui-extension-smoke.mjs",
     "desktop:dev": "tauri dev",

@@ -8,6 +8,11 @@ export function pathParams(pathname: string): { workspaceId?: string; sessionId?
   return {};
 }
 
+/** 正在看聊天正文。移动端会话列表不是查看。 */
+export function isChatPath(pathname: string): boolean {
+  return pathname === "/chat" || pathname.startsWith("/chat/");
+}
+
 export function readSessionFocusMode(): boolean {
   try {
     return window.localStorage.getItem(SESSION_FOCUS_STORAGE_KEY) === "true";

@@ -27,8 +27,9 @@ export function useWorkspaceEvents(input: {
   setDrafts: Dispatch<SetStateAction<Record<string, string>>>;
   setSessionMenu: Dispatch<SetStateAction<SessionContextMenuTarget | undefined>>;
   setGlobalExtensionToasts: Dispatch<SetStateAction<ExtensionToast[]>>;
+  onSocketReconnect?: (workspaceId: string) => void;
 }): void {
-  const { workspaces, deletedSessionsRef, viewedIdleKeysRef, setSessionsByWorkspace, setDrafts, setSessionMenu, setGlobalExtensionToasts } = input;
+  const { workspaces, deletedSessionsRef, viewedIdleKeysRef, setSessionsByWorkspace, setDrafts, setSessionMenu, setGlobalExtensionToasts, onSocketReconnect } = input;
 
   useEffect(() => {
     let disposed = false;
@@ -38,6 +39,7 @@ export function useWorkspaceEvents(input: {
       let pingTimer: number | undefined;
       let lastEventAt = Date.now();
       let lastReconnectAt = 0;
+      let hasOpened = false;
       const stopReconnectAndPing = () => {
         if (reconnect !== undefined) {
           window.clearTimeout(reconnect);
@@ -80,6 +82,9 @@ export function useWorkspaceEvents(input: {
           if (disposed || socket !== connection) return;
           lastEventAt = Date.now();
           startKeepalive(connection);
+          const resync = hasOpened;
+          hasOpened = true;
+          if (resync) onSocketReconnect?.(workspace.id);
         });
         connection.addEventListener("message", (event) => {
           if (disposed || socket !== connection) return;
@@ -194,5 +199,5 @@ export function useWorkspaceEvents(input: {
       disposed = true;
       for (const cleanup of cleanups) cleanup();
     };
-  }, [workspaces, deletedSessionsRef, viewedIdleKeysRef, setSessionsByWorkspace, setDrafts, setSessionMenu, setGlobalExtensionToasts]);
+  }, [workspaces, deletedSessionsRef, viewedIdleKeysRef, setSessionsByWorkspace, setDrafts, setSessionMenu, setGlobalExtensionToasts, onSocketReconnect]);
 }

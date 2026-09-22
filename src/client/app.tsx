@@ -34,7 +34,7 @@ import {
   withoutDraft,
   withoutSession,
 } from "./lib/socket-sync";
-import { pathParams, readDrafts, readExpandedWorkspaces, readSessionFocusMode, SESSION_FOCUS_STORAGE_KEY } from "./lib/app-storage";
+import { isChatPath, pathParams, readDrafts, readExpandedWorkspaces, readSessionFocusMode, SESSION_FOCUS_STORAGE_KEY } from "./lib/app-storage";
 import { markSessionUserActivity, mergeWorkspace, sessionCleanupConfirmMessage } from "./lib/session-list";
 import { errorMessage, isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel } from "./lib/utils";
 import { useIsMobile } from "./hooks/use-is-mobile";
@@ -86,7 +86,8 @@ export function App() {
   const workspaceOrderSequenceRef = useRef(0);
   // Mobile uses the global session list as its home: #/projects and #/chat/:workspaceId/:sessionId.
   const isSettingsPage = isSettingsPath(location.pathname);
-  const mobilePage: "sessions" | "chat" | "settings" = isSettingsPage ? "settings" : location.pathname.startsWith("/chat") ? "chat" : "sessions";
+  const isChatPage = isChatPath(location.pathname);
+  const mobilePage: "sessions" | "chat" | "settings" = isSettingsPage ? "settings" : isChatPage ? "chat" : "sessions";
   const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | undefined>();
   const [sideChatOpen, setSideChatOpen] = useState(false);
   const [sideChatRunState, setSideChatRunState] = useState<RunState | undefined>();
@@ -94,14 +95,19 @@ export function App() {
   const creatingSessionWorkspacesRef = useRef(new Set<string>());
   const previousSessionStatusRef = useRef<{ key?: string; runState?: string }>({});
   const isMobile = useIsMobile();
+  const viewingTranscript = !isMobile || isChatPage;
 
 
   // The URL is the source of truth for the selected workspace/session.
   useEffect(() => {
     const { workspaceId: pathWorkspaceId, sessionId: pathSessionId } = pathParams(location.pathname);
     if (pathWorkspaceId !== undefined && pathWorkspaceId !== workspaceId) setWorkspaceId(pathWorkspaceId);
-    if (pathSessionId !== undefined && pathSessionId !== sessionId) setSessionId(pathSessionId);
-  }, [location.pathname, workspaceId, sessionId]);
+    if (isMobile) {
+      if (pathSessionId !== sessionId) setSessionId(pathSessionId);
+    } else if (pathSessionId !== undefined && pathSessionId !== sessionId) {
+      setSessionId(pathSessionId);
+    }
+  }, [isMobile, location.pathname, workspaceId, sessionId]);
 
   // First visit (empty hash): mobile lands on the global session list; desktop restores its previous workspace.
   useEffect(() => {
@@ -188,7 +194,7 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [focusMode]);
   // The stream owns the authoritative runtime model snapshot and realtime changes.
-  const stream = useSessionStream(isSettingsPage ? undefined : selectedRef, assistantName, selectedSession?.name ?? undefined);
+  const stream = useSessionStream(isSettingsPage || !viewingTranscript ? undefined : selectedRef, assistantName, selectedSession?.name ?? undefined);
   useEffect(() => {
     if (isSettingsPage || (filesWorkspaceId !== undefined && !workspaces.some((workspace) => workspace.id === filesWorkspaceId))) {
       setFilesWorkspaceId(undefined);
@@ -481,6 +487,15 @@ export function App() {
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [globalExtensionToasts]);
 
+  const resyncWorkspaceSessions = useCallback((workspaceId: string) => {
+    void api.listSessions(workspaceId).then((sessions) => {
+      setSessionsByWorkspace((current) => ({
+        ...current,
+        ...mergeSessionSnapshots(current, { [workspaceId]: sessions }, [workspaceId], deletedSessionsRef.current, viewedIdleKeysRef.current),
+      }));
+    }).catch(() => undefined);
+  }, []);
+
   useWorkspaceEvents({
     workspaces,
     deletedSessionsRef,
@@ -489,6 +504,7 @@ export function App() {
     setDrafts,
     setSessionMenu,
     setGlobalExtensionToasts,
+    onSocketReconnect: resyncWorkspaceSessions,
   });
 
 
@@ -514,10 +530,10 @@ export function App() {
   }, [applyViewedSession]);
 
   useEffect(() => {
-    if (selectedRef === undefined || selectedRefKey === undefined) return;
-    // 只跟选中变化走；会话摘要更新（含关注态）不得反复 POST /viewed。
+    if (!viewingTranscript || selectedRef === undefined || selectedRefKey === undefined) return;
+    // 只跟选中变化和是否正在看正文走；会话摘要更新（含关注态）不得反复 POST /viewed。
     markSessionViewed(selectedRef, selectedSession);
-  }, [selectedRefKey]);
+  }, [selectedRefKey, viewingTranscript]);
 
   useEffect(() => {
     setUserNavigatorOpen(false);
@@ -539,11 +555,11 @@ export function App() {
       next[index] = { ...session, runState: status.runState };
       return { ...current, [selectedRef.workspaceId]: next };
     });
-    // Only clear completed/unread attention on an actual transition to idle.
+    // Only clear completed/unread attention on an actual transition to idle while looking at the transcript.
     // session.updated itself changes the status object and must not re-enter this loop.
-    if (status.runState !== "idle" || previous.key !== key || previous.runState === undefined || previous.runState === "idle") return;
+    if (!viewingTranscript || status.runState !== "idle" || previous.key !== key || previous.runState === undefined || previous.runState === "idle") return;
     markSessionViewed(selectedRef, selectedSession === undefined ? undefined : { ...selectedSession, runState: "idle" });
-  }, [stream.transcript.status, selectedRef, selectedRefKey, markSessionViewed]);
+  }, [stream.transcript.status, selectedRef, selectedRefKey, markSessionViewed, viewingTranscript]);
 
   const openCreatedSession = (targetWorkspaceId: string, nextSessionId: string) => {
     setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
