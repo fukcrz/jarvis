@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { activeUserMessageAnchor, ACTIVITY_NARRATION_MAX_CHARS, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isShortAssistantNarration, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors } from "./timeline";
+import { activeUserMessageAnchor, ACTIVITY_NARRATION_MAX_CHARS, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isShortAssistantNarration, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -64,8 +64,20 @@ describe("userMessageAnchors", () => {
       { kind: "message", id: "u", role: "user", createdAt: "", text: `  first\n  ${longText}` },
       { kind: "message", id: "image", role: "user", createdAt: "", text: "", images: [{ mimeType: "image/png", data: "x" }] },
     ])).toEqual([
-      { id: "u", index: 1, preview: `first ${"A".repeat(101)}…` },
-      { id: "image", index: 2, preview: "图片消息" },
+      { id: "u", index: 1, preview: `first ${"A".repeat(101)}…`, itemIndex: 1 },
+      { id: "image", index: 2, preview: "图片消息", itemIndex: 2 },
+    ]);
+  });
+});
+
+describe("userMessageAnchorsFromOutline", () => {
+  it("uses session-absolute indexes from the outline", () => {
+    expect(userMessageAnchorsFromOutline([
+      { id: "u1", preview: "first", itemIndex: 0 },
+      { id: "u2", preview: "second", itemIndex: 4 },
+    ])).toEqual([
+      { id: "u1", index: 1, preview: "first", itemIndex: 0 },
+      { id: "u2", index: 2, preview: "second", itemIndex: 4 },
     ]);
   });
 });

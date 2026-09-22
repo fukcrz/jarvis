@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { Archive, ArrowDown, Bell, Brain, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
-import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
+import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
+import { userMessageOutline as outlineFromItems } from "../../shared/user-message";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { imageDataUrl } from "../lib/image";
 import { encodeMultiSelectValue, multiSelectAnswerLabel, parseMultiSelectDialog, parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, splitDialogHeading, type ExtensionSelectOption } from "../lib/extension-dialog";
@@ -34,6 +35,9 @@ interface TimelineProps {
   workspaceCwd?: string;
   navigatorOpen?: boolean;
   onNavigatorOpenChange?: (open: boolean) => void;
+  outline?: UserMessageOutline[];
+  outlineLoading?: boolean;
+  onEnsureMessage?: (id: string) => Promise<void>;
 }
 
 /** Distance from the bottom (px) within which the list is considered "following" the latest content. */
@@ -89,16 +93,16 @@ export interface UserMessageAnchor {
   id: string;
   index: number;
   preview: string;
+  itemIndex?: number;
+}
+
+export function userMessageAnchorsFromOutline(messages: UserMessageOutline[]): UserMessageAnchor[] {
+  return messages.map((message, index) => ({ id: message.id, index: index + 1, preview: message.preview, itemIndex: message.itemIndex }));
 }
 
 /** Build the prompt-only outline shared by desktop rail and mobile turn list. */
 export function userMessageAnchors(items: TimelineItem[]): UserMessageAnchor[] {
-  const anchors: UserMessageAnchor[] = [];
-  for (const item of items) {
-    if (item.kind !== "message" || item.role !== "user") continue;
-    anchors.push({ id: item.id, index: anchors.length + 1, preview: userMessagePreview(item) });
-  }
-  return anchors;
+  return userMessageAnchorsFromOutline(outlineFromItems(items));
 }
 
 /** Newest user message first, keeping chronological indexes. */
@@ -114,13 +118,7 @@ export function formatUserMessageIndex(index: number): string {
   return String(index).padStart(2, "0");
 }
 
-function userMessagePreview(item: MessageTimelineItem): string {
-  const text = item.text.replace(/\s+/g, " ").trim();
-  if (text !== "") return text.length > 110 ? `${text.slice(0, 107)}…` : text;
-  return (item.images?.length ?? 0) > 0 ? "图片消息" : "空消息";
-}
-
-export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange }: TimelineProps) {
+export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const touchYRef = useRef<number | undefined>(undefined);
   const loadingEarlierRef = useRef(false);
@@ -148,11 +146,16 @@ export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadi
   const [activeUserMessageId, setActiveUserMessageId] = useState<string>();
   const [highlightedMessageId, setHighlightedMessageId] = useState<string>();
   const [markerPositions, setMarkerPositions] = useState<Record<string, number>>({});
-  const [loadingAllHistory, setLoadingAllHistory] = useState(false);
+  const [pendingJumpId, setPendingJumpId] = useState<string>();
+  const pendingJumpIdRef = useRef<string | undefined>(undefined);
   const [fillingViewport, setFillingViewport] = useState(false);
   const [fillViewportRevision, setFillViewportRevision] = useState(0);
   const isMobile = useIsMobile();
-  const userMessages = useMemo(() => userMessageAnchors(items), [items]);
+  const userMessages = useMemo(() => {
+    if (outline !== undefined && outline.length > 0) return userMessageAnchorsFromOutline(outline);
+    if (outlineLoading) return [];
+    return userMessageAnchors(items);
+  }, [outline, outlineLoading, items]);
   const userMessageKey = userMessages.map((item) => item.id).join(":");
   const feedback = getRunFeedback(status, items, streamingMessageId);
   const hasMatchingTimelineFailure = status.lastError !== undefined && items.some((item) => item.kind === "error" && item.state === "failed" && item.code === status.lastError!.code && item.message === status.lastError!.message);
@@ -174,6 +177,8 @@ export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadi
     setHighlightedMessageId(undefined);
     setActiveUserMessageId(undefined);
     setMarkerPositions({});
+    pendingJumpIdRef.current = undefined;
+    setPendingJumpId(undefined);
   }, [sessionKey]);
 
   const updateActiveUserMessage = () => {
@@ -319,27 +324,19 @@ export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadi
     void loadEarlier().catch(() => setFillingViewport(false));
   }, [fillViewportRevision, fillingViewport, hasMore, loadingMore, loadEarlier]);
 
-  useEffect(() => {
-    if (!navigatorOpen) {
-      setLoadingAllHistory(false);
-      return;
-    }
-    if (hasMore) setLoadingAllHistory(true);
-  }, [hasMore, navigatorOpen]);
-
-  useEffect(() => {
-    if (!loadingAllHistory) return;
-    if (!hasMore) {
-      setLoadingAllHistory(false);
-      return;
-    }
-    if (loadingMore) return;
-    void loadEarlier().catch(() => setLoadingAllHistory(false));
-  }, [hasMore, loadingAllHistory, loadingMore, loadEarlier]);
-
   const closeNavigator = () => onNavigatorOpenChange?.(false);
 
-  const jumpToUserMessage = (id: string) => {
+  const scrollUserMessageIntoView = (id: string) => {
+    const element = scrollRef.current;
+    const target = element === null ? undefined : Array.from(element.querySelectorAll<HTMLElement>("[data-user-message-id]")).find((item) => item.dataset.userMessageId === id);
+    if (element === null || target === undefined) return false;
+    const targetTop = target.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop - Math.min(112, element.clientHeight * 0.22);
+    element.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
+    setActiveUserMessageId(id);
+    return true;
+  };
+
+  const beginUserMessageNavigation = (id: string) => {
     activeNavigationIdRef.current = id;
     if (activeNavigationTimerRef.current !== undefined) window.clearTimeout(activeNavigationTimerRef.current);
     activeNavigationTimerRef.current = window.setTimeout(() => {
@@ -349,22 +346,54 @@ export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadi
     setFollowing(false);
     setActiveUserMessageId(id);
     setHighlightedMessageId(id);
-    closeNavigator();
-    requestAnimationFrame(() => {
-      const element = scrollRef.current;
-      const target = element === null ? undefined : Array.from(element.querySelectorAll<HTMLElement>("[data-user-message-id]")).find((item) => item.dataset.userMessageId === id);
-      if (element === null || target === undefined) return;
-      const targetTop = target.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop - Math.min(112, element.clientHeight * 0.22);
-      element.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
-      setActiveUserMessageId(id);
-    });
     if (highlightTimerRef.current !== undefined) window.clearTimeout(highlightTimerRef.current);
     highlightTimerRef.current = window.setTimeout(() => setHighlightedMessageId(undefined), 1_700);
   };
 
+  const finishPendingJump = (id: string) => {
+    if (pendingJumpIdRef.current !== id) return;
+    pendingJumpIdRef.current = undefined;
+    setPendingJumpId(undefined);
+    closeNavigator();
+    requestAnimationFrame(() => {
+      scrollUserMessageIntoView(id);
+    });
+  };
+
+  useLayoutEffect(() => {
+    const id = pendingJumpIdRef.current;
+    if (id === undefined || !items.some((item) => item.id === id)) return;
+    finishPendingJump(id);
+  }, [items, pendingJumpId]);
+
+  const jumpToUserMessage = (id: string) => {
+    beginUserMessageNavigation(id);
+    if (items.some((item) => item.id === id)) {
+      closeNavigator();
+      requestAnimationFrame(() => {
+        scrollUserMessageIntoView(id);
+      });
+      return;
+    }
+    if (onEnsureMessage === undefined) {
+      closeNavigator();
+      return;
+    }
+    pendingJumpIdRef.current = id;
+    setPendingJumpId(id);
+    void onEnsureMessage(id).then(() => {
+      if (pendingJumpIdRef.current !== id) return;
+      if (items.some((item) => item.id === id) || scrollUserMessageIntoView(id)) finishPendingJump(id);
+    }).catch(() => {
+      if (pendingJumpIdRef.current !== id) return;
+      pendingJumpIdRef.current = undefined;
+      setPendingJumpId(undefined);
+    });
+  };
+
   return (
     <section className="timeline-shell">
-      <TurnNavigator mobile={isMobile} anchors={userMessages} activeId={activeUserMessageId} markerPositions={markerPositions} loadingAll={loadingAllHistory || loadingMore} open={navigatorOpen} onOpenChange={(open) => { if (open) onNavigatorOpenChange?.(true); else closeNavigator(); }} onJump={jumpToUserMessage} />
+      <TurnNavigator mobile={isMobile} anchors={userMessages} activeId={activeUserMessageId} markerPositions={markerPositions} loadingAll={(outlineLoading && userMessages.length === 0) || pendingJumpId !== undefined} open={navigatorOpen} onOpenChange={(open) => { if (open) onNavigatorOpenChange?.(true); else closeNavigator(); }} onJump={jumpToUserMessage} />
       <div className="timeline" ref={scrollRef} onScroll={(event) => {
         const element = event.currentTarget;
         setFollowing(isFollowingLatest(element));
@@ -388,6 +417,7 @@ export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadi
       }}>
         <div className="timeline-inner">
           <div className="timeline-feed">
+            {hasMore ? <button type="button" className="timeline-load-earlier" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "加载中" : "更早"}</button> : null}
             {renderTimelineTurns(items, streamingMessageId, status, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, editingMessageId, setEditingMessageId, workspaceCwd, highlightedMessageId, following)}
             {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
             {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
@@ -423,10 +453,12 @@ function TurnNavigator({ mobile, anchors, activeId, markerPositions, loadingAll,
   }
   return <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent title="用户消息" className="turn-navigator-dialog">
-      {loadingAll ? <div className="timeline-mobile-navigator-status" role="status">加载中</div> : null}
-      {anchors.length === 0 ? <div className="timeline-mobile-navigator-empty">暂无用户消息</div> : <div className="timeline-mobile-navigator-list" ref={listRef}>
-        {mobileUserMessageRows(anchors).map((anchor) => <button key={anchor.id} type="button" className={`timeline-mobile-navigator-item${anchor.id === active?.id ? " active" : ""}`} aria-current={anchor.id === active?.id ? "true" : undefined} aria-label={`第 ${String(anchor.index)} 条用户消息`} onClick={() => onJump(anchor.id)}><span>{formatUserMessageIndex(anchor.index)}</span><strong>{anchor.preview}</strong></button>)}
-      </div>}
+      {loadingAll && anchors.length === 0 ? <div className="timeline-mobile-navigator-status" role="status">加载中</div> : anchors.length === 0 ? <div className="timeline-mobile-navigator-empty">暂无用户消息</div> : <>
+        {loadingAll ? <div className="timeline-mobile-navigator-status" role="status">加载中</div> : null}
+        <div className="timeline-mobile-navigator-list" ref={listRef}>
+          {mobileUserMessageRows(anchors).map((anchor) => <button key={anchor.id} type="button" className={`timeline-mobile-navigator-item${anchor.id === active?.id ? " active" : ""}`} aria-current={anchor.id === active?.id ? "true" : undefined} aria-label={`第 ${String(anchor.index)} 条用户消息`} onClick={() => onJump(anchor.id)}><span>{formatUserMessageIndex(anchor.index)}</span><strong>{anchor.preview}</strong></button>)}
+        </div>
+      </>}
     </DialogContent>
   </Dialog>;
 }

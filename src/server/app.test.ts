@@ -1171,6 +1171,23 @@ describe("Jarvis HTTP and WebSocket API", () => {
     listSpy.mockRestore();
   });
 
+  it("returns a user-message outline without paging the timeline", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "user-messages-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath);
+
+    const outline = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/user-messages` });
+    expect(outline.statusCode).toBe(200);
+    expect(outline.json()).toEqual({
+      messages: [
+        { id: source.user1, preview: "First question", itemIndex: 0 },
+        { id: source.user2, preview: "Second question", itemIndex: 2 },
+      ],
+    });
+  });
+
   it("reuses the active timeline projection until the session leaf changes", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "timeline-cache-workspace");

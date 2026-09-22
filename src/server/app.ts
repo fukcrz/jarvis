@@ -389,6 +389,7 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const query = timelineQuery.parse(request.query);
     return sessions.timeline(ref, query.before, query.limit);
   });
+  app.get("/api/workspaces/:workspaceId/sessions/:sessionId/user-messages", async (request) => sessions.userMessages(sessionRef(request.params)));
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/media/:itemId/:index", async (request, reply) => {
     const ref = sessionRef(request.params);
     const params = z.object({ itemId: z.string().min(1).max(500), index: z.coerce.number().int().nonnegative().max(64) }).parse(request.params);

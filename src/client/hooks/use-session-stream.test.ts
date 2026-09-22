@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionStreamSnapshot, TimelinePage } from "../../shared/protocol";
 import { emptyTranscript } from "../transcript";
-import { reduceSessionStream, shouldApplySessionRefresh, type StreamState } from "./use-session-stream";
+import { applyOutlineEvents, reduceSessionStream, shouldApplySessionRefresh, type StreamState } from "./use-session-stream";
 
 function page(text: string): TimelinePage {
   return {
@@ -79,5 +79,43 @@ describe("session stream reducer", () => {
     expect(shouldApplySessionRefresh({ ...base, requestGeneration: 1 })).toBe(false);
     expect(shouldApplySessionRefresh({ ...base, selectedHistoryGeneration: 3 })).toBe(false);
     expect(shouldApplySessionRefresh({ ...base, currentKey: "ws:b" })).toBe(false);
+  });
+});
+
+describe("applyOutlineEvents", () => {
+  it("rebuilds the outline after a session rewrite", () => {
+    const transcript = hydrated("ws:a", "Hello").transcript;
+    const rewritten = {
+      ...transcript,
+      items: [
+        { kind: "message" as const, id: "u1", role: "user" as const, createdAt: "2026-08-09T00:00:00.000Z", text: "One" },
+        { kind: "message" as const, id: "a1", role: "assistant" as const, createdAt: "2026-08-09T00:00:01.000Z", text: "Two" },
+      ],
+      start: 0,
+      total: 2,
+      hasMore: false,
+    };
+    expect(applyOutlineEvents([{ id: "old", preview: "stale", itemIndex: 0 }], [{ version: 1, sessionId: "session", type: "session.rewritten", seq: 2, emittedAt: "2026-08-09T00:00:02.000Z", payload: {} }], rewritten)).toEqual([
+      { id: "u1", preview: "One", itemIndex: 0 },
+    ]);
+  });
+
+  it("appends a newly created user message", () => {
+    const transcript = {
+      ...emptyTranscript,
+      start: 4,
+      total: 6,
+      items: [
+        { kind: "message" as const, id: "u2", role: "user" as const, createdAt: "2026-08-09T00:00:00.000Z", text: "Next" },
+      ],
+    };
+    expect(applyOutlineEvents(
+      [{ id: "u1", preview: "First", itemIndex: 0 }],
+      [{ version: 1, sessionId: "session", type: "message.created", seq: 3, emittedAt: "2026-08-09T00:00:01.000Z", payload: { message: { id: "u2", role: "user" } } }],
+      transcript,
+    )).toEqual([
+      { id: "u1", preview: "First", itemIndex: 0 },
+      { id: "u2", preview: "Next", itemIndex: 4 },
+    ]);
   });
 });

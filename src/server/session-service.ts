@@ -30,9 +30,11 @@ import type {
   TimelinePage,
   ToolTimelineItem,
   TimelineItem,
+  UserMessageOutline,
   Workspace,
 } from "../shared/protocol.js";
 import { emptySessionQueue, isRecord, PROTOCOL_VERSION } from "../shared/protocol.js";
+import { userMessageOutline } from "../shared/user-message.js";
 import { AppError, asMessage } from "./errors.js";
 import { stringValue, toIso } from "./values.js";
 import { EventHub } from "./event-hub.js";
@@ -440,6 +442,11 @@ export class SessionService {
     const requestedStart = Math.max(0, end - clamp(limit, 1, 500));
     const start = expandToUserBoundary(items, requestedStart);
     return { items: toExternalTimelineItems(items.slice(start, end), active.ref), start, total: items.length, hasMore: start > 0 };
+  }
+
+  async userMessages(ref: SessionRef): Promise<{ messages: UserMessageOutline[] }> {
+    const active = await this.getActive(ref, { waitForExtensions: false });
+    return { messages: userMessageOutline(this.timelineItems(active)) };
   }
 
   /** Serve one tool-result image from an already-open session. Does not start AgentSession. */

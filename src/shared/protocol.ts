@@ -456,6 +456,13 @@ export interface TimelinePage {
   hasMore: boolean;
 }
 
+/** Chronological user-message directory; indexes are session-absolute. */
+export interface UserMessageOutline {
+  id: string;
+  preview: string;
+  itemIndex: number;
+}
+
 export interface ExtensionUiSnapshot {
   /** Dialogs that are still waiting for a browser response. */
   dialogs: Array<{ request: Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>; createdAt: string }>;

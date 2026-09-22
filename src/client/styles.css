@@ -356,6 +356,10 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .timeline { min-width: 0; min-height: 0; height: 100%; overflow-y: auto; overscroll-behavior: contain; }
 .timeline-inner { box-sizing: border-box; width: min(870px, 100%); min-width: 0; max-width: 100%; min-height: 100%; margin: 0 auto; padding: 34px clamp(22px, 5vw, 70px) 42px; }
 .timeline-feed { display: grid; align-content: start; gap: 14px; }
+.timeline-load-earlier { justify-self: center; min-height: 28px; border: 0; background: transparent; padding: 4px 10px; color: var(--subtle); font-size: 12px; cursor: pointer; }
+.timeline-load-earlier:disabled { cursor: default; opacity: .55; }
+.timeline-load-earlier:focus-visible { color: var(--ink); outline: none; }
+@media (max-width: 760px) { .timeline-load-earlier { min-height: 36px; } }
 /* 操作行随消息占位（气泡下方固定一行），不悬浮在消息间隙里压住下一条消息 */
 .message-row { position: relative; display: flex; min-width: 0; scroll-margin-top: 112px; }.message-actions { display: flex; align-items: center; justify-content: flex-start; min-height: 18px; gap: 1px; margin-top: 2px; }.message-action-button { display: grid; place-items: center; width: 21px; height: 18px; border: 0; border-radius: 3px; background: transparent; padding: 0; color: #686772; cursor: pointer; }.message-action-button:focus-visible { background: rgb(255 255 255 / .035); color: #9b9aa5; outline: none; }.message-action-button.copied { color: var(--success); }
 .message-body.user .message-actions { justify-content: flex-end; }

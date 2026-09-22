@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, notifyUnauthorized, sessionPath, socketUrl } from "../api";
-import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, sessionEventSchema } from "../../shared/protocol";
+import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, type UserMessageOutline, sessionEventSchema } from "../../shared/protocol";
+import { appendUserMessageOutline, earlierPageLimit, userMessageOutline } from "../../shared/user-message";
 import { notifyRunFinished, type RunNotificationInfo } from "../notifications";
 import {
   coalesceStreamEvents,
@@ -49,6 +50,22 @@ const initialState: StreamState = { transcript: emptyTranscript, connection: "of
 
 function isCurrentSession(state: StreamState, sessionKey: string): boolean {
   return state.sessionKey === sessionKey;
+}
+
+export function applyOutlineEvents(outline: UserMessageOutline[], events: SessionEvent[], nextTranscript: TranscriptState): UserMessageOutline[] {
+  if (events.some((event) => event.type === "session.rewritten")) return userMessageOutline(nextTranscript.items);
+  let next = outline;
+  for (const event of events) {
+    if (event.type !== "message.created") continue;
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const raw = payload?.["message"];
+    if (!isRecord(raw) || raw["role"] !== "user" || typeof raw["id"] !== "string") continue;
+    const index = nextTranscript.items.findIndex((item) => item.id === raw["id"]);
+    const item = index === -1 ? undefined : nextTranscript.items[index];
+    if (item?.kind !== "message" || item.role !== "user") continue;
+    next = appendUserMessageOutline(next, item, nextTranscript.start + index);
+  }
+  return next;
 }
 
 export function shouldApplySessionRefresh(input: {
@@ -109,10 +126,15 @@ type PanelSideEffect =
 export function useSessionStream(ref: SessionRef | undefined, assistantName = document.title, sessionName?: string, options?: { manageDocumentTitle?: boolean }) {
   const [state, dispatch] = useReducer(reduceSessionStream, initialState);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [userMessages, setUserMessages] = useState<UserMessageOutline[]>([]);
+  const [userMessagesLoading, setUserMessagesLoading] = useState(false);
   const [extensionPanels, setExtensionPanels] = useState<ExtensionPanelState>({ widgets: {}, statuses: {} });
   const stateRef = useRef(state);
   const transcriptCache = useRef(new Map<string, TranscriptState>());
   const historyLoadGeneration = useRef(0);
+  const loadingEarlierLock = useRef(false);
+  const userMessagesRef = useRef<UserMessageOutline[]>([]);
+  const loadUserMessagesRef = useRef<(sessionKey: string, generation: number) => Promise<void>>(async () => undefined);
   const refreshGeneration = useRef(0);
   const sessionNameRef = useRef(sessionName);
   const manageDocumentTitle = options?.manageDocumentTitle !== false;
@@ -187,17 +209,23 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
         transcriptEvents.push(event);
       }
     }
-    if (transcriptEvents.length > 0) {
-      dispatch({ type: "events", events: coalesceStreamEvents(transcriptEvents) });
+    const coalescedEvents = transcriptEvents.length === 0 ? [] : coalesceStreamEvents(transcriptEvents);
+    const nextTranscript = coalescedEvents.length === 0 ? stateRef.current.transcript : applySessionEvents(stateRef.current.transcript, coalescedEvents);
+    if (coalescedEvents.length > 0) {
+      dispatch({ type: "events", events: coalescedEvents });
+      const nextOutline = applyOutlineEvents(userMessagesRef.current, coalescedEvents, nextTranscript);
+      if (nextOutline !== userMessagesRef.current) {
+        userMessagesRef.current = nextOutline;
+        setUserMessages(nextOutline);
+      }
     }
     // 会话 run 结束（完成/失败）：页面在后台时弹浏览器通知。
     // 同步冲刷时 React 的 stateRef 尚未更新（useEffect 异步），通知正文需基于
     // “当前 transcript 应用本批事件后”的结果计算，否则会漏掉刚完成的最后一条助手消息。
     const settledEvents = events.filter((event) => event.type === "run.settled" || event.type === "run.failed");
     if (settledEvents.length > 0) {
-      const items = applySessionEvents(stateRef.current.transcript, coalesceStreamEvents(transcriptEvents)).items;
       for (const event of settledEvents) {
-        const notification = runNotificationFor(event, items);
+        const notification = runNotificationFor(event, nextTranscript.items);
         if (notification !== undefined) {
           notifyRunFinished({ ...notification, sessionName: sessionNameRef.current });
         }
@@ -240,6 +268,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
       const [page, snapshot] = await Promise.all([api.timeline(ref, undefined, INITIAL_TIMELINE_LIMIT), api.runtime(ref)]);
       if (!shouldApplySessionRefresh({ selectedKey, currentKey: refKeyRef.current, selectedHistoryGeneration: selectedGeneration, currentHistoryGeneration: historyLoadGeneration.current, requestGeneration, currentRequestGeneration: refreshGeneration.current })) return;
       applyHydration(selectedKey, page, snapshot, connection);
+      void loadUserMessagesRef.current(selectedKey, selectedGeneration);
     } catch (error: unknown) {
       if (!shouldApplySessionRefresh({ selectedKey, currentKey: refKeyRef.current, selectedHistoryGeneration: selectedGeneration, currentHistoryGeneration: historyLoadGeneration.current, requestGeneration, currentRequestGeneration: refreshGeneration.current })) return;
       dispatch({ type: "hydrate-error", sessionKey: selectedKey, error: error instanceof Error ? error.message : "无法加载此会话" });
@@ -253,7 +282,11 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     const current = stateRef.current;
     if (current.sessionKey !== undefined) rememberTranscript(current.sessionKey, current.transcript);
     historyLoadGeneration.current += 1;
+    loadingEarlierLock.current = false;
     setLoadingEarlier(false);
+    userMessagesRef.current = [];
+    setUserMessages([]);
+    setUserMessagesLoading(ref !== undefined);
     dispatch({ type: "select", sessionKey: refKey, ...(refKey === undefined ? {} : { transcript: transcriptCache.current.get(refKey) }) });
     setExtensionPanels({ widgets: {}, statuses: {} });
     if (ref === undefined || refKey === undefined) {
@@ -501,19 +534,74 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     if (refKeyRef.current === selectedKey) dispatch({ type: "thinking", thinking });
   }, [refKey]);
 
+  const loadUserMessages = useCallback(async (sessionKey: string, generation: number) => {
+    if (ref === undefined) return;
+    try {
+      const { messages } = await api.userMessages(ref);
+      if (refKeyRef.current !== sessionKey || historyLoadGeneration.current !== generation) return;
+      userMessagesRef.current = messages;
+      setUserMessages(messages);
+    } catch {
+      // Keep a cached/partial outline; the navigator can fall back to loaded items.
+    } finally {
+      if (refKeyRef.current === sessionKey && historyLoadGeneration.current === generation) setUserMessagesLoading(false);
+    }
+  }, [refKey]);
+  useEffect(() => { loadUserMessagesRef.current = loadUserMessages; }, [loadUserMessages]);
+  useEffect(() => {
+    if (refKey === undefined) return;
+    void loadUserMessages(refKey, historyLoadGeneration.current);
+  }, [refKey, loadUserMessages]);
+
   const loadEarlier = useCallback(async () => {
-    if (ref === undefined || !stateRef.current.transcript.hasMore || loadingEarlier) return;
+    if (ref === undefined || !stateRef.current.transcript.hasMore || loadingEarlierLock.current) return;
     const selectedKey = refKey;
     if (selectedKey === undefined) return;
     const generation = historyLoadGeneration.current;
+    loadingEarlierLock.current = true;
     setLoadingEarlier(true);
     try {
       const page = await api.timeline(ref, stateRef.current.transcript.start);
       if (historyLoadGeneration.current === generation && refKeyRef.current === selectedKey) dispatch({ type: "prepend", sessionKey: selectedKey, page });
     } finally {
-      if (historyLoadGeneration.current === generation && refKeyRef.current === selectedKey) setLoadingEarlier(false);
+      if (historyLoadGeneration.current === generation && refKeyRef.current === selectedKey) {
+        loadingEarlierLock.current = false;
+        setLoadingEarlier(false);
+      }
     }
-  }, [refKey, loadingEarlier]);
+  }, [refKey]);
+
+  const loadUntilMessage = useCallback(async (id: string) => {
+    if (ref === undefined || refKey === undefined) return;
+    if (stateRef.current.transcript.items.some((item) => item.id === id)) return;
+    const selectedKey = refKey;
+    const generation = historyLoadGeneration.current;
+    while (loadingEarlierLock.current) {
+      if (stateRef.current.transcript.items.some((item) => item.id === id)) return;
+      await new Promise((resolve) => window.setTimeout(resolve, 32));
+      if (historyLoadGeneration.current !== generation || refKeyRef.current !== selectedKey) return;
+    }
+    if (stateRef.current.transcript.items.some((item) => item.id === id)) return;
+    loadingEarlierLock.current = true;
+    setLoadingEarlier(true);
+    try {
+      let transcript = stateRef.current.transcript;
+      while (historyLoadGeneration.current === generation && refKeyRef.current === selectedKey) {
+        if (transcript.items.some((item) => item.id === id)) return;
+        if (!transcript.hasMore) return;
+        const target = userMessagesRef.current.find((message) => message.id === id);
+        const page = await api.timeline(ref, transcript.start, earlierPageLimit(transcript.start, target?.itemIndex));
+        if (historyLoadGeneration.current !== generation || refKeyRef.current !== selectedKey) return;
+        dispatch({ type: "prepend", sessionKey: selectedKey, page });
+        transcript = prependTranscript(transcript, page);
+      }
+    } finally {
+      if (historyLoadGeneration.current === generation && refKeyRef.current === selectedKey) {
+        loadingEarlierLock.current = false;
+        setLoadingEarlier(false);
+      }
+    }
+  }, [refKey]);
 
   const respondExtensionUi = useCallback(async (id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> => {
     if (ref === undefined) throw new Error("会话已关闭");
@@ -530,7 +618,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   }, []);
   const discardOptimisticUser = useCallback((id: string) => { dispatch({ type: "discard-optimistic-user", id }); }, []);
   const replaceUserMessage = useCallback((messageId: string, id: string, text: string, images: import("../../shared/protocol").ImageAttachment[]) => { dispatch({ type: "replace-user", messageId, id, text, images }); }, []);
-  return { ...state, refresh, loadEarlier, loadingEarlier, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
+  return { ...state, refresh, loadEarlier, loadUntilMessage, loadingEarlier, userMessages, userMessagesLoading, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
 }
 
 function runNotificationFor(event: SessionEvent, items: TimelineItem[]): RunNotificationInfo | undefined {

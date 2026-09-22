@@ -18,6 +18,7 @@ import type {
   SessionThinkingSnapshot,
   ThinkingLevel,
   TimelinePage,
+  UserMessageOutline,
   TunnelInput,
   TunnelSnapshot,
   WorkspaceFile,
@@ -255,6 +256,7 @@ export const api = {
     const query = params.size === 0 ? "" : `?${params.toString()}`;
     return request(`${sessionPath(ref)}/timeline${query}`);
   },
+  userMessages: async (ref: SessionRef): Promise<{ messages: UserMessageOutline[] }> => request(`${sessionPath(ref)}/user-messages`),
   runtime: async (ref: SessionRef): Promise<SessionStreamSnapshot> => request(`${sessionPath(ref)}/runtime`),
   setModel: async (ref: SessionRef, model: Pick<ModelDescriptor, "provider" | "id">): Promise<ModelDescriptor> => (await request<{ model: ModelDescriptor }>(`${sessionPath(ref)}/model`, { method: "PUT", body: JSON.stringify({ provider: model.provider, modelId: model.id }) })).model,
   setThinkingLevel: async (ref: SessionRef, level: ThinkingLevel): Promise<SessionThinkingSnapshot> => (await request<{ thinking: SessionThinkingSnapshot }>(`${sessionPath(ref)}/thinking`, { method: "PUT", body: JSON.stringify({ level }) })).thinking,
