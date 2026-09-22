@@ -93,7 +93,8 @@ export async function listSessionFiles(workspace: Workspace): Promise<SessionFil
     if (isMissingFile(error)) return [];
     throw error;
   }
-  const files = await Promise.all(names.filter((name) => name.endsWith(".jsonl")).map(async (name) => {
+  const jsonlNames = names.filter((name) => name.endsWith(".jsonl"));
+  const files = await mapLimit(jsonlNames, HEADER_READ_CONCURRENCY, async (name) => {
     const path = join(directory, name);
     const header = await readSessionFileHeader(path);
     if (header === undefined || !isVisibleSessionId(header.id)) return undefined;
@@ -111,7 +112,7 @@ export async function listSessionFiles(workspace: Workspace): Promise<SessionFil
       mtimeIso: stats.mtime.toISOString(),
       ...(header.timestamp === undefined ? {} : { timestamp: header.timestamp }),
     };
-  }));
+  });
   return files.filter((file): file is SessionFileIndex => file !== undefined);
 }
 
@@ -158,6 +159,9 @@ export async function findSessionFile(workspace: Workspace, sessionId: string): 
 }
 
 const SESSION_HEADER_SCAN_BYTES = 64 * 1024;
+const SESSION_LIST_HEAD_SCAN_BYTES = 256 * 1024;
+const SESSION_LIST_TAIL_SCAN_BYTES = 64 * 1024;
+const HEADER_READ_CONCURRENCY = 16;
 
 export async function readSessionFileHeader(path: string): Promise<{ id: string; cwd?: string; timestamp?: string } | undefined> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
@@ -200,25 +204,35 @@ export async function sessionFileMtimeMs(path: string): Promise<number | undefin
 
 /** 只取侧栏需要的名称和首条用户消息，不拼全文。 */
 export async function readSessionListCopy(path: string): Promise<{ name: string | null; preview: string | null }> {
+  const [head, tailName] = await Promise.all([readSessionListHead(path), readLatestSessionInfoName(path)]);
+  return { name: tailName !== undefined ? tailName : head.name, preview: head.preview };
+}
+
+async function readSessionListHead(path: string): Promise<{ name: string | null; preview: string | null }> {
   let stream: ReturnType<typeof createReadStream> | undefined;
   let lines: ReturnType<typeof createInterface> | undefined;
   let name: string | null = null;
   let preview: string | null = null;
+  let bytes = 0;
   try {
     stream = createReadStream(path, { encoding: "utf8" });
     lines = createInterface({ input: stream, crlfDelay: Infinity });
     for await (const line of lines) {
+      bytes += Buffer.byteLength(line) + 1;
       const parsed = parseJsonlRecord(line);
-      if (parsed === undefined) continue;
-      if (parsed["type"] === "session_info") {
-        name = sessionInfoName(parsed);
+      if (parsed === undefined) {
+        if (bytes >= SESSION_LIST_HEAD_SCAN_BYTES) break;
         continue;
       }
-      if (preview !== null || parsed["type"] !== "message") continue;
-      const message = parsed["message"];
-      if (!isRecord(message) || message["role"] !== "user") continue;
-      const text = userContentFromContent(message["content"]).text.trim();
-      if (text !== "") preview = text;
+      if (parsed["type"] === "session_info") name = sessionInfoName(parsed);
+      else if (preview === null && parsed["type"] === "message") {
+        const message = parsed["message"];
+        if (isRecord(message) && message["role"] === "user") {
+          const text = userContentFromContent(message["content"]).text.trim();
+          if (text !== "") preview = text;
+        }
+      }
+      if (preview !== null || bytes >= SESSION_LIST_HEAD_SCAN_BYTES) break;
     }
   } catch {
     return { name, preview };
@@ -227,6 +241,48 @@ export async function readSessionListCopy(path: string): Promise<{ name: string 
     stream?.destroy();
   }
   return { name, preview };
+}
+
+async function readLatestSessionInfoName(path: string): Promise<string | null | undefined> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, "r");
+    const metadata = await handle.stat();
+    if (metadata.size === 0) return undefined;
+    const length = Math.min(SESSION_LIST_TAIL_SCAN_BYTES, metadata.size);
+    const start = metadata.size - length;
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, start);
+    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    const lines = text.split("\n");
+    if (start > 0 && lines.length > 0) lines.shift();
+    let name: string | null | undefined;
+    for (const line of lines) {
+      const parsed = parseJsonlRecord(line);
+      if (parsed?.["type"] === "session_info") name = sessionInfoName(parsed);
+    }
+    return name;
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function mapLimit<T, R>(items: readonly T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length) }, () => worker()));
+  return results;
 }
 
 function parseJsonlRecord(line: string): Record<string, unknown> | undefined {

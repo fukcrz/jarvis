@@ -96,30 +96,51 @@ async function listBySearch(deps: SessionCatalogDeps, workspaceId: string, needl
 export async function listFileReferences(deps: SessionCatalogDeps, workspaceId: string, query?: string): Promise<SessionFileReference[]> {
   const workspace = deps.workspaces.get(workspaceId);
   const sideIds = await deps.attention.sideChatIds(workspaceId);
-  const listed = (await listManagedSessions(workspace.cwd)).filter((entry) => isVisibleSessionId(entry.id) && !sideIds.has(entry.id));
+  const files = (await listSessionFiles(workspace)).filter((file) => !sideIds.has(file.id));
+  const sortMeta = await deps.attention.list(workspaceId);
   const activeById = new Map(
     [...deps.active.values()]
       .filter((active) => active.ref.workspaceId === workspaceId && isVisibleSessionId(active.ref.sessionId) && !sideIds.has(active.ref.sessionId) && active.readOnly !== true)
       .map((active) => [active.ref.sessionId, active]),
   );
   const needle = query?.trim().toLocaleLowerCase() ?? "";
-  return listed
-    .map((entry) => ({
-      id: entry.id,
-      name: entry.name ?? null,
-      preview: entry.firstMessage || null,
-      path: entry.path,
-      active: activeById.get(entry.id),
-    }))
-    .concat([...activeById.values()]
-      .filter((active) => !listed.some((entry) => entry.id === active.ref.sessionId) && active.session.sessionFile !== undefined)
-      .map((active) => ({
-        id: active.ref.sessionId,
-        name: active.session.sessionName ?? null,
-        preview: firstUserMessage(active.session.sessionManager.getBranch()),
-        path: active.session.sessionFile!,
-        active,
-      })))
+  const copiesToPersist: Array<{ ref: SessionRef; copy: SessionListCopy }> = [];
+  const listed = await Promise.all(files.map(async (file) => {
+    const ref = { workspaceId, sessionId: file.id };
+    const active = activeById.get(file.id);
+    const persisted = sortMeta.get(file.id);
+    let name = active?.session.sessionName ?? persisted?.name ?? null;
+    let preview = active === undefined ? persisted?.preview ?? null : firstUserMessage(active.session.sessionManager.getBranch());
+    if (active === undefined && persisted?.listCopyMtime !== file.mtimeMs) {
+      const scanned = await readSessionListCopy(file.path);
+      name = scanned.name ?? name;
+      preview = scanned.preview ?? preview;
+      copiesToPersist.push({ ref, copy: { name: scanned.name, preview: scanned.preview, listCopyMtime: file.mtimeMs } });
+    }
+    return {
+      id: file.id,
+      name,
+      preview: preview === "" ? null : preview,
+      path: file.path,
+      active,
+    };
+  }));
+  const seen = new Set(listed.map((entry) => entry.id));
+  const extras = [...activeById.values()].flatMap((active) => {
+    const path = active.session.sessionFile;
+    if (seen.has(active.ref.sessionId) || path === undefined) return [];
+    return [{
+      id: active.ref.sessionId,
+      name: active.session.sessionName ?? null,
+      preview: firstUserMessage(active.session.sessionManager.getBranch()),
+      path,
+      active,
+    }];
+  });
+  if (copiesToPersist.length > 0) {
+    void deps.attention.setListCopies(copiesToPersist).catch((error: unknown) => console.warn("Could not persist session list copy", error));
+  }
+  return listed.concat(extras)
     .filter((entry) => needle === "" || `${entry.name ?? ""}\n${entry.preview ?? ""}`.toLocaleLowerCase().includes(needle))
     .sort((left, right) => (right.active?.updatedAt ?? "").localeCompare(left.active?.updatedAt ?? ""))
     .map(({ id, name, preview, path }) => ({ id, name, preview, path }));

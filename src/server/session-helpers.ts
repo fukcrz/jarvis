@@ -2,7 +2,7 @@ import type { MessageTimelineItem, QueuedMessage, RetryStatus, SessionRef, Sessi
 import { isRecord } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION } from "./extension-ui.js";
-import { projectHistory } from "./projection.js";
+import { assistantTextFromContent, projectHistory, userContentFromContent } from "./projection.js";
 import { stringValue } from "./values.js";
 
 export function activeKey(ref: SessionRef): string {
@@ -123,17 +123,32 @@ export function findUserMessageEntry(entries: readonly unknown[], messageId: str
 }
 
 export function firstUserMessage(entries: readonly unknown[]): string | null {
-  const history = projectHistory(entries);
-  return history.find((item): item is MessageTimelineItem => item.kind === "message" && item.role === "user")?.text ?? null;
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry["type"] !== "message") continue;
+    const message = entry["message"];
+    if (!isRecord(message) || message["role"] !== "user") continue;
+    const text = userContentFromContent(message["content"]).text.trim();
+    if (text !== "") return text;
+  }
+  return null;
 }
 
 /** 内存中活跃会话的全文检索文本：名称 + 首条消息 + 全部 user/assistant 消息文本。 */
 export function sessionBranchSearchText(name: string | null, preview: string | null, entries: readonly unknown[]): string {
-  const text = projectHistory(entries)
-    .filter((item): item is MessageTimelineItem => item.kind === "message")
-    .map((item) => item.text)
-    .join("\n");
-  return `${name ?? ""}\n${preview ?? ""}\n${text}`;
+  const texts: string[] = [];
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry["type"] !== "message") continue;
+    const message = entry["message"];
+    if (!isRecord(message)) continue;
+    const role = message["role"];
+    const text = role === "user"
+      ? userContentFromContent(message["content"]).text.trim()
+      : role === "assistant"
+        ? assistantTextFromContent(message["content"]).trim()
+        : "";
+    if (text !== "") texts.push(text);
+  }
+  return `${name ?? ""}\n${preview ?? ""}\n${texts.join("\n")}`;
 }
 
 /** 命中关键词时提取其周围上下文（±48 字符），用于搜索结果中展示命中原因。 */

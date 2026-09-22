@@ -7,9 +7,14 @@ import type { DirectoryListing, WorkspaceDirectoryListing, WorkspaceFile, Worksp
 import { AppError } from "./errors.js";
 import { isMissingFile } from "./fs.js";
 
-const IGNORED_SEARCH_DIRECTORIES = new Set([".git", "node_modules", "dist", "coverage", ".next"]);
+const IGNORED_SEARCH_DIRECTORIES = new Set([
+  ".git", "node_modules", "dist", "coverage", ".next",
+  ".venv", "venv", "vendor", "target", "build", "out",
+  ".turbo", ".cache", "__pycache__", ".idea", ".vscode",
+]);
 const MAX_FILE_SEARCH_RESULTS = 80;
 const MAX_FILE_SEARCH_DEPTH = 14;
+const MAX_FILE_SEARCH_VISITS = 4_000;
 export const MAX_BROWSER_FILE_BYTES = 512 * 1024;
 const MAX_TEXT_FILE_BYTES = MAX_BROWSER_FILE_BYTES * 8;
 
@@ -299,9 +304,10 @@ export async function readTextFile(filePath: string, metadata: { size: number },
 export async function searchWorkspaceFiles(cwd: string, query: string): Promise<WorkspaceFile[]> {
   const normalizedQuery = query.trim().replaceAll("\\", "/").toLocaleLowerCase();
   const matches: Array<{ path: string; score: number }> = [];
+  let visits = 0;
 
   const visit = async (directory: string, depth: number): Promise<void> => {
-    if (matches.length >= MAX_FILE_SEARCH_RESULTS || depth > MAX_FILE_SEARCH_DEPTH) return;
+    if (matches.length >= MAX_FILE_SEARCH_RESULTS || depth > MAX_FILE_SEARCH_DEPTH || visits >= MAX_FILE_SEARCH_VISITS) return;
     let entries;
     try {
       entries = await readdir(directory, { withFileTypes: true });
@@ -309,7 +315,8 @@ export async function searchWorkspaceFiles(cwd: string, query: string): Promise<
       return;
     }
     for (const entry of entries) {
-      if (matches.length >= MAX_FILE_SEARCH_RESULTS) return;
+      if (matches.length >= MAX_FILE_SEARCH_RESULTS || visits >= MAX_FILE_SEARCH_VISITS) return;
+      visits += 1;
       const absolutePath = join(directory, entry.name);
       if (entry.isDirectory()) {
         if (!IGNORED_SEARCH_DIRECTORIES.has(entry.name)) await visit(absolutePath, depth + 1);

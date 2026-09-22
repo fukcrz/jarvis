@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clamp, isVisibleSessionId, mergeQueuedMessages, queuedMessage, snippetAround } from "./session-helpers.js";
+import { clamp, firstUserMessage, isVisibleSessionId, mergeQueuedMessages, queuedMessage, sessionBranchSearchText, snippetAround } from "./session-helpers.js";
 
 describe("isVisibleSessionId", () => {
   it("hides pi-subagent child sessions", () => {
@@ -31,5 +31,24 @@ describe("mergeQueuedMessages", () => {
 describe("snippetAround", () => {
   it("returns undefined when the needle is missing", () => {
     expect(snippetAround("alpha beta", "zzz")).toBeUndefined();
+  });
+});
+
+describe("firstUserMessage", () => {
+  it("returns the first non-empty user text without projecting tools", () => {
+    expect(firstUserMessage([
+      { type: "message", id: "a", message: { role: "assistant", content: [{ type: "toolCall", id: "c", name: "read", arguments: {} }] } },
+      { type: "message", id: "u", message: { role: "user", content: "Hello there" } },
+    ])).toBe("Hello there");
+    expect(firstUserMessage([])).toBeNull();
+  });
+});
+
+describe("sessionBranchSearchText", () => {
+  it("joins user and assistant text without tool payloads", () => {
+    expect(sessionBranchSearchText("Named", "Hello there", [
+      { type: "message", id: "u", message: { role: "user", content: "Hello there" } },
+      { type: "message", id: "a", message: { role: "assistant", content: [{ type: "text", text: "Done" }, { type: "toolCall", id: "c", name: "read", arguments: { path: "secret.bin" } }] } },
+    ])).toBe("Named\nHello there\nHello there\nDone");
   });
 });
