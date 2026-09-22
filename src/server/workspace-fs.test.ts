@@ -1,8 +1,8 @@
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { fileMatchScore, parseByteRange, resolveFileRequestPath } from "./workspace-fs.js";
+import { fileMatchScore, parseByteRange, resolveFileRequestPath, searchWorkspaceFiles } from "./workspace-fs.js";
 
 describe("parseByteRange", () => {
   it("parses closed, open, and suffix ranges", () => {
@@ -17,6 +17,24 @@ describe("parseByteRange", () => {
     expect(parseByteRange(undefined, 8)).toBeUndefined();
     expect(parseByteRange("bytes=-0", 8)).toBe("unsatisfiable");
     expect(parseByteRange("bytes=0-3", 0)).toBe("unsatisfiable");
+  });
+});
+
+describe("searchWorkspaceFiles", () => {
+  it("skips virtualenv trees but still returns editor-config files", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "jarvis-search-"));
+    try {
+      await mkdir(join(directory, ".venv", "lib"), { recursive: true });
+      await mkdir(join(directory, ".vscode"), { recursive: true });
+      await writeFile(join(directory, ".venv", "lib", "site.py"), "x");
+      await writeFile(join(directory, ".vscode", "settings.json"), "{}");
+      await writeFile(join(directory, "app.ts"), "x");
+      const paths = (await searchWorkspaceFiles(directory, "")).map((file) => file.path.replaceAll("\\", "/"));
+      expect(paths).toEqual(expect.arrayContaining(["app.ts", ".vscode/settings.json"]));
+      expect(paths.some((path) => path.includes(".venv"))).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

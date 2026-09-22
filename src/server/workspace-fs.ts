@@ -9,8 +9,7 @@ import { isMissingFile } from "./fs.js";
 
 const IGNORED_SEARCH_DIRECTORIES = new Set([
   ".git", "node_modules", "dist", "coverage", ".next",
-  ".venv", "venv", "vendor", "target", "build", "out",
-  ".turbo", ".cache", "__pycache__", ".idea", ".vscode",
+  ".venv", "venv", "vendor", "target", ".turbo", ".cache", "__pycache__",
 ]);
 const MAX_FILE_SEARCH_RESULTS = 80;
 const MAX_FILE_SEARCH_DEPTH = 14;
