@@ -99,6 +99,26 @@ fn set_notifications_enabled(state: State<AppState>, enabled: bool) {
 
 fn start_backend(app: AppHandle) {
   set_splash(&app, "正在启动");
+  let port = desktop_port();
+  match probe_existing_jarvis(port) {
+    Some(true) => {
+      if let Ok(mut slot) = app.state::<AppState>().port.lock() {
+        *slot = Some(port);
+      }
+      open_ui(&app, port);
+      let handle = app.clone();
+      tauri::async_runtime::spawn(async move {
+        let _ = check_update(handle, true).await;
+      });
+      return;
+    }
+    Some(false) => {
+      set_splash(&app, "启动失败");
+      let _ = app.dialog_message(&format!("端口 {port} 已被其他程序占用"));
+      return;
+    }
+    None => {}
+  }
   let node = match node::resolve_node() {
     Ok(path) => path,
     Err(_) => {
@@ -114,7 +134,6 @@ fn start_backend(app: AppHandle) {
     }
   };
   let root = jarvis_root(&app);
-  let port = desktop_port();
   let app_for_events = app.clone();
   match sidecar::spawn_sidecar(&node, &root, port, move |event| handle_event(&app_for_events, event)) {
     Ok(child) => {
@@ -130,7 +149,7 @@ fn start_backend(app: AppHandle) {
   }
   if !wait_for_port(&app, Duration::from_secs(30)) {
     set_splash(&app, "启动失败");
-    let _ = app.dialog_message("Jarvis 服务未能在 30 秒内启动。若端口已被占用，请先停止其他 Jarvis 服务。");
+    let _ = app.dialog_message("Jarvis 服务未能在 30 秒内启动");
   }
 }
 
@@ -260,6 +279,16 @@ fn sidecar_busy(app: &AppHandle) -> bool {
   let Ok(response) = ureq::get(&url).timeout(Duration::from_secs(2)).call() else { return false };
   let Ok(body) = response.into_json::<serde_json::Value>() else { return false };
   body.get("running").and_then(serde_json::Value::as_u64).unwrap_or(0) > 0
+}
+
+/// `None` = 没人听端口；`Some(true)` = 已有 Jarvis；`Some(false)` = 被别的程序占用。
+fn probe_existing_jarvis(port: u16) -> Option<bool> {
+  let url = format!("http://127.0.0.1:{port}/api/health");
+  match ureq::get(&url).timeout(Duration::from_secs(1)).call() {
+    Ok(response) => Some(response.into_json::<serde_json::Value>().ok().and_then(|body| body.get("ok")?.as_bool()) == Some(true)),
+    Err(ureq::Error::Status(_, _)) => Some(false),
+    Err(_) => None,
+  }
 }
 
 async fn check_update(app: AppHandle, silent: bool) -> Result<(), String> {
