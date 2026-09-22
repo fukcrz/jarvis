@@ -235,6 +235,8 @@ export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadi
     const updateDockLayout = () => {
       const shellRect = shell.getBoundingClientRect();
       const dockRect = dock.getBoundingClientRect();
+      stage.style.setProperty("--chat-dock-space", `${String(Math.ceil(dockRect.height + 18))}px`);
+      if (followingRef.current) element.scrollTop = element.scrollHeight;
       const composerEditor = dock.querySelector<HTMLElement>(".composer-editor");
       const nextBottom = jumpLatestBottomForDock(shellRect.bottom, dockRect.top);
       const nextHide = shouldHideJumpLatestForComposer(isMobile, composerEditor?.getBoundingClientRect().height ?? 0);
@@ -249,6 +251,7 @@ export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadi
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", updateDockLayout);
+      stage.style.removeProperty("--chat-dock-space");
     };
   }, [isMobile]);
 
