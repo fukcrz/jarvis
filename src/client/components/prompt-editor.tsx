@@ -11,6 +11,7 @@ import { ImagePreview } from "./image-lightbox";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
+const COMPLETION_SEARCH_DEBOUNCE_MS = 120;
 const basicSetup: BasicSetupOptions = { lineNumbers: false, foldGutter: false, highlightActiveLine: false };
 // Module-level so the array identity never changes; a new identity per render
 // would make useCodeMirror reconfigure (and effectively reset) the editor.
@@ -84,6 +85,7 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   const busyRef = useRef(busy);
   const submittingRef = useRef(false);
   const searchRequestRef = useRef(0);
+  const completionTimerRef = useRef<number | undefined>(undefined);
   const completionItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const attachmentsRef = useRef(attachments);
   const injectedTextRef = useRef(injectedText);
@@ -142,9 +144,16 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   }, [focusRequestRef]);
 
   const closeCompletion = useCallback(() => {
+    if (completionTimerRef.current !== undefined) {
+      window.clearTimeout(completionTimerRef.current);
+      completionTimerRef.current = undefined;
+    }
     searchRequestRef.current += 1;
     setCompletion(undefined);
     setSelectedIndex(0);
+  }, []);
+  useEffect(() => () => {
+    if (completionTimerRef.current !== undefined) window.clearTimeout(completionTimerRef.current);
   }, []);
   const onDraftChangeRef = useRef(onDraftChange);
   onDraftChangeRef.current = onDraftChange;
@@ -156,8 +165,11 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
       return;
     }
 
-    const request = ++searchRequestRef.current;
     if (context.trigger === "/") {
+      if (completionTimerRef.current !== undefined) {
+        window.clearTimeout(completionTimerRef.current);
+        completionTimerRef.current = undefined;
+      }
       const items = matchingComposerCommands(commandsRef.current, context.query)
         .map((command) => ({ kind: "command" as const, command }));
       setCompletion(items.length === 0 ? undefined : { trigger: context.trigger, from: context.from, items });
@@ -165,17 +177,27 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
       return;
     }
 
-    const search = context.trigger === "@@" ? searchSessionFilesRef.current(context.query) : searchFilesRef.current(context.query);
-    void search.then((results) => {
-      if (request !== searchRequestRef.current) return;
-      const items = context.trigger === "@@"
-        ? (results as SessionFileReference[]).slice(0, MAX_COMPOSER_SUGGESTIONS).map((session) => ({ kind: "session" as const, session }))
-        : (results as WorkspaceFile[]).slice(0, MAX_COMPOSER_SUGGESTIONS).map((file) => ({ kind: "file" as const, file }));
-      setCompletion(items.length === 0 ? undefined : { trigger: context.trigger, from: context.from, items });
-      setSelectedIndex(0);
-    }).catch(() => {
-      if (request === searchRequestRef.current) closeCompletion();
-    });
+    if (completionTimerRef.current !== undefined) window.clearTimeout(completionTimerRef.current);
+    completionTimerRef.current = window.setTimeout(() => {
+      completionTimerRef.current = undefined;
+      const latest = completionContextFor(view.state.doc.toString(), view.state.selection.main.head);
+      if (latest === undefined || (latest.trigger !== "@" && latest.trigger !== "@@")) {
+        closeCompletion();
+        return;
+      }
+      const request = ++searchRequestRef.current;
+      const search = latest.trigger === "@@" ? searchSessionFilesRef.current(latest.query) : searchFilesRef.current(latest.query);
+      void search.then((results) => {
+        if (request !== searchRequestRef.current) return;
+        const items = latest.trigger === "@@"
+          ? (results as SessionFileReference[]).slice(0, MAX_COMPOSER_SUGGESTIONS).map((session) => ({ kind: "session" as const, session }))
+          : (results as WorkspaceFile[]).slice(0, MAX_COMPOSER_SUGGESTIONS).map((file) => ({ kind: "file" as const, file }));
+        setCompletion(items.length === 0 ? undefined : { trigger: latest.trigger, from: latest.from, items });
+        setSelectedIndex(0);
+      }).catch(() => {
+        if (request === searchRequestRef.current) closeCompletion();
+      });
+    }, COMPLETION_SEARCH_DEBOUNCE_MS);
   }, [closeCompletion]);
   const refreshCompletionRef = useRef(refreshCompletion);
   refreshCompletionRef.current = refreshCompletion;
