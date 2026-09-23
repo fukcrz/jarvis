@@ -26,3 +26,8 @@ src-tauri/runtime-staging/*
 !src-tauri/runtime-staging/.gitkeep
 src-tauri/*.key
 src-tauri/*.key.pub
+src-tauri/gen/
+/jarvis-desktop.exe
+/uninstall.exe
+/jarvis/
+logs/
