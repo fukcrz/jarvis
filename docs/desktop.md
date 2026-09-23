@@ -11,6 +11,7 @@ Windows 先行的 Tauri 壳。窗口加载本机 Fastify 服务，数据仍在 `
 - 本机已有 Jarvis 在跑时，窗口直接连上，不另起一份；退出桌面壳也不会关掉那份服务
 - 端口被非 Jarvis 程序占用才启动失败
 - 自动更新读取公开 GitHub Releases 的 `latest.json`
+- 聊天和设置里的外链用系统浏览器打开，不离开 Jarvis 窗口
 
 ## 开发
 

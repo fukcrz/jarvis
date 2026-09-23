@@ -3,7 +3,13 @@ import { createRoot } from "react-dom/client";
 import { HashRouter } from "react-router";
 import { App } from "./app";
 import { AuthGate } from "./components/auth-gate";
+import { openExternalUrl } from "./desktop";
+import { installExternalLinkHandler } from "./lib/external-links";
 import "./styles.css";
+
+installExternalLinkHandler((url) => {
+  void openExternalUrl(url);
+});
 
 let lastCoarseAt = 0;
 

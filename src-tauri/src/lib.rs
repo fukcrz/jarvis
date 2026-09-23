@@ -51,7 +51,7 @@ pub fn run() {
       last_session: Mutex::new(None),
       quitting: AtomicBool::new(false),
     })
-    .invoke_handler(tauri::generate_handler![set_notifications_enabled])
+    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url])
     .setup(|app| {
       let handle = app.handle().clone();
       build_tray(&handle)?;
@@ -95,6 +95,29 @@ pub fn run() {
 fn set_notifications_enabled(state: State<AppState>, enabled: bool) {
   state.notifications_enabled.store(enabled, Ordering::Relaxed);
   save_notifications_enabled(enabled);
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+  open_http_url(&url)
+}
+
+fn open_http_url(url: &str) -> Result<(), String> {
+  if !url.starts_with("https://") && !url.starts_with("http://") {
+    return Err("只支持 http(s) 链接".into());
+  }
+  open::that_detached(url).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod open_url_tests {
+  use super::open_http_url;
+
+  #[test]
+  fn rejects_non_http() {
+    assert!(open_http_url("javascript:alert(1)").is_err());
+    assert!(open_http_url("file:///C:/Windows/notepad.exe").is_err());
+  }
 }
 
 fn start_backend(app: AppHandle) {
