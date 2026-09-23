@@ -498,12 +498,17 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
                   return;
                 }
                 lastAttachOpenRef.current = now;
+                viewRef.current?.contentDOM.blur();
               }} onChange={(event) => {
                 lastAttachOpenRef.current = Date.now();
                 const input = event.currentTarget;
                 const files = Array.from(input.files ?? []);
                 handleFiles(files);
-                window.setTimeout(() => { input.value = ""; }, 0);
+                blurAfterAttach(input, viewRef.current);
+                window.setTimeout(() => {
+                  input.value = "";
+                  blurAfterAttach(input, viewRef.current);
+                }, 0);
               }} />
               <Plus size={16} />
             </div>
@@ -525,6 +530,11 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
       </div>
     </section>
   );
+}
+
+function blurAfterAttach(input: HTMLInputElement, view: EditorView | undefined) {
+  input.blur();
+  view?.contentDOM.blur();
 }
 
 function quoteFileReference(path: string): string {

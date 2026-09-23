@@ -24,6 +24,7 @@ import { Dialog, DialogContent } from "./components/ui/dialog";
 import { WorkspaceDialog } from "./components/workspace-dialog";
 import { Tooltip } from "./components/ui/tooltip";
 import { installBodyPointerEventsGuard, installTextSelectionGuard, installTouchFocusGuard } from "./lib/pointer-events";
+import { installVisualViewportHeight } from "./lib/visual-viewport";
 import { isSettingsPath, navigateBackOr } from "./lib/settings-routes";
 import {
   clearIdleAttention,
@@ -222,22 +223,9 @@ export function App() {
     };
   }, []);
 
-  // Track the visual viewport so mobile layouts can shrink below the on-screen
-  // keyboard (dvh does not include it on iOS/Android). Sets --vvh on the root;
-  // CSS falls back to 100dvh when this runs in a browser without visualViewport.
-  useEffect(() => {
-    const visualViewport = window.visualViewport;
-    if (visualViewport === null) return;
-    const root = document.documentElement;
-    const update = () => { root.style.setProperty("--vvh", `${String(visualViewport.height)}px`); };
-    update();
-    visualViewport.addEventListener("resize", update);
-    visualViewport.addEventListener("scroll", update);
-    return () => {
-      visualViewport.removeEventListener("resize", update);
-      visualViewport.removeEventListener("scroll", update);
-    };
-  }, []);
+  // --vvh follows the visual viewport so mobile layouts shrink under the keyboard.
+  // CSS falls back to 100dvh when visualViewport is missing.
+  useEffect(() => installVisualViewportHeight(), []);
 
   // 移动端：其他输入框（历史消息编辑、扩展输入等）聚焦时收起底部输入栏，
   // 避免键盘顶起后两个输入框竞争垂直空间；失焦后恢复。
