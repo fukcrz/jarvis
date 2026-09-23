@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdate, useCodeMirror } from "@uiw/react-codemirror";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { ArrowUp, Command, FileCode2, History, LoaderCircle, MessageSquare, Plus, RotateCcw, Square, X, Zap } from "lucide-react";
+import { ArrowUp, Command, FileCode2, History, LoaderCircle, Plus, RotateCcw, Square, X, Zap } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionFileReference, SessionQueue, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { composerDraftSyncAction, isComposerCompositionPending } from "../lib/composer-draft";
@@ -59,11 +59,9 @@ interface PromptEditorProps {
   /** 切换单条排队消息的投递方式（后续 ↔ 紧急插队）。 */
   onToggleKind: (messageId: string) => void;
   controls?: ReactNode;
-  /** 移动端：其他输入框聚焦时折叠为紧凑的"发消息"按钮（编辑器保持挂载，草稿不丢）。 */
+  /** 移动端：其他输入框聚焦时收起输入栏（编辑器保持挂载，草稿不丢）。 */
   collapsed?: boolean;
-  /** 折叠按钮点击回调：App 负责收起当前输入焦点并展开编辑器。 */
-  onCollapsedClick?: () => void;
-  /** 暴露"聚焦编辑器"的方法，供折叠态点击恢复后调用。 */
+  /** 暴露"聚焦编辑器"的方法，供外部在需要时调用。 */
   focusRequestRef?: RefObject<(() => void) | undefined>;
   /** 桌面端：挂载后自动聚焦输入框（新建会话场景）。 */
   autoFocus?: boolean;
@@ -71,7 +69,7 @@ interface PromptEditorProps {
   onAutoFocusConsumed?: () => void;
 }
 
-export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, searchFiles, searchSessionFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, onCollapsedClick, focusRequestRef, autoFocus = false, onAutoFocusConsumed }: PromptEditorProps) {
+export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, searchFiles, searchSessionFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, focusRequestRef, autoFocus = false, onAutoFocusConsumed }: PromptEditorProps) {
   const isMobile = useIsMobile();
   // 挂载时捕获 autoFocus：视图创建可能比挂载晚一个提交（容器 ref 回调触发
   // 的二次渲染），而 App 可能在被动效果里已清除标记；用 ref 保存挂载快照。
@@ -135,8 +133,7 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
     completionItemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
   }, [completion?.items.length, selectedIndex]);
 
-  // 折叠态下编辑器不可见，恢复展开后由 App 通过该回调重新聚焦（延迟读取
-  // viewRef，早于编辑器创建时调用只是空操作）。
+  // 暴露聚焦方法给 App（新建会话等）。延迟读取 viewRef：早于编辑器创建时调用只是空操作。
   useEffect(() => {
     if (focusRequestRef === undefined) return;
     focusRequestRef.current = () => { viewRef.current?.focus(); };
@@ -441,7 +438,6 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
 
   return (
     <section className={`composer${collapsed ? " composer-collapsed" : ""}`} aria-label="消息输入框">
-      {collapsed ? <button type="button" className="composer-collapsed-button" onClick={onCollapsedClick}><MessageSquare size={16} /><span>发消息</span></button> : null}
       <div className="composer-editor">
         {attachments.length === 0 && preparingCount === 0 ? null : <div className="composer-attachments">
           {attachments.map((attachment, index) => (

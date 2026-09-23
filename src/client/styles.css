@@ -126,7 +126,7 @@ html[data-pointer="coarse"] [role="button"] { cursor: default; }
 .main-pane > .chat-stage, .main-pane > .empty-workspace { grid-row: 2; min-height: 0; }
 .chat-stage > .timeline-shell { grid-column: 1; grid-row: 1; min-width: 0; min-height: 0; }
 .chat-dock { grid-column: 1; grid-row: 1; z-index: 4; align-self: end; width: 100%; min-width: 0; pointer-events: none; }
-.extension-panels, .composer-editor, .composer-collapsed-button { pointer-events: auto; }
+.extension-panels, .composer-editor { pointer-events: auto; }
 html.text-selecting .chat-dock,
 html.text-selecting .chat-dock *,
 html.text-selecting .jump-latest,
@@ -903,10 +903,8 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .composer-attachment.preparing { display: grid; place-items: center; color: var(--muted); }
 .button.composer-attach { position: relative; overflow: hidden; width: 27px; height: 27px; color: var(--subtle); touch-action: manipulation; }.button.composer-attach svg { pointer-events: none; }.button.composer-attach.composer-attach-disabled { cursor: not-allowed; opacity: .42; }.button.composer-cancel-edit { width: 27px; height: 27px; color: var(--subtle); }
 .composer-file-input { position: absolute; inset: 0; z-index: 1; opacity: 0; width: 100%; height: 100%; margin: 0; border: 0; padding: 0; font-size: 16px; cursor: pointer; pointer-events: auto; }.composer-file-input::file-selector-button, .composer-file-input::-webkit-file-upload-button { display: block; width: 100%; height: 100%; cursor: pointer; }.button.composer-attach.composer-attach-disabled .composer-file-input { pointer-events: none; }
-/* --- 折叠态（移动端：其他输入框聚焦时输入栏折叠为紧凑按钮） --- */
-.composer.composer-collapsed .composer-editor { display: none; }
-.composer-collapsed-button { display: flex; align-items: center; justify-content: center; width: min(280px, 100%); min-height: 46px; margin: 0 auto; gap: 7px; border: 1px solid var(--glass-border); border-radius: 23px; background: var(--surface-raised); color: var(--ink); box-shadow: 0 8px 26px rgb(0 0 0 / .4), var(--glass-highlight); font-size: 13px; cursor: pointer; }
-.composer-collapsed-button:active { transform: scale(.97); }
+/* --- 折叠态（移动端：其他输入框聚焦时收起输入栏，编辑器保持挂载以免丢草稿） --- */
+.composer.composer-collapsed { display: none; }
 /* --- 排队消息条（编辑区上方，一行一条） --- */
 .composer-queue { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px 0; }
 .composer-queue-item { display: flex; align-items: center; min-width: 0; gap: 6px; border: 1px solid var(--line); border-radius: 7px; background: rgb(12 14 16 / .45); padding: 4px 6px; }

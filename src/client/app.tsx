@@ -140,7 +140,7 @@ export function App() {
   const [userNavigatorOpen, setUserNavigatorOpen] = useState(false);
   const deletingSessionsRef = useRef(new Set<string>());
   const [composerCommands, setComposerCommands] = useState<{ sessionKey: string; items: ComposerCommand[] } | undefined>();
-  // 移动端：非底部输入框聚焦时，输入栏折叠为紧凑按钮（见 PromptEditor）。
+  // 移动端：非底部输入框聚焦时收起输入栏（见 PromptEditor）。
   const [composerCollapsed, setComposerCollapsed] = useState(false);
   const composerFocusRef = useRef<(() => void) | undefined>(undefined);
   // 桌面端：新建会话（含复用空会话、创建分支）后自动聚焦输入框，PromptEditor 挂载时消费。
@@ -239,8 +239,8 @@ export function App() {
     };
   }, []);
 
-  // 移动端：其他输入框（历史消息编辑、扩展输入等）聚焦时把底部输入栏折叠为
-  // 紧凑按钮，避免键盘顶起后两个输入框竞争垂直空间；失焦或回到输入栏时恢复。
+  // 移动端：其他输入框（历史消息编辑、扩展输入等）聚焦时收起底部输入栏，
+  // 避免键盘顶起后两个输入框竞争垂直空间；失焦后恢复。
   useEffect(() => {
     if (!isMobile) {
       setComposerCollapsed(false);
@@ -268,15 +268,6 @@ export function App() {
       document.removeEventListener("focusout", onFocusOut);
     };
   }, [isMobile]);
-
-  /** 折叠按钮：收起当前输入焦点，展开输入栏并聚焦编辑器。 */
-  const expandComposer = useCallback(() => {
-    const active = document.activeElement;
-    if (active instanceof HTMLElement && active.closest(".composer") === null) active.blur();
-    setComposerCollapsed(false);
-    // 等展开态渲染完成（编辑器脱离 display:none）后再聚焦，rAF 保证已提交。
-    window.requestAnimationFrame(() => composerFocusRef.current?.());
-  }, []);
 
   useEffect(() => {
     setModelSwitchPending(false);
@@ -1077,7 +1068,7 @@ export function App() {
       <Timeline sessionKey={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} />
       <div className="chat-dock">
         <ExtensionPanels panels={stream.extensionPanels} />
-        <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} onCollapsedClick={expandComposer} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
+        <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />

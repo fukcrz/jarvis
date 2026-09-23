@@ -86,6 +86,22 @@ export function shouldHideJumpLatestForComposer(isMobile: boolean, composerHeigh
   return isMobile && composerHeight > thresholdPx;
 }
 
+/** 进入编辑时把光标放到末尾。移动端 textarea 聚焦默认钉在开头。 */
+function placeTextareaCaretAtEnd(element: HTMLTextAreaElement): () => void {
+  const place = () => {
+    const length = element.value.length;
+    element.setSelectionRange(length, length);
+  };
+  element.focus();
+  place();
+  const frame = window.requestAnimationFrame(place);
+  const timer = window.setTimeout(place, 0);
+  return () => {
+    window.cancelAnimationFrame(frame);
+    window.clearTimeout(timer);
+  };
+}
+
 function stopFollowingOnGesture(element: HTMLDivElement, setFollowing: (value: boolean) => void, deltaY: number) {
   if (shouldStopFollowingOnGesture(element, deltaY)) setFollowing(false);
 }
@@ -606,7 +622,14 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, highli
   const images = item.images ?? [];
   const [draft, setDraft] = useState(item.text);
   const [submitting, setSubmitting] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { if (!editing) setDraft(item.text); }, [editing, item.text]);
+  useLayoutEffect(() => {
+    if (!editing) return;
+    const element = textareaRef.current;
+    if (element === null) return;
+    return placeTextareaCaretAtEnd(element);
+  }, [editing]);
   const onStartEdit = () => setEditingMessageId(item.id);
   const onCancelEdit = () => setEditingMessageId(undefined);
   const submitEdit = async () => {
@@ -625,7 +648,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, highli
             return <ImagePreview key={`${image.mimeType}:${index}`} src={src} alt={`图片 ${String(index + 1)}`}><button type="button" className="message-image-thumb" aria-label={`预览图片 ${String(index + 1)}`}><img src={src} alt={`图片 ${String(index + 1)}`} loading="lazy" /></button></ImagePreview>;
           })}
         </div>}
-        {editing ? <div className="message-inline-editor"><textarea autoFocus value={draft} disabled={submitting} aria-label="编辑消息" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancelEdit(); } if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitEdit(); } }} /><div className="message-inline-editor-actions"><button type="button" disabled={submitting} onClick={onCancelEdit}>取消</button><button type="button" className="accent" disabled={submitting || (draft.trim() === "" && images.length === 0)} onClick={() => { void submitEdit(); }}>{submitting ? "正在重新生成…" : "重新生成"}</button></div></div> : item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
+        {editing ? <div className="message-inline-editor"><textarea ref={textareaRef} value={draft} disabled={submitting} aria-label="编辑消息" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancelEdit(); } if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitEdit(); } }} /><div className="message-inline-editor-actions"><button type="button" disabled={submitting} onClick={onCancelEdit}>取消</button><button type="button" className="accent" disabled={submitting || (draft.trim() === "" && images.length === 0)} onClick={() => { void submitEdit(); }}>{submitting ? "正在重新生成…" : "重新生成"}</button></div></div> : item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
           <MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} interactiveFiles={item.role === "assistant" && !streaming} />
         </div>}
         {editing ? null : <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : onStartEdit} onFork={onFork} />}
