@@ -6,6 +6,7 @@ import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionFileRefere
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
 import { composerDraftSyncAction, isComposerCompositionPending } from "../lib/composer-draft";
 import { imageDataUrl, prepareImage } from "../lib/image";
+import { lockVisualViewportKeyboardInset, unlockVisualViewportKeyboardInset } from "../lib/visual-viewport";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { ImagePreview } from "./image-lightbox";
 import { Button } from "./ui/button";
@@ -327,6 +328,10 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   // callbacks through refs so the extensions array stays referentially
   // stable and useCodeMirror never reconfigures the editor mid-typing.
   const pasteExtension = useMemo(() => CodeMirrorView.domEventHandlers({
+    pointerdown: () => {
+      unlockVisualViewportKeyboardInset();
+      return false;
+    },
     paste: (event) => {
       const files = Array.from(event.clipboardData?.items ?? [])
         .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
@@ -498,12 +503,14 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
                   return;
                 }
                 lastAttachOpenRef.current = now;
+                lockVisualViewportKeyboardInset();
                 viewRef.current?.contentDOM.blur();
               }} onChange={(event) => {
                 lastAttachOpenRef.current = Date.now();
                 const input = event.currentTarget;
                 const files = Array.from(input.files ?? []);
                 handleFiles(files);
+                lockVisualViewportKeyboardInset();
                 blurAfterAttach(input, viewRef.current);
                 window.setTimeout(() => {
                   input.value = "";

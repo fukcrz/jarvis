@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { installVisualViewportHeight, isTextEditingElement, resolveVisualViewportHeight } from "./visual-viewport";
+import {
+  installVisualViewportHeight,
+  isTextEditingElement,
+  isVisualViewportKeyboardInsetLocked,
+  lockVisualViewportKeyboardInset,
+  resolveVisualViewportHeight,
+  unlockVisualViewportKeyboardInset,
+} from "./visual-viewport";
 
 describe("isTextEditingElement", () => {
   it("treats contenteditable and text fields as editing", () => {
@@ -20,25 +27,50 @@ describe("isTextEditingElement", () => {
 
 describe("resolveVisualViewportHeight", () => {
   it("uses the visual height while a text field is focused", () => {
-    expect(resolveVisualViewportHeight({ visualHeight: 420, innerHeight: 860, editing: true })).toBe(420);
+    expect(resolveVisualViewportHeight({ visualHeight: 420, innerHeight: 860, editing: true, closedHeight: 860 }).height).toBe(420);
   });
 
   it("drops a leftover keyboard inset when nothing is editing", () => {
-    expect(resolveVisualViewportHeight({ visualHeight: 420, innerHeight: 860, editing: false })).toBe(860);
+    expect(resolveVisualViewportHeight({ visualHeight: 420, innerHeight: 860, editing: false, closedHeight: 860 }).height).toBe(860);
   });
 
   it("keeps a small chrome inset when the keyboard is not involved", () => {
-    expect(resolveVisualViewportHeight({ visualHeight: 800, innerHeight: 860, editing: false })).toBe(800);
+    expect(resolveVisualViewportHeight({ visualHeight: 800, innerHeight: 860, editing: false }).height).toBe(800);
   });
 
   it("falls back to innerHeight when visual height is unusable", () => {
-    expect(resolveVisualViewportHeight({ visualHeight: 0, innerHeight: 860, editing: true })).toBe(860);
+    expect(resolveVisualViewportHeight({ visualHeight: 0, innerHeight: 860, editing: true }).height).toBe(860);
+  });
+
+  it("uses the closed height when the picker lock is on and iOS restored editor focus", () => {
+    expect(resolveVisualViewportHeight({
+      visualHeight: 420,
+      innerHeight: 860,
+      editing: true,
+      locked: true,
+      closedHeight: 860,
+    }).height).toBe(860);
+  });
+
+  it("uses the closed height when innerHeight is also stuck at the keyboard size", () => {
+    expect(resolveVisualViewportHeight({
+      visualHeight: 420,
+      innerHeight: 420,
+      editing: true,
+      locked: true,
+      closedHeight: 860,
+    }).height).toBe(860);
+  });
+
+  it("remembers the closed height after a recovered viewport", () => {
+    expect(resolveVisualViewportHeight({ visualHeight: 860, innerHeight: 860, editing: false, closedHeight: 0 }).closedHeight).toBe(860);
   });
 });
 
 describe("installVisualViewportHeight", () => {
   afterEach(() => {
     vi.useRealTimers();
+    unlockVisualViewportKeyboardInset();
   });
 
   function harness(options: {
@@ -133,5 +165,17 @@ describe("installVisualViewportHeight", () => {
     expect(env.vvh()).toBe("860px");
     env.uninstall();
     expect(env.listenerCount()).toBe(0);
+  });
+
+  it("keeps the closed height after locking even if the editor is focused again", () => {
+    const env = harness({ visualHeight: 860, innerHeight: 860, active: null });
+    expect(env.vvh()).toBe("860px");
+    env.state.visualHeight = 420;
+    env.state.innerHeight = 420;
+    env.state.active = { isContentEditable: true };
+    lockVisualViewportKeyboardInset();
+    expect(isVisualViewportKeyboardInsetLocked()).toBe(true);
+    expect(env.vvh()).toBe("860px");
+    env.uninstall();
   });
 });
