@@ -4,6 +4,7 @@ import { canCopyDiagramImage, copyMermaidDiagram, downloadDiagramPng, normalizeM
 const mermaid = vi.hoisted(() => ({
   startOnLoad: true,
   initialize: vi.fn(),
+  parse: vi.fn(),
   render: vi.fn(),
 }));
 
@@ -290,9 +291,15 @@ describe("renderMermaidDiagram", () => {
   beforeEach(() => {
     mermaid.startOnLoad = true;
     mermaid.initialize.mockClear();
+    mermaid.parse.mockReset();
+    mermaid.parse.mockResolvedValue({ diagramType: "flowchart" });
     mermaid.render.mockReset();
     vi.stubGlobal("requestAnimationFrame", (callback: (time: number) => void) => {
       callback(0);
+      return 1;
+    });
+    vi.stubGlobal("setTimeout", (callback: () => void) => {
+      callback();
       return 1;
     });
   });
@@ -316,13 +323,50 @@ describe("renderMermaidDiagram", () => {
         arrowheadColor: "#ffffff",
       }),
     }));
+    expect(mermaid.parse).toHaveBeenCalledTimes(1);
     expect(mermaid.render).toHaveBeenCalledTimes(2);
   });
 
+  it("does not render when mermaid parse fails", async () => {
+    mermaid.parse.mockRejectedValueOnce(new Error("Parse error on line 1"));
+    await expect(renderMermaidDiagram("not a diagram")).rejects.toThrow("Parse error on line 1");
+    expect(mermaid.render).not.toHaveBeenCalled();
+  });
+
   it("throws after repeated render failures", async () => {
-    mermaid.render.mockRejectedValue(new Error("parse"));
-    await expect(renderMermaidDiagram("not a diagram")).rejects.toThrow("parse");
+    mermaid.render.mockRejectedValue(new Error("firstChild"));
+    await expect(renderMermaidDiagram("flowchart TD\n  A --> B")).rejects.toThrow("firstChild");
+    expect(mermaid.parse).toHaveBeenCalledTimes(1);
     expect(mermaid.render).toHaveBeenCalledTimes(3);
+  });
+
+  it("passes a viewport host to mermaid.render and clears it afterwards", async () => {
+    const host = {
+      id: "",
+      setAttribute: vi.fn(),
+      style: { cssText: "" },
+      replaceChildren: vi.fn(),
+    };
+    const leftover = { id: "djarvis-mermaid-old", remove: vi.fn() };
+    vi.stubGlobal("document", {
+      body: { append: vi.fn() },
+      createElement: vi.fn(() => host),
+      getElementById: vi.fn(() => null),
+      querySelectorAll: vi.fn(() => [leftover]),
+    });
+    mermaid.render.mockResolvedValueOnce({ svg: "<svg id=\"ok\" />" });
+    await expect(renderMermaidDiagram("flowchart TD\n  A --> B")).resolves.toBe("<svg id=\"ok\" />");
+    expect(host.id).toBe("jarvis-mermaid-host");
+    expect(host.setAttribute).toHaveBeenCalledWith("aria-hidden", "true");
+    expect(host.style.cssText).toContain("opacity:0");
+    expect(host.style.cssText).not.toContain("visibility");
+    expect(mermaid.render).toHaveBeenCalledWith(
+      expect.stringMatching(/^jarvis-mermaid-\d+$/),
+      "flowchart TD\n  A --> B",
+      host,
+    );
+    expect(host.replaceChildren).toHaveBeenCalled();
+    expect(leftover.remove).toHaveBeenCalled();
   });
 
   it("normalizes percentage-width mermaid svg for shrink-to-fit preview", async () => {

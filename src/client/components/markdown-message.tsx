@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
 import { copyText } from "../lib/clipboard";
 import { canCopyDiagramImage, copyMermaidDiagram, downloadMermaidDiagram, renderMermaidDiagram } from "../lib/mermaid";
@@ -290,12 +290,22 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & { node?:
   );
 }
 
+const MERMAID_PREFETCH_PX = 240;
+
+function mermaidBlockIsNearViewport(node: Element): boolean {
+  if (typeof node.getBoundingClientRect !== "function") return false;
+  const rect = node.getBoundingClientRect();
+  const viewport = globalThis.innerHeight ?? 0;
+  return rect.bottom >= -MERMAID_PREFETCH_PX && rect.top <= viewport + MERMAID_PREFETCH_PX;
+}
+
 /**
- * ```mermaid 代码块：异步渲染成 SVG。流式输出期间只显示源码（半成品图会抖动/报错），
- * 渲染失败时回退成源码并说明状态；可以手动在图形与源码之间切换。
+ * ```mermaid 代码块：靠近视口才画成 SVG，画成功后不随滚动卸载。
+ * 流式输出期间只显示源码；渲染失败时回退成源码并说明状态；可以手动在图形与源码之间切换。
  */
 function MermaidBlock({ code }: { code: string }) {
   const streaming = useContext(MarkdownStreamingContext);
+  const blockRef = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState<string>();
   const [failed, setFailed] = useState(false);
   const [showSource, setShowSource] = useState(false);
@@ -305,12 +315,30 @@ function MermaidBlock({ code }: { code: string }) {
 
   useEffect(() => {
     if (streaming || code.trim() === "") return;
+    const node = blockRef.current;
     let cancelled = false;
-    setFailed(false);
-    void renderMermaidDiagram(code)
-      .then((result) => { if (!cancelled) { setSvg(result); setFailed(false); } })
-      .catch(() => { if (!cancelled) { setSvg(undefined); setFailed(true); } });
-    return () => { cancelled = true; };
+    let started = false;
+    const start = (observer?: IntersectionObserver) => {
+      if (started) return;
+      started = true;
+      observer?.disconnect();
+      setFailed(false);
+      void renderMermaidDiagram(code)
+        .then((result) => { if (!cancelled) { setSvg(result); setFailed(false); } })
+        .catch(() => { if (!cancelled) { setSvg(undefined); setFailed(true); } });
+    };
+    if (node === null || typeof IntersectionObserver !== "function" || mermaidBlockIsNearViewport(node)) {
+      start();
+      return () => { cancelled = true; };
+    }
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) start(io);
+    }, { root: null, rootMargin: `${String(MERMAID_PREFETCH_PX)}px 0px`, threshold: 0 });
+    io.observe(node);
+    return () => {
+      cancelled = true;
+      io.disconnect();
+    };
   }, [code, streaming]);
 
   const handleCopy = () => {
@@ -338,7 +366,7 @@ function MermaidBlock({ code }: { code: string }) {
   const diagramActionLabel = copyDiagramImage
     ? (diagramCopy === "copied" ? "已复制" : diagramCopy === "failed" ? "复制失败" : "复制图")
     : (diagramCopy === "copied" ? "已下载" : diagramCopy === "failed" ? "下载失败" : "下载图");
-  return <div className="code-block mermaid-block">
+  return <div ref={blockRef} className="code-block mermaid-block">
     <div className="code-block-bar">
       <span className="code-block-lang">mermaid</span>
       <span className="mermaid-block-actions">

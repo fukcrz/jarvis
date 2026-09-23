@@ -418,6 +418,8 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mermaid-block-diagram:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
 .mermaid-block-diagram svg { max-width: 100%; height: auto; cursor: zoom-in; }
 .mermaid-block-error { margin: 0; border-bottom: 1px solid rgb(255 255 255 / .06); background: var(--warm-soft); padding: 6px 12px; color: var(--warm); font-size: 11px; }
+#jarvis-mermaid-host, #jarvis-mermaid-host * { box-sizing: content-box; }
+#jarvis-mermaid-host svg { display: inline; max-width: none; }
 /* highlight.js 语法高亮配色（消息与代码预览共用） */
 :is(.message-content, .code-preview) .hljs { color: #e4e4e7; background: transparent; }
 :is(.message-content, .code-preview) .hljs-comment, :is(.message-content, .code-preview) .hljs-quote, :is(.message-content, .code-preview) .hljs-code { color: #8a8a94; font-style: italic; }

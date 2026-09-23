@@ -5,6 +5,7 @@
 let mermaidPromise: Promise<typeof import("mermaid").default> | undefined;
 
 const RENDER_ATTEMPTS = 3;
+const MERMAID_HOST_ID = "jarvis-mermaid-host";
 let renderQueue: Promise<void> = Promise.resolve();
 
 function enqueueRender<T>(task: () => Promise<T>): Promise<T> {
@@ -20,6 +21,44 @@ function waitForPaint(): Promise<void> {
     });
     schedule(() => resolve());
   });
+}
+
+function waitForRetry(attempt: number): Promise<void> {
+  return waitForPaint().then(() => {
+    const delay = attempt === 1 ? 50 : 200;
+    return new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, delay);
+    });
+  });
+}
+
+/**
+ * mermaid.render 不传容器时会把临时 SVG 挂到 body 末尾。
+ * Jarvis 的 body overflow:hidden 且 #root 撑满视口，节点在屏外，getBBox / firstChild 会抛。
+ * 用视口内 opacity:0 宿主（不要 visibility:hidden，foreignObject 会量到 0）。
+ */
+function mermaidRenderHost(): HTMLElement | undefined {
+  if (typeof document === "undefined" || document.body === null) return undefined;
+  const existing = document.getElementById(MERMAID_HOST_ID);
+  if (existing !== null) return existing;
+  const host = document.createElement("div");
+  host.id = MERMAID_HOST_ID;
+  host.setAttribute("aria-hidden", "true");
+  host.style.cssText = "position:fixed;inset:0;width:100vw;height:100vh;opacity:0;pointer-events:none;overflow:visible";
+  document.body.append(host);
+  return host;
+}
+
+function cleanupMermaidDom(id: string, host: HTMLElement | undefined): void {
+  host?.replaceChildren();
+  if (typeof document === "undefined") return;
+  document.getElementById(id)?.remove();
+  document.getElementById(`d${id}`)?.remove();
+  document.getElementById(`i${id}`)?.remove();
+  for (const node of document.querySelectorAll('[id^="jarvis-mermaid-"], [id^="djarvis-mermaid-"], [id^="ijarvis-mermaid-"]')) {
+    if (node.id === MERMAID_HOST_ID) continue;
+    node.remove();
+  }
 }
 
 /** 按需加载并初始化 mermaid：安全级别维持 strict（内置 DOMPurify，图形源码不能注入脚本）。 */
@@ -73,19 +112,24 @@ const XLINK_NS = "http://www.w3.org/1999/xlink";
 const EXPORT_BACKGROUND = "#0b0d14";
 const MAX_EXPORT_EDGE = 4096;
 
-/** 把 mermaid 源码渲染成 SVG 字符串。瞬时失败会排队重试；源码非法时仍抛错，交由调用方退回源码展示。 */
+/** 把 mermaid 源码渲染成 SVG 字符串。语法错误不重试；瞬时失败会换 id 排队重试并清残留。 */
 export async function renderMermaidDiagram(code: string): Promise<string> {
   return enqueueRender(async () => {
     const mermaid = await loadMermaid();
+    await mermaid.parse(code);
+    const host = mermaidRenderHost();
     let lastError: unknown;
     for (let attempt = 0; attempt < RENDER_ATTEMPTS; attempt += 1) {
-      if (attempt > 0) await waitForPaint();
+      if (attempt > 0) await waitForRetry(attempt);
+      diagramCounter += 1;
+      const id = `jarvis-mermaid-${String(diagramCounter)}`;
       try {
-        diagramCounter += 1;
-        const { svg } = await mermaid.render(`jarvis-mermaid-${String(diagramCounter)}`, code);
+        const { svg } = await mermaid.render(id, code, host);
         return normalizeMermaidSvg(svg);
       } catch (error) {
         lastError = error;
+      } finally {
+        cleanupMermaidDom(id, host);
       }
     }
     throw lastError;
