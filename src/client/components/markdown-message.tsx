@@ -1,5 +1,6 @@
 import { createContext, memo, useContext, useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
+import { copyText } from "../lib/clipboard";
 import { copyMermaidDiagram, renderMermaidDiagram } from "../lib/mermaid";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { defaultSchema, type Schema } from "hast-util-sanitize";
@@ -263,12 +264,15 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & { node?:
     ? classes.find((c): c is string => typeof c === "string" && c.startsWith("language-"))?.slice("language-".length)
     : undefined;
   const code = extractText(codeNode);
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const handleCopy = () => {
-    void navigator.clipboard.writeText(code).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    }).catch(() => {});
+    void copyText(code).then(() => {
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1600);
+    }).catch(() => {
+      setCopyState("failed");
+      window.setTimeout(() => setCopyState("idle"), 1600);
+    });
   };
   if (lang === "mermaid") return <MermaidBlock code={code} />;
   return (
@@ -276,8 +280,8 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & { node?:
       <div className="code-block">
         <div className="code-block-bar">
           <span className="code-block-lang">{lang ?? "text"}</span>
-          <button type="button" className={`code-block-copy${copied ? " copied" : ""}`} onClick={handleCopy} disabled={code === ""}>
-            {copied ? "已复制" : "复制"}
+          <button type="button" className={`code-block-copy${copyState === "copied" ? " copied" : copyState === "failed" ? " failed" : ""}`} onClick={handleCopy} disabled={code === ""}>
+            {copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制"}
           </button>
         </div>
         <pre {...rest}>{children}</pre>
@@ -296,7 +300,7 @@ function MermaidBlock({ code }: { code: string }) {
   const [failed, setFailed] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [diagramCopy, setDiagramCopy] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {
@@ -310,10 +314,13 @@ function MermaidBlock({ code }: { code: string }) {
   }, [code, streaming]);
 
   const handleCopy = () => {
-    void navigator.clipboard.writeText(code).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    }).catch(() => {});
+    void copyText(code).then(() => {
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1600);
+    }).catch(() => {
+      setCopyState("failed");
+      window.setTimeout(() => setCopyState("idle"), 1600);
+    });
   };
   const handleCopyDiagram = () => {
     if (svg === undefined) return;
@@ -331,7 +338,7 @@ function MermaidBlock({ code }: { code: string }) {
       <span className="code-block-lang">mermaid</span>
       <span className="mermaid-block-actions">
         {diagram ? <button type="button" className="code-block-copy" onClick={() => setShowSource((current) => !current)}>{showSource ? "图形" : "源码"}</button> : null}
-        <button type="button" className={`code-block-copy${copied ? " copied" : ""}`} onClick={handleCopy} disabled={code === ""}>{copied ? "已复制" : "复制"}</button>
+        <button type="button" className={`code-block-copy${copyState === "copied" ? " copied" : copyState === "failed" ? " failed" : ""}`} onClick={handleCopy} disabled={code === ""}>{copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制"}</button>
         {diagram ? <button type="button" className={`code-block-copy${diagramCopy === "copied" ? " copied" : diagramCopy === "failed" ? " failed" : ""}`} onClick={handleCopyDiagram}>{diagramCopy === "copied" ? "已复制" : diagramCopy === "failed" ? "复制失败" : "复制图"}</button> : null}
       </span>
     </div>

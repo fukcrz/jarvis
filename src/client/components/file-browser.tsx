@@ -5,6 +5,7 @@ import { ArrowLeft, ChevronDown, ChevronRight, FileQuestion, FileText, Folder, F
 import type { WorkspaceDirectoryListing, WorkspaceFileContent } from "../../shared/protocol";
 import { api, ApiError, workspaceFileUrl } from "../api";
 import { useIsMobile } from "../hooks/use-is-mobile";
+import { copyText } from "../lib/clipboard";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
 import { MAX_TABLE_ROWS, parseDelimited, previewKindForPath, type PreviewKind } from "../lib/file-preview";
 import { MarkdownMessage } from "./markdown-message";
@@ -243,7 +244,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
 
   const copy = async (value: string, message: string) => {
     try {
-      await navigator.clipboard.writeText(value);
+      await copyText(value);
       setError(message);
       window.setTimeout(() => setError(undefined), 1_500);
     } catch {

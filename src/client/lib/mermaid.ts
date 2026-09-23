@@ -227,6 +227,7 @@ async function copyPngViaExecCommand(png: Blob): Promise<void> {
     await loaded;
     document.body.append(host);
     host.append(image);
+    host.focus();
     const selection = globalThis.getSelection();
     if (selection === null) throw new Error("selection");
     const range = document.createRange();

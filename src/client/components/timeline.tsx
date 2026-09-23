@@ -4,6 +4,7 @@ import { Archive, ArrowDown, Bell, Brain, Check, ChevronRight, CircleAlert, Cloc
 import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
 import { userMessageOutline as outlineFromItems } from "../../shared/user-message";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
+import { copyText } from "../lib/clipboard";
 import { imageDataUrl } from "../lib/image";
 import { encodeMultiSelectValue, multiSelectAnswerLabel, parseMultiSelectDialog, parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, splitDialogHeading, type ExtensionSelectOption } from "../lib/extension-dialog";
 import { MarkdownMessage } from "./markdown-message";
@@ -639,7 +640,7 @@ function MessageActions({ item, streaming, onEdit, onFork }: { item: MessageTime
   const canCopy = item.text !== "";
   if (!canCopy && onEdit === undefined && onFork === undefined) return null;
   const handleCopy = () => {
-    void navigator.clipboard.writeText(item.text).then(() => {
+    void copyText(item.text).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     }).catch(() => {});

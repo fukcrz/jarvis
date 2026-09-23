@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy, ExternalLink, Loader2, Pencil, Plus, Radio, Square, Trash2 } from "lucide-react";
 import type { TunnelInput, TunnelLogEntry, TunnelMethod, TunnelSnapshot, TunnelState } from "../../shared/protocol";
 import { api } from "../api";
+import { copyText } from "../lib/clipboard";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 
@@ -100,9 +101,9 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
       setBusy(undefined);
     }
   };
-  const copyText = async (value: string, kind: "url" | "caddy") => {
+  const copyValue = async (value: string, kind: "url" | "caddy") => {
     try {
-      await navigator.clipboard.writeText(value);
+      await copyText(value);
       setCopied(kind);
       window.setTimeout(() => setCopied(undefined), 1_500);
     } catch {
@@ -127,7 +128,7 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
             <div className="tunnel-entry-actions">
               {tunnel.url === undefined ? null : <>
                 <a className="button button-secondary button-default-size" href={tunnel.url} target="_blank" rel="noreferrer"><ExternalLink size={13} />{tunnel.url}</a>
-                <Button variant="ghost" size="icon" aria-label="复制公网地址" title="复制公网地址" onClick={() => { void copyText(tunnel.url as string, "url"); }}>{copied === "url" ? <Check size={13} /> : <Copy size={13} />}</Button>
+                <Button variant="ghost" size="icon" aria-label="复制公网地址" title="复制公网地址" onClick={() => { void copyValue(tunnel.url as string, "url"); }}>{copied === "url" ? <Check size={13} /> : <Copy size={13} />}</Button>
               </>}
               <Button variant="ghost" size="icon" aria-label={`编辑 ${tunnel.name ?? methodName(tunnel.method)}`} title="编辑" onClick={() => { setEditing(tunnel); setEditorOpen(true); }} disabled={busy !== undefined}><Pencil size={14} /></Button>
               <Button variant="ghost" size="icon" aria-label={`删除 ${tunnel.name ?? methodName(tunnel.method)}`} title="删除" disabled={busy !== undefined} onClick={() => setRemoveTarget(tunnel)}><Trash2 size={14} /></Button>
@@ -154,7 +155,7 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
               <label className="settings-field"><span>frps 服务器</span><input value={tunnel.frp.server} disabled /></label>
               <label className="settings-field"><span>远程端口</span><input value={String(tunnel.frp.remotePort ?? "（同本地）")} disabled /></label>
               {caddySnippet === "" ? null : <div className="tunnel-caddy">
-                <div className="tunnel-caddy-head"><span>Caddyfile</span><Button variant="ghost" size="sm" onClick={() => { void copyText(caddySnippet, "caddy"); }}>{copied === "caddy" ? <Check size={13} /> : <Copy size={13} />}复制</Button></div>
+                <div className="tunnel-caddy-head"><span>Caddyfile</span><Button variant="ghost" size="sm" onClick={() => { void copyValue(caddySnippet, "caddy"); }}>{copied === "caddy" ? <Check size={13} /> : <Copy size={13} />}复制</Button></div>
                 <pre>{caddySnippet}</pre>
               </div>}
             </div> : null}
