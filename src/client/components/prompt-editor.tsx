@@ -447,7 +447,7 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
         {attachments.length === 0 && preparingCount === 0 ? null : <div className="composer-attachments">
           {attachments.map((attachment, index) => (
             <div className="composer-attachment" key={`${attachment.mimeType}:${index}`}>
-              <ImagePreview key={`${attachment.mimeType}:${index}`} src={imageDataUrl(attachment)} alt={`图片 ${String(index + 1)}`}><button type="button" className="composer-attachment-preview" aria-label={`预览图片 ${String(index + 1)}`}><img src={imageDataUrl(attachment)} alt={`附件 ${String(index + 1)}`} /></button></ImagePreview>
+              <ImagePreview className="composer-attachment-preview" src={imageDataUrl(attachment)} alt={`图片 ${String(index + 1)}`}><img src={imageDataUrl(attachment)} alt={`附件 ${String(index + 1)}`} /></ImagePreview>
               <button type="button" className="composer-attachment-remove" aria-label="移除图片" onClick={() => { removeAttachment(index); }}><X size={10} /></button>
             </div>
           ))}

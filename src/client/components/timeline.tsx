@@ -645,7 +645,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, highli
         {images.length === 0 ? null : <div className="message-images" aria-label="消息图片">
           {images.map((image, index) => {
             const src = imageDataUrl(image);
-            return <ImagePreview key={`${image.mimeType}:${index}`} src={src} alt={`图片 ${String(index + 1)}`}><button type="button" className="message-image-thumb" aria-label={`预览图片 ${String(index + 1)}`}><img src={src} alt={`图片 ${String(index + 1)}`} loading="lazy" /></button></ImagePreview>;
+            return <ImagePreview key={`${image.mimeType}:${index}`} className="message-image-thumb" src={src} alt={`图片 ${String(index + 1)}`}><img src={src} alt={`图片 ${String(index + 1)}`} loading="lazy" /></ImagePreview>;
           })}
         </div>}
         {editing ? <div className="message-inline-editor"><textarea ref={textareaRef} value={draft} disabled={submitting} aria-label="编辑消息" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancelEdit(); } if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitEdit(); } }} /><div className="message-inline-editor-actions"><button type="button" disabled={submitting} onClick={onCancelEdit}>取消</button><button type="button" className="accent" disabled={submitting || (draft.trim() === "" && images.length === 0)} onClick={() => { void submitEdit(); }}>{submitting ? "正在重新生成…" : "重新生成"}</button></div></div> : item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>

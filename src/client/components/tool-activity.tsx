@@ -108,7 +108,7 @@ function GenericToolRow({ item, pending, open, onToggle }: { item: ToolTimelineI
       </button>
       {open ? <div className="tool-details inline-details">
         {images.length === 0 ? null : <div className="tool-images" aria-label="读取到的图片">
-          {images.map((image, index) => <ImagePreview key={`${image.mimeType}:${index}`} src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`}><button type="button" className="message-image-thumb" aria-label={`预览图片 ${String(index + 1)}`}><img src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`} loading="lazy" /></button></ImagePreview>)}
+          {images.map((image, index) => <ImagePreview key={`${image.mimeType}:${index}`} className="message-image-thumb" src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`}><img src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`} loading="lazy" /></ImagePreview>)}
         </div>}
         {item.name === "read" ? null : item.inputPreview === undefined ? null : <div className="detail-input"><span className="detail-label">输入</span><code>{item.inputPreview}</code></div>}
         {output === undefined ? null : <div><pre className={item.error === undefined ? "" : "tool-error-output"}>{output}</pre></div>}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { RotateCcw, RotateCw, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
@@ -9,9 +9,26 @@ const MAX_SCALE = 5;
 const ZOOM_STEP = 1.2;
 /** 指针移动超过该像素距离后，抬手不再算作「点空白关闭」，避免拖拽平移时误关。 */
 const TAP_SLOP = 6;
+/** 长按弹出系统菜单后，部分浏览器会再派发 click，这段时间内不当成打开预览。 */
+const CONTEXT_MENU_CLICK_SUPPRESS_MS = 500;
 
 export function clampScale(scale: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+}
+
+/** 只有主键（鼠标左键 / 触屏）才进入拖拽缩放，右键留给系统菜单。 */
+export function isPanPointer(button: number): boolean {
+  return button === 0;
+}
+
+export function movementExceedsTapSlop(dx: number, dy: number): boolean {
+  return Math.abs(dx) > TAP_SLOP || Math.abs(dy) > TAP_SLOP;
+}
+
+/** 长按弹出系统菜单后，紧跟的兼容 click 不能打开预览。 */
+export function shouldSuppressPreviewClick(contextMenuAt: number, clickAt: number): boolean {
+  const elapsed = clickAt - contextMenuAt;
+  return elapsed >= 0 && elapsed < CONTEXT_MENU_CLICK_SUPPRESS_MS;
 }
 
 /** 滚轮/按钮缩放：按固定倍率放大或缩小，并夹在上下限内。 */
@@ -55,7 +72,8 @@ interface DiagramLightboxProps {
 
 /**
  * 媒体预览浮层：缩放（滚轮 + 控件 + 双指）、拖拽平移，可选 ±90° 旋转，
- * 点空白或 Esc 关闭。挂到 body 上，避免被消息 DOM 或滚动容器裁剪。
+ * 点空白或 Esc 关闭。图片上的右键 / 长按走系统菜单，因此拖拽在移动超过 TAP_SLOP
+ * 之后才接管指针。挂到 body 上，避免被消息 DOM 或滚动容器裁剪。
  */
 function MediaLightbox({ label, closeLabel, rotatable = false, children, onClose }: MediaLightboxProps) {
   useHistoryBackTrap(true, onClose);
@@ -101,15 +119,31 @@ function MediaLightbox({ label, closeLabel, rotatable = false, children, onClose
     return () => { element.removeEventListener("wheel", onWheel); };
   }, []);
 
+  // 静止长按不能 preventDefault，否则系统菜单出不来；拖拽/双指时再拦住页面滚动。
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (stage === null) return;
+    const onTouchMove = (event: TouchEvent) => {
+      if (!event.cancelable) return;
+      if (pointers.current.size >= 2 || drag.current?.moved === true) event.preventDefault();
+    };
+    stage.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => { stage.removeEventListener("touchmove", onTouchMove); };
+  }, []);
+
   const pointerDistance = (): number | undefined => {
     const [first, second] = [...pointers.current.values()];
     if (first === undefined || second === undefined) return undefined;
     return Math.hypot(second.x - first.x, second.y - first.y);
   };
 
-  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  const capturePointer = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isPanPointer(event.button)) return;
+    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     tapPending.current = false;
     if (pointers.current.size === 1) {
       drag.current = {
@@ -120,13 +154,13 @@ function MediaLightbox({ label, closeLabel, rotatable = false, children, onClose
         fromBackdrop: !(event.target instanceof Element) || event.target.closest(".image-lightbox-content") === null,
         moved: false,
       };
-      setDragging(true);
       return;
     }
     // 第二根手指落下即进入双指缩放，放弃单指平移。
     drag.current = undefined;
     setDragging(false);
     pinchDistance.current = pointerDistance();
+    capturePointer(event);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -134,6 +168,7 @@ function MediaLightbox({ label, closeLabel, rotatable = false, children, onClose
     pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     if (pointers.current.size >= 2) {
+      capturePointer(event);
       const distance = pointerDistance();
       const previous = pinchDistance.current;
       pinchDistance.current = distance;
@@ -146,7 +181,12 @@ function MediaLightbox({ label, closeLabel, rotatable = false, children, onClose
     if (current === undefined) return;
     const x = event.clientX - current.startX;
     const y = event.clientY - current.startY;
-    if (Math.abs(x) > TAP_SLOP || Math.abs(y) > TAP_SLOP) current.moved = true;
+    if (!current.moved && movementExceedsTapSlop(x, y)) {
+      current.moved = true;
+      capturePointer(event);
+      setDragging(true);
+    }
+    if (!current.moved) return;
     setOffset({ x: current.originX + x, y: current.originY + y });
   };
 
@@ -181,6 +221,12 @@ function MediaLightbox({ label, closeLabel, rotatable = false, children, onClose
     onClose();
   };
 
+  const handleContextMenu = () => {
+    drag.current = undefined;
+    setDragging(false);
+    tapPending.current = false;
+  };
+
   const rotation = rotatable ? ` rotate(${String(angle)}deg)` : "";
   return createPortal(
     <div ref={overlayRef} className="image-lightbox" role="dialog" aria-modal="true" aria-label={label} tabIndex={-1}>
@@ -192,6 +238,7 @@ function MediaLightbox({ label, closeLabel, rotatable = false, children, onClose
         onPointerUp={handlePointerEnd}
         onPointerCancel={handlePointerEnd}
         onClick={handleStageClick}
+        onContextMenu={handleContextMenu}
       >
         <div
           className={`image-lightbox-content${dragging ? " dragging" : ""}`}
@@ -242,11 +289,26 @@ interface ImagePreviewProps {
   children: ReactNode;
 }
 
-/** 缩略图触发器：包住现有按钮/图片即可，浮层状态由组件自己持有。 */
+/** 缩略图触发器：自身是可聚焦按钮，包住图片即可。浮层状态由组件自己持有。 */
 export function ImagePreview({ src, alt = "", className, children }: ImagePreviewProps) {
   const [open, setOpen] = useState(false);
+  const contextMenuAt = useRef(0);
+  const openPreview = () => setOpen(true);
+  const onKeyDown = (event: KeyboardEvent<HTMLSpanElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openPreview();
+  };
   return <>
-    <span className={className} onClick={() => setOpen(true)}>{children}</span>
+    <span
+      className={className}
+      role="button"
+      tabIndex={0}
+      aria-label={alt === "" ? "预览图片" : alt}
+      onContextMenu={() => { contextMenuAt.current = Date.now(); }}
+      onClick={() => { if (!shouldSuppressPreviewClick(contextMenuAt.current, Date.now())) openPreview(); }}
+      onKeyDown={onKeyDown}
+    >{children}</span>
     {open ? <ImageLightbox src={src} alt={alt} onClose={() => setOpen(false)} /> : null}
   </>;
 }

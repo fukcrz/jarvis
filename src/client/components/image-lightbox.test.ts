@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { DiagramLightboxContent, ImagePreview, clampScale, nextAngle, nextScale } from "./image-lightbox";
+import { DiagramLightboxContent, ImagePreview, clampScale, isPanPointer, movementExceedsTapSlop, nextAngle, nextScale, shouldSuppressPreviewClick } from "./image-lightbox";
 
 describe("image lightbox transform helpers", () => {
   it("zooms by a fixed step and clamps to the 0.1x–5x range", () => {
@@ -21,6 +21,28 @@ describe("image lightbox transform helpers", () => {
   });
 });
 
+describe("image lightbox pointer policy", () => {
+  it("only pans on the primary button so right-click can open the system menu", () => {
+    expect(isPanPointer(0)).toBe(true);
+    expect(isPanPointer(1)).toBe(false);
+    expect(isPanPointer(2)).toBe(false);
+  });
+
+  it("waits for movement beyond the tap slop before treating a press as a drag", () => {
+    expect(movementExceedsTapSlop(0, 0)).toBe(false);
+    expect(movementExceedsTapSlop(6, 0)).toBe(false);
+    expect(movementExceedsTapSlop(7, 0)).toBe(true);
+    expect(movementExceedsTapSlop(0, -7)).toBe(true);
+  });
+
+  it("suppresses the click that some browsers fire after a long-press context menu", () => {
+    expect(shouldSuppressPreviewClick(1000, 1000)).toBe(true);
+    expect(shouldSuppressPreviewClick(1000, 1499)).toBe(true);
+    expect(shouldSuppressPreviewClick(1000, 1500)).toBe(false);
+    expect(shouldSuppressPreviewClick(1000, 999)).toBe(false);
+  });
+});
+
 describe("ImagePreview", () => {
   it("renders the trigger without mounting the overlay", () => {
     const markup = renderToStaticMarkup(createElement(ImagePreview, {
@@ -31,6 +53,8 @@ describe("ImagePreview", () => {
     }));
 
     expect(markup).toContain('class="message-image-frame"');
+    expect(markup).toContain('role="button"');
+    expect(markup).toContain('aria-label="截图"');
     expect(markup).toContain('src="/api/files?path=shot.png"');
     expect(markup).not.toContain("image-lightbox");
   });
