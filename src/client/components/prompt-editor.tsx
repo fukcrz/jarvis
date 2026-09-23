@@ -97,7 +97,7 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   const searchFilesRef = useRef(searchFiles);
   const searchSessionFilesRef = useRef(searchSessionFiles);
   const preparingRef = useRef(0);
-  const galleryRef = useRef<HTMLInputElement | null>(null);
+  const lastAttachOpenRef = useRef(0);
   const [completion, setCompletion] = useState<{ trigger: "/" | "@" | "@@"; from: number; items: Completion[] } | undefined>();
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [preparingCount, setPreparingCount] = useState(0);
@@ -435,10 +435,6 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   const completionItems = completion?.items ?? [];
   const completionLabel = useMemo(() => completion?.trigger === "/" ? "命令" : completion?.trigger === "@@" ? "会话" : "文件", [completion?.trigger]);
   const canSend = hasDraft || attachments.length > 0;
-  const openAttach = () => {
-    if (attachDisabled) return;
-    galleryRef.current?.click();
-  };
   const removeAttachment = (index: number) => {
     onAttachmentsChange(attachments.filter((_, current) => current !== index));
   };
@@ -498,9 +494,23 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
         </div>}
         <div className="composer-footer">
           <div className="composer-options">
-            <Tooltip label={attachDisabled ? "当前模型不支持图片" : "添加图片"}>
-              <Button variant="ghost" className="composer-attach" size="icon" aria-label="添加图片" disabled={attachDisabled} onClick={openAttach}><Plus size={16} /></Button>
-            </Tooltip>
+            <div className={`button button-ghost button-icon composer-attach${attachDisabled ? " composer-attach-disabled" : ""}`}>
+              <input className="composer-file-input" type="file" accept="image/*" multiple disabled={attachDisabled} aria-label={attachDisabled ? "当前模型不支持图片" : "添加图片"} onClick={(event) => {
+                const now = Date.now();
+                if (now - lastAttachOpenRef.current < 800) {
+                  event.preventDefault();
+                  return;
+                }
+                lastAttachOpenRef.current = now;
+              }} onChange={(event) => {
+                lastAttachOpenRef.current = Date.now();
+                const input = event.currentTarget;
+                const files = Array.from(input.files ?? []);
+                handleFiles(files);
+                window.setTimeout(() => { input.value = ""; }, 0);
+              }} />
+              <Plus size={16} />
+            </div>
             {controls}
           </div>
           <div className="composer-actions">
@@ -517,7 +527,6 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
           </div>
         </div>
       </div>
-      <input ref={galleryRef} className="composer-file-input" type="file" accept="image/*" multiple onChange={(event) => { handleFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
     </section>
   );
 }
