@@ -34,7 +34,7 @@ import {
   withoutDraft,
   withoutSession,
 } from "./lib/socket-sync";
-import { isChatPath, pathParams, readDrafts, readExpandedWorkspaces, readSessionFocusMode, SESSION_FOCUS_STORAGE_KEY } from "./lib/app-storage";
+import { isChatPath, pathParams, readDrafts, readExpandedWorkspaces, readSessionFocusMode, SESSION_FOCUS_STORAGE_KEY, sessionRouteNeedsSync } from "./lib/app-storage";
 import { markSessionUserActivity, mergeWorkspace, sessionCleanupConfirmMessage } from "./lib/session-list";
 import { errorMessage, isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel } from "./lib/utils";
 import { useIsMobile } from "./hooks/use-is-mobile";
@@ -410,6 +410,8 @@ export function App() {
       }
       return;
     }
+    // URL 已切到别的项目/会话时，等 state 跟上再判断过期；否则会拿上一个项目的列表把这次导航弹回 /projects。
+    if (sessionRouteNeedsSync(pathWorkspaceId, pathSessionId, workspaceId, sessionId)) return;
     const workspace = workspaceId === undefined ? undefined : workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace === undefined) {
       const fallback = workspaces[0]?.id;
@@ -563,6 +565,8 @@ export function App() {
 
   const openCreatedSession = (targetWorkspaceId: string, nextSessionId: string) => {
     setExpandedWorkspaceIds((current) => ({ ...current, [targetWorkspaceId]: true }));
+    setWorkspaceId(targetWorkspaceId);
+    setSessionId(nextSessionId);
     setPageError(undefined);
     setNewSessionFocusId(nextSessionId);
     const target = `/chat/${targetWorkspaceId}/${nextSessionId}`;
@@ -1019,6 +1023,8 @@ export function App() {
 
   const chooseSession = (nextWorkspaceId: string, nextSessionId: string) => {
     setExpandedWorkspaceIds((current) => ({ ...current, [nextWorkspaceId]: true }));
+    setWorkspaceId(nextWorkspaceId);
+    setSessionId(nextSessionId);
     const current = (sessionsByWorkspace[nextWorkspaceId] ?? []).find((session) => session.id === nextSessionId);
     markSessionViewed({ workspaceId: nextWorkspaceId, sessionId: nextSessionId }, current);
     const target = `/chat/${nextWorkspaceId}/${nextSessionId}`;

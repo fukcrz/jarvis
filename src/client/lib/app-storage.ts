@@ -13,6 +13,17 @@ export function isChatPath(pathname: string): boolean {
   return pathname === "/chat" || pathname.startsWith("/chat/");
 }
 
+/** URL 已指向某项目/会话，但 React state 还没跟上。此时不能按旧项目的列表判断过期。 */
+export function sessionRouteNeedsSync(
+  pathWorkspaceId: string | undefined,
+  pathSessionId: string | undefined,
+  workspaceId: string | undefined,
+  sessionId: string | undefined,
+): boolean {
+  return (pathWorkspaceId !== undefined && pathWorkspaceId !== workspaceId)
+    || (pathSessionId !== undefined && pathSessionId !== sessionId);
+}
+
 export function readSessionFocusMode(): boolean {
   try {
     return window.localStorage.getItem(SESSION_FOCUS_STORAGE_KEY) === "true";

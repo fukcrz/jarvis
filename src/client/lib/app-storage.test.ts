@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isChatPath, pathParams } from "./app-storage";
+import { isChatPath, pathParams, sessionRouteNeedsSync } from "./app-storage";
 
 describe("pathParams", () => {
   it("reads chat workspace and session ids", () => {
@@ -19,5 +19,23 @@ describe("isChatPath", () => {
     expect(isChatPath("/sessions/ws-1")).toBe(false);
     expect(isChatPath("/settings")).toBe(false);
     expect(isChatPath("/chatty")).toBe(false);
+  });
+});
+
+describe("sessionRouteNeedsSync", () => {
+  it("waits when the chat URL points at another workspace", () => {
+    expect(sessionRouteNeedsSync("b", "s2", "a", undefined)).toBe(true);
+  });
+
+  it("waits when the chat URL session is ahead of state", () => {
+    expect(sessionRouteNeedsSync("a", "s2", "a", undefined)).toBe(true);
+  });
+
+  it("is ready when path and state match", () => {
+    expect(sessionRouteNeedsSync("b", "s2", "b", "s2")).toBe(false);
+  });
+
+  it("does not wait on the session list", () => {
+    expect(sessionRouteNeedsSync(undefined, undefined, "a", undefined)).toBe(false);
   });
 });

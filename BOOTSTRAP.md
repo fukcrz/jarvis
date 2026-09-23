@@ -22,6 +22,7 @@
 - `node scripts/ui-smoke.mjs`（Playwright UI 冒烟）
 - `node scripts/ui-extension-smoke.mjs`（扩展选择/输入卡片冒烟，不依赖 ui-smoke 流水线，可单独跑）
 - `node scripts/ui-fold-smoke.mjs`（回合过程折叠冒烟：运行中展开 → 结束自动收起，失败/待交互/`!cmd` 回合保持展开）
+- `node scripts/ui-mobile-session-enter-smoke.mjs`（移动端跨项目第一次点会话/新建会话应留在聊天页，不弹回列表）
 
 ## 会话内命令
 
