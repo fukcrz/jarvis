@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { copyMermaidDiagram, normalizeMermaidSvg, prepareMermaidSvgForExport, renderMermaidDiagram, writeDiagramClipboard } from "./mermaid";
+import { canCopyDiagramImage, copyMermaidDiagram, downloadDiagramPng, normalizeMermaidSvg, prepareMermaidSvgForExport, renderMermaidDiagram, writeDiagramClipboard } from "./mermaid";
 
 const mermaid = vi.hoisted(() => ({
   startOnLoad: true,
@@ -140,6 +140,120 @@ describe("writeDiagramClipboard", () => {
     void png.catch(() => {});
     await expect(writeDiagramClipboard(png)).rejects.toThrow("toBlob");
     expect(writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe("canCopyDiagramImage", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubClipboardHost(options: {
+    ua: string;
+    platform?: string;
+    maxTouchPoints?: number;
+    secure?: boolean;
+    canWrite?: boolean;
+  }) {
+    const canWrite = options.canWrite !== false;
+    vi.stubGlobal("isSecureContext", options.secure ?? true);
+    vi.stubGlobal("navigator", {
+      userAgent: options.ua,
+      platform: options.platform ?? "",
+      maxTouchPoints: options.maxTouchPoints ?? 0,
+      clipboard: canWrite ? { write: vi.fn(async () => undefined), writeText: vi.fn() } : { writeText: vi.fn() },
+    });
+    vi.stubGlobal("ClipboardItem", canWrite ? class ClipboardItem {
+      constructor(public items: Record<string, Blob | Promise<Blob>>) {}
+    } : undefined);
+  }
+
+  it("allows desktop browsers that can write clipboard images", () => {
+    stubClipboardHost({ ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" });
+    expect(canCopyDiagramImage()).toBe(true);
+  });
+
+  it("allows desktop Macintosh without touch points", () => {
+    stubClipboardHost({
+      ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+      platform: "MacIntel",
+      maxTouchPoints: 0,
+    });
+    expect(canCopyDiagramImage()).toBe(true);
+  });
+
+  it("rejects Android even when ClipboardItem exists", () => {
+    stubClipboardHost({ ua: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/120.0.0.0 Mobile Safari/537.36" });
+    expect(canCopyDiagramImage()).toBe(false);
+  });
+
+  it("rejects iPhone", () => {
+    stubClipboardHost({ ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15" });
+    expect(canCopyDiagramImage()).toBe(false);
+  });
+
+  it("rejects iPad UA", () => {
+    stubClipboardHost({ ua: "Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15" });
+    expect(canCopyDiagramImage()).toBe(false);
+  });
+
+  it("rejects iPadOS that reports Macintosh with touch points", () => {
+    stubClipboardHost({
+      ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+      platform: "MacIntel",
+      maxTouchPoints: 5,
+    });
+    expect(canCopyDiagramImage()).toBe(false);
+  });
+
+  it("rejects insecure contexts", () => {
+    stubClipboardHost({
+      ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
+      secure: false,
+    });
+    expect(canCopyDiagramImage()).toBe(false);
+  });
+
+  it("rejects hosts without image clipboard write", () => {
+    stubClipboardHost({
+      ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
+      canWrite: false,
+    });
+    expect(canCopyDiagramImage()).toBe(false);
+  });
+});
+
+describe("downloadDiagramPng", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("clicks a temporary download anchor and revokes the object URL", () => {
+    vi.useFakeTimers();
+    const png = new Blob(["png"], { type: "image/png" });
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:diagram");
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockReturnValue(undefined);
+    const click = vi.fn();
+    const remove = vi.fn();
+    const anchor = { href: "", download: "", rel: "", click, remove };
+    const append = vi.fn();
+    vi.stubGlobal("document", {
+      body: { append },
+      createElement: (tag: string) => {
+        expect(tag).toBe("a");
+        return anchor;
+      },
+    });
+
+    downloadDiagramPng(png);
+    expect(anchor).toMatchObject({ href: "blob:diagram", download: "mermaid.png", rel: "noopener" });
+    expect(append).toHaveBeenCalledWith(anchor);
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    expect(revoke).toHaveBeenCalledWith("blob:diagram");
   });
 });
 

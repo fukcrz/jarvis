@@ -1,7 +1,7 @@
 import { createContext, memo, useContext, useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
 import { copyText } from "../lib/clipboard";
-import { copyMermaidDiagram, renderMermaidDiagram } from "../lib/mermaid";
+import { canCopyDiagramImage, copyMermaidDiagram, downloadMermaidDiagram, renderMermaidDiagram } from "../lib/mermaid";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { defaultSchema, type Schema } from "hast-util-sanitize";
 import rehypeHighlight from "rehype-highlight";
@@ -322,9 +322,11 @@ function MermaidBlock({ code }: { code: string }) {
       window.setTimeout(() => setCopyState("idle"), 1600);
     });
   };
-  const handleCopyDiagram = () => {
+  const copyDiagramImage = canCopyDiagramImage();
+  const handleExportDiagram = () => {
     if (svg === undefined) return;
-    void copyMermaidDiagram(svg).then(() => {
+    const run = copyDiagramImage ? copyMermaidDiagram(svg) : downloadMermaidDiagram(svg);
+    void run.then(() => {
       setDiagramCopy("copied");
       window.setTimeout(() => setDiagramCopy("idle"), 1600);
     }).catch(() => {
@@ -333,13 +335,16 @@ function MermaidBlock({ code }: { code: string }) {
     });
   };
   const diagram = svg !== undefined && !failed && !streaming;
+  const diagramActionLabel = copyDiagramImage
+    ? (diagramCopy === "copied" ? "已复制" : diagramCopy === "failed" ? "复制失败" : "复制图")
+    : (diagramCopy === "copied" ? "已下载" : diagramCopy === "failed" ? "下载失败" : "下载图");
   return <div className="code-block mermaid-block">
     <div className="code-block-bar">
       <span className="code-block-lang">mermaid</span>
       <span className="mermaid-block-actions">
         {diagram ? <button type="button" className="code-block-copy" onClick={() => setShowSource((current) => !current)}>{showSource ? "图形" : "源码"}</button> : null}
         <button type="button" className={`code-block-copy${copyState === "copied" ? " copied" : copyState === "failed" ? " failed" : ""}`} onClick={handleCopy} disabled={code === ""}>{copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制"}</button>
-        {diagram ? <button type="button" className={`code-block-copy${diagramCopy === "copied" ? " copied" : diagramCopy === "failed" ? " failed" : ""}`} onClick={handleCopyDiagram}>{diagramCopy === "copied" ? "已复制" : diagramCopy === "failed" ? "复制失败" : "复制图"}</button> : null}
+        {diagram ? <button type="button" className={`code-block-copy${diagramCopy === "copied" ? " copied" : diagramCopy === "failed" ? " failed" : ""}`} onClick={handleExportDiagram}>{diagramActionLabel}</button> : null}
       </span>
     </div>
     {!failed ? null : <p className="mermaid-block-error" role="status">图形渲染失败，已显示源码</p>}

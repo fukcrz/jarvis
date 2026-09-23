@@ -256,6 +256,7 @@ describe("MarkdownMessage", () => {
     expect(markup).toContain("code-block-copy");
     expect(markup).toContain("复制");
     expect(markup).not.toContain("复制图");
+    expect(markup).not.toContain("下载图");
     expect(markup).not.toContain("mermaid-block-diagram");
     expect(markup).not.toContain("预览图形");
     expect(markup).not.toContain("image-lightbox");

@@ -142,6 +142,27 @@ function clipboardCanWriteImages(): boolean {
   return typeof globalThis.ClipboardItem === "function" && typeof clipboard()?.write === "function";
 }
 
+/** Android / iPhone / iPad（含 iPadOS 伪装成 Mac）。这些环境有 ClipboardItem，但写 PNG 进系统剪贴板会失败。 */
+function isMobileClipboardHost(): boolean {
+  const nav = globalThis.navigator;
+  if (nav === undefined) return false;
+  const ua = nav.userAgent ?? "";
+  if (/Android|iPhone|iPod/i.test(ua)) return true;
+  if (/iPad/i.test(ua)) return true;
+  if (/Macintosh/i.test(ua) || /Macintosh/i.test(nav.platform ?? "")) return (nav.maxTouchPoints ?? 0) > 1;
+  return false;
+}
+
+/**
+ * 当前环境能否把 PNG 写入系统剪贴板。
+ * 不用 ClipboardItem.supports("image/png")：规范要求它对 PNG 恒为 true。
+ */
+export function canCopyDiagramImage(): boolean {
+  if (globalThis.isSecureContext === false) return false;
+  if (!clipboardCanWriteImages()) return false;
+  return !isMobileClipboardHost();
+}
+
 function svgPixelSize(svg: string): { width: number; height: number } {
   const viewBox = /viewBox="([^"']+)"/.exec(svg)?.[1];
   if (viewBox !== undefined) {
@@ -252,4 +273,23 @@ export async function copyMermaidDiagram(svg: string): Promise<void> {
   } catch {
     await copyPngViaExecCommand(await pngPromise);
   }
+}
+
+/** 触发 PNG 文件下载。剪贴板不可用时由 UI 调用。 */
+export function downloadDiagramPng(png: Blob, filename = "mermaid.png"): void {
+  if (document.body === null) throw new Error("download");
+  const url = URL.createObjectURL(png);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = "noopener";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** 把已渲染的 mermaid SVG 转成 PNG 并下载。 */
+export async function downloadMermaidDiagram(svg: string): Promise<void> {
+  downloadDiagramPng(await pngBlobFromSvg(svg));
 }
