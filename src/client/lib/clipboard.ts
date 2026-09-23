@@ -1,13 +1,20 @@
 /**
- * 文本复制。Firefox / 局域网 HTTP 没有 Clipboard API（非安全上下文），
- * writeText 会直接失败；execCommand 仍能在点击手势里工作。
- * 先同步 execCommand，失败再走 writeText。
+ * 文本复制。默认走 Clipboard API。
+ * 仅 Linux Firefox 先用 execCommand：该环境 writeText 经常不可用。
  */
 export function copyText(text: string): Promise<void> {
-  if (copyTextWithExecCommand(text)) return Promise.resolve();
+  if (isLinuxFirefox() && copyTextWithExecCommand(text)) return Promise.resolve();
   const writeText = globalThis.navigator?.clipboard?.writeText;
   if (writeText === undefined) return Promise.reject(new Error("clipboard"));
   return writeText.call(globalThis.navigator.clipboard, text);
+}
+
+function isLinuxFirefox(): boolean {
+  const nav = globalThis.navigator;
+  if (nav === undefined) return false;
+  const ua = nav.userAgent ?? "";
+  if (!ua.includes("Firefox/") || /Android/i.test(ua)) return false;
+  return /Linux/i.test(nav.platform ?? "") || /Linux/i.test(ua);
 }
 
 function copyTextWithExecCommand(text: string): boolean {
