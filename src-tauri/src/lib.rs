@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -41,6 +42,7 @@ pub fn run() {
     .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
       show_main(app);
     }))
+    .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
@@ -319,19 +321,32 @@ async fn check_update(app: AppHandle, silent: bool) -> Result<(), String> {
   let update = updater.check().await.map_err(|error| error.to_string())?;
   let Some(update) = update else {
     if !silent {
-      let _ = app.dialog_message("已是最新版本");
+      native_message(&app, "已是最新版本");
     }
     return Ok(());
   };
+  show_main(&app);
+  let version = update.version.clone();
+  let confirmed = app
+    .dialog()
+    .message(format!("安装 {version}？安装后会重启。"))
+    .title("Jarvis")
+    .buttons(MessageDialogButtons::OkCancelCustom("安装".into(), "取消".into()))
+    .blocking_show();
+  if !confirmed {
+    return Ok(());
+  }
   if sidecar_busy(&app) {
-    if !silent {
-      let _ = app.dialog_message("有任务正在运行，已下载将在空闲后安装");
-    }
+    native_message(&app, "有任务正在运行");
     return Ok(());
   }
   update.download_and_install(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
   app.request_restart();
   Ok(())
+}
+
+fn native_message(app: &AppHandle, message: &str) {
+  let _ = app.dialog().message(message).title("Jarvis").blocking_show();
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {

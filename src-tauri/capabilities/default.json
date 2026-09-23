@@ -12,6 +12,7 @@
     "core:window:allow-unminimize",
     "notification:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    "dialog:default"
   ]
 }
