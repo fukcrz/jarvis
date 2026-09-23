@@ -158,20 +158,26 @@ function svgPixelSize(svg: string): { width: number; height: number } {
   };
 }
 
-function loadSvgImage(svg: string): Promise<HTMLImageElement> {
+function loadImage(src: string, revoke?: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
     const image = new Image();
     image.onload = () => {
-      URL.revokeObjectURL(url);
+      if (revoke !== undefined) URL.revokeObjectURL(revoke);
       resolve(image);
     };
     image.onerror = () => {
-      URL.revokeObjectURL(url);
+      if (revoke !== undefined) URL.revokeObjectURL(revoke);
       reject(new Error("svg decode"));
     };
-    image.src = url;
+    image.src = src;
   });
+}
+
+function loadSvgImage(svg: string): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+  return loadImage(url, url).catch(() => (
+    loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`)
+  ));
 }
 
 async function pngBlobFromSvg(svg: string): Promise<Blob> {
@@ -192,29 +198,57 @@ async function pngBlobFromSvg(svg: string): Promise<Blob> {
   return blob;
 }
 
-/** 优先写入 PNG；浏览器不支持图片剪贴板或转码失败时退回 SVG 文本。 */
-export async function writeDiagramClipboard(svg: string, png?: Blob): Promise<"png" | "svg"> {
+/** 把 PNG 写入剪贴板。传 Promise 可以在转码期间保住点击手势，失败不写源码。 */
+export async function writeDiagramClipboard(png: Blob | Promise<Blob>): Promise<void> {
   const api = clipboard();
-  if (png !== undefined && clipboardCanWriteImages() && api !== undefined) {
-    try {
-      await api.write([new ClipboardItem({ "image/png": png })]);
-      return "png";
-    } catch {
-      // 部分浏览器声明了 write 但不接受 image/png。
-    }
+  if (!clipboardCanWriteImages() || api === undefined) throw new Error("clipboard");
+  try {
+    await api.write([new ClipboardItem({ "image/png": png })]);
+  } catch (error) {
+    if (!(png instanceof Promise)) throw error;
+    const blob = await png;
+    await api.write([new ClipboardItem({ "image/png": blob })]);
   }
-  if (api?.writeText === undefined) throw new Error("clipboard");
-  await api.writeText(svg);
-  return "svg";
 }
 
-/** 把已渲染的 mermaid SVG 复制到剪贴板。 */
-export async function copyMermaidDiagram(svg: string): Promise<"png" | "svg"> {
-  let png: Blob | undefined;
+async function copyPngViaExecCommand(png: Blob): Promise<void> {
+  if (typeof document.execCommand !== "function") throw new Error("execCommand");
+  const url = URL.createObjectURL(png);
+  const host = document.createElement("div");
+  host.contentEditable = "true";
+  host.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;overflow:hidden";
+  const image = new Image();
   try {
-    png = await pngBlobFromSvg(svg);
-  } catch {
-    png = undefined;
+    const loaded = new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("png decode"));
+    });
+    image.src = url;
+    await loaded;
+    document.body.append(host);
+    host.append(image);
+    const selection = globalThis.getSelection();
+    if (selection === null) throw new Error("selection");
+    const range = document.createRange();
+    range.selectNode(image);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const ok = document.execCommand("copy");
+    selection.removeAllRanges();
+    if (!ok) throw new Error("execCommand");
+  } finally {
+    host.remove();
+    URL.revokeObjectURL(url);
   }
-  return writeDiagramClipboard(svg, png);
+}
+
+/** 把已渲染的 mermaid SVG 复制为 PNG。失败抛错，不写源码。 */
+export async function copyMermaidDiagram(svg: string): Promise<void> {
+  const pngPromise = pngBlobFromSvg(svg);
+  void pngPromise.catch(() => {});
+  try {
+    await writeDiagramClipboard(pngPromise);
+  } catch {
+    await copyPngViaExecCommand(await pngPromise);
+  }
 }

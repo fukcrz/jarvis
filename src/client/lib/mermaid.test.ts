@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { normalizeMermaidSvg, prepareMermaidSvgForExport, renderMermaidDiagram, writeDiagramClipboard } from "./mermaid";
+import { copyMermaidDiagram, normalizeMermaidSvg, prepareMermaidSvgForExport, renderMermaidDiagram, writeDiagramClipboard } from "./mermaid";
 
 const mermaid = vi.hoisted(() => ({
   startOnLoad: true,
@@ -60,27 +60,45 @@ describe("writeDiagramClipboard", () => {
   });
 
   it("writes png when ClipboardItem is available", async () => {
-    const write: Mock<(items: Array<{ items: Record<string, Blob> }>) => Promise<void>> = vi.fn(async () => undefined);
-    vi.stubGlobal("navigator", { clipboard: { write, writeText: vi.fn() } });
+    const write: Mock<(items: Array<{ items: Record<string, Blob | Promise<Blob>> }>) => Promise<void>> = vi.fn(async () => undefined);
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { write, writeText } });
     vi.stubGlobal("ClipboardItem", class ClipboardItem {
-      constructor(public items: Record<string, Blob>) {}
+      constructor(public items: Record<string, Blob | Promise<Blob>>) {}
     });
     const png = new Blob(["png"], { type: "image/png" });
-    await expect(writeDiagramClipboard("<svg />", png)).resolves.toBe("png");
+    await expect(writeDiagramClipboard(png)).resolves.toBeUndefined();
     expect(write).toHaveBeenCalledTimes(1);
     const payload = write.mock.calls[0]?.[0];
     expect(payload?.[0]?.items["image/png"]).toBe(png);
+    expect(writeText).not.toHaveBeenCalled();
   });
 
-  it("falls back to svg text when image write is unavailable", async () => {
+  it("writes a png promise without waiting for the blob first", async () => {
+    const write: Mock<(items: Array<{ items: Record<string, Blob | Promise<Blob>> }>) => Promise<void>> = vi.fn(async () => undefined);
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { write, writeText } });
+    vi.stubGlobal("ClipboardItem", class ClipboardItem {
+      constructor(public items: Record<string, Blob | Promise<Blob>>) {}
+    });
+    const blob = new Blob(["png"], { type: "image/png" });
+    const png = Promise.resolve(blob);
+    await expect(writeDiagramClipboard(png)).resolves.toBeUndefined();
+    expect(write).toHaveBeenCalledTimes(1);
+    const payload = write.mock.calls[0]?.[0];
+    expect(payload?.[0]?.items["image/png"]).toBe(png);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("throws when image write is unavailable", async () => {
     const writeText = vi.fn(async () => undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     vi.stubGlobal("ClipboardItem", undefined);
-    await expect(writeDiagramClipboard("<svg />")).resolves.toBe("svg");
-    expect(writeText).toHaveBeenCalledWith("<svg />");
+    await expect(writeDiagramClipboard(new Blob(["png"], { type: "image/png" }))).rejects.toThrow("clipboard");
+    expect(writeText).not.toHaveBeenCalled();
   });
 
-  it("falls back to svg text when png write rejects", async () => {
+  it("does not write svg text when png write rejects", async () => {
     const writeText = vi.fn(async () => undefined);
     vi.stubGlobal("navigator", {
       clipboard: {
@@ -89,10 +107,68 @@ describe("writeDiagramClipboard", () => {
       },
     });
     vi.stubGlobal("ClipboardItem", class ClipboardItem {
-      constructor(public items: Record<string, Blob>) {}
+      constructor(public items: Record<string, Blob | Promise<Blob>>) {}
     });
-    await expect(writeDiagramClipboard("<svg />", new Blob(["png"], { type: "image/png" }))).resolves.toBe("svg");
-    expect(writeText).toHaveBeenCalledWith("<svg />");
+    await expect(writeDiagramClipboard(new Blob(["png"], { type: "image/png" }))).rejects.toThrow("denied");
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("retries with a resolved blob if writing a promise is rejected", async () => {
+    const blob = new Blob(["png"], { type: "image/png" });
+    const write: Mock<(items: Array<{ items: Record<string, Blob | Promise<Blob>> }>) => Promise<void>> = vi.fn(async (items) => {
+      if (items[0]?.items["image/png"] instanceof Promise) throw new Error("no promise");
+    });
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { write, writeText } });
+    vi.stubGlobal("ClipboardItem", class ClipboardItem {
+      constructor(public items: Record<string, Blob | Promise<Blob>>) {}
+    });
+    await expect(writeDiagramClipboard(Promise.resolve(blob))).resolves.toBeUndefined();
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write.mock.calls[1]?.[0]?.[0]?.items["image/png"]).toBe(blob);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("does not write text when the png promise rejects", async () => {
+    const write = vi.fn(async () => { throw new Error("denied"); });
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { write, writeText } });
+    vi.stubGlobal("ClipboardItem", class ClipboardItem {
+      constructor(public items: Record<string, Blob | Promise<Blob>>) {}
+    });
+    const png = Promise.reject(new Error("toBlob"));
+    void png.catch(() => {});
+    await expect(writeDiagramClipboard(png)).rejects.toThrow("toBlob");
+    expect(writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe("copyMermaidDiagram", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("does not write svg or mermaid source when png conversion fails", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        write: vi.fn(async () => { throw new Error("denied"); }),
+        writeText,
+      },
+    });
+    vi.stubGlobal("ClipboardItem", class ClipboardItem {
+      constructor(public items: Record<string, Blob | Promise<Blob>>) {}
+    });
+    vi.stubGlobal("Image", class {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) { queueMicrotask(() => this.onerror?.()); }
+    });
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:fake");
+    vi.spyOn(URL, "revokeObjectURL").mockReturnValue(undefined);
+    await expect(copyMermaidDiagram('<svg viewBox="0 0 10 10"></svg>')).rejects.toThrow();
+    expect(writeText).not.toHaveBeenCalled();
   });
 });
 

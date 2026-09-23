@@ -297,7 +297,7 @@ function MermaidBlock({ code }: { code: string }) {
   const [showSource, setShowSource] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [copiedDiagram, setCopiedDiagram] = useState(false);
+  const [diagramCopy, setDiagramCopy] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {
     if (streaming || code.trim() === "") return;
@@ -318,9 +318,12 @@ function MermaidBlock({ code }: { code: string }) {
   const handleCopyDiagram = () => {
     if (svg === undefined) return;
     void copyMermaidDiagram(svg).then(() => {
-      setCopiedDiagram(true);
-      window.setTimeout(() => setCopiedDiagram(false), 1600);
-    }).catch(() => {});
+      setDiagramCopy("copied");
+      window.setTimeout(() => setDiagramCopy("idle"), 1600);
+    }).catch(() => {
+      setDiagramCopy("failed");
+      window.setTimeout(() => setDiagramCopy("idle"), 1600);
+    });
   };
   const diagram = svg !== undefined && !failed && !streaming;
   return <div className="code-block mermaid-block">
@@ -329,7 +332,7 @@ function MermaidBlock({ code }: { code: string }) {
       <span className="mermaid-block-actions">
         {diagram ? <button type="button" className="code-block-copy" onClick={() => setShowSource((current) => !current)}>{showSource ? "图形" : "源码"}</button> : null}
         <button type="button" className={`code-block-copy${copied ? " copied" : ""}`} onClick={handleCopy} disabled={code === ""}>{copied ? "已复制" : "复制"}</button>
-        {diagram ? <button type="button" className={`code-block-copy${copiedDiagram ? " copied" : ""}`} onClick={handleCopyDiagram}>{copiedDiagram ? "已复制" : "复制图"}</button> : null}
+        {diagram ? <button type="button" className={`code-block-copy${diagramCopy === "copied" ? " copied" : diagramCopy === "failed" ? " failed" : ""}`} onClick={handleCopyDiagram}>{diagramCopy === "copied" ? "已复制" : diagramCopy === "failed" ? "复制失败" : "复制图"}</button> : null}
       </span>
     </div>
     {!failed ? null : <p className="mermaid-block-error" role="status">图形渲染失败，已显示源码</p>}

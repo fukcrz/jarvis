@@ -408,6 +408,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .code-block-copy { display: inline-flex; align-items: center; gap: 4px; border: 0; border-radius: 4px; background: transparent; padding: 4px 7px; color: var(--subtle); font-size: 10.5px; }
 .code-block-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .code-block-copy.copied { color: var(--success); }
+.code-block-copy.failed { color: var(--warm); }
 .message-content pre { max-width: 100%; overflow-x: auto; margin: 0; border: 0; border-radius: 0; background: transparent; padding: 13px; color: #e4e4e7; }
 .message-content pre code { background: transparent; padding: 0; color: inherit; font-size: 12px; }
 /* mermaid 图形卡片：沿用代码块外框，头部多一个「源码/图形」切换 */
