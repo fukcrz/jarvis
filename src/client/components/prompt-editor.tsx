@@ -4,7 +4,7 @@ import { EditorView as CodeMirrorView } from "@codemirror/view";
 import { ArrowUp, Command, FileCode2, History, LoaderCircle, MessageSquare, Plus, RotateCcw, Square, X, Zap } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionFileReference, SessionQueue, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
-import { composerDraftSyncAction } from "../lib/composer-draft";
+import { composerDraftSyncAction, isComposerCompositionPending } from "../lib/composer-draft";
 import { imageDataUrl, prepareImage } from "../lib/image";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { ImagePreview } from "./image-lightbox";
@@ -202,12 +202,17 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   const refreshCompletionRef = useRef(refreshCompletion);
   refreshCompletionRef.current = refreshCompletion;
 
-  // 组字期间既不回写 App、也不刷新补全：父组件重渲染会让 useCodeMirror
-  // 重配扩展，Firefox + ibus 会把刚确认的词再提交一次。
+  // 组字期间仍更新发送按钮（微信输入法语音上屏常带着 input.type.compose，
+  // 且 Android EditContext 往往不冒泡 DOM compositionend）。
+  // 但不要回写 App、也不刷新补全：父组件重渲染会让 useCodeMirror 重配扩展，
+  // Firefox + ibus 会把刚确认的词再提交一次。
   const change = useCallback((next: string, update: ViewUpdate) => {
     valueRef.current = next;
-    if (composingRef.current || update.view.composing || update.transactions.some((transaction) => transaction.isUserEvent("input.type.compose"))) return;
     setHasDraft(next.trim() !== "");
+    if (isComposerCompositionPending({
+      composing: composingRef.current || update.view.composing,
+      composeTransaction: update.transactions.some((transaction) => transaction.isUserEvent("input.type.compose")),
+    })) return;
     onDraftChangeRef.current(next);
     refreshCompletionRef.current(update.view);
   }, []);
@@ -310,6 +315,16 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   useEffect(() => { handleFilesRef.current = handleFiles; }, [handleFiles]);
   const syncDraftFromAppRef = useRef(syncDraftFromApp);
   useEffect(() => { syncDraftFromAppRef.current = syncDraftFromApp; }, [syncDraftFromApp]);
+  const flushComposerDraftFromView = useCallback((syncApp: boolean) => {
+    const view = viewRef.current;
+    if (view === undefined) return;
+    const next = view.state.doc.toString();
+    valueRef.current = next;
+    setHasDraft(next.trim() !== "");
+    if (syncApp) onDraftChangeRef.current(next);
+  }, []);
+  const flushComposerDraftFromViewRef = useRef(flushComposerDraftFromView);
+  flushComposerDraftFromViewRef.current = flushComposerDraftFromView;
 
   // Created once with an empty dependency list: handlers read the latest
   // callbacks through refs so the extensions array stays referentially
@@ -343,10 +358,22 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
         syncDraftFromAppRef.current(view, pending, true, true);
         return false;
       }
-      const next = view.state.doc.toString();
-      valueRef.current = next;
-      setHasDraft(next.trim() !== "");
-      onDraftChangeRef.current(next);
+      // Android Chrome 会把上屏推迟到下一帧 flush；立即读文档可能仍是组字前的内容。
+      requestAnimationFrame(() => {
+        if (composingRef.current) return;
+        const current = viewRef.current;
+        if (current === undefined) return;
+        flushComposerDraftFromViewRef.current(!current.composing);
+      });
+      return false;
+    },
+    // 语音上屏有时只打 input、不走 onChange。只允许点亮发送，避免读到尚未 flush 的空文档把按钮又关掉。
+    input: () => {
+      requestAnimationFrame(() => {
+        const current = viewRef.current;
+        if (current === undefined) return;
+        if (current.state.doc.toString().trim() !== "") setHasDraft(true);
+      });
       return false;
     },
   }), []);
@@ -368,10 +395,11 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
 
   const submit = useCallback(async (behavior?: "steer" | "followUp") => {
     if (submittingRef.current) return;
-    if (valueRef.current.trim() === "" && attachmentsRef.current.length === 0) return;
+    const text = viewRef.current?.state.doc.toString() ?? valueRef.current;
+    if (text.trim() === "" && attachmentsRef.current.length === 0) return;
     submittingRef.current = true;
     try {
-      const submitted = await onSubmit(valueRef.current, attachmentsRef.current, behavior);
+      const submitted = await onSubmit(text, attachmentsRef.current, behavior);
       if (!submitted) return;
       closeCompletion();
       const view = viewRef.current;
@@ -457,7 +485,7 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
           // Busy 时 Enter 排队为后续消息（默认行为，可到排队条改插队）。
           const explicitSubmit = (event.ctrlKey || event.metaKey) && event.key === "Enter";
           if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || submittingRef.current || (isMobile && !explicitSubmit)) return;
-          if (valueRef.current.trim() === "" && attachmentsRef.current.length === 0) return;
+          if ((viewRef.current?.state.doc.toString() ?? valueRef.current).trim() === "" && attachmentsRef.current.length === 0) return;
           event.preventDefault();
           event.stopPropagation();
           void submit();

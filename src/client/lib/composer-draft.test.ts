@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composerDraftSyncAction } from "./composer-draft";
+import { composerDraftSyncAction, isComposerCompositionPending } from "./composer-draft";
 
 describe("composerDraftSyncAction", () => {
   it("ignores parent re-renders that did not bump the draft nonce", () => {
@@ -36,5 +36,19 @@ describe("composerDraftSyncAction", () => {
       incoming: "排队消息\n\n当前草稿",
       composing: false,
     })).toBe("apply");
+  });
+});
+
+describe("isComposerCompositionPending", () => {
+  it("treats an active IME session as pending", () => {
+    expect(isComposerCompositionPending({ composing: true, composeTransaction: false })).toBe(true);
+  });
+
+  it("treats a compose-tagged commit as pending even after compositionend", () => {
+    expect(isComposerCompositionPending({ composing: false, composeTransaction: true })).toBe(true);
+  });
+
+  it("allows app draft sync once composition has fully settled", () => {
+    expect(isComposerCompositionPending({ composing: false, composeTransaction: false })).toBe(false);
   });
 });
