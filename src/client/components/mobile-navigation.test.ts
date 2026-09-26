@@ -41,10 +41,9 @@ afterEach(() => {
 });
 
 describe("mobile session group visibility", () => {
-  it("keeps empty projects visible in focus mode", () => {
-    expect(shouldShowMobileSessionGroup(0, true)).toBe(true);
-    expect(shouldShowMobileSessionGroup(0, false)).toBe(false);
-    expect(shouldShowMobileSessionGroup(2, false)).toBe(true);
+  it("hides empty projects in every mode", () => {
+    expect(shouldShowMobileSessionGroup(0)).toBe(false);
+    expect(shouldShowMobileSessionGroup(2)).toBe(true);
   });
 });
 

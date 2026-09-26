@@ -720,14 +720,14 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .mobile-session-projects { display: flex; flex: 0 0 auto; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--glass-border); background: var(--chrome); padding: 8px 16px; scrollbar-width: none; }
 .mobile-session-projects::-webkit-scrollbar { display: none; }
 .mobile-session-projects button { display: inline-flex; align-items: center; flex: 0 0 auto; min-height: 24px; gap: 4px; border: 1px solid var(--glass-border); border-radius: 999px; background: rgb(255 255 255 / .03); padding: 2px 8px; color: var(--muted); font-size: 11px; white-space: nowrap; }
-.mobile-session-projects button.selected { border-color: rgb(255 255 255 / .16); background: rgb(255 255 255 / .08); color: var(--ink); }
+.mobile-session-projects button.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent); }
 .mobile-session-projects button:has(.mobile-project-status.attention-running) { --project-chip-tone: var(--accent); --project-chip-ink: var(--accent-strong); }
 .mobile-session-projects button:has(.mobile-project-status.attention-running.stopping),
 .mobile-session-projects button:has(.mobile-project-status.attention-waiting_interaction) { --project-chip-tone: var(--warm); --project-chip-ink: var(--warm); }
 .mobile-session-projects button:has(.mobile-project-status.attention-failed) { --project-chip-tone: var(--danger); --project-chip-ink: var(--danger); }
 .mobile-session-projects button:has(.mobile-project-status.attention-completed_unread) { --project-chip-tone: var(--success); --project-chip-ink: var(--success); }
 .mobile-session-projects button:has(.mobile-project-status) { border-color: color-mix(in srgb, var(--project-chip-tone) 62%, #303035); background: color-mix(in srgb, var(--project-chip-tone) 14%, #202023); }
-.mobile-session-projects button.selected:has(.mobile-project-status) { border-color: color-mix(in srgb, var(--project-chip-tone) 45%, rgb(255 255 255 / .16)); background: rgb(255 255 255 / .08); color: var(--ink); }
+.mobile-session-projects button.selected:has(.mobile-project-status) { border-color: var(--project-chip-tone); background: color-mix(in srgb, var(--project-chip-tone) 22%, #202023); color: var(--project-chip-ink); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--project-chip-tone) 24%, transparent); }
 .mobile-project-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-project-status { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 11px; height: 11px; }
 .mobile-session-projects .mobile-project-status.attention-running { color: var(--accent-strong); }
