@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -18,6 +19,10 @@ pub fn project_node_path() -> PathBuf {
   runtime_dir().join("node.exe")
 }
 
+pub fn bundled_node_path(root: &Path) -> PathBuf {
+  root.join("node.exe")
+}
+
 pub fn runtime_dir() -> PathBuf {
   dirs::data_local_dir()
     .unwrap_or_else(|| PathBuf::from("."))
@@ -26,7 +31,11 @@ pub fn runtime_dir() -> PathBuf {
     .join(format!("node-v{NODE_VERSION}"))
 }
 
-pub fn resolve_node() -> Result<PathBuf, String> {
+pub fn resolve_node(root: &Path) -> Result<PathBuf, String> {
+  let bundled = bundled_node_path(root);
+  if bundled.is_file() && node_version_ok(&bundled) {
+    return Ok(bundled);
+  }
   let project = project_node_path();
   if project.is_file() && node_version_ok(&project) {
     return Ok(project);
@@ -64,6 +73,7 @@ pub fn download_node() -> Result<PathBuf, String> {
   let dest = dir.join("node.exe");
   let temp = dir.join("node.exe.part");
   let response = ureq::get(NODE_EXE_URL)
+    .timeout(Duration::from_secs(60))
     .call()
     .map_err(|error| format!("下载 Node 失败：{error}"))?;
   let mut file = fs::File::create(&temp).map_err(|error| format!("无法写入 Node：{error}"))?;
@@ -94,11 +104,20 @@ pub fn download_node() -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
-  use super::parse_major;
+  use super::{bundled_node_path, parse_major};
+  use std::path::{Path, PathBuf};
 
   #[test]
   fn parses_node_major() {
     assert_eq!(parse_major("v24.21.0"), Some(24));
     assert_eq!(parse_major("22.11.0"), Some(22));
+  }
+
+  #[test]
+  fn resolves_bundled_node_from_resource_root() {
+    assert_eq!(
+      bundled_node_path(Path::new("resources/jarvis")),
+      PathBuf::from("resources").join("jarvis").join("node.exe"),
+    );
   }
 }

@@ -5,7 +5,6 @@ use serde::Serialize;
 use sidecar::DesktopEvent;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
@@ -18,9 +17,11 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
 
 const DEFAULT_PORT: u16 = 9528;
+const STARTUP_SLOW_AFTER_SECS: u64 = 30;
+const STARTUP_TIMEOUT_SECS: u64 = 60;
 
 struct AppState {
-  sidecar: Mutex<Option<Child>>,
+  sidecar: Mutex<Option<sidecar::Sidecar>>,
   port: Mutex<Option<u16>>,
   notifications_enabled: AtomicBool,
   last_session: Mutex<Option<(String, String)>>,
@@ -125,16 +126,12 @@ mod open_url_tests {
 fn start_backend(app: AppHandle) {
   set_splash(&app, "正在启动");
   let port = desktop_port();
+  if let Ok(mut slot) = app.state::<AppState>().port.lock() {
+    *slot = None;
+  }
   match probe_existing_jarvis(port) {
     Some(true) => {
-      if let Ok(mut slot) = app.state::<AppState>().port.lock() {
-        *slot = Some(port);
-      }
-      open_ui(&app, port);
-      let handle = app.clone();
-      tauri::async_runtime::spawn(async move {
-        let _ = check_update(handle, true).await;
-      });
+      mark_backend_ready(&app, port);
       return;
     }
     Some(false) => {
@@ -144,7 +141,8 @@ fn start_backend(app: AppHandle) {
     }
     None => {}
   }
-  let node = match node::resolve_node() {
+  let root = jarvis_root(&app);
+  let node = match node::resolve_node(&root) {
     Ok(path) => path,
     Err(_) => {
       set_splash(&app, "正在下载 Node");
@@ -158,7 +156,7 @@ fn start_backend(app: AppHandle) {
       }
     }
   };
-  let root = jarvis_root(&app);
+  set_splash(&app, "正在启动服务");
   let app_for_events = app.clone();
   match sidecar::spawn_sidecar(&node, &root, port, move |event| handle_event(&app_for_events, event)) {
     Ok(child) => {
@@ -172,24 +170,16 @@ fn start_backend(app: AppHandle) {
       return;
     }
   }
-  if !wait_for_port(&app, Duration::from_secs(30)) {
+  if let Err(error) = wait_for_backend(&app, port, Duration::from_secs(STARTUP_TIMEOUT_SECS)) {
     set_splash(&app, "启动失败");
-    let _ = app.dialog_message("Jarvis 服务未能在 30 秒内启动");
+    stop_current_sidecar(&app);
+    let _ = app.dialog_message(&error);
   }
 }
 
 fn handle_event(app: &AppHandle, event: DesktopEvent) {
   match event {
-    DesktopEvent::Ready { port } => {
-      if let Ok(mut slot) = app.state::<AppState>().port.lock() {
-        *slot = Some(port);
-      }
-      open_ui(app, port);
-      let handle = app.clone();
-      tauri::async_runtime::spawn(async move {
-        let _ = check_update(handle, true).await;
-      });
-    }
+    DesktopEvent::Ready { port } => mark_backend_ready(app, port),
     DesktopEvent::Restart => restart_sidecar(app),
     DesktopEvent::RunFinished {
       workspace_id,
@@ -206,6 +196,22 @@ fn handle_event(app: &AppHandle, event: DesktopEvent) {
       notify_run(app, &workspace_id, &session_id, failed, session_name.as_deref(), text.as_deref(), error_message.as_deref());
     }
   }
+}
+
+fn mark_backend_ready(app: &AppHandle, port: u16) {
+  let newly_ready = app.state::<AppState>().port.lock().map(|mut slot| {
+    let was_ready = *slot == Some(port);
+    *slot = Some(port);
+    !was_ready
+  }).unwrap_or(true);
+  if !newly_ready {
+    return;
+  }
+  open_ui(app, port);
+  let handle = app.clone();
+  tauri::async_runtime::spawn(async move {
+    let _ = check_update(handle, true).await;
+  });
 }
 
 fn open_ui(app: &AppHandle, port: u16) {
@@ -258,21 +264,78 @@ fn restart_sidecar(app: &AppHandle) {
 
 fn stop_current_sidecar(app: &AppHandle) {
   if let Ok(mut slot) = app.state::<AppState>().sidecar.lock() {
-    if let Some(mut child) = slot.take() {
-      sidecar::stop_sidecar(&mut child);
+    if let Some(mut sidecar) = slot.take() {
+      sidecar::stop_sidecar(&mut sidecar);
     }
   }
 }
 
-fn wait_for_port(app: &AppHandle, timeout: Duration) -> bool {
-  let deadline = Instant::now() + timeout;
+fn wait_for_backend(app: &AppHandle, port: u16, timeout: Duration) -> Result<(), String> {
+  let started_at = Instant::now();
+  let deadline = started_at + timeout;
+  let mut slow_notice_shown = false;
   while Instant::now() < deadline {
-    if app.state::<AppState>().port.lock().ok().and_then(|slot| *slot).is_some() {
-      return true;
+    if backend_is_ready(port) {
+      mark_backend_ready(app, port);
+      return Ok(());
+    }
+    if let Some(error) = sidecar_exit_error(app) {
+      return Err(error);
+    }
+    if !slow_notice_shown && started_at.elapsed() >= Duration::from_secs(STARTUP_SLOW_AFTER_SECS) {
+      set_splash(app, "启动时间较长");
+      slow_notice_shown = true;
     }
     thread::sleep(Duration::from_millis(200));
   }
-  false
+  if backend_is_ready(port) {
+    mark_backend_ready(app, port);
+    return Ok(());
+  }
+  if let Some(error) = sidecar_exit_error(app) {
+    return Err(error);
+  }
+  Err(startup_failure(
+    &format!("Jarvis 服务未能在 {STARTUP_TIMEOUT_SECS} 秒内启动"),
+    &sidecar_diagnostics(app),
+  ))
+}
+
+fn backend_is_ready(port: u16) -> bool {
+  matches!(probe_jarvis(port, Duration::from_millis(500)), Some(true))
+}
+
+fn sidecar_exit_error(app: &AppHandle) -> Option<String> {
+  let state = app.state::<AppState>();
+  let Ok(mut slot) = state.sidecar.lock() else { return None };
+  let sidecar = slot.as_mut()?;
+  let status = match sidecar.try_wait() {
+    Ok(Some(status)) => status,
+    Ok(None) => return None,
+    Err(error) => return Some(startup_failure(&format!("无法读取 Jarvis 服务状态：{error}"), &sidecar.diagnostics())),
+  };
+  thread::sleep(Duration::from_millis(100));
+  let diagnostics = sidecar.diagnostics();
+  *slot = None;
+  Some(startup_failure(&format!("Jarvis 服务启动后意外退出（{status}）"), &diagnostics))
+}
+
+fn sidecar_diagnostics(app: &AppHandle) -> String {
+  app.state::<AppState>().sidecar.lock().ok().and_then(|slot| slot.as_ref().map(|sidecar| sidecar.diagnostics())).unwrap_or_default()
+}
+
+fn startup_failure(summary: &str, diagnostics: &str) -> String {
+  const MAX_DIAGNOSTIC_CHARS: usize = 2_000;
+  let diagnostics = diagnostics.trim();
+  if diagnostics.is_empty() {
+    return summary.to_string();
+  }
+  let detail = if diagnostics.chars().count() > MAX_DIAGNOSTIC_CHARS {
+    format!("{}...", diagnostics.chars().take(MAX_DIAGNOSTIC_CHARS).collect::<String>())
+  } else {
+    diagnostics.to_string()
+  };
+  format!("{summary}\n\n最后日志：\n{detail}")
 }
 
 fn show_main(app: &AppHandle) {
@@ -306,10 +369,14 @@ fn sidecar_busy(app: &AppHandle) -> bool {
   body.get("running").and_then(serde_json::Value::as_u64).unwrap_or(0) > 0
 }
 
-/// `None` = 没人听端口；`Some(true)` = 已有 Jarvis；`Some(false)` = 被别的程序占用。
+/// `None` = 没人听端口；`Some(true)` = 已有 Jarvis；`Some(false)` = 被其他程序占用。
 fn probe_existing_jarvis(port: u16) -> Option<bool> {
+  probe_jarvis(port, Duration::from_secs(1))
+}
+
+fn probe_jarvis(port: u16, timeout: Duration) -> Option<bool> {
   let url = format!("http://127.0.0.1:{port}/api/health");
-  match ureq::get(&url).timeout(Duration::from_secs(1)).call() {
+  match ureq::get(&url).timeout(timeout).call() {
     Ok(response) => Some(response.into_json::<serde_json::Value>().ok().and_then(|body| body.get("ok")?.as_bool()) == Some(true)),
     Err(ureq::Error::Status(_, _)) => Some(false),
     Err(_) => None,
@@ -420,6 +487,21 @@ impl DialogMessage for AppHandle {
       let _ = window.eval(&format!("alert({message:?})"));
     }
     Ok(())
+  }
+}
+
+#[cfg(test)]
+mod startup_tests {
+  use super::startup_failure;
+
+  #[test]
+  fn adds_diagnostics_to_startup_failure() {
+    assert_eq!(startup_failure("启动失败", "error line"), "启动失败\n\n最后日志：\nerror line");
+  }
+
+  #[test]
+  fn omits_empty_diagnostics() {
+    assert_eq!(startup_failure("启动失败", "  \n"), "启动失败");
   }
 }
 
