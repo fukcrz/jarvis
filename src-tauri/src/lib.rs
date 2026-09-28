@@ -351,9 +351,6 @@ fn show_main(app: &AppHandle) {
 }
 
 fn quit_app(app: &AppHandle) {
-  if sidecar_busy(app) {
-    let _ = app.dialog_message("有任务正在运行，退出将中断当前会话。");
-  }
   app.state::<AppState>().quitting.store(true, Ordering::Relaxed);
   stop_current_sidecar(app);
   app.exit(0);
