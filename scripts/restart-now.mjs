@@ -72,6 +72,7 @@ function startServer() {
     cwd: root,
     env: { ...process.env, NODE_ENV: "production", PORT: String(port) },
     detached: true,
+    windowsHide: true,
     stdio: ["ignore", output, output],
   });
   child.unref();
@@ -79,6 +80,7 @@ function startServer() {
 }
 
 async function main() {
+  if (process.platform === "win32") throw new Error("Windows 请使用 Jarvis 设置中的服务重启");
   log(`restart-now 启动：端口 ${port}`);
   if (!existsSync(entry)) {
     log(`ERROR: 生产构建不存在：${entry}`);

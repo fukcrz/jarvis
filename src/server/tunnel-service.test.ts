@@ -60,7 +60,7 @@ describe("extractArchiveFile", () => {
       await mkdir(src, { recursive: true });
       await writeFile(join(src, "frpc"), "binary");
       // 相对路径打包，避免 Windows 上 msys GNU tar 把 "C:\\" 解析为 rsh 主机
-      const pack = spawnSync("tar", ["-czf", "frp.tar.gz", "-C", "src", "."], { cwd: dir });
+      const pack = spawnSync("tar", ["-czf", "frp.tar.gz", "-C", "src", "."], { cwd: dir, windowsHide: true });
       expect(pack.status).toBe(0);
       const out = join(dir, "out");
       await mkdir(out);
@@ -80,7 +80,7 @@ describe("extractArchiveFile", () => {
       const pack = spawnSync("powershell.exe", [
         "-NoProfile", "-NonInteractive", "-Command",
         `Compress-Archive -Path '${join(src, "*")}' -DestinationPath '${join(dir, "frp.zip")}' -Force`,
-      ]);
+      ], { windowsHide: true });
       expect(pack.status).toBe(0);
       const out = join(dir, "out");
       await mkdir(out);

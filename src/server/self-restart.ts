@@ -1,7 +1,9 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import type { FastifyInstance } from "fastify";
 import { PROTOCOL_VERSION } from "../shared/protocol.js";
 import { desktopEnabled, emitDesktopEvent } from "./desktop-bridge.js";
@@ -44,7 +46,7 @@ function scheduleRestart(app: FastifyInstance, events: EventHub, onFailed: () =>
   setImmediate(() => {
     void (async () => {
       try {
-        spawnChild();
+        await spawnChild();
         await closeGracefully(app, events);
         process.exit(0);
       } catch (error) {
@@ -60,20 +62,27 @@ function childEntry(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "index.js");
 }
 
-function spawnChild(): void {
+async function spawnChild(): Promise<void> {
+  if (process.platform === "win32") {
+    const root = join(dirname(childEntry()), "..", "..", "..");
+    const logs = join(root, "logs");
+    mkdirSync(logs, { recursive: true });
+    const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+    const script = `$env:JARVIS_SELF_RESTART='1'; Start-Process -FilePath ${literal(process.execPath)} -ArgumentList @(${literal(`"${childEntry()}"`)}) -WorkingDirectory ${literal(root)} -WindowStyle Hidden -RedirectStandardOutput ${literal(join(logs, "self-restart.log"))} -RedirectStandardError ${literal(join(logs, "self-restart.error.log"))}`;
+    await promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
+      windowsHide: true,
+      timeout: 10_000,
+    });
+    return;
+  }
   const child = spawn(process.execPath, [childEntry()], {
     env: { ...process.env, JARVIS_SELF_RESTART: "1" },
-    // The replacement must not inherit the old process's console handles.
-    // `windowsHide` cannot undo an inherited console attached by stdio.
     stdio: ["ignore", "ignore", "ignore"],
     detached: true,
     windowsHide: true,
   });
-  // 旧进程退出后新进程继续运行（否则父进程退出会带走子进程）。
   child.unref();
-  child.on("error", (error) => {
-    console.error("jarvis: failed to spawn replacement process:", error.message);
-  });
+  child.on("error", (error) => console.error("jarvis: failed to spawn replacement process:", error.message));
 }
 
 async function closeGracefully(app: FastifyInstance, events: EventHub): Promise<void> {

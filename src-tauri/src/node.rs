@@ -4,6 +4,12 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 pub const NODE_VERSION: &str = "24.21.0";
 const NODE_EXE_SHA256: &str = "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32";
 const NODE_EXE_URL: &str = "https://nodejs.org/dist/v24.21.0/win-x64/node.exe";
@@ -34,7 +40,11 @@ pub fn resolve_node() -> Result<PathBuf, String> {
 }
 
 pub fn node_version_ok(path: &Path) -> bool {
-  let output = Command::new(path).arg("-v").output().ok();
+  let mut command = Command::new(path);
+  command.arg("-v");
+  #[cfg(windows)]
+  command.creation_flags(CREATE_NO_WINDOW);
+  let output = command.output().ok();
   let Some(output) = output else { return false };
   if !output.status.success() {
     return false;

@@ -20,11 +20,16 @@ cpSync(join(root, "scripts"), join(staging, "scripts"), { recursive: true });
 
 const install = spawnSync("npm", ["ci", "--omit=dev"], {
   cwd: staging,
-  stdio: "inherit",
+  stdio: process.platform === "win32" ? ["ignore", "pipe", "pipe"] : "inherit",
+  maxBuffer: 64 * 1024 * 1024,
   windowsHide: true,
   shell: process.platform === "win32",
   env: { ...process.env, NODE_ENV: "production" },
 });
+if (process.platform === "win32") {
+  if (install.stdout) process.stdout.write(install.stdout);
+  if (install.stderr) process.stderr.write(install.stderr);
+}
 if (install.status !== 0) {
   throw new Error("desktop runtime npm ci --omit=dev 失败");
 }

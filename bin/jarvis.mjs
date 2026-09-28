@@ -73,15 +73,14 @@ function parseArgs(argv) {
 
 function openBrowser(port) {
   const url = `http://127.0.0.1:${port}`;
-  const command =
-    process.platform === "win32"
-      ? "start"
-      : process.platform === "darwin"
-        ? "open"
-        : "xdg-open";
+  const [command, args] = process.platform === "win32"
+    ? ["rundll32", ["url.dll,FileProtocolHandler", url]]
+    : [process.platform === "darwin" ? "open" : "xdg-open", [url]];
   // Give the server a moment to start listening.
   setTimeout(() => {
-    spawn(command, [url], { stdio: "ignore", detached: true, shell: process.platform === "win32" }).unref();
+    spawn(command, args, { stdio: "ignore", detached: process.platform !== "win32", windowsHide: true })
+      .on("error", () => {})
+      .unref();
   }, 1200);
 }
 
@@ -119,9 +118,16 @@ const child = spawn(
       PORT: String(port),
       HOST: host,
     },
-    stdio: "inherit",
+    stdio: process.platform === "win32" ? ["pipe", "pipe", "pipe"] : "inherit",
+    windowsHide: true,
   },
 );
+
+if (process.platform === "win32") {
+  process.stdin.pipe(child.stdin).on("error", () => {});
+  child.stdout.pipe(process.stdout).on("error", () => {});
+  child.stderr.pipe(process.stderr).on("error", () => {});
+}
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {

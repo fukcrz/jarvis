@@ -122,6 +122,7 @@ function startServer() {
     cwd: root,
     env: { ...process.env, NODE_ENV: "production", PORT: String(port) },
     detached: true,
+    windowsHide: true,
     stdio: ["ignore", output, output],
   });
   child.unref();
@@ -129,6 +130,7 @@ function startServer() {
 }
 
 async function main() {
+  if (process.platform === "win32") throw new Error("Windows 请使用 Jarvis 设置中的服务重启");
   log(`prod-restart 启动：端口 ${port}，等待所有会话空闲后重启`);
   if (!existsSync(entry)) {
     log(`ERROR: 生产构建不存在：${entry}（先执行 npm run build）`);
