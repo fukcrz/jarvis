@@ -131,4 +131,50 @@ for (const runnerPath of new Set(subagentRunnerPaths)) {
   );
 }
 
+const foveaRoots = [
+  join(root, "node_modules/pi-fovea"),
+  join(homedir(), ".pi/agent/npm/node_modules/pi-fovea"),
+];
+for (const foveaRoot of new Set(foveaRoots)) {
+  const astgrepPath = join(foveaRoot, "src/core/astgrep.ts");
+  const gitPath = join(foveaRoot, "src/core/git.ts");
+  if (!existsSync(astgrepPath) || !existsSync(gitPath)) continue;
+
+  await replaceOnce(
+    astgrepPath,
+    'const probe = spawnSync("ast-grep", ["--version"], { encoding: "utf8" });',
+    'const probe = spawnSync("ast-grep", ["--version"], { encoding: "utf8", windowsHide: true });',
+  );
+  await replaceOnce(
+    astgrepPath,
+    'const r = spawnSync(bin, ["--version"], { encoding: "utf8" });',
+    'const r = spawnSync(bin, ["--version"], { encoding: "utf8", windowsHide: true });',
+  );
+  await replaceOnce(
+    astgrepPath,
+    'execFile(bin, ["--version"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 }, (error) => {',
+    'execFile(bin, ["--version"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024, windowsHide: true }, (error) => {',
+  );
+  await replaceOnce(
+    astgrepPath,
+    '          { cwd, encoding: "utf8", timeout: RUN_TIMEOUT, maxBuffer: RUN_MAX_BUFFER },',
+    '          { cwd, encoding: "utf8", timeout: RUN_TIMEOUT, maxBuffer: RUN_MAX_BUFFER, windowsHide: true },',
+  );
+  await replaceOnce(
+    astgrepPath,
+    '      execFile(bin, ["scan", "--help"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 }, (error) => {',
+    '      execFile(bin, ["scan", "--help"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024, windowsHide: true }, (error) => {',
+  );
+  await replaceOnce(
+    astgrepPath,
+    '      { cwd, stdio: ["ignore", "pipe", "pipe"] },',
+    '      { cwd, stdio: ["ignore", "pipe", "pipe"], windowsHide: true },',
+  );
+  await replaceOnce(
+    gitPath,
+    '            env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "", GIT_TERMINAL_PROMPT: "0" },\n            encoding: "utf8",',
+    '            env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "", GIT_TERMINAL_PROMPT: "0" },\n            encoding: "utf8",\n            windowsHide: true,',
+  );
+}
+
 console.log("Applied Pi ownerSessionId and Windows hidden-process patches");
