@@ -29,7 +29,7 @@ interface TimelineProps {
   onDismissNotice?: () => void;
   status: SessionStatus;
   onRetryCompaction?: () => void;
-  onEditUserMessage?: (item: MessageTimelineItem, text: string) => Promise<boolean>;
+  onEditUserMessage?: (item: MessageTimelineItem) => void;
   onForkMessage?: (item: MessageTimelineItem) => void;
   onExtensionUiRespond?: (id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void | Promise<void>;
   /** 当前工作区根目录：渲染 AI 回复中的相对路径图片时作为基准。 */
@@ -86,22 +86,6 @@ export function shouldHideJumpLatestForComposer(isMobile: boolean, composerHeigh
   return isMobile && composerHeight > thresholdPx;
 }
 
-/** 进入编辑时把光标放到末尾。移动端 textarea 聚焦默认钉在开头。 */
-function placeTextareaCaretAtEnd(element: HTMLTextAreaElement): () => void {
-  const place = () => {
-    const length = element.value.length;
-    element.setSelectionRange(length, length);
-  };
-  element.focus();
-  place();
-  const frame = window.requestAnimationFrame(place);
-  const timer = window.setTimeout(place, 0);
-  return () => {
-    window.cancelAnimationFrame(frame);
-    window.clearTimeout(timer);
-  };
-}
-
 function stopFollowingOnGesture(element: HTMLDivElement, setFollowing: (value: boolean) => void, deltaY: number) {
   if (shouldStopFollowingOnGesture(element, deltaY)) setFollowing(false);
 }
@@ -154,12 +138,13 @@ export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadi
   onEditUserMessageRef.current = onEditUserMessage;
   onForkMessageRef.current = onForkMessage;
   onExtensionUiRespondRef.current = onExtensionUiRespond;
-  const stableOnEditUserMessage = useCallback((item: MessageTimelineItem, text: string) => onEditUserMessageRef.current?.(item, text) ?? Promise.resolve(false), []);
+  const stableOnEditUserMessage = useCallback((item: MessageTimelineItem) => {
+    onEditUserMessageRef.current?.(item);
+  }, []);
   const stableOnForkMessage = useCallback((item: MessageTimelineItem) => {
     onForkMessageRef.current?.(item);
   }, []);
   const stableOnExtensionUiRespond = useCallback((id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => onExtensionUiRespondRef.current?.(id, response), []);
-  const [editingMessageId, setEditingMessageId] = useState<string>();
   const [activeUserMessageId, setActiveUserMessageId] = useState<string>();
   const [highlightedMessageId, setHighlightedMessageId] = useState<string>();
   const [markerPositions, setMarkerPositions] = useState<Record<string, number>>({});
@@ -190,7 +175,6 @@ export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadi
     if (scrollRef.current !== null) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     setFollowing(true);
     setShowJumpLatest(false);
-    setEditingMessageId(undefined);
     setHighlightedMessageId(undefined);
     setActiveUserMessageId(undefined);
     setMarkerPositions({});
@@ -435,7 +419,7 @@ export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadi
         <div className="timeline-inner">
           <div className="timeline-feed">
             {hasMore ? <button type="button" className="timeline-load-earlier" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "加载中" : "更早"}</button> : null}
-            {renderTimelineTurns(items, streamingMessageId, status, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, editingMessageId, setEditingMessageId, workspaceCwd, highlightedMessageId, following)}
+            {renderTimelineTurns(items, streamingMessageId, status, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, workspaceCwd, highlightedMessageId, following)}
             {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
             {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
             {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
@@ -618,29 +602,10 @@ function errorSummary(message: string): string {
   return `${firstLine.slice(0, 177)}…`;
 }
 
-const MessageItem = memo(function MessageItem({ item, streaming, editing, highlighted, setEditingMessageId, onEdit, onFork, baseDir }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; editing: boolean; highlighted: boolean; setEditingMessageId: (id: string | undefined) => void; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string }) {
+const MessageItem = memo(function MessageItem({ item, streaming, highlighted, onEdit, onFork, baseDir }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; highlighted: boolean; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string }) {
   const images = item.images ?? [];
-  const [draft, setDraft] = useState(item.text);
-  const [submitting, setSubmitting] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => { if (!editing) setDraft(item.text); }, [editing, item.text]);
-  useLayoutEffect(() => {
-    if (!editing) return;
-    const element = textareaRef.current;
-    if (element === null) return;
-    return placeTextareaCaretAtEnd(element);
-  }, [editing]);
-  const onStartEdit = () => setEditingMessageId(item.id);
-  const onCancelEdit = () => setEditingMessageId(undefined);
-  const submitEdit = async () => {
-    if (onEdit === undefined || submitting || (draft.trim() === "" && images.length === 0)) return;
-    setSubmitting(true);
-    const sent = await onEdit(item, draft);
-    setSubmitting(false);
-    if (sent) onCancelEdit();
-  };
   return (
-    <article data-user-message-id={item.role === "user" ? item.id : undefined} className={`message-row ${item.role} ${streaming ? "streaming" : ""} ${editing ? "editing" : ""} ${highlighted ? "navigator-highlight" : ""}`}>
+    <article data-user-message-id={item.role === "user" ? item.id : undefined} className={`message-row ${item.role} ${streaming ? "streaming" : ""} ${highlighted ? "navigator-highlight" : ""}`}>
       <div className={`message-body ${item.role}`}>
         {images.length === 0 ? null : <div className="message-images" aria-label="消息图片">
           {images.map((image, index) => {
@@ -648,10 +613,10 @@ const MessageItem = memo(function MessageItem({ item, streaming, editing, highli
             return <ImagePreview key={`${image.mimeType}:${index}`} className="message-image-thumb" src={src} alt={`图片 ${String(index + 1)}`}><img src={src} alt={`图片 ${String(index + 1)}`} loading="lazy" /></ImagePreview>;
           })}
         </div>}
-        {editing ? <div className="message-inline-editor"><textarea ref={textareaRef} value={draft} disabled={submitting} aria-label="编辑消息" onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onCancelEdit(); } if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitEdit(); } }} /><div className="message-inline-editor-actions"><button type="button" disabled={submitting} onClick={onCancelEdit}>取消</button><button type="button" className="accent" disabled={submitting || (draft.trim() === "" && images.length === 0)} onClick={() => { void submitEdit(); }}>{submitting ? "正在重新生成…" : "重新生成"}</button></div></div> : item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
+        {item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
           <MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} interactiveFiles={item.role === "assistant" && !streaming} />
         </div>}
-        {editing ? null : <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : onStartEdit} onFork={onFork} />}
+        <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : () => onEdit(item)} onFork={onFork} />
       </div>
     </article>
   );
@@ -1135,17 +1100,15 @@ interface TurnRenderContext {
   streamingMessageId?: string;
   status: SessionStatus;
   activeActivityId?: string;
-  editingMessageId?: string;
   highlightedMessageId?: string;
   workspaceCwd?: string;
   onExtensionUiRespond?: TimelineProps["onExtensionUiRespond"];
   onEditUserMessage?: TimelineProps["onEditUserMessage"];
   onForkMessage?: TimelineProps["onForkMessage"];
-  setEditingMessageId: (id: string | undefined) => void;
 }
 
 function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, narration?: string): ReactNode {
-  if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} editing={entry.item.id === context.editingMessageId} highlighted={entry.item.id === context.highlightedMessageId} setEditingMessageId={context.setEditingMessageId} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
+  if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} />;
@@ -1210,11 +1173,11 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
   </>;
 }
 
-function renderTimelineTurns(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], editingMessageId: string | undefined, setEditingMessageId: (id: string | undefined) => void, workspaceCwd: string | undefined, highlightedMessageId: string | undefined, autoCollapse: boolean): ReactNode[] {
+function renderTimelineTurns(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined, autoCollapse: boolean): ReactNode[] {
   const turns = groupTimelineTurns(items);
   const activeActivityId = isToolActivityRunning(items, status) ? lastActivityGroupId(items) : undefined;
   const activeTurnKey = status.runState === "idle" ? undefined : turns.at(-1)?.key;
-  const context: TurnRenderContext = { streamingMessageId, status, activeActivityId, editingMessageId, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage, setEditingMessageId };
+  const context: TurnRenderContext = { streamingMessageId, status, activeActivityId, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage };
   // 全部属性都显式传：TurnRenderContext 的键名与组件 props 一致，展开时不会漏项。
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} active={turn.key === activeTurnKey} autoCollapse={autoCollapse} {...context} />);
 }

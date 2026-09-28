@@ -5,6 +5,7 @@ import { emptySessionQueue } from "../../shared/protocol";
 import { api, isSessionConflict } from "../api";
 import { useSessionStream, type ExtensionPanelState } from "../hooks/use-session-stream";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
+import { composerImageAttachments } from "../lib/image";
 import { parseBashCommand, randomUUID } from "../lib/utils";
 import { ContextButton } from "./context-button";
 import { ModelSelector } from "./model-selector";
@@ -35,6 +36,8 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
   const [draft, setDraft] = useState("");
   const [draftNonce, setDraftNonce] = useState(0);
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+  const [editingMessage, setEditingMessage] = useState<{ id: string; draft: string; attachments: ImageAttachment[] }>();
+  const [editDraftInjection, setEditDraftInjection] = useState<{ text: string; nonce: number }>();
   const [commands, setCommands] = useState<ComposerCommand[]>([]);
   const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const [thinkingLevelPending, setThinkingLevelPending] = useState(false);
@@ -61,6 +64,8 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
     setDraft("");
     setDraftNonce((nonce) => nonce + 1);
     setAttachments([]);
+    setEditingMessage(undefined);
+    setEditDraftInjection(undefined);
     setCommands([]);
     setModelSwitchPending(false);
     setThinkingLevelPending(false);
@@ -155,21 +160,31 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
 
   const submitPrompt = async (text: string, images: ImageAttachment[], behavior?: "steer" | "followUp"): Promise<boolean> => {
     if (sideRef === undefined) return false;
-    if (images.length === 0 && parseBashCommand(text) !== undefined) {
+    const edit = editingMessage;
+    if (edit === undefined && images.length === 0 && parseBashCommand(text) !== undefined) {
       setError("侧聊为只读");
       return false;
     }
     const clientRequestId = randomUUID();
-    stream.addOptimisticUser(clientRequestId, text, images);
+    const attachments = composerImageAttachments(images);
+    if (edit === undefined) stream.addOptimisticUser(clientRequestId, text, attachments);
+    else stream.replaceUserMessage(edit.id, clientRequestId, text, attachments);
     try {
-      const result = await api.prompt(sideRef, text, clientRequestId, images, behavior);
-      if (result.queued === true) stream.discardOptimisticUser(clientRequestId);
+      if (edit === undefined) {
+        const result = await api.prompt(sideRef, text, clientRequestId, attachments, behavior);
+        if (result.queued === true) stream.discardOptimisticUser(clientRequestId);
+      } else {
+        await api.editAndResend(sideRef, edit.id, text, clientRequestId, attachments);
+        setEditingMessage(undefined);
+        setEditDraftInjection(undefined);
+      }
       setError(undefined);
       return true;
     } catch (caught) {
       stream.discardOptimisticUser(clientRequestId);
+      if (edit !== undefined) await stream.refresh().catch(() => undefined);
       if (await recoverConflict(caught)) return false;
-      setError(caught instanceof Error ? caught.message : "无法发送消息");
+      setError(caught instanceof Error ? caught.message : edit === undefined ? "无法发送消息" : "无法重新生成消息");
       return false;
     }
   };
@@ -270,28 +285,31 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
     }
   };
 
-  const editUserMessage = async (message: Extract<import("../../shared/protocol").TimelineItem, { kind: "message" }>, text: string): Promise<boolean> => {
-    if (sideRef === undefined || stream.transcript.status.runState !== "idle") return false;
-    const clientRequestId = randomUUID();
-    const images = message.images ?? [];
-    stream.replaceUserMessage(message.id, clientRequestId, text, images);
-    try {
-      await api.editAndResend(sideRef, message.id, text, clientRequestId, images);
-      setError(undefined);
-      return true;
-    } catch (caught) {
-      stream.discardOptimisticUser(clientRequestId);
-      await stream.refresh().catch(() => undefined);
-      if (await recoverConflict(caught)) return false;
-      setError(caught instanceof Error ? caught.message : "无法重新生成消息");
-      return false;
-    }
+  const editUserMessage = (message: Extract<import("../../shared/protocol").TimelineItem, { kind: "message" }>) => {
+    if (sideRef === undefined || stream.transcript.status.runState !== "idle") return;
+    setEditingMessage((current) => current === undefined
+      ? { id: message.id, draft: draftRef.current, attachments: [...attachments] }
+      : { ...current, id: message.id });
+    setEditDraftInjection({ text: message.text, nonce: Date.now() });
+    setAttachments(composerImageAttachments(message.images));
+  };
+
+  const cancelMessageEdit = () => {
+    const edit = editingMessage;
+    if (edit === undefined) return;
+    setAttachments(edit.attachments);
+    setEditDraftInjection({ text: edit.draft, nonce: Date.now() });
+    setEditingMessage(undefined);
   };
 
   const abortRef = useRef(abort);
   const statusRef = useRef(stream.transcript.status);
+  const cancelEditRef = useRef(cancelMessageEdit);
+  const editingRef = useRef(editingMessage);
   useEffect(() => { abortRef.current = abort; });
   useEffect(() => { statusRef.current = stream.transcript.status; });
+  useEffect(() => { cancelEditRef.current = cancelMessageEdit; });
+  useEffect(() => { editingRef.current = editingMessage; });
   useEffect(() => {
     if (!open || sideRef === undefined) return;
     const onKeyDownCapture = (event: KeyboardEvent) => {
@@ -301,6 +319,10 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
       event.stopPropagation();
       if (statusRef.current.runState !== "idle") {
         void abortRef.current();
+        return;
+      }
+      if (editingRef.current !== undefined) {
+        cancelEditRef.current();
         return;
       }
       onOpenChange(false);
@@ -318,6 +340,8 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
       setDraft("");
       setDraftNonce((nonce) => nonce + 1);
       setAttachments([]);
+      setEditingMessage(undefined);
+      setEditDraftInjection(undefined);
       setResetOpen(false);
       setError(undefined);
     } catch (caught) {
@@ -340,7 +364,7 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
       <Timeline key={`${sideRef.workspaceId}:${sideRef.sessionId}`} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? error} onDismissNotice={() => setError(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={workspaceCwd} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} />
       <div className="chat-dock">
         <SideChatExtensionPanels panels={stream.extensionPanels} />
-        <PromptEditor key={sideRef.sessionId} initialValue={draft} draftNonce={draftNonce} busy={busy} commands={commands.length === 0 ? EMPTY_COMMANDS : commands} searchFiles={searchFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={attachments} onAttachmentsChange={setAttachments} onAttachmentError={setError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} queue={stream.transcript.queue ?? emptySessionQueue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueued} onToggleKind={toggleQueuedKind} focusRequestRef={composerFocusRef} autoFocus={open && !isMobile} controls={controls} />
+        <PromptEditor key={sideRef.sessionId} initialValue={draft} draftNonce={draftNonce} busy={busy} commands={commands.length === 0 ? EMPTY_COMMANDS : commands} searchFiles={searchFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={attachments} onAttachmentsChange={setAttachments} onAttachmentError={setError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage === undefined ? undefined : cancelMessageEdit} queue={stream.transcript.queue ?? emptySessionQueue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueued} onToggleKind={toggleQueuedKind} focusRequestRef={composerFocusRef} autoFocus={open && !isMobile} controls={controls} />
       </div>
     </div>;
 

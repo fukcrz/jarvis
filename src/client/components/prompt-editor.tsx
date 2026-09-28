@@ -477,6 +477,12 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
               return;
             }
           }
+          if (onCancelEdit !== undefined && event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            onCancelEdit();
+            return;
+          }
           // Phone keyboards use Enter to insert a newline. On mobile, only an
           // explicit Ctrl/Cmd+Enter shortcut submits; the send button is primary.
           // Busy 时 Enter 排队为后续消息（默认行为，可到排队条改插队）。
@@ -524,8 +530,8 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
           <div className="composer-actions">
             {onCancelEdit === undefined ? null : <Tooltip label="取消编辑"><Button variant="ghost" className="composer-cancel-edit" size="icon" aria-label="取消编辑" onClick={onCancelEdit}><X size={15} /></Button></Tooltip>}
             {canSend ? (
-              <Tooltip label={busy ? "排队为后续消息" : "发送消息"}>
-                <Button className="composer-send" size="icon" aria-label={busy ? "排队为后续消息" : "发送消息"} onClick={() => { void submit(); }}><ArrowUp size={17} /></Button>
+              <Tooltip label={onCancelEdit === undefined ? (busy ? "排队为后续消息" : "发送消息") : "重新生成"}>
+                <Button className="composer-send" size="icon" aria-label={onCancelEdit === undefined ? (busy ? "排队为后续消息" : "发送消息") : "重新生成"} onClick={() => { void submit(); }}><ArrowUp size={17} /></Button>
               </Tooltip>
             ) : busy ? (
               <Tooltip label="停止当前执行"><Button className="composer-stop" size="icon" aria-label="停止当前执行" onClick={onStop}><Square size={14} fill="currentColor" /></Button></Tooltip>
