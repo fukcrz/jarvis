@@ -1,12 +1,17 @@
-import { buildApp } from "./app.js";
-import { emitDesktopEvent } from "./desktop-bridge.js";
-import { forwardPiCliInvocation } from "./pi-cli-forward.js";
+import { installWindowsChildProcessGuard } from "./windows-child-process-guard.js";
+
+installWindowsChildProcessGuard();
+
+const { forwardPiCliInvocation } = await import("./pi-cli-forward.js");
 import type { FastifyInstance } from "fastify";
 
 // Pi 嵌入本进程运行：派生子进程的 Pi 扩展会把本入口当成 Pi CLI 来 spawn。
 // 这类调用（带 Pi 的 `--mode ...`，Jarvis 不使用）必须转发给真正的 Pi CLI，
 // 否则会再起一个 Jarvis 服务并因端口占用而退出。
 await forwardPiCliInvocation();
+
+const { buildApp } = await import("./app.js");
+const { emitDesktopEvent } = await import("./desktop-bridge.js");
 
 const production = process.env["NODE_ENV"] === "production";
 const app = await buildApp({ serveStatic: production });
