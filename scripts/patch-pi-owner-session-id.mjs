@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const codingAgentRoot = join(root, "node_modules/@earendil-works/pi-coding-agent");
@@ -111,5 +112,23 @@ await replaceOnce(
   "        const result = spawnSync(\"which\", [executable], { encoding: \"utf-8\", timeout: 5000 });",
   "        const result = spawnSync(\"which\", [executable], { encoding: \"utf-8\", timeout: 5000, windowsHide: true });",
 );
+
+const subagentRunnerPaths = [
+  join(root, "node_modules/@mjakl/pi-subagent/runner.ts"),
+  join(homedir(), ".pi/agent/npm/node_modules/@mjakl/pi-subagent/runner.ts"),
+];
+for (const runnerPath of new Set(subagentRunnerPaths)) {
+  if (!existsSync(runnerPath)) continue;
+  await replaceOnce(
+    runnerPath,
+    '        detached: !isWindows,\n        stdio: ["pipe", "pipe", "pipe"],\n        env: {',
+    '        detached: !isWindows,\n        stdio: ["pipe", "pipe", "pipe"],\n        windowsHide: true,\n        env: {',
+  );
+  await replaceOnce(
+    runnerPath,
+    '            const killer = spawn("taskkill", ["/T", "/F", "/PID", String(proc.pid)], {\n              stdio: "ignore",\n            });',
+    '            const killer = spawn("taskkill", ["/T", "/F", "/PID", String(proc.pid)], {\n              stdio: "ignore",\n              windowsHide: true,\n            });',
+  );
+}
 
 console.log("Applied Pi ownerSessionId and Windows hidden-process patches");
