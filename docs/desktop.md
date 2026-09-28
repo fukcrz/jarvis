@@ -4,7 +4,7 @@ Windows 先行的 Tauri 壳。窗口加载本机 Fastify 服务，数据仍在 `
 
 ## 行为
 
-- 安装包内置 Node 24；旧安装包缺失时才使用系统 Node 24+，再回退下载官方 `node.exe` 到 `%LOCALAPPDATA%\jarvis\runtime\`
+- 启动时使用系统 Node 22.19+；没有则确认后下载官方 `node.exe` 到 `%LOCALAPPDATA%\jarvis\runtime\`，启动页显示进度
 - 服务绑定 `0.0.0.0`，默认端口 `9528`（可用 `JARVIS_PORT` 覆盖）
 - 服务超过 30 秒仍在启动时显示等待状态，60 秒未就绪或进程异常退出时显示末尾诊断日志
 - 关闭窗口会藏到托盘，进程和会话继续跑

@@ -144,17 +144,16 @@ fn start_backend(app: AppHandle) {
   let root = jarvis_root(&app);
   let node = match node::resolve_node(&root) {
     Ok(path) => path,
-    Err(_) => {
-      set_splash(&app, "正在下载 Node");
-      match node::download_node() {
-        Ok(path) => path,
-        Err(error) => {
-          set_splash(&app, "启动失败");
+    Err(_) => match download_runtime_node(&app) {
+      Ok(path) => path,
+      Err(error) => {
+        set_splash(&app, "启动失败");
+        if !error.is_empty() {
           let _ = app.dialog_message(&error);
-          return;
         }
+        return;
       }
-    }
+    },
   };
   set_splash(&app, "正在启动服务");
   let app_for_events = app.clone();
@@ -433,10 +432,52 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
   Ok(())
 }
 
+fn download_runtime_node(app: &AppHandle) -> Result<PathBuf, String> {
+  if !confirm_node_download(app) {
+    return Err(String::new());
+  }
+  set_download_progress(app, 0, None);
+  let mut last_tick: i16 = -1;
+  node::download_node(|done, total| {
+    let tick = match total {
+      Some(size) if size > 0 => ((done.saturating_mul(100)) / size).min(100) as i16,
+      _ => 101,
+    };
+    if tick == last_tick {
+      return;
+    }
+    last_tick = tick;
+    set_download_progress(app, done, total);
+  })
+}
+
+fn confirm_node_download(app: &AppHandle) -> bool {
+  app
+    .dialog()
+    .message("未检测到可用 Node，将下载官方运行时。")
+    .title("Jarvis")
+    .buttons(MessageDialogButtons::OkCancelCustom("下载".into(), "取消".into()))
+    .blocking_show()
+}
+
 fn set_splash(app: &AppHandle, text: &str) {
+  set_splash_state(app, text, "hidden", 0);
+}
+
+fn set_download_progress(app: &AppHandle, done: u64, total: Option<u64>) {
+  match total {
+    Some(size) if size > 0 => {
+      let percent = ((done.saturating_mul(100)) / size).min(100) as u8;
+      set_splash_state(app, &format!("正在下载 Node {percent}%"), "percent", percent);
+    }
+    _ => set_splash_state(app, "正在下载 Node", "unknown", 0),
+  }
+}
+
+fn set_splash_state(app: &AppHandle, text: &str, mode: &str, percent: u8) {
   if let Some(window) = app.get_webview_window("main") {
     let _ = window.eval(&format!(
-      "var n=document.getElementById('status'); if(n) n.textContent = {text:?}"
+      "(function(text,mode,percent){{\n        var n=document.getElementById('status');\n        if(n) n.textContent=text;\n        var bar=document.getElementById('progress');\n        var fill=document.getElementById('progress-fill');\n        if(!bar||!fill) return;\n        if(mode==='hidden'){{\n          bar.hidden=true;\n          bar.classList.remove('unknown');\n          fill.style.width='0%';\n          return;\n        }}\n        bar.hidden=false;\n        if(mode==='unknown'){{\n          bar.classList.add('unknown');\n          fill.style.width='32%';\n          return;\n        }}\n        bar.classList.remove('unknown');\n        fill.style.width=Math.max(0,Math.min(100,percent))+'%';\n      }})({text:?},{mode:?},{percent})"
     ));
   }
 }

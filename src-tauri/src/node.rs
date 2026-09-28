@@ -14,6 +14,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub const NODE_VERSION: &str = "24.21.0";
 const NODE_EXE_SHA256: &str = "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32";
 const NODE_EXE_URL: &str = "https://nodejs.org/dist/v24.21.0/win-x64/node.exe";
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 pub fn project_node_path() -> PathBuf {
   runtime_dir().join("node.exe")
@@ -59,42 +60,31 @@ pub fn node_version_ok(path: &Path) -> bool {
     return false;
   }
   let text = String::from_utf8_lossy(&output.stdout);
-  parse_major(text.trim()).is_some_and(|major| major >= 24)
+  parse_version(text.trim()).is_some_and(version_usable)
 }
 
-fn parse_major(version: &str) -> Option<u32> {
+fn parse_version(version: &str) -> Option<(u32, u32)> {
   let trimmed = version.strip_prefix('v').unwrap_or(version);
-  trimmed.split('.').next()?.parse().ok()
+  let mut parts = trimmed.split('.');
+  let major = parts.next()?.parse().ok()?;
+  let minor = parts.next().unwrap_or("0").parse().ok()?;
+  Some((major, minor))
 }
 
-pub fn download_node() -> Result<PathBuf, String> {
+fn version_usable(version: (u32, u32)) -> bool {
+  version.0 > 22 || (version.0 == 22 && version.1 >= 19)
+}
+
+pub fn download_node(mut on_progress: impl FnMut(u64, Option<u64>)) -> Result<PathBuf, String> {
   let dir = runtime_dir();
   fs::create_dir_all(&dir).map_err(|error| format!("无法创建运行时目录：{error}"))?;
   let dest = dir.join("node.exe");
   let temp = dir.join("node.exe.part");
-  let response = ureq::get(NODE_EXE_URL)
-    .timeout(Duration::from_secs(60))
-    .call()
-    .map_err(|error| format!("下载 Node 失败：{error}"))?;
-  let mut file = fs::File::create(&temp).map_err(|error| format!("无法写入 Node：{error}"))?;
-  let mut hasher = Sha256::new();
-  let mut buffer = [0_u8; 64 * 1024];
-  let mut reader = response.into_reader();
-  loop {
-    let read = reader.read(&mut buffer).map_err(|error| format!("下载 Node 失败：{error}"))?;
-    if read == 0 {
-      break;
-    }
-    file.write_all(&buffer[..read]).map_err(|error| format!("无法写入 Node：{error}"))?;
-    hasher.update(&buffer[..read]);
-  }
-  file.flush().map_err(|error| format!("无法写入 Node：{error}"))?;
-  drop(file);
-  let digest = hex::encode(hasher.finalize());
-  if digest != NODE_EXE_SHA256 {
+  let result = download_node_to(&temp, &mut on_progress);
+  if result.is_err() {
     let _ = fs::remove_file(&temp);
-    return Err("Node 校验失败，请重试".into());
   }
+  result?;
   fs::rename(&temp, &dest).map_err(|error| format!("无法保存 Node：{error}"))?;
   if !node_version_ok(&dest) {
     return Err("下载的 Node 版本不可用".into());
@@ -102,15 +92,55 @@ pub fn download_node() -> Result<PathBuf, String> {
   Ok(dest)
 }
 
+fn download_node_to(temp: &Path, on_progress: &mut impl FnMut(u64, Option<u64>)) -> Result<(), String> {
+  let response = ureq::get(NODE_EXE_URL)
+    .timeout(DOWNLOAD_TIMEOUT)
+    .call()
+    .map_err(|error| format!("下载 Node 失败：{error}"))?;
+  let total = response.header("Content-Length").and_then(|value| value.parse().ok());
+  let mut file = fs::File::create(temp).map_err(|error| format!("无法写入 Node：{error}"))?;
+  let mut hasher = Sha256::new();
+  let mut buffer = [0_u8; 64 * 1024];
+  let mut reader = response.into_reader();
+  let mut downloaded = 0_u64;
+  on_progress(0, total);
+  loop {
+    let read = reader.read(&mut buffer).map_err(|error| format!("下载 Node 失败：{error}"))?;
+    if read == 0 {
+      break;
+    }
+    file.write_all(&buffer[..read]).map_err(|error| format!("无法写入 Node：{error}"))?;
+    hasher.update(&buffer[..read]);
+    downloaded += read as u64;
+    on_progress(downloaded, total);
+  }
+  file.flush().map_err(|error| format!("无法写入 Node：{error}"))?;
+  drop(file);
+  let digest = hex::encode(hasher.finalize());
+  if digest != NODE_EXE_SHA256 {
+    return Err("Node 校验失败，请重试".into());
+  }
+  Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-  use super::{bundled_node_path, parse_major};
+  use super::{bundled_node_path, parse_version, version_usable};
   use std::path::{Path, PathBuf};
 
   #[test]
-  fn parses_node_major() {
-    assert_eq!(parse_major("v24.21.0"), Some(24));
-    assert_eq!(parse_major("22.11.0"), Some(22));
+  fn parses_node_version() {
+    assert_eq!(parse_version("v24.21.0"), Some((24, 21)));
+    assert_eq!(parse_version("22.19.0"), Some((22, 19)));
+    assert_eq!(parse_version("22"), Some((22, 0)));
+  }
+
+  #[test]
+  fn accepts_pi_supported_node_versions() {
+    assert!(!version_usable((20, 19)));
+    assert!(!version_usable((22, 18)));
+    assert!(version_usable((22, 19)));
+    assert!(version_usable((24, 0)));
   }
 
   #[test]

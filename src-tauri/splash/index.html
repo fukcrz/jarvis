@@ -7,9 +7,19 @@
     <style>
       html, body { height: 100%; margin: 0; background: #0b0d14; color: #e8eaef; font: 15px/1.4 system-ui, sans-serif; }
       main { min-height: 100%; display: grid; place-items: center; }
+      .panel { display: grid; gap: 14px; justify-items: center; }
+      #progress { width: 220px; height: 4px; overflow: hidden; border-radius: 99px; background: #1c2230; }
+      #progress-fill { display: block; height: 100%; width: 0; background: #6b8afd; }
+      #progress.unknown #progress-fill { width: 32%; animation: indeterminate 1.2s ease-in-out infinite; }
+      @keyframes indeterminate { 0% { transform: translateX(-140%); } 100% { transform: translateX(380%); } }
     </style>
   </head>
   <body>
-    <main><span id="status">正在启动</span></main>
+    <main>
+      <div class="panel">
+        <span id="status">正在启动</span>
+        <div id="progress" hidden><i id="progress-fill"></i></div>
+      </div>
+    </main>
   </body>
 </html>

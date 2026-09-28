@@ -18,7 +18,6 @@ cpSync(dist, join(staging, "dist"), { recursive: true });
 cpSync(join(root, "package.json"), join(staging, "package.json"));
 cpSync(join(root, "package-lock.json"), join(staging, "package-lock.json"));
 cpSync(join(root, "scripts"), join(staging, "scripts"), { recursive: true });
-if (process.platform === "win32") cpSync(process.execPath, join(staging, "node.exe"));
 
 const install = spawnSync("npm", ["ci", "--omit=dev"], {
   cwd: staging,
