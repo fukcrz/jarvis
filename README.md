@@ -4,7 +4,7 @@ Jarvis is a local, single-user coding workspace for persistent Pi sessions. It k
 
 ## Requirements
 
-- Node.js 24 or newer
+- Node.js 22.19 or newer
 - A configured Pi profile, normally `~/.pi/agent`
 
 ## Install & Run (preview builds)

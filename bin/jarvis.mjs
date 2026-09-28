@@ -27,7 +27,7 @@ Options:
   -v, --version       Print version
       --help          Show this help
 
-Requires Node.js >= 24 and a configured Pi profile (~/.pi/agent).
+Requires Node.js >= 22.19 and a configured Pi profile (~/.pi/agent).
 
 Security: set an access password under Settings -> 安全 to require a login.
 Until then every request is allowed, so keep the port private (LAN or

@@ -9,7 +9,7 @@ npm run build
 npm exec playwright install chromium
 ```
 
-The runners require Node 24+, use only existing project dependencies, and never use port `9528`. Each run creates temporary fixture data under the system temp directory, sets isolated Jarvis/Pi environment paths, binds Fastify to `127.0.0.1:0`, and removes fixtures and sockets on exit.
+The runners require Node 22.19+, use only existing project dependencies, and never use port `9528`. Each run creates temporary fixture data under the system temp directory, sets isolated Jarvis/Pi environment paths, binds Fastify to `127.0.0.1:0`, and removes fixtures and sockets on exit.
 
 ## Profiles
 

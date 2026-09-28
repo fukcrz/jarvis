@@ -230,7 +230,7 @@ async function measureDirectFanout({ args, environment, ref, subscribers, eventC
 }
 
 function openSocket(url) {
-  if (typeof WebSocket !== "function") throw new Error("Node WebSocket is unavailable; Node 24 or newer is required");
+  if (typeof WebSocket !== "function") throw new Error("Node WebSocket is unavailable; Node 22.19 or newer is required");
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
     const timeout = setTimeout(() => {
