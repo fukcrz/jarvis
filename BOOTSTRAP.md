@@ -16,8 +16,8 @@
 
 ## 验证命令
 
-- `npm run typecheck`（快速类型检查；`markdown-message.tsx` 有预存类型错误可忽略）
-- `npm test`（vitest，160 个用例）
+- `npm run typecheck`（快速类型检查；当前 `image-lightbox.tsx:106-107` 有预存的键盘事件类型错误）
+- `npm test`（vitest，554 个用例）
 - `npm run build`（tsc + vite）
 - `node scripts/ui-smoke.mjs`（Playwright UI 冒烟）
 - `node scripts/ui-extension-smoke.mjs`（扩展选择/输入卡片冒烟，不依赖 ui-smoke 流水线，可单独跑）
