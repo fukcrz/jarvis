@@ -11,6 +11,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { MANAGED_APIS, MANAGED_MAX_TOKENS_FIELDS, MANAGED_THINKING_FORMATS, THINKING_LEVELS, TUNNEL_METHODS } from "../shared/protocol.js";
 import type { ApiErrorBody, SessionRef } from "../shared/protocol.js";
 import { AuthService } from "./auth-service.js";
+import { BackgroundTaskService } from "./background-task-service.js";
 import { AppError, asMessage, errorStatusCode } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { applyAuthCookie, authorizeSocket, clearAuthCookie, readAuthCookie } from "./http-auth.js";
@@ -53,6 +54,7 @@ const messageActionInput = z.object({ messageId: z.string().min(1).max(200).opti
 const editAndResendInput = z.object({ messageId: z.string().min(1).max(200), text: z.string(), clientRequestId: z.string().uuid(), images: z.array(imageInput).optional() }).strict();
 const compactInput = z.object({ customInstructions: z.string().max(40_000).optional(), clientRequestId: z.string().uuid().optional() }).strict();
 const bashInput = z.object({ command: z.string().min(1).max(40_000), excludeFromContext: z.boolean().optional(), clientRequestId: z.string().uuid() }).strict();
+const backgroundTaskInput = z.object({ command: z.string().min(1).max(40_000), cwd: z.string().optional() }).strict();
 const abortInput = z.object({ runId: z.string().uuid().optional() }).strict();
 const settingsInput = z.object({ assistantName: z.string().min(1).max(64) }).strict();
 const authLoginInput = z.object({ providerId: z.string().min(1).max(120), type: z.enum(["api_key", "oauth"]) }).strict();
@@ -103,6 +105,7 @@ const fileQuery = z.object({ path: z.string().min(1).max(2000), cwd: z.string().
 export interface JarvisServices {
   workspaces: WorkspaceStore;
   sessions: SessionService;
+  backgroundTasks: BackgroundTaskService;
   events: EventHub;
   tunnel: TunnelService;
   auth: AuthService;
@@ -114,19 +117,20 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   const workspaces = new WorkspaceStore();
   await workspaces.initialize(getAgentDir(), "pi agent");
   const events = new EventHub();
-  const sessions = new SessionService(workspaces, events);
+  const backgroundTasks = new BackgroundTaskService(workspaces);
+  const sessions = new SessionService(workspaces, events, backgroundTasks);
   const settings = new SettingsService(() => sessions.globalModelRuntime(), () => sessions.refreshModelConfiguration());
   await settings.initialize();
   const auth = new AuthService();
   await auth.initialize();
-  const services: JarvisServices = { workspaces, sessions, events, tunnel: new TunnelService((message) => app.log.info({ tunnel: message })), auth };
+  const services: JarvisServices = { workspaces, sessions, backgroundTasks, events, tunnel: new TunnelService((message) => app.log.info({ tunnel: message })), auth };
 
   await app.register(cors, { origin: production ? [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] : true });
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
 
   app.decorate("jarvis", services);
-  app.addHook("onClose", async () => { await sessions.dispose(); await services.tunnel.dispose(); });
+  app.addHook("onClose", async () => { await backgroundTasks.dispose(); await sessions.dispose(); await services.tunnel.dispose(); });
 
   // 登录认证（仅在设置了密码时生效）：
   // - 静态资源与 SPA 页面放行，否则登录页自身无法加载；
@@ -318,9 +322,37 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   app.delete("/api/workspaces/:workspaceId", async (request) => {
     const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
     if (sessions.hasActiveWorkspace(params.workspaceId)) throw new AppError("WORKSPACE_BUSY", "Stop running sessions before removing this workspace", 409);
-    await sessions.disposeWorkspace(params.workspaceId);
-    await workspaces.remove(params.workspaceId);
+    try {
+      await backgroundTasks.stopWorkspace(params.workspaceId);
+      await sessions.disposeWorkspace(params.workspaceId);
+      await workspaces.remove(params.workspaceId);
+    } catch (error) {
+      backgroundTasks.resumeWorkspace(params.workspaceId);
+      throw error;
+    }
     return { removed: true };
+  });
+
+  app.get("/api/workspaces/:workspaceId/background-tasks", async (request) => {
+    const { workspaceId } = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
+    return { tasks: backgroundTasks.list(workspaceId) };
+  });
+  app.post("/api/workspaces/:workspaceId/background-tasks", async (request) => {
+    const { workspaceId } = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
+    const input = backgroundTaskInput.parse(request.body);
+    return { task: await backgroundTasks.start(workspaceId, input.command, input.cwd) };
+  });
+  app.get("/api/workspaces/:workspaceId/background-tasks/:taskId/logs", async (request) => {
+    const { workspaceId, taskId } = z.object({ workspaceId: z.string().uuid(), taskId: z.string().uuid() }).parse(request.params);
+    return backgroundTasks.logs(workspaceId, taskId);
+  });
+  app.post("/api/workspaces/:workspaceId/background-tasks/:taskId/stop", async (request) => {
+    const { workspaceId, taskId } = z.object({ workspaceId: z.string().uuid(), taskId: z.string().uuid() }).parse(request.params);
+    return { task: await backgroundTasks.stop(workspaceId, taskId) };
+  });
+  app.post("/api/workspaces/:workspaceId/background-tasks/:taskId/restart", async (request) => {
+    const { workspaceId, taskId } = z.object({ workspaceId: z.string().uuid(), taskId: z.string().uuid() }).parse(request.params);
+    return { task: await backgroundTasks.restart(workspaceId, taskId) };
   });
 
   app.get("/api/workspaces/:workspaceId/sessions", async (request) => {

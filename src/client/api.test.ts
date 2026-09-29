@@ -30,6 +30,34 @@ describe("API client", () => {
     expect(new Headers(init?.headers).has("content-type")).toBe(false);
   });
 
+  it("uses workspace-scoped background task endpoints", async () => {
+    const workspaceId = "da69b38d-f132-4c84-8c4f-6174015e9c5e";
+    const taskId = "c2f73ddd-cfc6-464f-acb3-c8f425cea7f0";
+    const task = { id: taskId, workspaceId, cwd: "C:\\workspace", command: "npm run dev", state: "running", startedAt: "2026-01-01T00:00:00.000Z" };
+    const fetchMock = vi.fn<typeof fetch>(async (path, init) => new Response(JSON.stringify(
+      String(path).endsWith("/logs") ? { task, output: "ready" }
+        : init?.method === undefined ? { tasks: [task] }
+          : { task },
+    ), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.backgroundTasks(workspaceId)).resolves.toEqual([task]);
+    await expect(api.startBackgroundTask(workspaceId, "npm run dev", "apps/web")).resolves.toEqual(task);
+    await expect(api.backgroundTaskLogs(workspaceId, taskId)).resolves.toEqual({ task, output: "ready" });
+    await expect(api.stopBackgroundTask(workspaceId, taskId)).resolves.toEqual(task);
+    await expect(api.restartBackgroundTask(workspaceId, taskId)).resolves.toEqual(task);
+
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      `/api/workspaces/${workspaceId}/background-tasks`,
+      `/api/workspaces/${workspaceId}/background-tasks`,
+      `/api/workspaces/${workspaceId}/background-tasks/${taskId}/logs`,
+      `/api/workspaces/${workspaceId}/background-tasks/${taskId}/stop`,
+      `/api/workspaces/${workspaceId}/background-tasks/${taskId}/restart`,
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ command: "npm run dev", cwd: "apps/web" }));
+    expect(fetchMock.mock.calls[3]?.[1]?.body).toBe("{}");
+  });
+
   it("encodes and sends a workspace entry deletion request", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ removed: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

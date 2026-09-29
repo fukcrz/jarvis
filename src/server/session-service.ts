@@ -38,6 +38,7 @@ import { userMessageOutline } from "../shared/user-message.js";
 import { AppError, asMessage } from "./errors.js";
 import { stringValue, toIso } from "./values.js";
 import { EventHub } from "./event-hub.js";
+import type { BackgroundTaskService } from "./background-task-service.js";
 import { projectModelSnapshot } from "./model-projection.js";
 import { bashExecutionItem, decodeTimelineMediaItemId, projectHistory, toExternalTimelineItem, toExternalTimelineItems } from "./projection.js";
 import { emitDesktopEvent } from "./desktop-bridge.js";
@@ -106,6 +107,7 @@ export class SessionService {
   constructor(
     private readonly workspaces: WorkspaceStore,
     private readonly events: EventHub,
+    private readonly backgroundTasks: BackgroundTaskService,
   ) {
     this.piEvents = new SessionPiEvents({
       events: this.events,
@@ -1124,8 +1126,10 @@ export class SessionService {
   private lastBashItem(active: ActiveSession, command: string): ToolTimelineItem | undefined {
     for (const entry of [...active.session.sessionManager.getBranch()].reverse()) {
       if (!isRecord(entry) || entry["type"] !== "message") continue;
-      const message = entry["message"];
-      if (!isRecord(message) || message["role"] !== "bashExecution") continue;
+      const message: unknown = entry["message"];
+      if (!isRecord(message)) continue;
+      const role = stringValue(message["role"]);
+      if (role !== "bashExecution") continue;
       if (stringValue(message["command"]) !== command) continue;
       const entryId = stringValue(entry["id"]) || crypto.randomUUID();
       const createdAt = toIso(entry["timestamp"] ?? message["timestamp"]);
@@ -1214,6 +1218,7 @@ export class SessionService {
       active: this.active,
       ownerBoundSessions: this.ownerBoundSessions,
       piEvents: this.piEvents,
+      backgroundTasks: this.backgroundTasks,
       getModelRuntime: (agentDir) => this.getModelRuntime(agentDir),
       setAttention: (active, state) => this.setAttention(active, state),
       publishSummary: (active) => this.publishSummary(active),

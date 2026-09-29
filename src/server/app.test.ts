@@ -23,11 +23,14 @@ let sessionDir: string;
 let previousJarvisHome: string | undefined;
 let previousAgentDir: string | undefined;
 let previousSessionDir: string | undefined;
+let previousDesktop: string | undefined;
 
 beforeEach(async () => {
   previousJarvisHome = process.env["JARVIS_HOME"];
   previousAgentDir = process.env["PI_CODING_AGENT_DIR"];
   previousSessionDir = process.env["PI_CODING_AGENT_SESSION_DIR"];
+  previousDesktop = process.env["JARVIS_DESKTOP"];
+  delete process.env["JARVIS_DESKTOP"];
   jarvisHome = await mkdtemp(join(tmpdir(), "jarvis-app-test-"));
   sessionDir = join(jarvisHome, "sessions");
   process.env["JARVIS_HOME"] = jarvisHome;
@@ -44,6 +47,8 @@ afterEach(async () => {
   else process.env["PI_CODING_AGENT_DIR"] = previousAgentDir;
   if (previousSessionDir === undefined) delete process.env["PI_CODING_AGENT_SESSION_DIR"];
   else process.env["PI_CODING_AGENT_SESSION_DIR"] = previousSessionDir;
+  if (previousDesktop === undefined) delete process.env["JARVIS_DESKTOP"];
+  else process.env["JARVIS_DESKTOP"] = previousDesktop;
   vi.restoreAllMocks();
   await rm(jarvisHome, { force: true, recursive: true });
   app = undefined;
@@ -1709,6 +1714,91 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(replay.statusCode).toBe(200);
     expect(replay.json()).toEqual(accepted);
     expect(bashSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("manages background tasks through workspace-scoped routes and stops them before workspace removal", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "background-task-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const baseUrl = `/api/workspaces/${workspace.id}/background-tasks`;
+    const command = `node -e ${JSON.stringify("console.log('api-background-task'); setInterval(function () {}, 1000)")}`;
+
+    const started = await server.inject({ method: "POST", url: baseUrl, payload: { command } });
+    expect(started.statusCode).toBe(200);
+    const task = started.json<{ task: { id: string; state: string } }>().task;
+    expect(task.state).toBe("running");
+
+    const listed = await server.inject({ method: "GET", url: baseUrl });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({ tasks: [{ id: task.id, state: "running" }] });
+
+    await vi.waitFor(async () => {
+      const logs = await server.inject({ method: "GET", url: `${baseUrl}/${task.id}/logs` });
+      expect(logs.statusCode).toBe(200);
+      expect(logs.json()).toMatchObject({ task: { id: task.id }, output: expect.stringContaining("api-background-task") });
+    });
+
+    const restarted = await server.inject({ method: "POST", url: `${baseUrl}/${task.id}/restart`, payload: {} });
+    expect(restarted.statusCode).toBe(200);
+    expect(restarted.json()).toMatchObject({ task: { id: task.id, state: "running" } });
+
+    const stopped = await server.inject({ method: "POST", url: `${baseUrl}/${task.id}/stop`, payload: {} });
+    expect(stopped.statusCode).toBe(200);
+    expect(stopped.json()).toMatchObject({ task: { id: task.id, state: "stopped" } });
+
+    const resumed = await server.inject({ method: "POST", url: baseUrl, payload: { command } });
+    expect(resumed.statusCode).toBe(200);
+    const removed = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.id}` });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toEqual({ removed: true });
+  });
+
+  it("restores task starts when workspace session cleanup fails", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "background-task-removal-failure-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const disposeSpy = vi.spyOn(server.jarvis.sessions, "disposeWorkspace").mockRejectedValueOnce(new Error("session cleanup failed"));
+
+    const failed = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.id}` });
+    expect(failed.statusCode).toBe(500);
+    expect(disposeSpy).toHaveBeenCalledWith(workspace.id);
+
+    const started = await server.inject({
+      method: "POST",
+      url: `/api/workspaces/${workspace.id}/background-tasks`,
+      payload: { command: `node -e ${JSON.stringify("setInterval(function () {}, 1000)")}` },
+    });
+    expect(started.statusCode).toBe(200);
+  });
+
+  it("registers and executes background tasks only for writable Pi sessions", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "background-task-tool-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const created = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${created.id}/runtime` });
+
+    const active = (server.jarvis.sessions as unknown as { active: Map<string, { session: AgentSession }> }).active.get(`${workspace.id}:${created.id}`);
+    const definition = active?.session.getToolDefinition("background_task");
+    expect(definition?.name).toBe("background_task");
+    expect(active?.session.getActiveToolNames()).toContain("background_task");
+    if (definition === undefined) throw new Error("Expected background_task definition");
+    const execute = definition.execute as unknown as (toolCallId: string, input: Record<string, unknown>) => Promise<{ details?: unknown }>;
+    const result = await execute("background-task-test", { action: "start", command: `node -e ${JSON.stringify("setInterval(function () {}, 1000)")}` });
+    expect(result).toHaveProperty("details", undefined);
+    const task = server.jarvis.backgroundTasks.list(workspace.id)[0];
+    if (task === undefined) throw new Error("Expected background task");
+    await execute("background-task-stop", { action: "stop", taskId: task.id });
+    expect(server.jarvis.backgroundTasks.list(workspace.id)[0]).toMatchObject({ id: task.id, state: "stopped" });
+
+    const side = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${created.id}/side-chat` })).json<{ session: { id: string } }>().session;
+    await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${side.id}/runtime` });
+    const sideActive = (server.jarvis.sessions as unknown as { active: Map<string, { session: AgentSession }> }).active.get(`${workspace.id}:${side.id}`);
+    expect(sideActive?.session.getToolDefinition("background_task")).toBeUndefined();
+    expect(sideActive?.session.getActiveToolNames()).not.toContain("background_task");
   });
 
   it("rejects an empty bash command and a bash command while a run is active", async () => {

@@ -22,6 +22,19 @@ export interface Workspace {
   lastOpenedAt: string;
 }
 
+export interface BackgroundTaskSnapshot {
+  id: string;
+  workspaceId: string;
+  cwd: string;
+  command: string;
+  state: "starting" | "running" | "stopping" | "stopped" | "exited" | "failed";
+  startedAt: string;
+  endedAt?: string;
+  pid?: number;
+  exitCode?: number;
+  error?: string;
+}
+
 export interface AppSettings {
   assistantName: string;
 }

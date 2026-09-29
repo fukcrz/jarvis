@@ -8,9 +8,12 @@ import {
   type ExtensionError,
   type ModelRuntime,
   type SessionManager,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { emptySessionQueue, type SessionAttentionState, type SessionRef, type Workspace } from "../shared/protocol.js";
 import type { EventHub } from "./event-hub.js";
+import type { BackgroundTaskService } from "./background-task-service.js";
 import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
 import { JARVIS_UI_NOTICE, SIDE_CHAT_NOTICE, SIDE_CHAT_TOOLS, type ActiveSession } from "./session-active.js";
 import type { SessionAttentionStore } from "./session-attention-store.js";
@@ -24,6 +27,7 @@ export interface CreateActiveDeps {
   active: Map<string, ActiveSession>;
   ownerBoundSessions: WeakSet<AgentSession>;
   piEvents: SessionPiEvents;
+  backgroundTasks: BackgroundTaskService;
   getModelRuntime(agentDir: string): Promise<ModelRuntime>;
   setAttention(active: ActiveSession, state: SessionAttentionState): void;
   publishSummary(active: ActiveSession): void;
@@ -60,6 +64,7 @@ export async function createActiveSession(
     sessionManager: manager,
     settingsManager,
     resourceLoader,
+    ...(!readOnly ? { customTools: [backgroundTaskTool(deps.backgroundTasks, workspace.id)] } : {}),
     ...(readOnly ? { tools: [...SIDE_CHAT_TOOLS], excludeTools: ["bash", "edit", "write", "powershell"] } : {}),
     ...(scopedModels.length === 0 ? {} : { scopedModels }),
   });
@@ -151,6 +156,38 @@ export async function createActiveSession(
     console.warn("Pi extension binding failed", error);
   });
   return active;
+}
+
+const backgroundTaskParameters = Type.Object({
+  action: Type.Union([Type.Literal("start"), Type.Literal("list"), Type.Literal("log"), Type.Literal("stop"), Type.Literal("restart")]),
+  command: Type.Optional(Type.String({ description: "Command to start. Required for start." })),
+  cwd: Type.Optional(Type.String({ description: "Working directory within the workspace. Defaults to its root." })),
+  taskId: Type.Optional(Type.String({ description: "Task ID. Required for log, stop and restart." })),
+});
+
+function backgroundTaskTool(tasks: BackgroundTaskService, workspaceId: string): ToolDefinition<typeof backgroundTaskParameters> {
+  return {
+    name: "background_task",
+    label: "Background task",
+    description: "Manage long-running workspace commands. Use start for dev servers instead of a blocking bash command; list, log, stop or restart by task ID. Tasks stop when Jarvis exits.",
+    promptSnippet: "Start and manage long-running workspace commands with logs and explicit stop/restart",
+    parameters: backgroundTaskParameters,
+    async execute(_toolCallId, { action, command, cwd, taskId }) {
+      let result: unknown;
+      if (action === "start") {
+        if (!command?.trim()) throw new Error("start requires command");
+        result = await tasks.start(workspaceId, command, cwd);
+      } else if (action === "list") {
+        result = tasks.list(workspaceId);
+      } else {
+        if (!taskId) throw new Error(`${action} requires taskId`);
+        result = action === "log" ? await tasks.logs(workspaceId, taskId)
+          : action === "stop" ? await tasks.stop(workspaceId, taskId)
+            : await tasks.restart(workspaceId, taskId);
+      }
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: undefined };
+    },
+  };
 }
 
 /**
