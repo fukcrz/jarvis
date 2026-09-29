@@ -72,18 +72,31 @@ describe("SessionAttentionStore side chats", () => {
   it("maps a parent session to a hidden side chat id", async () => {
     const store = new SessionAttentionStore(directory);
     const sideId = "44444444-4444-4444-8444-444444444444";
-    await store.setSideChat(ref, sideId);
+    const source = { path: "C:\\sessions\\parent.jsonl", leafId: "entry-1" };
+    await store.setSideChat(ref, sideId, source);
     await expect(store.getSideChatId(ref)).resolves.toBe(sideId);
+    await expect(store.getSideChatSource({ workspaceId: ref.workspaceId, sessionId: sideId })).resolves.toEqual(source);
     await expect(store.isSideChat({ workspaceId: ref.workspaceId, sessionId: sideId })).resolves.toBe(true);
     await expect(store.sideChatIds(ref.workspaceId)).resolves.toEqual(new Set([sideId]));
     expect(JSON.parse(await readFile(join(directory, "jarvis-session-attention.json"), "utf8"))).toMatchObject({
-      sideChats: { [`${ref.workspaceId}:${ref.sessionId}`]: sideId },
+      sideChats: { [`${ref.workspaceId}:${ref.sessionId}`]: { sessionId: sideId, source } },
     });
+  });
+
+  it("reads legacy side-chat id mappings", async () => {
+    await writeFile(join(directory, "jarvis-session-attention.json"), `${JSON.stringify({
+      version: 2,
+      sessions: {},
+      sideChats: { [`${ref.workspaceId}:${ref.sessionId}`]: "44444444-4444-4444-8444-444444444444" },
+    })}\n`, "utf8");
+    const store = new SessionAttentionStore(directory);
+    await expect(store.getSideChatId(ref)).resolves.toBe("44444444-4444-4444-8444-444444444444");
+    await expect(store.getSideChatSource({ workspaceId: ref.workspaceId, sessionId: "44444444-4444-4444-8444-444444444444" })).resolves.toBeUndefined();
   });
 
   it("clears the mapping when the parent is removed", async () => {
     const store = new SessionAttentionStore(directory);
-    await store.setSideChat(ref, "44444444-4444-4444-8444-444444444444");
+    await store.setSideChat(ref, "44444444-4444-4444-8444-444444444444", { path: "parent.jsonl" });
     await store.remove(ref);
     await expect(store.getSideChatId(ref)).resolves.toBeUndefined();
     expect(JSON.parse(await readFile(join(directory, "jarvis-session-attention.json"), "utf8"))).toEqual({

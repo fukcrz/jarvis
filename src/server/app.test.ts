@@ -2298,7 +2298,7 @@ describe("side chat", () => {
     return name === undefined ? undefined : join(sessionDir, name);
   }
 
-  it("creates a hidden read-only side chat that inherits the parent transcript", async () => {
+  it("creates a hidden read-only blank side chat with a reference to the parent branch", async () => {
     const server = activeApp();
     const workspace = await addWorkspace("side-chat-inherit");
     const source = await writeConversationSession(workspace.cwd);
@@ -2310,6 +2310,18 @@ describe("side chat", () => {
     expect(created.statusCode).toBe(200);
     const side = created.json<{ session: { id: string } }>().session;
     expect(side.id).not.toBe(source.id);
+    const sourcePath = await sideChatFile(source.id);
+    expect(sourcePath).toBeDefined();
+    const sourceMap = JSON.parse(await readFile(join(jarvisHome, "agent", "jarvis-session-attention.json"), "utf8")) as { sideChats: Record<string, { source?: { path: string; leafId?: string } }> };
+    const sourceReference = sourceMap.sideChats[`${workspace.id}:${source.id}`]?.source;
+    expect(sourceReference).toMatchObject({ path: sourcePath, leafId: expect.any(String) });
+    const sourceLines = (await readFile(sourcePath as string, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { id?: string });
+    expect(sourceLines.some((entry) => entry.id === sourceReference?.leafId)).toBe(true);
+    const sideRuntime = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${side.id}/runtime` });
+    expect(sideRuntime.statusCode).toBe(200);
+    const sideActive = (server.jarvis.sessions as unknown as { active: Map<string, { session: AgentSession }> }).active.get(`${workspace.id}:${side.id}`);
+    expect(sideActive?.session.systemPrompt).toContain(`reference (use this exact path with read):\n${sourcePath}`);
+    expect(sideActive?.session.systemPrompt).toContain(sourceReference?.leafId);
 
     const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` });
     expect((listed.json() as { sessions: Array<{ id: string }> }).sessions.map((session) => session.id)).toEqual([source.id]);
@@ -2322,7 +2334,7 @@ describe("side chat", () => {
 
     const timeline = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${side.id}/timeline` });
     expect(timeline.statusCode).toBe(200);
-    expect((timeline.json() as { items: Array<{ id: string }> }).items.map((item) => item.id)).toEqual([source.user1, source.assistant1, source.user2, source.assistant2]);
+    expect((timeline.json() as { items: Array<{ id: string }> }).items).toEqual([]);
 
     const bash = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${side.id}/bash`, payload: { command: "echo hi", clientRequestId: randomUUID() } });
     expect(bash.statusCode).toBe(403);
@@ -2331,6 +2343,15 @@ describe("side chat", () => {
     const nested = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${side.id}/side-chat` });
     expect(nested.statusCode).toBe(400);
     expect(nested.json()).toMatchObject({ error: { code: "SIDE_CHAT_INVALID" } });
+
+    await app?.close();
+    app = await buildApp();
+    const restarted = activeApp();
+    const restoredRuntime = await restarted.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${side.id}/runtime` });
+    expect(restoredRuntime.statusCode).toBe(200);
+    const restoredActive = (restarted.jarvis.sessions as unknown as { active: Map<string, { session: AgentSession }> }).active.get(`${workspace.id}:${side.id}`);
+    expect(restoredActive?.session.systemPrompt).toContain(`reference (use this exact path with read):\n${sourcePath}`);
+    expect(restoredActive?.session.systemPrompt).toContain(sourceReference?.leafId);
   });
 
   it("deletes the side chat with the parent and can reset it", async () => {

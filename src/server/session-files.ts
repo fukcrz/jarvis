@@ -1,7 +1,7 @@
 import { createReadStream, existsSync, readFileSync } from "node:fs";
-import { open, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, open, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
 import { isRecord, type Workspace } from "../shared/protocol.js";
@@ -37,6 +37,15 @@ function managedSessionDir(cwd: string): string | undefined {
 export function createManagedSession(cwd: string): SessionManager {
   const sessionDir = managedSessionDir(cwd);
   return sessionDir === undefined ? SessionManager.create(cwd) : SessionManager.create(cwd, sessionDir);
+}
+
+export async function persistEmptyManagedSession(manager: SessionManager): Promise<SessionManager> {
+  const path = manager.getSessionFile();
+  const header = manager.getHeader();
+  if (path === undefined || header === null) throw new Error("Cannot persist an empty in-memory session");
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(header)}\n`, { encoding: "utf8", flag: "wx" });
+  return openManagedSessionAt(path, manager.getSessionDir());
 }
 
 export function openManagedSessionAt(path: string, sessionDir: string | undefined): SessionManager {

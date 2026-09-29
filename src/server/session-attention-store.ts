@@ -29,11 +29,21 @@ interface PersistedSessionMeta {
   listCopyMtime?: number;
 }
 
+export interface SideChatSource {
+  path: string;
+  leafId?: string;
+}
+
+interface PersistedSideChatLink {
+  sessionId: string;
+  source?: SideChatSource;
+}
+
 interface PersistedAttentionFile {
   version: 2;
   sessions: Record<string, PersistedSessionMeta>;
-  /** parentKey (`workspaceId:sessionId`) → side-chat session id */
-  sideChats?: Record<string, string>;
+  /** parentKey (`workspaceId:sessionId`) → hidden side-chat session and source */
+  sideChats?: Record<string, PersistedSideChatLink>;
 }
 
 /** Jarvis-owned UI state. Pi JSONL remains the source of conversation history. */
@@ -138,20 +148,26 @@ export class SessionAttentionStore {
       for (const ref of refs) delete data.sessions[key(ref)];
       const sideChats = data.sideChats;
       if (sideChats === undefined) return;
-      for (const [entryKey, sideId] of Object.entries(sideChats)) {
-        if (keys.has(entryKey) || sessionIds.has(sideId)) delete sideChats[entryKey];
+      for (const [entryKey, link] of Object.entries(sideChats)) {
+        if (keys.has(entryKey) || sessionIds.has(link.sessionId)) delete sideChats[entryKey];
       }
     });
   }
 
   async getSideChatId(parent: SessionRef): Promise<string | undefined> {
-    return (await this.load()).sideChats?.[key(parent)];
+    return (await this.load()).sideChats?.[key(parent)]?.sessionId;
+  }
+
+  async getSideChatSource(ref: SessionRef): Promise<SideChatSource | undefined> {
+    const prefix = `${ref.workspaceId}:`;
+    const sideChats = (await this.load()).sideChats ?? {};
+    return Object.entries(sideChats).find(([entryKey, link]) => entryKey.startsWith(prefix) && link.sessionId === ref.sessionId)?.[1].source;
   }
 
   async sideChatIds(workspaceId: string): Promise<Set<string>> {
     const prefix = `${workspaceId}:`;
     const sideChats = (await this.load()).sideChats ?? {};
-    return new Set(Object.entries(sideChats).flatMap(([entryKey, sideId]) => entryKey.startsWith(prefix) ? [sideId] : []));
+    return new Set(Object.entries(sideChats).flatMap(([entryKey, link]) => entryKey.startsWith(prefix) ? [link.sessionId] : []));
   }
 
   async isSideChat(ref: SessionRef): Promise<boolean> {
@@ -159,10 +175,10 @@ export class SessionAttentionStore {
     return ids.has(ref.sessionId);
   }
 
-  async setSideChat(parent: SessionRef, sideSessionId: string): Promise<void> {
+  async setSideChat(parent: SessionRef, sideSessionId: string, source?: SideChatSource): Promise<void> {
     await this.update((data) => {
       const sideChats = { ...data.sideChats };
-      sideChats[key(parent)] = sideSessionId;
+      sideChats[key(parent)] = { sessionId: sideSessionId, ...(source === undefined ? {} : { source }) };
       data.sideChats = sideChats;
     });
   }
@@ -251,11 +267,27 @@ function migratePersistedFile(value: unknown): PersistedAttentionFile | undefine
   return { version: 2, sessions, ...(sideChats === undefined ? {} : { sideChats }) };
 }
 
-function parseSideChats(value: unknown): Record<string, string> | undefined {
+function parseSideChats(value: unknown): Record<string, PersistedSideChatLink> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const next: Record<string, string> = {};
-  for (const [entryKey, sideId] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof sideId === "string" && sideId !== "") next[entryKey] = sideId;
+  const next: Record<string, PersistedSideChatLink> = {};
+  for (const [entryKey, rawLink] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof rawLink === "string" && rawLink !== "") {
+      next[entryKey] = { sessionId: rawLink };
+      continue;
+    }
+    if (typeof rawLink !== "object" || rawLink === null || Array.isArray(rawLink)) continue;
+    const link = rawLink as Record<string, unknown>;
+    if (typeof link["sessionId"] !== "string" || link["sessionId"] === "") continue;
+    const rawSource = link["source"];
+    const source = typeof rawSource === "object" && rawSource !== null && !Array.isArray(rawSource)
+      ? rawSource as Record<string, unknown>
+      : undefined;
+    const path = source === undefined ? undefined : stringField(source["path"]);
+    const leafId = source === undefined ? undefined : stringField(source["leafId"]);
+    next[entryKey] = {
+      sessionId: link["sessionId"],
+      ...(path === undefined ? {} : { source: { path, ...(leafId === undefined ? {} : { leafId }) } }),
+    };
   }
   return Object.keys(next).length === 0 ? undefined : next;
 }

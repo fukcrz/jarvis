@@ -16,10 +16,16 @@ import type { EventHub } from "./event-hub.js";
 import type { BackgroundTaskService } from "./background-task-service.js";
 import { ExtensionUiBridge, isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION, type ExtensionUiMessage } from "./extension-ui.js";
 import { JARVIS_UI_NOTICE, SIDE_CHAT_NOTICE, SIDE_CHAT_TOOLS, type ActiveSession } from "./session-active.js";
-import type { SessionAttentionStore } from "./session-attention-store.js";
+import type { SessionAttentionStore, SideChatSource } from "./session-attention-store.js";
 import { sessionModifiedAt } from "./session-files.js";
 import { activeKey } from "./session-helpers.js";
 import type { SessionPiEvents } from "./session-pi-events.js";
+
+function sideChatNotice(source: SideChatSource | undefined): string {
+  if (source === undefined) return SIDE_CHAT_NOTICE;
+  const anchor = source.leafId === undefined ? "" : `\nCurrent branch anchor entry ID: ${source.leafId}.`;
+  return `${SIDE_CHAT_NOTICE}\nParent session JSONL reference (use this exact path with read):\n${source.path}${anchor}\nThis is a blank independent conversation, not a fork. Treat the JSONL as an append-only tree: inspect relevant ranges in small chunks, starting from the anchor when present and following parentId to trace ancestry. Ignore sibling branches. Do not read or dump the entire file unless the user asks. The source is read-only.`;
+}
 
 export interface CreateActiveDeps {
   attention: SessionAttentionStore;
@@ -38,10 +44,11 @@ export async function createActiveSession(
   ref: SessionRef,
   workspace: Workspace,
   manager: SessionManager,
-  options?: { readOnly?: boolean },
+  options?: { readOnly?: boolean; sideChatSource?: SideChatSource },
 ): Promise<ActiveSession> {
   const agentDir = getAgentDir();
   const readOnly = options?.readOnly === true || (ref.sessionId !== "" && await deps.attention.isSideChat(ref));
+  const sideChatSource = options?.sideChatSource ?? (readOnly && ref.sessionId !== "" ? await deps.attention.getSideChatSource(ref) : undefined);
   const modelRuntime = await deps.getModelRuntime(agentDir);
   const settingsManager = SettingsManager.create(workspace.cwd, agentDir);
   const enabledModels = settingsManager.getEnabledModels();
@@ -54,7 +61,7 @@ export async function createActiveSession(
     cwd: workspace.cwd,
     agentDir,
     settingsManager,
-    appendSystemPrompt: readOnly ? [JARVIS_UI_NOTICE, SIDE_CHAT_NOTICE] : [JARVIS_UI_NOTICE],
+    appendSystemPrompt: readOnly ? [JARVIS_UI_NOTICE, sideChatNotice(sideChatSource)] : [JARVIS_UI_NOTICE],
   });
   await resourceLoader.reload();
   const { session } = await createAgentSession({

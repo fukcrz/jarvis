@@ -60,14 +60,16 @@ import {
   type ActiveSession,
   type RunAccepted,
 } from "./session-active.js";
-import { SessionAttentionStore, type SessionSortMeta } from "./session-attention-store.js";
+import { SessionAttentionStore, type SessionSortMeta, type SideChatSource } from "./session-attention-store.js";
 import {
   createManagedSession,
   findSessionFile,
   listSessionFiles,
   openManagedSession,
   openManagedSessionAt,
+  persistEmptyManagedSession,
   removeSessionJsonl,
+  readSessionFileHeader,
   sessionDirectoryFor,
   sessionFileMtimeMs,
 } from "./session-files.js";
@@ -272,23 +274,32 @@ export class SessionService {
       return this.summaryFromActive(await this.getActive({ workspaceId: parent.workspaceId, sessionId: existing.id }));
     }
     const parentActive = await this.getActive(parent);
+    const sourcePath = parentActive.session.sessionFile;
     const branch = parentActive.session.sessionManager.getBranch();
     const running = parentActive.state.runState !== "idle" || parentActive.session.isStreaming;
-    const entryId = sessionForkEntryId(branch, running);
-    const workspace = this.workspaces.get(parent.workspaceId);
-    let side: ActiveSession;
-    if (entryId === undefined) {
-      const manager = createManagedSession(workspace.cwd);
-      side = await this.createActive({ workspaceId: parent.workspaceId, sessionId: "" }, workspace, manager, { readOnly: true });
-    } else {
-      const sourcePath = parentActive.session.sessionFile;
-      if (sourcePath === undefined) throw new AppError("SESSION_NOT_READY", "Wait for this message to be saved before opening a side chat", 409);
-      const sessionDir = sessionDirectoryFor(parentActive.cwd, getAgentDir());
-      const manager = await this.openSnapshotWithEntry(sessionDir, sourcePath, entryId);
-      manager.createBranchedSession(entryId);
-      side = await this.createActive({ workspaceId: parent.workspaceId, sessionId: "" }, workspace, manager, { readOnly: true });
+    const leafId = sessionForkEntryId(branch, running);
+    let source: SideChatSource | undefined;
+    if (sourcePath !== undefined) {
+      const header = await readSessionFileHeader(sourcePath);
+      if (header?.id === parent.sessionId) {
+        if (leafId !== undefined) {
+          const sessionDir = sessionDirectoryFor(parentActive.cwd, getAgentDir());
+          try {
+            await this.openSnapshotWithEntry(sessionDir, sourcePath, leafId);
+            source = { path: sourcePath, leafId };
+          } catch (error) {
+            if (!(error instanceof AppError) || error.code !== "SESSION_NOT_READY") throw error;
+            source = { path: sourcePath };
+          }
+        } else {
+          source = { path: sourcePath };
+        }
+      }
     }
-    await this.attention.setSideChat(parent, side.ref.sessionId);
+    const workspace = this.workspaces.get(parent.workspaceId);
+    const manager = await persistEmptyManagedSession(createManagedSession(workspace.cwd));
+    const side = await this.createActive({ workspaceId: parent.workspaceId, sessionId: "" }, workspace, manager, { readOnly: true, ...(source === undefined ? {} : { sideChatSource: source }) });
+    await this.attention.setSideChat(parent, side.ref.sessionId, source);
     return this.summaryFromActive(side);
   }
 
@@ -1211,7 +1222,7 @@ export class SessionService {
     return this.createActive(ref, workspace, openManagedSession(workspace.cwd, path));
   }
 
-  private async createActive(ref: SessionRef, workspace: Workspace, manager: SessionManager, options?: { readOnly?: boolean }): Promise<ActiveSession> {
+  private async createActive(ref: SessionRef, workspace: Workspace, manager: SessionManager, options?: { readOnly?: boolean; sideChatSource?: SideChatSource }): Promise<ActiveSession> {
     return createActiveSession({
       attention: this.attention,
       events: this.events,
