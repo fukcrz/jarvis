@@ -7,6 +7,7 @@ describe("isExternalHttpUrl", () => {
   it("treats other hosts as external", () => {
     expect(isExternalHttpUrl("https://github.com/fukcrz/jarvis", origin)).toBe(true);
     expect(isExternalHttpUrl("http://example.com/a", origin)).toBe(true);
+    expect(isExternalHttpUrl("http://127.0.0.1:3000/", origin)).toBe(true);
     expect(isExternalHttpUrl("//github.com/path", origin)).toBe(true);
   });
 
