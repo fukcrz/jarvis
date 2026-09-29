@@ -96,7 +96,7 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   const searchFilesRef = useRef(searchFiles);
   const searchSessionFilesRef = useRef(searchSessionFiles);
   const preparingRef = useRef(0);
-  const lastAttachOpenRef = useRef(0);
+  const attachGestureRef = useRef(false);
   const [completion, setCompletion] = useState<{ trigger: "/" | "@" | "@@"; from: number; items: Completion[] } | undefined>();
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [preparingCount, setPreparingCount] = useState(0);
@@ -502,19 +502,21 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
         <div className="composer-footer">
           <div className="composer-options">
             <div className={`button button-ghost button-icon composer-attach${attachDisabled ? " composer-attach-disabled" : ""}`}>
-              <input className="composer-file-input" type="file" accept="image/*" multiple disabled={attachDisabled} aria-label={attachDisabled ? "当前模型不支持图片" : "添加图片"} onClick={(event) => {
-                const now = Date.now();
-                if (now - lastAttachOpenRef.current < 800) {
+              <input className="composer-file-input" type="file" accept="image/*" multiple disabled={attachDisabled} aria-label={attachDisabled ? "当前模型不支持图片" : "添加图片"} onPointerDown={() => { attachGestureRef.current = true; }} onPointerCancel={() => { attachGestureRef.current = false; }} onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") attachGestureRef.current = true;
+              }} onClick={(event) => {
+                const hasFreshGesture = attachGestureRef.current || (event.nativeEvent.isTrusted && event.nativeEvent.detail === 0);
+                attachGestureRef.current = false;
+                if (!hasFreshGesture) {
                   event.preventDefault();
                   return;
                 }
-                lastAttachOpenRef.current = now;
                 lockVisualViewportKeyboardInset();
                 viewRef.current?.contentDOM.blur();
               }} onChange={(event) => {
-                lastAttachOpenRef.current = Date.now();
                 const input = event.currentTarget;
                 const files = Array.from(input.files ?? []);
+                input.value = "";
                 handleFiles(files);
                 lockVisualViewportKeyboardInset();
                 blurAfterAttach(input, viewRef.current);

@@ -57,8 +57,8 @@ export function sortWorkspacesByAttention(workspaces: Workspace[], sessionsByWor
   });
 }
 
-export function shouldShowMobileSessionGroup(sessionCount: number, focusMode: boolean): boolean {
-  return sessionCount > 0 || focusMode;
+export function shouldShowMobileSessionGroup(sessionCount: number): boolean {
+  return sessionCount > 0;
 }
 
 export function projectAttentionSession(sessions: SessionSummary[]): SessionSummary | undefined {
@@ -96,7 +96,7 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
     for (const workspace of props.workspaces) {
       if (workspaceFilter !== "all" && workspace.id !== workspaceFilter) continue;
       const sessions = sortSessionSummaries(props.sessionsByWorkspace[workspace.id] ?? []);
-      if (!shouldShowMobileSessionGroup(sessions.length, props.focusMode)) continue;
+      if (!shouldShowMobileSessionGroup(sessions.length)) continue;
       result.push({ workspace, sessions });
     }
     return result;
@@ -116,9 +116,10 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
   ));
   return <section className="mobile-page mobile-all-sessions-page" aria-label="全部会话">
     <header className="mobile-switcher-header"><strong>{props.assistantName}</strong><div className="mobile-switcher-actions"><Button variant="ghost" size="icon" aria-label="搜索会话" title="搜索会话" onClick={props.onOpenSearch}><Search size={16} /></Button><Button variant="ghost" size="icon" className={`session-focus-toggle${props.focusMode ? " active" : ""}`} aria-label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} aria-pressed={props.focusMode} title={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} onClick={props.onToggleFocusMode}><Focus size={16} /></Button><Button variant="ghost" size="icon" aria-label="打开设置" title="设置" onClick={props.onOpenSettings}><Settings2 size={16} /></Button><Button variant="ghost" size="icon" aria-label="新建会话" onClick={requestCreateSession} disabled={props.workspaces.length === 0}><Plus size={16} /></Button></div></header>
-    <nav className="mobile-session-projects" aria-label="按项目筛选会话"><button type="button" className={workspaceFilter === "all" ? "selected" : ""} onClick={() => setWorkspaceFilter("all")}>全部</button>{projectChips.map((workspace) => {
+    <nav className="mobile-session-projects" aria-label="按项目筛选会话"><button type="button" className={workspaceFilter === "all" ? "selected" : ""} aria-pressed={workspaceFilter === "all"} onClick={() => setWorkspaceFilter("all")}>全部</button>{projectChips.map((workspace) => {
       const attentionSession = projectAttentionSession(props.sessionsByWorkspace[workspace.id] ?? []);
-      return <button type="button" key={workspace.id} className={workspaceFilter === workspace.id ? "selected" : ""} aria-label={`${workspace.label}${attentionSession === undefined ? "" : `，${sessionAttentionLabel(attentionSession)}`}`} onClick={() => { if (!consumeLongPress()) setWorkspaceFilter(workspace.id); }} onContextMenu={(event) => { event.preventDefault(); props.onOpenProjectMenu(workspace); }} onPointerDown={(event) => startLongPress(event, () => props.onOpenProjectMenu(workspace))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress}><span className="mobile-project-label">{workspace.label}</span><MobileProjectStatus session={attentionSession} /></button>;
+      const selected = workspaceFilter === workspace.id;
+      return <button type="button" key={workspace.id} className={selected ? "selected" : ""} aria-pressed={selected} aria-label={`${workspace.label}${attentionSession === undefined ? "" : `，${sessionAttentionLabel(attentionSession)}`}`} onClick={() => { if (!consumeLongPress()) setWorkspaceFilter(workspace.id); }} onContextMenu={(event) => { event.preventDefault(); props.onOpenProjectMenu(workspace); }} onPointerDown={(event) => startLongPress(event, () => props.onOpenProjectMenu(workspace))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress}><span className="mobile-project-label">{workspace.label}</span><MobileProjectStatus session={attentionSession} /></button>;
     })}<button type="button" className="mobile-add-project" aria-label="添加项目" onClick={props.onAddProject}><Plus size={15} /></button></nav>
     <div className="mobile-page-list mobile-switcher-list">
       {groups.length === 0 ? <div className="mobile-page-empty">{props.focusMode ? "暂无聚焦会话" : "暂无会话"}</div> : null}
