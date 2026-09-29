@@ -11,33 +11,58 @@ const piAiTypePaths = [
   join(codingAgentRoot, "node_modules/@earendil-works/pi-ai/dist/types.d.ts"),
 ].filter(existsSync);
 
-async function replaceOnce(path, before, after) {
+// 补丁分两档：ownerSessionId 是本地请求路由的关键依赖，目标缺失即断言失败；
+// Windows 隐藏控制台类补丁在上游重写（版本漂移）时只告警跳过，不阻断 npm install。
+const skipped = [];
+
+function skip(path, detail) {
+  skipped.push(`${path}: ${detail}`);
+  console.warn(`jarvis: skipped Pi patch (${detail}): ${path}`);
+}
+
+async function replaceOnce(path, before, after, { critical = false } = {}) {
   const source = await readFile(path, "utf8");
   if (source.includes(after)) return;
   const count = source.split(before).length - 1;
-  if (count !== 1) throw new Error(`Expected one patch target in ${path}, found ${count}`);
+  if (count !== 1) {
+    if (critical) throw new Error(`Expected one patch target in ${path}, found ${count}`);
+    skip(path, `found ${count} targets`);
+    return;
+  }
   await writeFile(path, source.replace(before, after), "utf8");
 }
 
-async function replaceAllExact(path, before, after, expectedCount) {
+async function replaceAllExact(path, before, after, expectedCount, { critical = false } = {}) {
   const source = await readFile(path, "utf8");
   const beforeCount = source.split(before).length - 1;
   const afterCount = source.split(after).length - 1;
   if (beforeCount === 0 && afterCount === expectedCount) return;
   if (beforeCount !== expectedCount || afterCount !== 0) {
-    throw new Error(`Expected ${expectedCount} unpatched targets in ${path}, found ${beforeCount} unpatched and ${afterCount} patched`);
+    if (critical) {
+      throw new Error(`Expected ${expectedCount} unpatched targets in ${path}, found ${beforeCount} unpatched and ${afterCount} patched`);
+    }
+    skip(path, `found ${beforeCount} unpatched and ${afterCount} patched targets`);
+    return;
   }
   await writeFile(path, source.replaceAll(before, after), "utf8");
 }
 
-async function replaceOneOf(path, replacements) {
+async function replaceOneOf(path, replacements, { critical = false } = {}) {
   const source = await readFile(path, "utf8");
   if (replacements.some(({ after }) => source.includes(after))) return;
   const matches = replacements.filter(({ before }) => source.split(before).length - 1 === 1);
-  if (matches.length === 0) throw new Error(`Expected one patch target in ${path}, found 0`);
+  if (matches.length === 0) {
+    if (critical) throw new Error(`Expected one patch target in ${path}, found 0`);
+    skip(path, "found 0 targets");
+    return;
+  }
   const longestLength = Math.max(...matches.map(({ before }) => before.length));
   const specificMatches = matches.filter(({ before }) => before.length === longestLength);
-  if (specificMatches.length !== 1) throw new Error(`Expected one patch target in ${path}, found ${specificMatches.length}`);
+  if (specificMatches.length !== 1) {
+    if (critical) throw new Error(`Expected one patch target in ${path}, found ${specificMatches.length}`);
+    skip(path, `found ${specificMatches.length} targets`);
+    return;
+  }
   const [{ before, after }] = specificMatches;
   await writeFile(path, source.replace(before, after), "utf8");
 }
@@ -64,13 +89,14 @@ for (const piAiTypes of piAiTypePaths) {
       before: "export interface SimpleStreamOptions extends StreamOptions {\n    /** Provider-neutral tool selection for simple requests. When omitted, adapters use provider-specific behavior. */\n    toolChoice?: ToolChoice;",
       after: "export interface SimpleStreamOptions extends StreamOptions {\n    /** Stable source session ID for local request routing. Unlike sessionId, this is not replaced for standalone summaries. */\n    ownerSessionId?: string;\n    /** Provider-neutral tool selection for simple requests. When omitted, adapters use provider-specific behavior. */\n    toolChoice?: ToolChoice;",
     },
-  ]);
+  ], { critical: true });
 }
 
 await replaceOnce(
   join(root, "node_modules/@earendil-works/pi-coding-agent/dist/core/sdk.js"),
   "            return modelRuntime.streamSimple(model, context, {\n                ...options,\n                timeoutMs,",
   "            return modelRuntime.streamSimple(model, context, {\n                ...options,\n                // Keep local provider routing tied to this AgentSession even when compaction\n                // replaces sessionId with an isolated UUID for cache/request affinity.\n                ownerSessionId: sessionManager.getSessionId(),\n                timeoutMs,",
+  { critical: true },
 );
 
 const codingAgentDist = join(codingAgentRoot, "dist/core");
@@ -401,3 +427,4 @@ for (const base of new Set(playwrightRoots)) {
 }
 
 console.log("Applied Pi ownerSessionId and Windows hidden-process patches");
+if (skipped.length > 0) console.warn(`jarvis: ${skipped.length} non-critical Pi patch target(s) skipped (upstream drift)`);
