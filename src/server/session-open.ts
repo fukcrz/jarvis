@@ -23,8 +23,7 @@ import type { SessionPiEvents } from "./session-pi-events.js";
 
 function sideChatNotice(source: SideChatSource | undefined): string {
   if (source === undefined) return SIDE_CHAT_NOTICE;
-  const anchor = source.leafId === undefined ? "" : `\nCurrent branch anchor entry ID: ${source.leafId}.`;
-  return `${SIDE_CHAT_NOTICE}\nParent session JSONL reference (use this exact path with read):\n${source.path}${anchor}\nThis is a blank independent conversation, not a fork. Treat the JSONL as an append-only tree: inspect relevant ranges in small chunks, starting from the anchor when present and following parentId to trace ancestry. Ignore sibling branches. Do not read or dump the entire file unless the user asks. The source is read-only.`;
+  return `${SIDE_CHAT_NOTICE}\n这是一个空白、独立的对话，不是主会话的分支。主会话记录路径：\n${source.path}\n你可以根据当前问题，自行决定是否以及如何参考主会话记录。`;
 }
 
 export interface CreateActiveDeps {

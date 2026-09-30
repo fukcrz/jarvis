@@ -84,7 +84,7 @@ export const JARVIS_UI_NOTICE = [
   "Keep it useful: one short caption plus the image beats paragraphs of description, and skip images when they carry no information (for example, a text-only code change).",
 ].join(" ");
 
-export const SIDE_CHAT_NOTICE = "This is a read-only side chat next to the main Jarvis session. You may inspect project files with read, grep, find, and ls. Do not modify files, run commands, or change the workspace.";
+export const SIDE_CHAT_NOTICE = "这是 Jarvis 主会话旁边的只读侧聊。你可以使用 read、grep、find、ls 查看项目文件，但不要修改文件、运行命令或更改工作区。";
 export const SIDE_CHAT_TOOLS = ["read", "grep", "find", "ls"] as const;
 
 export const PAGE_LIMIT = 120;

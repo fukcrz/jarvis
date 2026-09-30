@@ -2320,8 +2320,9 @@ describe("side chat", () => {
     const sideRuntime = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${side.id}/runtime` });
     expect(sideRuntime.statusCode).toBe(200);
     const sideActive = (server.jarvis.sessions as unknown as { active: Map<string, { session: AgentSession }> }).active.get(`${workspace.id}:${side.id}`);
-    expect(sideActive?.session.systemPrompt).toContain(`reference (use this exact path with read):\n${sourcePath}`);
-    expect(sideActive?.session.systemPrompt).toContain(sourceReference?.leafId);
+    expect(sideActive?.session.systemPrompt).toContain(`主会话记录路径：\n${sourcePath}`);
+    expect(sideActive?.session.systemPrompt).toContain("你可以根据当前问题，自行决定是否以及如何参考主会话记录。");
+    expect(sideActive?.session.systemPrompt).not.toContain(sourceReference?.leafId);
 
     const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` });
     expect((listed.json() as { sessions: Array<{ id: string }> }).sessions.map((session) => session.id)).toEqual([source.id]);
@@ -2350,8 +2351,9 @@ describe("side chat", () => {
     const restoredRuntime = await restarted.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions/${side.id}/runtime` });
     expect(restoredRuntime.statusCode).toBe(200);
     const restoredActive = (restarted.jarvis.sessions as unknown as { active: Map<string, { session: AgentSession }> }).active.get(`${workspace.id}:${side.id}`);
-    expect(restoredActive?.session.systemPrompt).toContain(`reference (use this exact path with read):\n${sourcePath}`);
-    expect(restoredActive?.session.systemPrompt).toContain(sourceReference?.leafId);
+    expect(restoredActive?.session.systemPrompt).toContain(`主会话记录路径：\n${sourcePath}`);
+    expect(restoredActive?.session.systemPrompt).toContain("你可以根据当前问题，自行决定是否以及如何参考主会话记录。");
+    expect(restoredActive?.session.systemPrompt).not.toContain(sourceReference?.leafId);
   });
 
   it("deletes the side chat with the parent and can reset it", async () => {
