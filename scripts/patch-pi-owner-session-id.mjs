@@ -92,10 +92,18 @@ for (const piAiTypes of piAiTypePaths) {
   ], { critical: true });
 }
 
-await replaceOnce(
+await replaceOneOf(
   join(root, "node_modules/@earendil-works/pi-coding-agent/dist/core/sdk.js"),
-  "            return modelRuntime.streamSimple(model, context, {\n                ...options,\n                timeoutMs,",
-  "            return modelRuntime.streamSimple(model, context, {\n                ...options,\n                // Keep local provider routing tied to this AgentSession even when compaction\n                // replaces sessionId with an isolated UUID for cache/request affinity.\n                ownerSessionId: sessionManager.getSessionId(),\n                timeoutMs,",
+  [
+    {
+      before: "            return modelRuntime.streamSimple(model, context, {\n                ...options,\n                timeoutMs,",
+      after: "            return modelRuntime.streamSimple(model, context, {\n                ...options,\n                // Keep local provider routing tied to this AgentSession even when compaction\n                // replaces sessionId with an isolated UUID for cache/request affinity.\n                ownerSessionId: sessionManager.getSessionId(),\n                timeoutMs,",
+    },
+    {
+      before: "            const requestOptions = buildRequestOptions(model, options);",
+      after: "            const requestOptions = buildRequestOptions(model, {\n                ...options,\n                // Keep local provider routing tied to this AgentSession even when compaction\n                // replaces sessionId with an isolated UUID for cache/request affinity.\n                ownerSessionId: sessionManager.getSessionId(),\n            });",
+    },
+  ],
   { critical: true },
 );
 
@@ -124,11 +132,23 @@ await replaceOnce(
   '    const result = spawnSync(command, args, { stdio: "pipe" });',
   '    const result = spawnSync(command, args, { stdio: "pipe", windowsHide: true });',
 );
-await replaceOnce(
-  join(codingAgentUtils, "clipboard.js"),
-  'const options = { input: text, timeout: 5000, stdio: ["pipe", "ignore", "ignore"] };',
-  'const options = { input: text, timeout: 5000, stdio: ["pipe", "ignore", "ignore"], windowsHide: true };',
-);
+const clipboardCommandPath = join(codingAgentUtils, "clipboard-command.js");
+if (existsSync(clipboardCommandPath)) {
+  const clipboardCommandSource = await readFile(clipboardCommandPath, "utf8");
+  if (!clipboardCommandSource.includes("windowsHide: true")) {
+    await replaceOnce(
+      clipboardCommandPath,
+      '            stdio: ["pipe", options?.input === undefined ? "pipe" : "ignore"],\n        });',
+      '            stdio: ["pipe", options?.input === undefined ? "pipe" : "ignore"],\n            windowsHide: true,\n        });',
+    );
+  }
+} else {
+  await replaceOnce(
+    join(codingAgentUtils, "clipboard.js"),
+    'const options = { input: text, timeout: 5000, stdio: ["pipe", "ignore", "ignore"] };',
+    'const options = { input: text, timeout: 5000, stdio: ["pipe", "ignore", "ignore"], windowsHide: true };',
+  );
+}
 await replaceOnce(
   join(codingAgentUtils, "open-browser.js"),
   'spawn(cmd, args, { stdio: "ignore", detached: true })',

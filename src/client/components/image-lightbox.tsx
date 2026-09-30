@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { RotateCcw, RotateCw, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
@@ -96,7 +96,7 @@ function MediaLightbox({ label, closeLabel, rotatable = false, children, onClose
   }, []);
 
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       onClose();
@@ -294,7 +294,7 @@ export function ImagePreview({ src, alt = "", className, children }: ImagePrevie
   const [open, setOpen] = useState(false);
   const contextMenuAt = useRef(0);
   const openPreview = () => setOpen(true);
-  const onKeyDown = (event: KeyboardEvent<HTMLSpanElement>) => {
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLSpanElement>) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     openPreview();
