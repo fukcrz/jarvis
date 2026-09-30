@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { projectAttentionSession, readMobileExpandedGroups, saveMobileExpandedGroups, shouldShowMobileSessionGroup, sortWorkspacesByAttention } from "./mobile-navigation.js";
+import { projectAttentionSession, readMobileExpandedGroups, saveMobileExpandedGroups, shouldShowMobileSessionGroup, sortWorkspacesByAttention, visibleMobileWorkspaces } from "./mobile-navigation.js";
 
 const storage = new Map<string, string>();
 
@@ -44,6 +44,20 @@ describe("mobile session group visibility", () => {
   it("hides empty projects in every mode", () => {
     expect(shouldShowMobileSessionGroup(0)).toBe(false);
     expect(shouldShowMobileSessionGroup(2)).toBe(true);
+  });
+});
+
+describe("mobile focus mode workspaces", () => {
+  it("hides projects without focused sessions while retaining unloaded projects", () => {
+    const active = workspace("active", 0);
+    const idle = workspace("idle", 1);
+    const unloaded = workspace("unloaded", 2);
+    const sessionsByWorkspace = { active: [session], idle: [] as SessionSummary[] };
+
+    expect(visibleMobileWorkspaces([active, idle, unloaded], sessionsByWorkspace, true).map((item) => item.id))
+      .toEqual(["active", "unloaded"]);
+    expect(visibleMobileWorkspaces([active, idle, unloaded], sessionsByWorkspace, false).map((item) => item.id))
+      .toEqual(["active", "idle", "unloaded"]);
   });
 });
 

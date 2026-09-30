@@ -163,6 +163,13 @@ export function App() {
     if (!focusMode) return sessionsByWorkspace;
     return Object.fromEntries(Object.entries(sessionsByWorkspace).map(([id, sessions]) => [id, sessions.filter((session) => isSessionInFocusWindow(session, focusNow))]));
   }, [focusMode, focusNow, sessionsByWorkspace]);
+  const visibleWorkspaces = useMemo(() => {
+    if (!focusMode) return workspaces;
+    return workspaces.filter((workspace) => {
+      const sessions = visibleSessionsByWorkspace[workspace.id];
+      return sessions === undefined || sessions.length > 0;
+    });
+  }, [focusMode, visibleSessionsByWorkspace, workspaces]);
   const selectedComposerCommands = composerCommands !== undefined && composerCommands.sessionKey === selectedRefKey ? composerCommands.items : EMPTY_COMPOSER_COMMANDS;
   const selectedDraft = selectedSessionId === undefined ? "" : drafts[selectedSessionId] ?? "";
   const updateDraft = useCallback((id: string, value: string, external = false) => {
@@ -1037,7 +1044,7 @@ export function App() {
   };
 
   const sidebar = <Sidebar
-    workspaces={workspaces}
+    workspaces={visibleWorkspaces}
     sessionsByWorkspace={visibleSessionsByWorkspace}
     workspaceId={workspaceId}
     selectedSessionId={sessionId}

@@ -61,6 +61,18 @@ export function shouldShowMobileSessionGroup(sessionCount: number): boolean {
   return sessionCount > 0;
 }
 
+export function visibleMobileWorkspaces(
+  workspaces: Workspace[],
+  sessionsByWorkspace: Record<string, SessionSummary[]>,
+  focusMode: boolean,
+): Workspace[] {
+  if (!focusMode) return workspaces;
+  return workspaces.filter((workspace) => {
+    const sessions = sessionsByWorkspace[workspace.id];
+    return sessions === undefined || sessions.length > 0;
+  });
+}
+
 export function projectAttentionSession(sessions: SessionSummary[]): SessionSummary | undefined {
   const session = sortSessionSummaries(sessions)[0];
   return session === undefined || sessionAttentionLabel(session) === undefined ? undefined : session;
@@ -73,13 +85,17 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
   const [expandedGroupIds, setExpandedGroupIds] = useState<Record<string, boolean>>(readMobileExpandedGroups);
   /** 展开的组内会话窗口步数（默认窗口 + 每次「展开更多」+1，同 PC 侧栏）。 */
   const [sessionExpandSteps, setSessionExpandSteps] = useState<Record<string, number>>({});
+  const projectChips = useMemo(() => sortWorkspacesByAttention(
+    visibleMobileWorkspaces(props.workspaces, props.sessionsByWorkspace, props.focusMode),
+    props.sessionsByWorkspace,
+  ), [props.focusMode, props.workspaces, props.sessionsByWorkspace]);
   useEffect(() => {
-    if (workspaceFilter !== "all" && !props.workspaces.some((workspace) => workspace.id === workspaceFilter)) {
+    if (workspaceFilter !== "all" && !projectChips.some((workspace) => workspace.id === workspaceFilter)) {
       setWorkspaceFilter("all");
       return;
     }
     window.localStorage.setItem("jarvis.mobile.session-project", workspaceFilter);
-  }, [props.workspaces, workspaceFilter]);
+  }, [projectChips, workspaceFilter]);
   useEffect(() => {
     saveMobileExpandedGroups(expandedGroupIds);
   }, [expandedGroupIds]);
@@ -101,7 +117,6 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
     }
     return result;
   }, [props.workspaces, props.sessionsByWorkspace, workspaceFilter]);
-  const projectChips = useMemo(() => sortWorkspacesByAttention(props.workspaces, props.sessionsByWorkspace), [props.workspaces, props.sessionsByWorkspace]);
   const toggleGroup = (workspaceId: string) => {
     setExpandedGroupIds((current) => ({ ...current, [workspaceId]: current[workspaceId] !== true }));
   };
