@@ -210,6 +210,18 @@ async function writeConversationSession(workspacePath: string): Promise<{ id: st
 }
 
 describe("Jarvis HTTP and WebSocket API", () => {
+  it("starts and disposes an injected desktop-touch service with the app", async () => {
+    await app?.close();
+    app = undefined;
+    const desktopTouchService = { start: vi.fn(async () => undefined), dispose: vi.fn(async () => undefined) };
+    app = await buildApp({ desktopTouchService });
+
+    expect(desktopTouchService.start).toHaveBeenCalledOnce();
+    await app.close();
+    app = undefined;
+    expect(desktopTouchService.dispose).toHaveBeenCalledOnce();
+  });
+
   it("loads settings and persists an assistant name update", async () => {
     await app?.close();
     await writeFile(join(jarvisHome, "settings.json"), JSON.stringify({ version: 1, assistantName: "Legacy Jarvis", uiMode: "beautiful" }));

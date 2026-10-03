@@ -17,6 +17,7 @@ import { EventHub } from "./event-hub.js";
 import { applyAuthCookie, authorizeSocket, clearAuthCookie, readAuthCookie } from "./http-auth.js";
 import { SessionService } from "./session-service.js";
 import { desktopEnabled } from "./desktop-bridge.js";
+import { DesktopTouchService } from "./desktop-touch-service.js";
 import { registerSelfRestart } from "./self-restart.js";
 import { WorkspaceStore } from "./workspace-store.js";
 import { SettingsService } from "./settings-service.js";
@@ -111,7 +112,12 @@ export interface JarvisServices {
   auth: AuthService;
 }
 
-export async function buildApp(options: { serveStatic?: boolean; staticRoot?: string } = {}): Promise<FastifyInstance> {
+export async function buildApp(options: {
+  serveStatic?: boolean;
+  staticRoot?: string;
+  desktopTouch?: boolean;
+  desktopTouchService?: Pick<DesktopTouchService, "start" | "dispose">;
+} = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: { level: process.env["LOG_LEVEL"] ?? "info" }, bodyLimit: 25 * 1024 * 1024 });
   const production = process.env["NODE_ENV"] === "production";
   const workspaces = new WorkspaceStore();
@@ -124,13 +130,23 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
   const auth = new AuthService();
   await auth.initialize();
   const services: JarvisServices = { workspaces, sessions, backgroundTasks, events, tunnel: new TunnelService((message) => app.log.info({ tunnel: message })), auth };
-
+  const desktopTouchService = options.desktopTouchService ?? (options.desktopTouch ? new DesktopTouchService({
+    logger: (message, error) => app.log.warn({ err: error }, message),
+  }) : undefined);
   await app.register(cors, { origin: production ? [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] : true });
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
 
   app.decorate("jarvis", services);
-  app.addHook("onClose", async () => { await backgroundTasks.dispose(); await sessions.dispose(); await services.tunnel.dispose(); });
+  app.addHook("onClose", async () => {
+    try {
+      await backgroundTasks.dispose();
+      await sessions.dispose();
+      await services.tunnel.dispose();
+    } finally {
+      await desktopTouchService?.dispose();
+    }
+  });
 
   // 登录认证（仅在设置了密码时生效）：
   // - 静态资源与 SPA 页面放行，否则登录页自身无法加载；
@@ -548,6 +564,14 @@ export async function buildApp(options: { serveStatic?: boolean; staticRoot?: st
     const response: ApiErrorBody = { error: { code, message, requestId: request.id } };
     reply.status(statusCode).send(response);
   });
+
+  if (desktopTouchService) {
+    try {
+      await desktopTouchService.start();
+    } catch (error) {
+      app.log.warn({ err: error }, "Could not start shared desktop-touch MCP service");
+    }
+  }
 
   return app;
 }

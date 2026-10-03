@@ -14,7 +14,7 @@ const { buildApp } = await import("./app.js");
 const { emitDesktopEvent } = await import("./desktop-bridge.js");
 
 const production = process.env["NODE_ENV"] === "production";
-const app = await buildApp({ serveStatic: production });
+const app = await buildApp({ serveStatic: production, desktopTouch: process.platform === "win32" });
 
 // Extension code can leave async continuations (streams, timers, compaction
 // callbacks) running after a session is disposed. A stale extension ctx throws
@@ -44,7 +44,12 @@ const close = async (signal: string) => {
 process.on("SIGINT", () => { void close("SIGINT"); });
 process.on("SIGTERM", () => { void close("SIGTERM"); });
 
-await listenWithRetry(app, port, host, process.env["JARVIS_SELF_RESTART"] === "1");
+try {
+  await listenWithRetry(app, port, host, process.env["JARVIS_SELF_RESTART"] === "1");
+} catch (error) {
+  await app.close();
+  throw error;
+}
 const address = app.server.address();
 const actualPort = typeof address === "object" && address !== null && typeof address.port === "number" ? address.port : port;
 // 设置目标端口；若开启了自动穿透，这里会直接拉起隧道。
