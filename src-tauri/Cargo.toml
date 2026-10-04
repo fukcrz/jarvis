@@ -1,6 +1,6 @@
 [package]
 name = "jarvis-desktop"
-version = "0.1.10"
+version = "0.1.11"
 description = "Jarvis desktop shell"
 authors = ["Jarvis"]
 edition = "2021"
@@ -20,7 +20,7 @@ open = { version = "5", features = ["shellexecute-on-windows"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2.12.1", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-process = "2"
