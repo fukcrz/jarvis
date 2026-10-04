@@ -1883,8 +1883,8 @@ describe("message queue", () => {
     const sessionUrl = `/api/workspaces/${workspace.id}/sessions/${session.id}`;
 
     vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
-    const steerSpy = vi.spyOn(AgentSession.prototype, "steer").mockResolvedValue(undefined);
-    const followUpSpy = vi.spyOn(AgentSession.prototype, "followUp").mockResolvedValue(undefined);
+    const steerSpy = vi.spyOn(AgentSession.prototype, "steer").mockResolvedValue("queued");
+    const followUpSpy = vi.spyOn(AgentSession.prototype, "followUp").mockResolvedValue("queued");
     await server.inject({ method: "POST", url: `${sessionUrl}/prompt`, payload: { text: "Keep running", clientRequestId: randomUUID() } });
 
     // 缺省：后续消息（全部完成后投递）。
@@ -1914,8 +1914,8 @@ describe("message queue", () => {
     vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
     const steering: string[] = ["First steer"];
     const followUp: string[] = ["Later note"];
-    const steerSpy = vi.spyOn(AgentSession.prototype, "steer").mockResolvedValue(undefined);
-    const followUpSpy = vi.spyOn(AgentSession.prototype, "followUp").mockResolvedValue(undefined);
+    const steerSpy = vi.spyOn(AgentSession.prototype, "steer").mockResolvedValue("queued");
+    const followUpSpy = vi.spyOn(AgentSession.prototype, "followUp").mockResolvedValue("queued");
     vi.spyOn(AgentSession.prototype, "getSteeringMessages").mockImplementation(() => steering);
     vi.spyOn(AgentSession.prototype, "getFollowUpMessages").mockImplementation(() => followUp);
     vi.spyOn(AgentSession.prototype, "clearQueue").mockImplementation(() => {
@@ -2046,8 +2046,8 @@ describe("message queue", () => {
     vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(() => new Promise(() => undefined) as never);
     const steering: string[] = ["First note", "Second note"];
     const followUp: string[] = ["Later note"];
-    const steerSpy = vi.spyOn(AgentSession.prototype, "steer").mockResolvedValue(undefined);
-    const followUpSpy = vi.spyOn(AgentSession.prototype, "followUp").mockResolvedValue(undefined);
+    const steerSpy = vi.spyOn(AgentSession.prototype, "steer").mockResolvedValue("queued");
+    const followUpSpy = vi.spyOn(AgentSession.prototype, "followUp").mockResolvedValue("queued");
     vi.spyOn(AgentSession.prototype, "getSteeringMessages").mockImplementation(() => steering);
     vi.spyOn(AgentSession.prototype, "getFollowUpMessages").mockImplementation(() => followUp);
     const clearQueueSpy = vi.spyOn(AgentSession.prototype, "clearQueue").mockImplementation(() => {

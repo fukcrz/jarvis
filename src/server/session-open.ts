@@ -1,5 +1,6 @@
 import {
   createAgentSession,
+  createMcpExtension,
   DefaultResourceLoader,
   getAgentDir,
   resolveModelScopeWithDiagnostics,
@@ -58,6 +59,7 @@ export async function createActiveSession(
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: workspace.cwd,
+    extensionFactories: [createMcpExtension()],
     agentDir,
     settingsManager,
     appendSystemPrompt: readOnly ? [JARVIS_UI_NOTICE, sideChatNotice(sideChatSource)] : [JARVIS_UI_NOTICE],
