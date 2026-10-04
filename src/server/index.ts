@@ -14,7 +14,7 @@ const { buildApp } = await import("./app.js");
 const { emitDesktopEvent } = await import("./desktop-bridge.js");
 
 const production = process.env["NODE_ENV"] === "production";
-const app = await buildApp({ serveStatic: production, desktopTouch: process.platform === "win32" });
+const app = await buildApp({ serveStatic: production });
 
 // Extension code can leave async continuations (streams, timers, compaction
 // callbacks) running after a session is disposed. A stale extension ctx throws
