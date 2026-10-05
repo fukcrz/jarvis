@@ -480,11 +480,12 @@ fn set_splash_state(app: &AppHandle, text: &str, mode: &str, percent: u8) {
 }
 
 fn jarvis_root(app: &AppHandle) -> PathBuf {
-  if cfg!(debug_assertions) {
+  let root = if cfg!(debug_assertions) {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
   } else {
     app.path().resource_dir().map(|dir| dir.join("jarvis")).unwrap_or_else(|_| PathBuf::from("."))
-  }
+  };
+  sidecar::strip_windows_verbatim(&root)
 }
 
 fn desktop_port() -> u16 {

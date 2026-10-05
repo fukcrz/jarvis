@@ -85,15 +85,35 @@ pub fn server_entry(root: &Path) -> PathBuf {
   root.join("dist").join("server").join("server").join("index.js")
 }
 
+/// Node's CJS loader cannot resolve Windows verbatim paths (`\\?\C:\...`):
+/// `realpathSync` collapses them to a bare drive letter and exits with EISDIR.
+pub fn strip_windows_verbatim(path: &Path) -> PathBuf {
+  let Some(text) = path.to_str() else {
+    return path.to_path_buf();
+  };
+  if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+    let mut normalized = String::from(r"\\");
+    normalized.push_str(rest);
+    return PathBuf::from(normalized);
+  }
+  if let Some(rest) = text.strip_prefix(r"\\?\") {
+    return PathBuf::from(rest);
+  }
+  path.to_path_buf()
+}
+
 pub fn spawn_sidecar(node: &Path, root: &Path, port: u16, on_event: impl Fn(DesktopEvent) + Send + 'static) -> Result<Sidecar, String> {
   let entry = server_entry(root);
   if !entry.is_file() {
     return Err(format!("找不到服务入口：{}", entry.display()));
   }
-  let mut command = Command::new(node);
+  let node = strip_windows_verbatim(node);
+  let root = strip_windows_verbatim(root);
+  let entry = strip_windows_verbatim(&entry);
+  let mut command = Command::new(&node);
   command
     .arg(&entry)
-    .current_dir(root)
+    .current_dir(&root)
     .env("NODE_ENV", "production")
     .env("HOST", "0.0.0.0")
     .env("PORT", port.to_string())
@@ -159,7 +179,8 @@ fn truncate_line(line: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::{parse_desktop_line, DiagnosticTail};
+  use super::{parse_desktop_line, strip_windows_verbatim, DiagnosticTail};
+  use std::path::Path;
 
   #[test]
   fn parses_ready_event() {
@@ -180,5 +201,38 @@ mod tests {
     assert!(!text.contains("line-0\n"));
     assert!(text.starts_with("line-2\n"));
     assert!(text.ends_with("line-41"));
+  }
+
+  #[test]
+  fn strips_windows_verbatim_drive_prefix() {
+    assert_eq!(
+      strip_windows_verbatim(Path::new(r"\\?\C:\Users\app\Jarvis\resources\jarvis")),
+      Path::new(r"C:\Users\app\Jarvis\resources\jarvis"),
+    );
+    assert_eq!(
+      strip_windows_verbatim(Path::new(r"\\?\C:\Program Files\nodejs\node.exe")),
+      Path::new(r"C:\Program Files\nodejs\node.exe"),
+    );
+  }
+
+  #[test]
+  fn strips_windows_verbatim_unc_prefix() {
+    assert_eq!(
+      strip_windows_verbatim(Path::new(r"\\?\UNC\server\share\jarvis")),
+      Path::new(r"\\server\share\jarvis"),
+    );
+  }
+
+  #[test]
+  fn leaves_normal_paths_unchanged() {
+    assert_eq!(
+      strip_windows_verbatim(Path::new(r"C:\Users\app\Jarvis")),
+      Path::new(r"C:\Users\app\Jarvis"),
+    );
+    assert_eq!(strip_windows_verbatim(Path::new(".")), Path::new("."));
+    assert_eq!(
+      strip_windows_verbatim(Path::new("/usr/local/jarvis")),
+      Path::new("/usr/local/jarvis"),
+    );
   }
 }
