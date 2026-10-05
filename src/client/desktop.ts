@@ -10,13 +10,9 @@ export async function setDesktopNotificationEnabled(enabled: boolean): Promise<v
 
 export async function openExternalUrl(url: string): Promise<void> {
   if (isDesktopShell()) {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("open_external_url", { url });
-      return;
-    } catch {
-      // 旧桌面壳没有该命令时，退回新窗口。
-    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("open_external_url", { url });
+    return;
   }
   window.open(url, "_blank", "noopener,noreferrer");
 }
