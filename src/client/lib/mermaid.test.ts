@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { canCopyDiagramImage, copyMermaidDiagram, downloadDiagramPng, normalizeMermaidSvg, prepareMermaidSvgForExport, renderMermaidDiagram, writeDiagramClipboard } from "./mermaid";
+import { canCopyDiagramImage, copyMermaidDiagram, downloadDiagramPng, downloadMermaidDiagram, flattenMermaidForeignObjects, mermaidFitScale, normalizeMermaidSvg, prepareMermaidSvgForExport, renderMermaidDiagram, saveBlobFile, svgPixelSize, writeDiagramClipboard } from "./mermaid";
 
 const mermaid = vi.hoisted(() => ({
   startOnLoad: true,
@@ -390,5 +390,124 @@ describe("renderMermaidDiagram", () => {
     const second = renderMermaidDiagram("two");
     await expect(Promise.all([first, second])).resolves.toEqual(["<svg id=\"one\" />", "<svg id=\"two\" />"]);
     expect(order).toEqual(["start:one", "end:one", "start:two", "end:two"]);
+  });
+});
+
+describe("svgPixelSize", () => {
+  it("reads viewBox and falls back to a default size", () => {
+    expect(svgPixelSize('<svg viewBox="0 0 248.03 167.61"></svg>')).toEqual({ width: 248.03, height: 167.61 });
+    expect(svgPixelSize("<svg></svg>")).toEqual({ width: 800, height: 600 });
+  });
+});
+
+describe("mermaidFitScale", () => {
+  it("shrinks to width without upscaling", () => {
+    expect(mermaidFitScale({ width: 1000, height: 200 }, { width: 400, height: Number.POSITIVE_INFINITY })).toBeCloseTo(0.4);
+    expect(mermaidFitScale({ width: 100, height: 80 }, { width: 400, height: 400 })).toBe(1);
+  });
+
+  it("uses the tighter of width and height", () => {
+    expect(mermaidFitScale({ width: 800, height: 400 }, { width: 400, height: 100 })).toBeCloseTo(0.25);
+  });
+
+  it("ignores unmeasured box edges", () => {
+    expect(mermaidFitScale({ width: 100, height: 100 }, { width: 0, height: 0 })).toBe(1);
+  });
+});
+
+describe("flattenMermaidForeignObjects", () => {
+  it("replaces html labels with svg text", () => {
+    const svg = '<svg viewBox="0 0 120 40"><foreignObject x="10" y="5" width="100" height="30"><div xmlns="http://www.w3.org/1999/xhtml" style="color:#f5efea;font-size:16px">基本面筛选</div></foreignObject></svg>';
+    const out = flattenMermaidForeignObjects(svg);
+    expect(out).not.toMatch(/foreignObject/i);
+    expect(out).toContain("基本面筛选");
+    expect(out).toContain("<text ");
+    expect(out).toContain('fill="#f5efea"');
+  });
+
+  it("keeps wrapped lines as tspans", () => {
+    const svg = "<svg><foreignObject x=\"0\" y=\"0\" width=\"80\" height=\"40\"><span>第一行<br/>第二行</span></foreignObject></svg>";
+    const out = flattenMermaidForeignObjects(svg);
+    expect(out).toContain("<tspan");
+    expect(out).toContain("第一行");
+    expect(out).toContain("第二行");
+  });
+
+  it("leaves svg without foreignObject unchanged", () => {
+    const svg = "<svg><text>ok</text></svg>";
+    expect(flattenMermaidForeignObjects(svg)).toBe(svg);
+  });
+});
+
+describe("saveBlobFile", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("shares a file when the browser can share", async () => {
+    const share = vi.fn(async () => undefined);
+    const canShare = vi.fn(() => true);
+    vi.stubGlobal("navigator", { share, canShare });
+    await saveBlobFile(new Blob(["png"], { type: "image/png" }), "mermaid.png");
+    expect(canShare).toHaveBeenCalled();
+    expect(share).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats share abort as success without downloading", async () => {
+    const share = vi.fn(async () => {
+      const error = new Error("abort");
+      error.name = "AbortError";
+      throw error;
+    });
+    vi.stubGlobal("navigator", { share, canShare: () => true });
+    vi.stubGlobal("document", { body: { append: vi.fn() }, createElement: vi.fn() });
+    await expect(saveBlobFile(new Blob(["png"], { type: "image/png" }), "mermaid.png")).resolves.toBeUndefined();
+    expect(document.createElement).not.toHaveBeenCalled();
+  });
+
+  it("clicks a download anchor when share is unavailable", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:diagram");
+    vi.spyOn(URL, "revokeObjectURL").mockReturnValue(undefined);
+    const click = vi.fn();
+    const remove = vi.fn();
+    const anchor = { href: "", download: "", rel: "", click, remove };
+    vi.stubGlobal("navigator", {});
+    vi.stubGlobal("document", {
+      body: { append: vi.fn() },
+      createElement: () => anchor,
+    });
+    await saveBlobFile(new Blob(["png"], { type: "image/png" }), "mermaid.png");
+    expect(anchor).toMatchObject({ href: "blob:diagram", download: "mermaid.png" });
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("downloadMermaidDiagram", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("falls back to svg download when png conversion fails", async () => {
+    vi.stubGlobal("Image", class {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) { queueMicrotask(() => this.onerror?.()); }
+    });
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:diagram");
+    vi.spyOn(URL, "revokeObjectURL").mockReturnValue(undefined);
+    const click = vi.fn();
+    const remove = vi.fn();
+    const anchor = { href: "", download: "", rel: "", click, remove };
+    vi.stubGlobal("navigator", {});
+    vi.stubGlobal("document", {
+      body: { append: vi.fn() },
+      createElement: () => anchor,
+    });
+    await downloadMermaidDiagram('<svg viewBox="0 0 10 10"><foreignObject x="0" y="0" width="10" height="10"><div>字</div></foreignObject></svg>');
+    expect(anchor.download).toBe("mermaid.svg");
+    expect(click).toHaveBeenCalledTimes(1);
   });
 });

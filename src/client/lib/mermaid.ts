@@ -207,7 +207,7 @@ export function canCopyDiagramImage(): boolean {
   return !isMobileClipboardHost();
 }
 
-function svgPixelSize(svg: string): { width: number; height: number } {
+export function svgPixelSize(svg: string): { width: number; height: number } {
   const viewBox = /viewBox="([^"']+)"/.exec(svg)?.[1];
   if (viewBox !== undefined) {
     const parts = viewBox.trim().split(/[\s,]+/).map(Number);
@@ -221,6 +221,112 @@ function svgPixelSize(svg: string): { width: number; height: number } {
     width: Number.isFinite(width) && width > 0 ? width : 800,
     height: Number.isFinite(height) && height > 0 ? height : 600,
   };
+}
+
+/** 按容器缩小、不放大。宽或高为 0 / 非有限时忽略该边，避免测量前把图画没。 */
+export function mermaidFitScale(
+  natural: { width: number; height: number },
+  box: { width: number; height: number },
+): number {
+  if (!(natural.width > 0) || !(natural.height > 0)) return 1;
+  let scale = 1;
+  if (box.width > 0 && Number.isFinite(box.width)) scale = Math.min(scale, box.width / natural.width);
+  if (box.height > 0 && Number.isFinite(box.height)) scale = Math.min(scale, box.height / natural.height);
+  return scale > 0 && Number.isFinite(scale) ? scale : 1;
+}
+
+function escapeXml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function decodeXmlText(value: string): string {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#x([0-9a-f]+);/gi, (_all, hex: string) => {
+      const code = Number.parseInt(hex, 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
+    })
+    .replace(/&#(\d+);/g, (_all, dec: string) => {
+      const code = Number(dec);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : "";
+    })
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function cssPropFromHtml(html: string, prop: string): string | undefined {
+  const style = /style="([^"]*)"/i.exec(html)?.[1] ?? /style='([^']*)'/i.exec(html)?.[1];
+  if (style === undefined) return undefined;
+  const value = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, "i").exec(style)?.[1]?.trim();
+  return value === undefined || value === "" ? undefined : value;
+}
+
+function attrNumber(attrs: string, name: string): number {
+  const match = new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i").exec(attrs);
+  const value = Number.parseFloat(match?.[1] ?? "");
+  return Number.isFinite(value) ? value : 0;
+}
+
+function htmlToLines(html: string): string[] {
+  const withBreaks = html
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\s*\/\s*p\s*>/gi, "\n")
+    .replace(/<\s*\/\s*div\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, "");
+  const lines = decodeXmlText(withBreaks).split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "");
+  return lines.length > 0 ? lines : [""];
+}
+
+function mermaidSvgText(options: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fill: string;
+  fontSize: string;
+  fontFamily?: string;
+  lines: string[];
+}): string {
+  const cx = options.x + options.width / 2;
+  const parsed = Number.parseFloat(options.fontSize);
+  const fontSizePx = Number.isFinite(parsed) && parsed > 0 ? parsed : 16;
+  const family = options.fontFamily === undefined || options.fontFamily === ""
+    ? ""
+    : ` font-family="${escapeXml(options.fontFamily)}"`;
+  const common = `x="${String(cx)}" fill="${escapeXml(options.fill)}" font-size="${escapeXml(options.fontSize)}"${family} text-anchor="middle"`;
+  if (options.lines.length <= 1) {
+    return `<text ${common} y="${String(options.y + options.height / 2)}" dominant-baseline="middle">${escapeXml(options.lines[0] ?? "")}</text>`;
+  }
+  const lineHeight = fontSizePx * 1.5;
+  const start = options.y + (options.height - lineHeight * options.lines.length) / 2 + fontSizePx;
+  const spans = options.lines.map((line, index) => (
+    `<tspan x="${String(cx)}" y="${String(start + index * lineHeight)}">${escapeXml(line)}</tspan>`
+  )).join("");
+  return `<text ${common}>${spans}</text>`;
+}
+
+/**
+ * 导出时把 foreignObject（HTML 节点字）收成 SVG text。
+ * 手机把 SVG 当图片画到 canvas 时不会画 foreignObject，会解码失败或导出空字。
+ */
+export function flattenMermaidForeignObjects(svg: string): string {
+  if (!/<foreignObject\b/i.test(svg)) return svg;
+  return svg.replace(/<foreignObject\b([^>]*)>([\s\S]*?)<\/foreignObject>/gi, (_all, attrs: string, inner: string) => {
+    const fontSize = cssPropFromHtml(inner, "font-size") ?? "16px";
+    return mermaidSvgText({
+      x: attrNumber(attrs, "x"),
+      y: attrNumber(attrs, "y"),
+      width: attrNumber(attrs, "width"),
+      height: attrNumber(attrs, "height"),
+      fill: cssPropFromHtml(inner, "color") ?? "#f5efea",
+      fontSize,
+      fontFamily: cssPropFromHtml(inner, "font-family"),
+      lines: htmlToLines(inner),
+    });
+  });
 }
 
 function loadImage(src: string, revoke?: string): Promise<HTMLImageElement> {
@@ -245,8 +351,8 @@ function loadSvgImage(svg: string): Promise<HTMLImageElement> {
   ));
 }
 
-async function pngBlobFromSvg(svg: string): Promise<Blob> {
-  const prepared = prepareMermaidSvgForExport(svg);
+export async function pngBlobFromSvg(svg: string): Promise<Blob> {
+  const prepared = prepareMermaidSvgForExport(flattenMermaidForeignObjects(svg));
   const { width, height } = svgPixelSize(prepared);
   const scale = Math.min(2, MAX_EXPORT_EDGE / Math.max(width, height));
   const image = await loadSvgImage(prepared);
@@ -319,7 +425,36 @@ export async function copyMermaidDiagram(svg: string): Promise<void> {
   }
 }
 
-/** 触发 PNG 文件下载。剪贴板不可用时由 UI 调用。 */
+function isAbortError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error && (error as { name: string }).name === "AbortError";
+}
+
+function asShareFile(blob: Blob, filename: string): File | undefined {
+  if (typeof File !== "function") return undefined;
+  try {
+    return new File([blob], filename, { type: blob.type || "application/octet-stream" });
+  } catch {
+    return undefined;
+  }
+}
+
+async function shareBlobFile(blob: Blob, filename: string): Promise<boolean> {
+  const nav = globalThis.navigator;
+  if (nav === undefined || typeof nav.share !== "function") return false;
+  const file = asShareFile(blob, filename);
+  if (file === undefined) return false;
+  const data: ShareData = { files: [file], title: filename };
+  try {
+    if (typeof nav.canShare === "function" && !nav.canShare(data)) return false;
+    await nav.share(data);
+    return true;
+  } catch (error) {
+    if (isAbortError(error)) return true;
+    return false;
+  }
+}
+
+/** 触发文件下载。剪贴板不可用时由 UI 调用。 */
 export function downloadDiagramPng(png: Blob, filename = "mermaid.png"): void {
   if (document.body === null) throw new Error("download");
   const url = URL.createObjectURL(png);
@@ -333,7 +468,21 @@ export function downloadDiagramPng(png: Blob, filename = "mermaid.png"): void {
   globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** 把已渲染的 mermaid SVG 转成 PNG 并下载。 */
+/** 手机优先系统分享，否则用下载链接。 */
+export async function saveBlobFile(blob: Blob, filename: string): Promise<void> {
+  if (await shareBlobFile(blob, filename)) return;
+  downloadDiagramPng(blob, filename);
+}
+
+function mermaidSvgFile(svg: string): Blob {
+  return new Blob([prepareMermaidSvgForExport(svg)], { type: "image/svg+xml" });
+}
+
+/** 把已渲染的 mermaid SVG 转成 PNG 并下载；转码失败则下 SVG。 */
 export async function downloadMermaidDiagram(svg: string): Promise<void> {
-  downloadDiagramPng(await pngBlobFromSvg(svg));
+  try {
+    await saveBlobFile(await pngBlobFromSvg(svg), "mermaid.png");
+  } catch {
+    await saveBlobFile(mermaidSvgFile(svg), "mermaid.svg");
+  }
 }

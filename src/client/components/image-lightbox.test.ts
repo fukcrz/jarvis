@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { DiagramLightboxContent, ImagePreview, clampScale, isPanPointer, movementExceedsTapSlop, nextAngle, nextScale, shouldSuppressPreviewClick } from "./image-lightbox";
+import { DiagramLightboxContent, ImagePreview, clampScale, isPanPointer, lightboxDiagramBox, movementExceedsTapSlop, nextAngle, nextScale, shouldSuppressPreviewClick } from "./image-lightbox";
 
 describe("image lightbox transform helpers", () => {
   it("zooms by a fixed step and clamps to the 0.1x–5x range", () => {
@@ -60,12 +60,23 @@ describe("ImagePreview", () => {
   });
 });
 
+describe("lightboxDiagramBox", () => {
+  it("subtracts padding from the 94vw / 90vh / 1100px frame", () => {
+    expect(lightboxDiagramBox(1000, 800)).toEqual({
+      width: 1000 * 0.94 - 36,
+      height: 800 * 0.9 - 36,
+    });
+    expect(lightboxDiagramBox(2000, 1000).width).toBe(1100 - 36);
+  });
+});
+
 describe("DiagramLightboxContent", () => {
   it("wraps the rendered svg for the zoom overlay", () => {
     const markup = renderToStaticMarkup(createElement(DiagramLightboxContent, {
       svg: "<svg id=\"chart\"><g /></svg>",
     }));
     expect(markup).toContain("image-lightbox-diagram");
+    expect(markup).toContain("mermaid-svg-scaled");
     expect(markup).toContain('id="chart"');
   });
 });

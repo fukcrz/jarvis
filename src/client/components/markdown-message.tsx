@@ -1,7 +1,7 @@
-import { createContext, memo, useContext, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
 import { copyText } from "../lib/clipboard";
-import { canCopyDiagramImage, copyMermaidDiagram, downloadMermaidDiagram, renderMermaidDiagram } from "../lib/mermaid";
+import { canCopyDiagramImage, copyMermaidDiagram, downloadMermaidDiagram, mermaidFitScale, pngBlobFromSvg, renderMermaidDiagram, saveBlobFile, svgPixelSize } from "../lib/mermaid";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { defaultSchema, type Schema } from "hast-util-sanitize";
 import rehypeHighlight from "rehype-highlight";
@@ -39,7 +39,7 @@ const rehypePluginsStreaming: PluggableList = [[rehypeSanitize, sanitizeSchema]]
 const urlTransform = (url: string): string =>
   /^data:image\//i.test(url) || localFilePathFromHref(url) !== undefined ? url : defaultUrlTransform(url);
 
-import { DiagramLightbox, ImagePreview } from "./image-lightbox";
+import { DiagramLightbox, ImagePreview, MermaidScaledSvg } from "./image-lightbox";
 import { LocalTextFileLink } from "./text-file-preview";
 
 interface MarkdownMessageProps {
@@ -299,6 +299,46 @@ function mermaidBlockIsNearViewport(node: Element): boolean {
   return rect.bottom >= -MERMAID_PREFETCH_PX && rect.top <= viewport + MERMAID_PREFETCH_PX;
 }
 
+function MermaidFittedSvg({ svg, onOpen }: { svg: string; onOpen: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const natural = useMemo(() => svgPixelSize(svg), [svg]);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (node === null) return;
+    const apply = (next: number) => {
+      setWidth((current) => (current === next ? current : next));
+    };
+    const measure = () => {
+      if (typeof globalThis.getComputedStyle !== "function") return;
+      const style = globalThis.getComputedStyle(node);
+      const left = Number.parseFloat(style.paddingLeft);
+      const right = Number.parseFloat(style.paddingRight);
+      apply(Math.max(0, node.clientWidth - (Number.isFinite(left) ? left : 0) - (Number.isFinite(right) ? right : 0)));
+    };
+    measure();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver((entries) => {
+      const next = entries[0]?.contentRect.width;
+      if (next !== undefined) apply(next);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [svg]);
+  const scale = mermaidFitScale(natural, { width, height: Number.POSITIVE_INFINITY });
+  return <div
+    ref={ref}
+    className="mermaid-block-diagram"
+    role="button"
+    tabIndex={0}
+    aria-label="预览图形"
+    onClick={(event) => { if ((event.target as Element).closest("svg") !== null) onOpen(); }}
+    onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}
+  >
+    <MermaidScaledSvg svg={svg} scale={scale} width={natural.width} height={natural.height} />
+  </div>;
+}
+
 /**
  * ```mermaid 代码块：靠近视口才画成 SVG，画成功后不随滚动卸载。
  * 流式输出期间只显示源码；渲染失败时回退成源码并说明状态；可以手动在图形与源码之间切换。
@@ -351,9 +391,24 @@ function MermaidBlock({ code }: { code: string }) {
     });
   };
   const copyDiagramImage = canCopyDiagramImage();
+  const pngRef = useRef<Blob | undefined>(undefined);
+  useEffect(() => {
+    pngRef.current = undefined;
+    if (copyDiagramImage || svg === undefined) return;
+    let cancelled = false;
+    void pngBlobFromSvg(svg).then((blob) => {
+      if (!cancelled) pngRef.current = blob;
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [svg, copyDiagramImage]);
   const handleExportDiagram = () => {
     if (svg === undefined) return;
-    const run = copyDiagramImage ? copyMermaidDiagram(svg) : downloadMermaidDiagram(svg);
+    const ready = pngRef.current;
+    const run = copyDiagramImage
+      ? copyMermaidDiagram(svg)
+      : ready === undefined
+        ? downloadMermaidDiagram(svg)
+        : saveBlobFile(ready, "mermaid.png");
     void run.then(() => {
       setDiagramCopy("copied");
       window.setTimeout(() => setDiagramCopy("idle"), 1600);
@@ -377,16 +432,7 @@ function MermaidBlock({ code }: { code: string }) {
     </div>
     {!failed ? null : <p className="mermaid-block-error" role="status">图形渲染失败，已显示源码</p>}
     {diagram && !showSource
-      ? <div
-        className="mermaid-block-diagram"
-        role="button"
-        tabIndex={0}
-        aria-label="预览图形"
-        onClick={(event) => { if ((event.target as Element).closest("svg") !== null) setPreviewOpen(true); }}
-        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setPreviewOpen(true); } }}
-      >
-        <div dangerouslySetInnerHTML={{ __html: svg }} />
-      </div>
+      ? <MermaidFittedSvg svg={svg} onOpen={() => setPreviewOpen(true)} />
       : <pre><code>{code}</code></pre>}
     {previewOpen && svg !== undefined ? <DiagramLightbox svg={svg} onClose={() => setPreviewOpen(false)} /> : null}
   </div>;

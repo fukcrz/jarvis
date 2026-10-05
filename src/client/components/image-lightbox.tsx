@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, 
 import { createPortal } from "react-dom";
 import { RotateCcw, RotateCw, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
+import { mermaidFitScale, svgPixelSize } from "../lib/mermaid";
 
 /** 缩放上下限与每档倍率（对齐 compass 预览组件的 0.1x–5x、×1.2）。 */
 const MIN_SCALE = 0.1;
@@ -271,8 +272,40 @@ export function ImageLightbox({ src, alt = "", onClose }: ImageLightboxProps) {
   </MediaLightbox>;
 }
 
+const LIGHTBOX_MAX_EDGE = 1100;
+const LIGHTBOX_PAD = 18;
+
+/** 灯箱里图的可用区域，与 94vw / 90vh / 1100px / 18px padding 对齐。 */
+export function lightboxDiagramBox(viewportWidth: number, viewportHeight: number): { width: number; height: number } {
+  return {
+    width: Math.max(0, Math.min(LIGHTBOX_MAX_EDGE, viewportWidth * 0.94) - LIGHTBOX_PAD * 2),
+    height: Math.max(0, viewportHeight * 0.9 - LIGHTBOX_PAD * 2),
+  };
+}
+
+/** 用 transform 缩放，避免 CSS 宽高直接压 SVG 时 foreignObject 文字被裁。 */
+export function MermaidScaledSvg({ svg, scale, width, height }: { svg: string; scale: number; width: number; height: number }) {
+  return <div className="mermaid-svg-scaled" style={{ width: width * scale, height: height * scale }}>
+    <div className="mermaid-svg-native" style={{ width, height, transform: `scale(${String(scale)})` }} dangerouslySetInnerHTML={{ __html: svg }} />
+  </div>;
+}
+
 export function DiagramLightboxContent({ svg }: { svg: string }) {
-  return <div className="image-lightbox-diagram" dangerouslySetInnerHTML={{ __html: svg }} />;
+  const natural = svgPixelSize(svg);
+  const [box, setBox] = useState(() => lightboxDiagramBox(
+    typeof globalThis.innerWidth === "number" ? globalThis.innerWidth : 0,
+    typeof globalThis.innerHeight === "number" ? globalThis.innerHeight : 0,
+  ));
+  useEffect(() => {
+    const update = () => setBox(lightboxDiagramBox(globalThis.innerWidth ?? 0, globalThis.innerHeight ?? 0));
+    update();
+    globalThis.addEventListener("resize", update);
+    return () => globalThis.removeEventListener("resize", update);
+  }, []);
+  const scale = mermaidFitScale(natural, box);
+  return <div className="image-lightbox-diagram">
+    <MermaidScaledSvg svg={svg} scale={scale} width={natural.width} height={natural.height} />
+  </div>;
 }
 
 /** mermaid SVG 全屏预览：缩放、拖拽，不旋转。 */
