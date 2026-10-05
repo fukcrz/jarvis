@@ -1307,6 +1307,62 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(remaining.sessions.find((session) => session.id === starred.id)?.starred).toBe(true);
   });
 
+  it("keeps attention-marked sessions during cleanup", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "cleanup-attention-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const unread = await writeConversationSession(workspacePath);
+    const failed = await writeConversationSession(workspacePath);
+    const idle = await writeConversationSession(workspacePath);
+    const attentionPath = join(jarvisHome, "agent", "jarvis-session-attention.json");
+    await mkdir(dirname(attentionPath), { recursive: true });
+    await writeFile(attentionPath, `${JSON.stringify({
+      version: 2,
+      sessions: {
+        [`${workspace.id}:${unread.id}`]: { attentionState: "completed_unread", attentionAt: "2026-08-09T00:00:00.000Z" },
+        [`${workspace.id}:${failed.id}`]: { attentionState: "failed", attentionAt: "2026-08-09T00:00:00.000Z" },
+      },
+    })}\n`);
+
+    const cleaned = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/cleanup`, payload: {} });
+
+    expect(cleaned.statusCode).toBe(200);
+    expect(cleaned.json()).toEqual({ removed: [idle.id], skipped: [] });
+    const sessionPath = (id: string) => join(sessionDir, `2026-08-09T00-00-00-000Z_${id}.jsonl`);
+    expect(existsSync(sessionPath(unread.id))).toBe(true);
+    expect(existsSync(sessionPath(failed.id))).toBe(true);
+    expect(existsSync(sessionPath(idle.id))).toBe(false);
+  });
+
+  it("keeps sessions with a pending interaction during cleanup", async () => {
+    const server = activeApp();
+    const extensionsPath = join(jarvisHome, "agent", "extensions");
+    await mkdir(extensionsPath, { recursive: true });
+    await writeFile(join(extensionsPath, "cleanup-pending-confirm.ts"), `export default function (pi) {
+      pi.on("session_start", async (_event, ctx) => { await ctx.ui.confirm("Confirm cleanup", "Allow this session?"); });
+    }`);
+    const workspacePath = join(jarvisHome, "cleanup-waiting-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const waiting = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const idle = await writeConversationSession(workspacePath);
+    const runtimeUrl = `/api/workspaces/${workspace.id}/sessions/${waiting.id}/runtime`;
+
+    await vi.waitFor(async () => {
+      const runtime = (await server.inject({ method: "GET", url: runtimeUrl })).json<{ extensionUi?: { dialogs: Array<{ request: { method: string } }> } }>();
+      expect(runtime.extensionUi?.dialogs).toEqual([expect.objectContaining({ request: expect.objectContaining({ method: "confirm" }) })]);
+    });
+
+    const cleaned = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/cleanup`, payload: {} });
+
+    expect(cleaned.statusCode).toBe(200);
+    expect(cleaned.json()).toEqual({ removed: [idle.id], skipped: [] });
+    expect((await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` })).json()).toMatchObject({
+      sessions: expect.arrayContaining([expect.objectContaining({ id: waiting.id, attentionState: "waiting_interaction" })]),
+    });
+  });
+
   it("cleans idle sessions without rereading every transcript", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "cleanup-scan-workspace");

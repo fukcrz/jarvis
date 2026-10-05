@@ -358,6 +358,7 @@ export class SessionService {
   }
 
   async cleanup(workspaceId: string, keepSessionId?: string): Promise<SessionCleanupResult> {
+    await this.attention.flush();
     const workspace = this.workspaces.get(workspaceId);
     const files = await listSessionFiles(workspace);
     const pathById = new Map(files.map((file) => [file.id, file.path]));
@@ -381,11 +382,14 @@ export class SessionService {
         skipped.push({ id: sessionId, reason: "busy" });
         continue;
       }
+      const attentionState = active?.attentionState ?? sortMeta.get(sessionId)?.attentionState ?? "idle";
+      if (attentionState !== "idle") continue;
       try {
-        await this.deleteSession(ref, pathById.get(sessionId) ?? active?.session.sessionFile);
+        await this.deleteSession(ref, pathById.get(sessionId) ?? active?.session.sessionFile, { cleanup: true });
         removed.push(sessionId);
         removedRefs.push(ref);
       } catch (error) {
+        if (error instanceof AppError && error.code === "SESSION_PROTECTED") continue;
         if (error instanceof AppError && error.code === "SESSION_BUSY") {
           skipped.push({ id: sessionId, reason: "busy" });
           continue;
@@ -402,7 +406,7 @@ export class SessionService {
     return { removed, skipped };
   }
 
-  private async deleteSession(ref: SessionRef, knownPath?: string, options?: { force?: boolean; skipCascade?: boolean }): Promise<void> {
+  private async deleteSession(ref: SessionRef, knownPath?: string, options?: { force?: boolean; skipCascade?: boolean; cleanup?: boolean }): Promise<void> {
     if (!isVisibleSessionId(ref.sessionId)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
     await this.attention.flush();
     const sideId = options?.skipCascade === true ? undefined : await this.attention.getSideChatId(ref);
@@ -419,6 +423,10 @@ export class SessionService {
         const active = this.active.get(key);
         if (active !== undefined && this.isBusy(active) && options?.force !== true) {
           throw new AppError("SESSION_BUSY", "Stop the current run before deleting this session", 409);
+        }
+        if (options?.cleanup === true) {
+          const attentionState = active?.attentionState ?? (await this.attention.get(ref)).attentionState;
+          if (attentionState !== "idle") throw new AppError("SESSION_PROTECTED", "Session has pending attention", 409);
         }
 
         const path = knownPath ?? active?.session.sessionFile ?? await findSessionFile(workspace, ref.sessionId);

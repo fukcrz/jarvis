@@ -94,6 +94,16 @@ describe("session cleanup targets", () => {
     const items = [idle("idle-1"), { ...idle("starred-1"), starred: true }, running("run-1")];
     expect(ids(sessionCleanupTargets(items))).toEqual(["idle-1"]);
   });
+
+  it("keeps sessions with visible attention states", () => {
+    const items = [
+      idle("idle-1"),
+      { ...idle("unread"), attentionState: "completed_unread" as const },
+      { ...idle("failed"), attentionState: "failed" as const },
+      { ...idle("waiting"), attentionState: "waiting_interaction" as const },
+    ];
+    expect(ids(sessionCleanupTargets(items))).toEqual(["idle-1"]);
+  });
 });
 
 describe("session list window", () => {
