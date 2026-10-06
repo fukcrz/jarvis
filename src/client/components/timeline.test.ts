@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { activeUserMessageAnchor, ACTIVITY_NARRATION_MAX_CHARS, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isActivityNarratedBy, isFollowingLatest, isShortAssistantNarration, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
+import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, liveTurnProcessEntries, processTextPreview, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -20,6 +20,7 @@ function message(id: string): MessageTimelineItem {
     createdAt: "2026-01-01T00:00:00.000Z",
     role: "assistant",
     text: "message",
+    phase: "final_answer",
   };
 }
 
@@ -237,10 +238,11 @@ describe("groupTimelineTurns", () => {
   });
 
   it("keeps process entries that follow the last text inside the turn", () => {
-    const [turn] = groupTimelineTurns([user("u1"), message("m1"), tool("a")]);
+    const narration = { ...message("m1"), phase: "commentary" as const };
+    const [turn] = groupTimelineTurns([user("u1"), narration, tool("a")]);
 
     expect(turn?.final).toBeUndefined();
-    expect(turn?.process).toEqual([{ kind: "message", item: message("m1") }, { kind: "activity", items: [tool("a")] }]);
+    expect(turn?.process).toEqual([{ kind: "message", item: narration }, { kind: "activity", items: [tool("a")] }]);
   });
 
   it("collects leading entries that precede any user message into their own turn", () => {
@@ -293,27 +295,57 @@ describe("summarizeTurnProcess", () => {
   });
 });
 
-describe("isShortAssistantNarration", () => {
-  it("accepts a short assistant line and rejects longer text or images", () => {
-    expect(isShortAssistantNarration(message("m1"))).toBe(true);
-    expect(isShortAssistantNarration({ ...message("long"), text: "字".repeat(ACTIVITY_NARRATION_MAX_CHARS + 1) })).toBe(false);
-    expect(isShortAssistantNarration({ ...message("image"), images: [{ mimeType: "image/png", data: "x" }] })).toBe(false);
-    expect(isShortAssistantNarration(user("u1"))).toBe(false);
+describe("structured text phases", () => {
+  it.each(["Preparing", "正在检查代码", "字".repeat(250)])("retains unphased text as an ordinary reply: %s", (text) => {
+    const plain = { ...message("plain"), text, phase: undefined };
+    const turns = groupTimelineTurns([user("u"), plain, tool("after"), message("final")]);
+    expect(turns[0]?.reply).toEqual(plain);
+    expect(turns[0]?.final).toBeUndefined();
+    expect(turns[0]?.process).toEqual([]);
+    expect(turns[1]?.process).toEqual([{ kind: "activity", items: [tool("after")] }]);
+    expect(turns[1]?.final).toEqual(message("final"));
+  });
+
+  it("keeps commentary in process even at the end and with long text", () => {
+    const commentary = { ...message("commentary"), phase: "commentary" as const, text: "Reviewing\n".repeat(200) };
+    const [turn] = groupTimelineTurns([user("u"), thinking("t"), commentary]);
+    expect(turn?.final).toBeUndefined();
+    expect(turn?.reply).toBeUndefined();
+    expect(turn?.process.at(-1)).toEqual({ kind: "message", item: commentary });
+  });
+
+  it("keeps multiple final blocks and later process in their original order", () => {
+    const first = message("first");
+    const second = message("second");
+    const turns = groupTimelineTurns([user("u"), thinking("t"), first, tool("between"), second]);
+    expect(turns.map((turn) => turn.final?.id)).toEqual(["first", "second"]);
+    expect(turns[1]?.process).toEqual([{ kind: "activity", items: [tool("between")] }]);
   });
 });
 
-describe("isActivityNarratedBy", () => {
-  it("pairs a short assistant message with the following tool group", () => {
-    expect(isActivityNarratedBy({ kind: "message", item: message("m1") }, { kind: "activity", items: [tool("a")] })).toBe(true);
+describe("liveTurnProcessEntries", () => {
+  it("keeps current work, failures and pending dialogs while earlier process is folded", () => {
+    const failed = { ...tool("failed"), state: "failed" as const };
+    const running = { ...tool("running"), state: "running" as const };
+    const current = { kind: "thinking" as const, item: { ...thinking("current"), state: "running" as const } };
+    const result = liveTurnProcessEntries({ key: "t", process: [
+      { kind: "thinking", item: thinking("old") },
+      { kind: "activity", items: [tool("done"), failed, running] },
+      { kind: "extension-ui", item: dialog("pending") },
+      current,
+    ] });
+    expect(result).toEqual([
+      { kind: "activity", items: [tool("done"), failed, running] },
+      { kind: "extension-ui", item: dialog("pending") },
+      current,
+    ]);
   });
+});
 
-  it("does not pair tools with long text, thinking, errors, or a missing previous entry", () => {
-    expect(isActivityNarratedBy({ kind: "message", item: { ...message("long"), text: "字".repeat(ACTIVITY_NARRATION_MAX_CHARS + 1) } }, { kind: "activity", items: [tool("a")] })).toBe(false);
-    expect(isActivityNarratedBy({ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] })).toBe(false);
-    expect(isActivityNarratedBy({ kind: "error", items: [error("e1")] }, { kind: "activity", items: [tool("a")] })).toBe(false);
-    expect(isActivityNarratedBy(undefined, { kind: "activity", items: [tool("a")] })).toBe(false);
-    expect(isActivityNarratedBy({ kind: "message", item: message("m1") }, { kind: "thinking", item: thinking("t1") })).toBe(false);
-    expect(isActivityNarratedBy({ kind: "message", item: user("u1") }, { kind: "activity", items: [tool("a")] })).toBe(false);
+describe("processTextPreview", () => {
+  it("uses the last nonempty line only for the preview without altering the source", () => {
+    expect(processTextPreview("Preparing\n正在检查代码\n\n")).toBe("正在检查代码");
+    expect(processTextPreview("\n")).toBe("");
   });
 });
 

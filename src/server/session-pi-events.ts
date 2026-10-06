@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { SessionSummary, SessionThinkingSnapshot, ThinkingTimelineItem, ToolTimelineItem } from "../shared/protocol.js";
+import type { MessageTimelineItem, SessionSummary, SessionThinkingSnapshot, ThinkingTimelineItem, ToolTimelineItem } from "../shared/protocol.js";
 import type { EventHub } from "./event-hub.js";
-import { assistantTextFromContent, contextSummaryFromEntry, errorFromPi, messageFromPi, thinkingTextFromContent, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
+import { assistantTextBlockId, assistantTextPhaseFromContent, assistantThinkingBlockId, assistantTimelineItemsFromPi, contextSummaryFromEntry, errorFromPi, messageFromPi, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import type { ActiveRun, ActiveSession, PiEvent } from "./session-active.js";
 import { firstUserMessage, isAssistantMessage, isUserMessage, retryStatus } from "./session-helpers.js";
 import { stringValue } from "./values.js";
@@ -109,37 +109,57 @@ export class SessionPiEvents {
     const runId = active.state.activeRun?.id;
     if (runId === undefined) return;
     const identity = messageFromPi(event.message, "assistant", "");
-    const assistantId = active.assistantStreamId ??= identity.id;
+    const assistantMessageId = active.assistantStreamId ??= identity.id;
+    const update = event.assistantMessageEvent;
+    if (!("contentIndex" in update)) return;
+    const contentIndex = update.contentIndex;
+    const existing = active.partialAssistantItems.get(contentIndex);
 
-    if (event.assistantMessageEvent.type === "thinking_delta") {
-      const thinkingId = `${assistantId}:thinking`;
-      active.partialThinking ??= {
-        kind: "thinking",
-        id: thinkingId,
-        createdAt: identity.createdAt,
-        state: "running",
-        text: "",
+    if (update.type === "thinking_start" || update.type === "thinking_delta" || update.type === "thinking_end") {
+      // partial is mutable response-so-far; only the event's delta/end is authoritative.
+      const text = update.type === "thinking_end" ? update.content
+        : (existing?.kind === "thinking" ? existing.text : "") + (update.type === "thinking_delta" ? update.delta : "");
+      const item: ThinkingTimelineItem = {
+        kind: "thinking", id: assistantThinkingBlockId(assistantMessageId, contentIndex),
+        createdAt: existing?.createdAt ?? identity.createdAt, contentIndex, assistantMessageId,
+        state: update.type === "thinking_end" ? "completed" : "running", text,
       };
-      active.partialThinking.text += event.assistantMessageEvent.delta;
-      this.host.events.publishSession(active.ref, { type: "thinking.delta", runId, payload: { thinkingId, createdAt: active.partialThinking.createdAt, delta: event.assistantMessageEvent.delta } });
+      active.partialAssistantItems.set(contentIndex, item);
+      active.partialThinking = item.state === "running" ? item : undefined;
+      this.host.events.publishSession(active.ref, {
+        type: update.type === "thinking_end" ? "thinking.completed" : "thinking.delta", runId,
+        payload: { thinkingId: item.id, createdAt: item.createdAt, contentIndex, assistantMessageId,
+          ...(update.type === "thinking_end" ? { text } : { delta: update.type === "thinking_delta" ? update.delta : "" }) },
+      });
       return;
     }
-    if (event.assistantMessageEvent.type !== "text_delta") return;
-    if (active.partialThinking !== undefined) {
-      const thinking = { ...active.partialThinking, state: "completed" as const };
-      active.partialThinking = undefined;
-      this.host.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: { thinkingId: thinking.id, createdAt: thinking.createdAt, text: thinking.text } });
+    if (update.type === "text_start" || update.type === "text_delta" || update.type === "text_end") {
+      const phase = assistantTextPhaseFromContent(update.partial.content[contentIndex]);
+      const text = update.type === "text_end" ? update.content
+        : (existing?.kind === "message" ? existing.text : "") + (update.type === "text_delta" ? update.delta : "");
+      const item: MessageTimelineItem = {
+        kind: "message", id: assistantTextBlockId(assistantMessageId, contentIndex), role: "assistant",
+        createdAt: existing?.createdAt ?? identity.createdAt, contentIndex, assistantMessageId, text,
+        ...(phase === undefined ? {} : { phase }),
+      };
+      active.partialAssistantItems.set(contentIndex, item);
+      if (update.type === "text_end") active.streamingMessageIds.delete(item.id);
+      else active.streamingMessageIds.add(item.id);
+      const texts = [...active.partialAssistantItems.entries()].sort(([left], [right]) => left - right)
+        .flatMap(([, block]) => block.kind === "message" ? [block] : []);
+      active.partial = { ...item, id: assistantMessageId, text: texts.map((block) => block.text).join("\n\n") };
+      this.host.events.publishSession(active.ref, {
+        type: update.type === "text_end" ? "assistant.completed" : "assistant.delta", runId,
+        payload: update.type === "text_end" ? { message: item }
+          : { messageId: item.id, createdAt: item.createdAt, contentIndex, assistantMessageId, phase,
+            delta: update.type === "text_delta" ? update.delta : "" },
+      });
+      return;
     }
-    const partial = active.partial ?? {
-      kind: "message" as const,
-      id: assistantId,
-      role: "assistant" as const,
-      createdAt: identity.createdAt,
-      text: "",
-    };
-    partial.text += event.assistantMessageEvent.delta;
-    active.partial = partial;
-    this.host.events.publishSession(active.ref, { type: "assistant.delta", runId, payload: { messageId: partial.id, delta: event.assistantMessageEvent.delta } });
+    if (update.type === "toolcall_end") {
+      this.host.publishTool(active, toolFromCall(update.toolCall.id, update.toolCall.name, update.toolCall.arguments,
+        identity.createdAt, "queued", { contentIndex, assistantMessageId }));
+    }
   }
 
   private onMessageEnd(active: ActiveSession, event: PiEvent<"message_end">): void {
@@ -176,30 +196,37 @@ export class SessionPiEvents {
     const identity = messageFromPi(message, "assistant", "", active.partial?.createdAt);
     const assistantId = active.assistantStreamId ?? identity.id;
     const stopReason = stringValue((message as Record<string, unknown>)["stopReason"]);
-    // 思考块定稿：以最终 content 里的 thinking 部分为准（流式期间部分 provider
-    // 只在 message_end 才返回思考内容），兜底用流式累积的文本。
-    const thinkingText = thinkingTextFromContent(message.content);
-    if (active.partialThinking !== undefined || thinkingText !== "") {
-      const thinking: ThinkingTimelineItem = {
-        kind: "thinking",
-        id: `${assistantId}:thinking`,
-        createdAt: active.partialThinking?.createdAt ?? identity.createdAt,
-        state: "completed",
-        text: thinkingText !== "" ? thinkingText : (active.partialThinking?.text ?? ""),
-      };
-      active.partialThinking = undefined;
-      this.host.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: { thinkingId: thinking.id, createdAt: thinking.createdAt, text: thinking.text } });
+    const provisionalIds = [
+      ...[...active.partialAssistantItems.values()].map((item) => item.id),
+      ...[...active.activeTools.values()].filter((item) => item.assistantMessageId === assistantId).map((item) => item.id),
+    ];
+    const authoritative = assistantTimelineItemsFromPi(message, identity.createdAt, assistantId, assistantId);
+    for (const id of provisionalIds) {
+      active.liveMessages.delete(id);
+      active.liveThinking.delete(id);
+      active.activeTools.delete(id);
     }
-    const text = assistantTextFromContent(message.content);
-    const completed = text === ""
-      ? undefined
-      : messageFromPi(message, "assistant", text, active.partial?.createdAt);
-    if (completed !== undefined) {
-      const item = active.partial === undefined ? { ...completed, id: assistantId } : { ...completed, id: active.partial.id, createdAt: active.partial.createdAt };
-      active.liveMessages.set(item.id, item);
-      active.partial = undefined;
-      this.host.events.publishSession(active.ref, { type: "assistant.completed", runId, payload: { message: item } });
+    for (const item of authoritative) {
+      if (item.kind === "message") {
+        active.liveMessages.set(item.id, item);
+        // Retain the single-item payload for clients predating block reconciliation.
+        this.host.events.publishSession(active.ref, { type: "assistant.completed", runId, payload: { message: item } });
+      } else if (item.kind === "thinking") {
+        active.liveThinking.set(item.id, item);
+        this.host.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: {
+          thinkingId: item.id, contentIndex: item.contentIndex, assistantMessageId: item.assistantMessageId,
+          createdAt: item.createdAt, text: item.text,
+        } });
+      } else {
+        this.host.publishTool(active, item);
+      }
     }
+    // Replace the whole response in source order, including disappeared provisional blocks.
+    this.host.events.publishSession(active.ref, { type: "assistant.completed", runId, payload: { items: toExternalTimelineItems(authoritative, active.ref), replaceIds: provisionalIds } });
+    active.partialAssistantItems.clear();
+    active.streamingMessageIds.clear();
+    active.partialThinking = undefined;
+    active.partial = undefined;
     this.host.publishContextUsage(active, runId);
     if (stopReason === "error") {
       this.markAssistantAttemptFailed(active, message, identity.createdAt, assistantId, runId);
@@ -233,14 +260,21 @@ export class SessionPiEvents {
   }
 
   private onToolExecutionStart(active: ActiveSession, event: PiEvent<"tool_execution_start">): void {
-    this.host.publishTool(active, toolFromCall(
+    const previous = active.activeTools.get(event.toolCallId);
+    active.toolStartedAt.set(event.toolCallId, Date.now());
+    const tool = toolFromCall(
       event.toolCallId,
       event.toolName,
       event.args,
       new Date().toISOString(),
       "running",
-      event.toolName === "bash" ? { cwd: active.cwd } : undefined,
-    ));
+      {
+        ...(event.toolName === "bash" ? { cwd: active.cwd } : {}),
+        ...(previous?.contentIndex === undefined ? {} : { contentIndex: previous.contentIndex }),
+        ...(previous?.assistantMessageId === undefined ? {} : { assistantMessageId: previous.assistantMessageId }),
+      },
+    );
+    this.host.publishTool(active, { ...tool, createdAt: previous?.createdAt ?? tool.createdAt });
   }
 
   private onToolExecutionUpdate(active: ActiveSession, event: PiEvent<"tool_execution_update">): void {
@@ -250,8 +284,9 @@ export class SessionPiEvents {
 
   private onToolExecutionEnd(active: ActiveSession, event: PiEvent<"tool_execution_end">): void {
     const previous = active.activeTools.get(event.toolCallId) ?? toolFromCall(event.toolCallId, event.toolName, undefined, new Date().toISOString(), "running", event.toolName === "bash" ? { cwd: active.cwd } : undefined);
-    const startedAt = Date.parse(previous.createdAt);
-    const durationMs = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : undefined;
+    const startedAt = active.toolStartedAt.get(event.toolCallId);
+    const durationMs = startedAt === undefined ? undefined : Math.max(0, Date.now() - startedAt);
+    active.toolStartedAt.delete(event.toolCallId);
     this.host.publishTool(active, toolWithResult(previous, event.result, event.isError, durationMs));
   }
 
@@ -350,6 +385,8 @@ export class SessionPiEvents {
     const runId = active.state.activeRun?.id;
     if (runId === undefined) return;
     active.assistantStreamId = undefined;
+    active.partialAssistantItems.clear();
+    active.streamingMessageIds.clear();
     active.partial = undefined;
     active.partialThinking = undefined;
     const retrying = retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage);

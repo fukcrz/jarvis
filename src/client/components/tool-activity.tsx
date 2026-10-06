@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CircleAlert, LoaderCircle, Quote } from "lucide-react";
+import { ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import type { SubagentCallView, SubagentView, ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
 import { ImagePreview } from "./image-lightbox";
@@ -7,36 +7,44 @@ import { ImagePreview } from "./image-lightbox";
 interface ToolActivityProps {
   items: ToolTimelineItem[];
   active: boolean;
-  /** 短旁白：当折叠标题，点开才露出工具列表。 */
-  narration?: string;
+  /** The enclosing process was expanded by the user. */
+  expanded?: boolean;
+  onExpand?: () => void;
 }
 
-/** 工具行平铺；有短旁白时旁白当可点标题，默认收起。 */
-export function ToolActivity({ items, active, narration }: ToolActivityProps) {
-  const text = narration?.trim() ?? "";
-  const narrated = text !== "";
-  const [open, setOpen] = useState(() => !narrated || active);
+/** Consecutive operations share one summary; current work and failures stay visible. */
+export function ToolActivity({ items, active, expanded = false, onExpand }: ToolActivityProps) {
+  const [open, setOpen] = useState(expanded);
   const touched = useRef(false);
   const [openToolId, setOpenToolId] = useState<string>();
   const state = activityState(items, active);
-  const pendingToolId = state === "running"
-    ? (items.find((item) => item.state === "running") ?? items.find((item) => item.state === "queued"))?.id
-    : undefined;
+  const collapsible = items.length > 1 && !items.some((item) => item.id.startsWith("bash:"));
+  const visible = !collapsible || open ? items : items.filter((item) =>
+    item.state === "failed" || active && (item.state === "running" || item.state === "queued"));
 
   useEffect(() => {
-    if (!narrated || touched.current) return;
-    setOpen(active);
-  }, [active, narrated]);
+    if (!touched.current) setOpen(expanded);
+  }, [expanded]);
 
   return (
-    <article className={`activity-group ${state}${narrated ? " narrated" : ""}`}>
-      {narrated ? <button className="activity-narration" type="button" onClick={() => { touched.current = true; setOpen((value) => !value); }} aria-expanded={open}>
-        <span className="activity-narration-icon">{state === "running" && !open ? <LoaderCircle size={14} className="spin" /> : <Quote size={14} />}</span>
-        <span className="activity-narration-text">{text}</span>
-      </button> : null}
-      {!narrated || open ? <div className="activity-items">{items.map((item) => <ToolRow key={item.id} item={item} pending={item.id === pendingToolId} open={openToolId === item.id} onToggle={() => setOpenToolId((current) => current === item.id ? undefined : item.id)} />)}</div> : null}
+    <article className={`activity-group ${state}`}>
+      {!collapsible ? null : <button className="activity-narration" type="button" onClick={() => { touched.current = true; if (!open) onExpand?.(); setOpen((value) => !value); }} aria-expanded={open}>
+        <span className="activity-narration-icon"><ChevronRight size={13} className={open ? "expanded" : ""} /></span>
+        <span className="activity-narration-text">{summarizeToolActivity(items)}</span>
+      </button>}
+      {visible.length === 0 ? null : <div className="activity-items">{visible.map((item) => <ToolRow key={item.id} item={item} pending={active && (item.state === "running" || item.state === "queued")} open={openToolId === item.id} onToggle={() => { if (openToolId !== item.id) { touched.current = true; onExpand?.(); } setOpenToolId((current) => current === item.id ? undefined : item.id); }} />)}</div>}
     </article>
   );
+}
+
+export function summarizeToolActivity(items: ToolTimelineItem[]): string {
+  const labels: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", bash: "命令", powershell: "命令", grep: "搜索", find: "查找", ls: "目录", subagent: "子代理" };
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const label = labels[item.name] ?? item.title;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts].map(([label, count]) => `${label} ${String(count)}`).join(" · ");
 }
 
 function ToolRow({ item, pending, open, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; onToggle: () => void }) {
@@ -47,6 +55,7 @@ function ToolRow({ item, pending, open, onToggle }: { item: ToolTimelineItem; pe
 
 function activityState(items: ToolTimelineItem[], active: boolean): ToolState {
   if (active) return "running";
+  if (items.some((item) => item.state === "failed")) return "failed";
   if (items.length > 0 && items.every((item) => item.state === "cancelled")) return "cancelled";
   return "completed";
 }

@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { SubagentView, ToolTimelineItem } from "../../shared/protocol";
-import { ToolActivity } from "./tool-activity";
+import { summarizeToolActivity, ToolActivity } from "./tool-activity";
 
 function subagentTool(state: ToolTimelineItem["state"], view: SubagentView): ToolTimelineItem {
   return {
@@ -15,6 +15,22 @@ function subagentTool(state: ToolTimelineItem["state"], view: SubagentView): Too
     subagent: view,
   };
 }
+
+describe("ToolActivity summaries", () => {
+  it("summarizes consecutive operations while keeping running and failed rows visible", () => {
+    const base: ToolTimelineItem = { kind: "tool", id: "a", createdAt: "", name: "read", title: "Read file", state: "completed", target: "a.ts", output: "retained output" };
+    const items = [base, { ...base, id: "b", target: "b.ts" }, { ...base, id: "c", state: "running" as const, target: "current.ts" }, { ...base, id: "d", name: "bash", title: "Run command", state: "failed" as const, inputPreview: "npm test", error: "failed output" }];
+    expect(summarizeToolActivity(items)).toBe("读取 3 · 命令 1");
+    const compact = renderToStaticMarkup(createElement(ToolActivity, { items, active: true }));
+    expect(compact).toContain("读取 3 · 命令 1");
+    expect(compact).toContain("current.ts");
+    expect(compact).toContain("npm test");
+    expect(compact).not.toContain("a.ts");
+    const expanded = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, expanded: true }));
+    expect(expanded).toContain("a.ts");
+    expect(expanded).toContain("b.ts");
+  });
+});
 
 describe("ToolActivity subagent rows", () => {
   it("collapses a single running call to agent and status", () => {

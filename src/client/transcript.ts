@@ -1,5 +1,5 @@
-import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type ImageAttachment, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol";
-import { isRecord } from "../shared/protocol";
+import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type ImageAttachment, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol.js";
+import { isRecord } from "../shared/protocol.js";
 
 export interface TranscriptState {
   items: TimelineItem[];
@@ -12,6 +12,8 @@ export interface TranscriptState {
   thinking: SessionThinkingSnapshot;
   contextUsage?: ContextUsage;
   streamingMessageId?: string;
+  /** Text blocks awaiting authoritative completion; the singular field remains for callers. */
+  streamingMessageIds?: string[];
   /** 排队等待投递的用户消息。 */
   queue: SessionQueue;
 }
@@ -30,7 +32,12 @@ export const emptyTranscript: TranscriptState = {
 
 export function hydrateTranscript(previous: TranscriptState, page: TimelinePage, snapshot: SessionStreamSnapshot): TranscriptState {
   const extensionItems: ExtensionUiTimelineItem[] = snapshot.extensionUi?.cards ?? (snapshot.extensionUi?.dialogs ?? []).map(({ request, createdAt }) => ({ kind: "extension-ui", id: `ext:${request.id}`, createdAt, request }));
-  const live = [...snapshot.liveMessages, ...(snapshot.liveErrors ?? []), ...(snapshot.partialThinking === undefined ? [] : [snapshot.partialThinking]), ...snapshot.activeTools, ...(snapshot.partial === undefined ? [] : [snapshot.partial]), ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
+  const partialItems = snapshot.partialAssistantItems ?? [
+    ...(snapshot.partialThinking === undefined ? [] : [snapshot.partialThinking]),
+    ...(snapshot.partial === undefined ? [] : [snapshot.partial]),
+  ];
+  const partialTextIds = snapshot.streamingMessageIds ?? partialItems.flatMap((item) => item.kind === "message" ? [item.id] : []);
+  const live = [...snapshot.liveMessages, ...(snapshot.liveThinking ?? []), ...(snapshot.liveErrors ?? []), ...partialItems, ...snapshot.activeTools, ...(snapshot.activeBash === undefined ? [] : [snapshot.activeBash])];
   // History and the snapshot are authoritative after a reconnect. A cached
   // transcript may include earlier pages; retain them only when the server
   // version and size still match, otherwise a rewrite could revive old items.
@@ -52,7 +59,7 @@ export function hydrateTranscript(previous: TranscriptState, page: TimelinePage,
     model: snapshot.model,
     thinking: snapshot.thinking,
     ...(snapshot.contextUsage === undefined ? {} : { contextUsage: snapshot.contextUsage }),
-    ...(snapshot.partial === undefined ? {} : { streamingMessageId: snapshot.partial.id }),
+    ...(partialTextIds.length === 0 ? {} : { streamingMessageId: partialTextIds.at(-1), streamingMessageIds: partialTextIds }),
     queue: snapshot.queue ?? emptySessionQueue,
   };
 }
@@ -99,7 +106,7 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const items = Array.isArray(payload?.["items"]) ? payload["items"].flatMap(recordTimelineItem) : undefined;
     const status = recordStatus(payload?.["status"]);
     if (items === undefined || status === undefined) return next;
-    return { ...next, items, start: 0, total: items.length, hasMore: false, status, streamingMessageId: undefined };
+    return { ...next, items, start: 0, total: items.length, hasMore: false, status, streamingMessageId: undefined, streamingMessageIds: undefined };
   }
   if (event.type === "context.updated") {
     const payload = isRecord(event.payload) ? event.payload : {};
@@ -125,31 +132,47 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const messageId = typeof payload?.["messageId"] === "string" ? payload["messageId"] : undefined;
     const delta = typeof payload?.["delta"] === "string" ? payload["delta"] : "";
-    if (messageId === undefined || delta === "") return next;
-    const existing = next.items.find((item) => item.kind === "message" && item.id === messageId) as MessageTimelineItem | undefined;
-    const message: MessageTimelineItem = existing === undefined
-      ? { kind: "message", id: messageId, role: "assistant", createdAt: event.emittedAt, text: delta }
-      : { ...existing, text: existing.text + delta };
-    return { ...next, items: upsertStreamingMessage(next.items, message), streamingMessageId: messageId };
+    if (messageId === undefined) return next;
+    const existing = next.items.find((item): item is MessageTimelineItem => item.kind === "message" && item.id === messageId);
+    const phase = recordAssistantPhase(payload?.["phase"]);
+    const message: MessageTimelineItem = {
+      ...(existing ?? { kind: "message", id: messageId, role: "assistant", createdAt: typeof payload?.["createdAt"] === "string" ? payload["createdAt"] : event.emittedAt }),
+      ...recordBlockMetadata(payload),
+      ...(phase === undefined ? {} : { phase }),
+      text: (existing?.text ?? "") + delta,
+    };
+    const streamingMessageIds = [...new Set([...(next.streamingMessageIds ?? (next.streamingMessageId === undefined ? [] : [next.streamingMessageId])), messageId])];
+    return { ...next, items: sortTimelineByCreatedAt(upsertStreamingMessage(next.items, message)), streamingMessageId: messageId, streamingMessageIds };
   }
   if (event.type === "assistant.completed") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
+    const rawItems = payload?.["items"] ?? payload?.["messages"];
+    if (Array.isArray(rawItems)) {
+      const items = rawItems.flatMap(recordTimelineItem);
+      const replaceIds = Array.isArray(payload?.["replaceIds"])
+        ? payload["replaceIds"].filter((id): id is string => typeof id === "string") : [];
+      const replaced = new Set([...replaceIds, ...items.map((item) => item.id)]);
+      const insertion = next.items.findIndex((item) => replaced.has(item.id));
+      const retained = next.items.filter((item) => !replaced.has(item.id));
+      const position = insertion === -1 ? retained.length : next.items.slice(0, insertion).filter((item) => !replaced.has(item.id)).length;
+      const updated = { ...next, items: sortTimelineByCreatedAt([...retained.slice(0, position), ...items, ...retained.slice(position)]) };
+      return completeStreamingBlocks(updated, replaced);
+    }
     const message = recordMessage(payload?.["message"]);
     if (message === undefined) return next;
-    const updated = { ...next, items: mergeTimeline(next.items, [message]) };
-    return updated.streamingMessageId === message.id ? withoutStreamingMessage(updated) : updated;
+    return completeStreamingBlocks({ ...next, items: sortTimelineByCreatedAt(mergeTimeline(next.items, [message])) }, new Set([message.id]));
   }
   if (event.type === "thinking.delta") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const id = typeof payload?.["thinkingId"] === "string" ? payload["thinkingId"] : undefined;
     const delta = typeof payload?.["delta"] === "string" ? payload["delta"] : "";
-    if (id === undefined || delta === "") return next;
+    if (id === undefined) return next;
     const createdAt = typeof payload?.["createdAt"] === "string" ? payload["createdAt"] : event.emittedAt;
     const existing = next.items.find((item): item is ThinkingTimelineItem => item.kind === "thinking" && item.id === id);
     const item: ThinkingTimelineItem = existing === undefined
-      ? { kind: "thinking", id, createdAt, state: "running", text: delta }
-      : { ...existing, text: existing.text + delta };
-    return { ...next, items: mergeTimeline(next.items, [item]) };
+      ? { kind: "thinking", id, createdAt, state: "running", text: delta, ...recordBlockMetadata(payload) }
+      : { ...existing, ...recordBlockMetadata(payload), state: "running", text: existing.text + delta };
+    return { ...next, items: sortTimelineByCreatedAt(mergeTimeline(next.items, [item])) };
   }
   if (event.type === "thinking.completed") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -157,14 +180,14 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     if (id === undefined) return next;
     const createdAt = typeof payload?.["createdAt"] === "string" ? payload["createdAt"] : event.emittedAt;
     const existing = next.items.find((item): item is ThinkingTimelineItem => item.kind === "thinking" && item.id === id);
-    const text = typeof payload?.["text"] === "string" && payload["text"] !== "" ? payload["text"] : (existing?.text ?? "");
-    const item: ThinkingTimelineItem = { kind: "thinking", id, createdAt: existing?.createdAt ?? createdAt, state: "completed", text };
-    return { ...next, items: mergeTimeline(next.items, [item]) };
+    const text = typeof payload?.["text"] === "string" ? payload["text"] : (existing?.text ?? "");
+    const item: ThinkingTimelineItem = { ...existing, kind: "thinking", id, createdAt: existing?.createdAt ?? createdAt, state: "completed", text, ...recordBlockMetadata(payload) };
+    return { ...next, items: sortTimelineByCreatedAt(mergeTimeline(next.items, [item])) };
   }
   if (event.type === "tool.upsert") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const tool = recordTool(payload?.["tool"]);
-    return tool === undefined ? next : { ...next, items: mergeTimeline(next.items, [tool]) };
+    return tool === undefined ? next : { ...next, items: sortTimelineByCreatedAt(mergeTimeline(next.items, [tool])) };
   }
   if (event.type === "bash.delta") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -236,19 +259,25 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const status = recordStatus(payload?.["status"]);
     if (status === undefined) return next;
     const updated = { ...next, status };
-    if (event.type === "run.settled" || event.type === "run.failed" || event.type === "run.retrying") return withoutStreamingMessage(updated, event.type === "run.retrying", event.type === "run.retrying");
+    if (event.type === "run.settled" || event.type === "run.failed" || event.type === "run.retrying") return withoutStreamingMessage(updated, true, event.type === "run.retrying");
     return updated;
   }
   return next;
 }
 
+function completeStreamingBlocks(state: TranscriptState, ids: ReadonlySet<string>): TranscriptState {
+  const streamingMessageIds = (state.streamingMessageIds ?? (state.streamingMessageId === undefined ? [] : [state.streamingMessageId])).filter((id) => !ids.has(id));
+  return { ...state, streamingMessageIds, streamingMessageId: streamingMessageIds.at(-1) };
+}
+
 function withoutStreamingMessage(state: TranscriptState, completeThinking = false, removeStreamingMessage = false): TranscriptState {
-  const streamingMessageId = state.streamingMessageId;
+  const streamingMessageIds = new Set(state.streamingMessageIds ?? (state.streamingMessageId === undefined ? [] : [state.streamingMessageId]));
   return {
     ...state,
     streamingMessageId: undefined,
+    streamingMessageIds: undefined,
     items: state.items
-      .filter((item) => !removeStreamingMessage || streamingMessageId === undefined || item.id !== streamingMessageId)
+      .filter((item) => !removeStreamingMessage || !streamingMessageIds.has(item.id))
       .map((item) => completeThinking && item.kind === "thinking" && item.state === "running" ? { ...item, state: "completed" as const } : item),
   };
 }
@@ -285,6 +314,9 @@ function sameTimelineItem(left: TimelineItem, right: TimelineItem): boolean {
     && left.createdAt === right.createdAt
     && left.role === right.role
     && left.text === right.text
+    && left.phase === right.phase
+    && left.contentIndex === right.contentIndex
+    && left.assistantMessageId === right.assistantMessageId
     && sameImages(left.images, right.images);
 }
 
@@ -298,7 +330,7 @@ function sameImages(left: ImageAttachment[] | undefined, right: ImageAttachment[
 }
 
 function upsertStreamingMessage(items: TimelineItem[], message: MessageTimelineItem): TimelineItem[] {
-  const completedThinking = items.some((item) => item.kind === "thinking" && item.state === "running")
+  const completedThinking = message.contentIndex === undefined && items.some((item) => item.kind === "thinking" && item.state === "running")
     ? items.map((item) => item.kind === "thinking" && item.state === "running" ? { ...item, state: "completed" as const } : item)
     : items;
   const index = completedThinking.findIndex((item) => item.id === message.id);
@@ -310,13 +342,21 @@ function upsertStreamingMessage(items: TimelineItem[], message: MessageTimelineI
 
 /** Runtime-only cards need to rejoin persisted history at their original time. */
 function sortTimelineByCreatedAt(items: TimelineItem[]): TimelineItem[] {
-  return items
-    .map((item, index) => ({ item, index, timestamp: Date.parse(item.createdAt) }))
-    .sort((a, b) => {
-      const byTime = (Number.isFinite(a.timestamp) ? a.timestamp : 0) - (Number.isFinite(b.timestamp) ? b.timestamp : 0);
-      return byTime === 0 ? a.index - b.index : byTime;
-    })
-    .map(({ item }) => item);
+  const groups = new Map<string, { timestamp: number; index: number }>();
+  const keyed = items.map((item, index) => {
+    const parsed = Date.parse(item.createdAt);
+    const timestamp = Number.isFinite(parsed) ? parsed : 0;
+    const metadata = recordBlockMetadata(item);
+    const id = metadata.assistantMessageId;
+    if (id !== undefined && !groups.has(id)) groups.set(id, { timestamp, index });
+    return { item, index, timestamp, ...metadata };
+  });
+  return keyed.sort((left, right) => {
+    const a = left.assistantMessageId === undefined ? left : groups.get(left.assistantMessageId)!;
+    const b = right.assistantMessageId === undefined ? right : groups.get(right.assistantMessageId)!;
+    return a.timestamp - b.timestamp || a.index - b.index
+      || (left.contentIndex ?? 0) - (right.contentIndex ?? 0) || left.index - right.index;
+  }).map(({ item }) => item);
 }
 
 function upsert(items: TimelineItem[], item: TimelineItem): void {
@@ -363,7 +403,20 @@ function recordMessage(value: unknown): MessageTimelineItem | undefined {
   if (!isRecord(value) || value["kind"] !== "message") return undefined;
   if ((value["role"] !== "user" && value["role"] !== "assistant") || typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["text"] !== "string") return undefined;
   const images = Array.isArray(value["images"]) ? value["images"].flatMap(recordImageAttachment) : [];
-  return { kind: "message", id: value["id"], role: value["role"], createdAt: value["createdAt"], text: value["text"], ...(images.length === 0 ? {} : { images }) };
+  const phase = recordAssistantPhase(value["phase"]);
+  return { kind: "message", id: value["id"], role: value["role"], createdAt: value["createdAt"], text: value["text"], ...recordBlockMetadata(value), ...(phase === undefined ? {} : { phase }), ...(images.length === 0 ? {} : { images }) };
+}
+
+function recordAssistantPhase(value: unknown): MessageTimelineItem["phase"] {
+  return value === "commentary" || value === "final_answer" ? value : undefined;
+}
+
+function recordBlockMetadata(value: unknown): Pick<MessageTimelineItem, "contentIndex" | "assistantMessageId"> {
+  if (!isRecord(value)) return {};
+  return {
+    ...(typeof value["contentIndex"] === "number" ? { contentIndex: value["contentIndex"] } : {}),
+    ...(typeof value["assistantMessageId"] === "string" ? { assistantMessageId: value["assistantMessageId"] } : {}),
+  };
 }
 
 function sameUserMessage(a: MessageTimelineItem, b: MessageTimelineItem): boolean {
@@ -417,7 +470,7 @@ function recordThinkingItem(value: unknown): ThinkingTimelineItem | undefined {
   const state = value["state"];
   if (state !== "running" && state !== "completed") return undefined;
   if (typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["text"] !== "string") return undefined;
-  return { kind: "thinking", id: value["id"], createdAt: value["createdAt"], state, text: value["text"] };
+  return { kind: "thinking", id: value["id"], createdAt: value["createdAt"], state, text: value["text"], ...recordBlockMetadata(value) };
 }
 
 function recordTool(value: unknown): ToolTimelineItem | undefined {
@@ -432,6 +485,7 @@ function recordTool(value: unknown): ToolTimelineItem | undefined {
     name: value["name"],
     title: value["title"],
     state,
+    ...recordBlockMetadata(value),
     ...(typeof value["target"] === "string" ? { target: value["target"] } : {}),
     ...(typeof value["inputPreview"] === "string" ? { inputPreview: value["inputPreview"] } : {}),
     ...(typeof value["cwd"] === "string" ? { cwd: value["cwd"] } : {}),

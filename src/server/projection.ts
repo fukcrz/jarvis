@@ -1,4 +1,4 @@
-import { isRecord, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
+import { isRecord, type AssistantTextPhase, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
 import { attachSubagentView, subagentViewFromArgs } from "./subagent-view.js";
 import { numberValue, stringValue, toIso } from "./values.js";
 
@@ -37,20 +37,9 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
     }
 
     if (role === "assistant") {
-      const thinkingText = thinkingTextFromContent(message["content"]);
-      if (thinkingText !== "") items.push(thinkingFromPi(message, thinkingText, createdAt, entryId));
-      const text = assistantTextFromContent(message["content"]);
-      if (text !== "") items.push(messageFromPi(message, "assistant", text, createdAt, entryId));
-      const content = message["content"];
-      if (Array.isArray(content)) {
-        for (let index = 0; index < content.length; index += 1) {
-          const part = content[index];
-          if (!isRecord(part) || part["type"] !== "toolCall") continue;
-          const toolId = stringValue(part["id"]) || `tool:${entryId}:${String(index)}`;
-          const tool = toolFromCall(toolId, stringValue(part["name"]) || "tool", part["arguments"], createdAt, "queued");
-          toolIndex.set(tool.id, items.length);
-          items.push(tool);
-        }
+      for (const item of assistantTimelineItemsFromPi(message, createdAt, entryId)) {
+        if (item.kind === "tool") toolIndex.set(item.id, items.length);
+        items.push(item);
       }
       if (stringValue(message["stopReason"]) === "error") {
         const projected = errorFromPi(message, createdAt, entryId);
@@ -187,15 +176,21 @@ function legacyThinkingFromText(text: string): string {
   return matches.map((match) => (match[1] ?? "").trim()).filter(Boolean).join("\n\n");
 }
 
-export function thinkingFromPi(message: unknown, text: string, createdAt: string, fallbackId: string): ThinkingTimelineItem {
+export function thinkingFromPi(message: unknown, text: string, createdAt: string, fallbackId: string, contentIndex?: number): ThinkingTimelineItem {
   const record = isRecord(message) ? message : {};
   const timestamp = record["timestamp"];
+  const base = messageFromPi(message, "assistant", "", createdAt, fallbackId);
+  const sourceId = stringValue(record["id"]) || fallbackId;
   return {
     kind: "thinking",
-    id: `thinking:${stringValue(record["id"]) || fallbackId}`,
+    id: typeof timestamp === "number" || typeof timestamp === "string"
+      ? assistantThinkingBlockId(base.id, contentIndex)
+      : `thinking:${sourceId}${contentIndex === undefined || contentIndex === 0 ? "" : `:${String(contentIndex)}`}`,
+    assistantMessageId: base.id,
     createdAt: toIso(timestamp ?? createdAt),
     state: "completed",
     text,
+    ...(contentIndex === undefined ? {} : { contentIndex }),
   };
 }
 
@@ -232,13 +227,85 @@ export function messageFromPi(message: unknown, role: "user" | "assistant", text
   return { kind: "message", id: stableId, role, createdAt, text };
 }
 
+/** Parse only the structured phase metadata emitted by providers such as OpenAI Responses. */
+export function assistantTextPhaseFromSignature(signature: unknown): AssistantTextPhase | undefined {
+  if (typeof signature !== "string" || signature.trim() === "") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(signature);
+    if (!isRecord(parsed) || parsed["v"] !== 1 || typeof parsed["id"] !== "string" || parsed["id"].trim() === "") return undefined;
+    const phase = parsed["phase"];
+    return phase === "commentary" || phase === "final_answer" ? phase : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function assistantTextPhaseFromContent(part: unknown): AssistantTextPhase | undefined {
+  if (!isRecord(part) || part["type"] !== "text") return undefined;
+  return assistantTextPhaseFromSignature(part["textSignature"]);
+}
+
+export function assistantTextBlockId(baseId: string, contentIndex?: number): string {
+  return contentIndex === undefined || contentIndex === 0 ? baseId : `${baseId}:text:${String(contentIndex)}`;
+}
+
+export function assistantThinkingBlockId(baseId: string, contentIndex?: number): string {
+  return contentIndex === undefined || contentIndex === 0 ? `${baseId}:thinking` : `${baseId}:thinking:${String(contentIndex)}`;
+}
+
+export function assistantTimelineItemsFromPi(message: unknown, fallbackCreatedAt: string, fallbackId: string, assistantMessageId?: string): Array<MessageTimelineItem | ThinkingTimelineItem | ToolTimelineItem> {
+  const record = isRecord(message) ? message : {};
+  const projected = messageFromPi(message, "assistant", "", fallbackCreatedAt, fallbackId);
+  const base = assistantMessageId === undefined ? projected : { ...projected, id: assistantMessageId };
+  const thinkingItem = (text: string, index?: number): ThinkingTimelineItem => ({
+    ...thinkingFromPi(message, text, base.createdAt, fallbackId, index),
+    ...(assistantMessageId === undefined ? {} : { id: assistantThinkingBlockId(base.id, index), assistantMessageId }),
+  });
+  const content = record["content"];
+  if (typeof content === "string") {
+    const thinking = legacyThinkingFromText(content);
+    const visible = visibleTextAfterThinkingMarker(content);
+    return [
+      ...(thinking === "" ? [] : [thinkingItem(thinking)]),
+      ...(visible === "" ? [] : [{ ...base, text: visible, assistantMessageId: base.id }]),
+    ];
+  }
+  if (!Array.isArray(content)) return [];
+  const items: Array<MessageTimelineItem | ThinkingTimelineItem | ToolTimelineItem> = [];
+  for (let index = 0; index < content.length; index += 1) {
+    const part = content[index];
+    if (!isRecord(part)) continue;
+    if (part["type"] === "thinking") {
+      const text = stringValue(part["thinking"]);
+      if (text !== "") items.push(thinkingItem(text, index));
+      continue;
+    }
+    if (part["type"] === "text") {
+      const raw = stringValue(part["text"]);
+      const phase = assistantTextPhaseFromContent(part);
+      const legacyThinking = phase === undefined ? legacyThinkingFromText(raw) : "";
+      if (legacyThinking !== "") items.push(thinkingItem(legacyThinking, index));
+      const text = phase === undefined ? visibleTextAfterThinkingMarker(raw) : raw;
+      if (text !== "") {
+        items.push({ ...base, id: assistantTextBlockId(base.id, index), text, contentIndex: index, assistantMessageId: base.id, ...(phase === undefined ? {} : { phase }) });
+      }
+      continue;
+    }
+    if (part["type"] === "toolCall") {
+      const toolId = stringValue(part["id"]) || `tool:${fallbackId}:${String(index)}`;
+      items.push(toolFromCall(toolId, stringValue(part["name"]) || "tool", part["arguments"], base.createdAt, "queued", { contentIndex: index, assistantMessageId: base.id }));
+    }
+  }
+  return items;
+}
+
 export function toolFromCall(
   id: string,
   name: string,
   args: unknown,
   createdAt = new Date().toISOString(),
   state: ToolState = "running",
-  metadata?: { cwd?: string },
+  metadata?: { cwd?: string; contentIndex?: number; assistantMessageId?: string },
 ): ToolTimelineItem {
   const target = toolTarget(args);
   const title = toolTitle(name);
@@ -254,6 +321,8 @@ export function toolFromCall(
     ...(target === undefined ? {} : { target }),
     ...(inputPreview === "" ? {} : { inputPreview }),
     ...(metadata?.cwd === undefined ? {} : { cwd: metadata.cwd }),
+    ...(metadata?.contentIndex === undefined ? {} : { contentIndex: metadata.contentIndex }),
+    ...(metadata?.assistantMessageId === undefined ? {} : { assistantMessageId: metadata.assistantMessageId }),
     ...(subagent === undefined ? {} : { subagent }),
   };
 }

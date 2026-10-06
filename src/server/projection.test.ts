@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { encodeTimelineMediaItemId, projectHistory, toExternalTimelineItem, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, toolImageUrl } from "./projection.js";
+import { assistantTextPhaseFromSignature, encodeTimelineMediaItemId, projectHistory, toExternalTimelineItem, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, toolImageUrl } from "./projection.js";
+
+describe("assistant phase metadata", () => {
+  it.each([
+    undefined, "commentary", "{", "opaque-provider-signature", "[]",
+    JSON.stringify({ v: 2, id: "text", phase: "commentary" }),
+    JSON.stringify({ v: 1, phase: "final_answer" }),
+    JSON.stringify({ v: 1, id: " ", phase: "final_answer" }),
+    JSON.stringify({ v: 1, id: "text", phase: "analysis" }),
+  ])("does not infer phase from invalid metadata: %s", (value) => {
+    expect(assistantTextPhaseFromSignature(value)).toBeUndefined();
+  });
+
+  it.each(["commentary", "final_answer"] as const)("accepts TextSignatureV1 phase %s", (phase) => {
+    expect(assistantTextPhaseFromSignature(JSON.stringify({ v: 1, id: "text", phase }))).toBe(phase);
+  });
+});
 
 describe("projectHistory", () => {
   it("turns Pi messages and tool results into a stable linear timeline", () => {
@@ -37,6 +53,31 @@ describe("projectHistory", () => {
       expect.objectContaining({ kind: "message", role: "assistant", text: "I will inspect it." }),
       expect.objectContaining({ kind: "tool", id: "tool-1", name: "read", state: "completed", target: "package.json", output: "{\"name\":\"jarvis\"}" }),
     ]);
+  });
+
+  it("preserves interleaved thinking, text, tools and multilingual phases", () => {
+    const at = Date.parse("2026-08-09T00:00:01.000Z");
+    const items = projectHistory([{ type: "message", id: "entry", message: { role: "assistant", timestamp: at, content: [
+      { type: "text", text: "Preparing\n正在检查", textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }) },
+      { type: "thinking", thinking: "Reasoning\n思考" },
+      { type: "toolCall", id: "read", name: "read", arguments: { path: "a.ts" } },
+      { type: "text", text: "Reviewing\n正在审阅" },
+      { type: "thinking", thinking: "More reasoning" },
+      { type: "text", text: "Done\n已完成", textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }) },
+    ] } }]);
+    expect(items.map((item) => item.kind)).toEqual(["message", "thinking", "tool", "message", "thinking", "message"]);
+    expect(items.map((item) => "contentIndex" in item ? item.contentIndex : undefined)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(new Set(items.map((item) => item.id)).size).toBe(6);
+    expect(items[0]).toMatchObject({ phase: "commentary", assistantMessageId: `message:assistant:${at}` });
+    expect(items[3]).not.toHaveProperty("phase");
+    expect(items[5]).toMatchObject({ phase: "final_answer" });
+  });
+
+  it("keeps explicit commentary text intact even when it contains legacy thinking markup", () => {
+    const items = projectHistory([{ type: "message", id: "entry", message: { role: "assistant", content: [
+      { type: "text", text: "<thinking>literal text</thinking>", textSignature: JSON.stringify({ v: 1, id: "text", phase: "commentary" }) },
+    ] } }]);
+    expect(items).toEqual([expect.objectContaining({ kind: "message", text: "<thinking>literal text</thinking>", phase: "commentary" })]);
   });
 
   it("projects bash exit codes as command status instead of output text", () => {

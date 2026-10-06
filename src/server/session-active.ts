@@ -39,10 +39,17 @@ export interface ActiveSession {
   readOnly?: boolean;
   requestRuns: Map<string, RunAccepted>;
   liveMessages: Map<string, MessageTimelineItem>;
+  liveThinking: Map<string, ThinkingTimelineItem>;
   /** Retry attempts which have not yet been reconciled with persisted history. */
   liveErrors: Map<string, ErrorTimelineItem>;
   /** Stable identity shared by thinking/text/message_end for one assistant response. */
   assistantStreamId?: string;
+  /** Ordered assistant text/thinking blocks keyed by their Pi content index. */
+  partialAssistantItems: Map<number, MessageTimelineItem | ThinkingTimelineItem>;
+  streamingMessageIds: Set<string>;
+  /** Actual execution starts, separate from a tool call's place in the transcript. */
+  toolStartedAt: Map<string, number>;
+  /** Legacy single-text compatibility mirror. */
   partial?: MessageTimelineItem;
   /** 当前 run 正在流式的思考块（message_end 定稿前）。 */
   partialThinking?: ThinkingTimelineItem;

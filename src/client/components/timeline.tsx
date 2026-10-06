@@ -573,12 +573,11 @@ function ErrorItem({ items }: { items: ErrorTimelineItem[] }) {
   const stateLabel = latest.state === "recovered" ? "已恢复" : "操作未完成";
   const retryLabel = latest.attempt === undefined || latest.maxAttempts === undefined ? undefined : `第 ${String(latest.attempt)} / ${String(latest.maxAttempts)} 次尝试`;
   const attemptCount = items.length > 1 ? `${String(items.length)} 次尝试` : undefined;
-  const details = items.length > 1 || latest.diagnostics !== undefined;
   const summary = retryLabel === undefined
     ? (attemptCount === undefined ? errorSummary(latest.message) : `${attemptCount}：${errorSummary(latest.message)}`)
     : `${retryLabel}：${errorSummary(latest.message)}`;
   return <article className={`timeline-event timeline-error ${latest.state}`} role={latest.state === "failed" ? "alert" : "status"}>
-    <button className="timeline-event-summary timeline-error-header" type="button" aria-expanded={open} onClick={() => setOpen((value) => details ? !value : value)}>
+    <button className="timeline-event-summary timeline-error-header" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
       {latest.state === "recovered" ? <Check size={15} /> : <CircleAlert size={15} />}
       <div className="timeline-error-copy"><strong>{stateLabel}</strong><span>{summary}</span></div>
     </button>
@@ -954,15 +953,6 @@ export function isToolActivityRunning(items: TimelineItem[], status: SessionStat
   return false;
 }
 
-/** 最后一段连续工具条目的首条 id：把运行中的耗时计时交给真正活跃的那一组。 */
-function lastActivityGroupId(items: TimelineItem[]): string | undefined {
-  const lastToolIndex = items.reduce((last, item, index) => item.kind === "tool" ? index : last, -1);
-  if (lastToolIndex === -1) return undefined;
-  let start = lastToolIndex;
-  while (start > 0 && items[start - 1]?.kind === "tool") start -= 1;
-  return items[start]?.id;
-}
-
 export interface TimelineTurn {
   /** React key 与折叠状态的依据。 */
   key: string;
@@ -970,13 +960,15 @@ export interface TimelineTurn {
   user?: MessageTimelineItem;
   /** 折叠进「过程」的条目：思考、工具组、过程文本、错误、上下文事件。 */
   process: TimelineRenderItem[];
-  /** 留在折叠外作为最终汇报的 assistant 文本。 */
+  /** Explicit final_answer text stays outside the process. */
   final?: MessageTimelineItem;
+  /** Unphased assistant text remains an ordinary visible reply. */
+  reply?: MessageTimelineItem;
   /** 回合末尾未恢复的错误，留在过程折叠外。 */
   finalError?: ErrorTimelineItem[];
 }
 
-/** 以用户消息为界把渲染条目组成回合，并把回合最后一条 assistant 文本或末尾失败卡提到折叠外。 */
+/** Split at user messages and visible replies so folding never reorders assistant content. */
 export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
   const turns: TimelineTurn[] = [];
   let current: TimelineTurn | undefined;
@@ -992,35 +984,23 @@ export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
       openTurn(`turn:${entry.item.id}`).user = entry.item;
       continue;
     }
-    (current ?? openTurn(`turn:${renderItemKey(entry)}`)).process.push(entry);
+    const turn = current ?? openTurn(`turn:${renderItemKey(entry)}`);
+    if (entry.kind === "message" && entry.item.role === "assistant" && entry.item.phase !== "commentary") {
+      if (entry.item.phase === "final_answer") turn.final = entry.item;
+      else turn.reply = entry.item;
+      current = undefined;
+    } else {
+      turn.process.push(entry);
+    }
   }
   for (const turn of turns) {
-    // 只有它确实是回合最后一条时才外提，否则会把后发生的过程条目排到最终汇报之前。
     const last = turn.process.at(-1);
-    if (last?.kind === "message" && last.item.role === "assistant") {
-      turn.final = last.item;
-      turn.process.pop();
-    } else if (last?.kind === "error" && last.items.some((item) => item.state === "failed")) {
+    if (turn.final === undefined && turn.reply === undefined && last?.kind === "error" && last.items.some((item) => item.state === "failed")) {
       turn.finalError = last.items;
       turn.process.pop();
     }
   }
   return turns;
-}
-
-/** 短过程旁白；更长的助手文本不当旁白，避免把整段汇报收进工具组。 */
-export const ACTIVITY_NARRATION_MAX_CHARS = 100;
-
-export function isShortAssistantNarration(item: MessageTimelineItem): boolean {
-  if (item.role !== "assistant") return false;
-  if ((item.images?.length ?? 0) > 0) return false;
-  const length = [...item.text.trim()].length;
-  return length > 0 && length <= ACTIVITY_NARRATION_MAX_CHARS;
-}
-
-/** 短旁白紧挨着后面一组工具时，旁白作为可点标题，工具默认收在下面。 */
-export function isActivityNarratedBy(previous: TimelineRenderItem | undefined, entry: TimelineRenderItem): boolean {
-  return entry.kind === "activity" && previous?.kind === "message" && isShortAssistantNarration(previous.item);
 }
 
 function renderItemKey(entry: TimelineRenderItem): string {
@@ -1099,7 +1079,7 @@ function turnProcessLabel(summary: TurnProcessSummary): string {
 interface TurnRenderContext {
   streamingMessageId?: string;
   status: SessionStatus;
-  activeActivityId?: string;
+  onExpandProcess?: () => void;
   highlightedMessageId?: string;
   workspaceCwd?: string;
   onExtensionUiRespond?: TimelineProps["onExtensionUiRespond"];
@@ -1107,35 +1087,42 @@ interface TurnRenderContext {
   onForkMessage?: TimelineProps["onForkMessage"];
 }
 
-function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, narration?: string): ReactNode {
+function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, expanded = false): ReactNode {
   if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} />;
-  if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
-  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={entry.items[0]?.id === context.activeActivityId} narration={narration} />;
+  if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} onExpand={context.onExpandProcess} />;
+  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={context.status.runState !== "idle" && entry.items.some((item) => item.state === "queued" || item.state === "running")} expanded={expanded} onExpand={context.onExpandProcess} />;
 }
 
-/** 短旁白并进工具组：旁白当折叠标题，不再单独画一条消息。 */
-function renderProcessEntries(process: TimelineRenderItem[], context: TurnRenderContext): ReactNode[] {
-  return process.flatMap((entry, index) => {
-    const next = process[index + 1];
-    if (next !== undefined && isActivityNarratedBy(entry, next)) return [];
-    const previous = process[index - 1];
-    const narration = previous?.kind === "message" && isActivityNarratedBy(previous, entry) ? previous.item.text : undefined;
-    return [renderTimelineEntry(entry, context, narration)];
+function renderProcessEntries(process: TimelineRenderItem[], context: TurnRenderContext, expanded: boolean): ReactNode[] {
+  return process.map((entry) => renderTimelineEntry(entry, context, expanded));
+}
+
+/** Keep current work and failures visible while the earlier process is collapsed. */
+export function liveTurnProcessEntries(turn: TimelineTurn): TimelineRenderItem[] {
+  const current = turn.process.at(-1);
+  return turn.process.flatMap<TimelineRenderItem>((entry) => {
+    if (entry.kind === "activity") {
+      return entry === current || entry.items.some((item) => item.state === "running" || item.state === "queued" || item.state === "failed") ? [entry] : [];
+    }
+    if (entry.kind === "error" && entry.items.some((item) => item.state === "failed")) return [entry];
+    if (entry.kind === "extension-ui" && entry.item.outcome === undefined) return [entry];
+    return entry === current ? [entry] : [];
   });
+}
+
+export function processTextPreview(text: string): string {
+  return text.split(/\r?\n/).filter((line) => line.trim() !== "").at(-1)?.trim() ?? "";
 }
 
 function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRenderContext & { turn: TimelineTurn; active: boolean; autoCollapse: boolean }) {
   const foldable = shouldFoldTurnProcess(turn);
   const summary = summarizeTurnProcess(turn);
-  // 最终汇报或末尾失败卡会留在折叠外；过程本身可以收起。等待交互或 !cmd 仍钉住。
   const pinned = isTurnPinned(turn);
-  const canAutoCollapse = (turn.final !== undefined || turn.finalError !== undefined) && !pinned;
-  // 运行中不出现折叠行：过程和以前一样直接铺在时间线上。
-  const collapsible = foldable && canAutoCollapse && !active;
-  const [open, setOpen] = useState(() => active || !canAutoCollapse);
+  const collapsible = foldable && !pinned;
+  const [open, setOpen] = useState(false);
   const touched = useRef(false);
   const wasActive = useRef(active);
 
@@ -1143,31 +1130,33 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
     const startedRunning = wasActive.current !== active;
     wasActive.current = active;
     if (touched.current) return;
-    if (active) {
-      setOpen(true);
-      return;
-    }
-    // 刚结束、而用户正在往上读的时候不动布局；他滚回底部（autoCollapse 变真）后再收起。
-    if (startedRunning && !autoCollapse) return;
-    setOpen(!canAutoCollapse);
-  }, [active, autoCollapse, canAutoCollapse]);
+    if (startedRunning && !active && autoCollapse) setOpen(false);
+  }, [active, autoCollapse]);
 
+  const expandProcess = () => { touched.current = true; setOpen(true); };
+  const processContext = { ...context, onExpandProcess: expandProcess };
   const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
-  const process = renderProcessEntries(turn.process, context);
-  const processBlock = process.length === 0 ? null : !collapsible
-    ? <div className="turn-process-stack">{process}</div>
-    : <section className={`turn-process ${open ? "expanded" : "collapsed"}`}>
-      <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => { touched.current = true; setOpen((value) => !value); }}>
-        <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
-        <span className="turn-process-label">过程</span>
-        {summary.operations === 0 ? null : <span className="turn-process-count">{summary.operations} 项操作</span>}
-        {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
-      </button>
-      {!open ? null : <div className="turn-process-body">{process}</div>}
-    </section>;
+  const process = renderProcessEntries(turn.process, processContext, open || pinned);
+  const liveProcess = active ? liveTurnProcessEntries(turn) : turn.process.filter((entry) =>
+    entry.kind === "activity" && entry.items.some((item) => item.state === "failed")
+    || entry.kind === "error" && entry.items.some((item) => item.state === "failed"));
+  const processBlock = process.length === 0 ? null : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
+    {!collapsible ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => { touched.current = true; setOpen((value) => !value); }}>
+      <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
+      <span className="turn-process-label">过程</span>
+      {summary.operations === 0 ? null : <span className="turn-process-count">{summary.operations} 项操作</span>}
+      {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
+    </button>}
+    <div key="entries" className={!collapsible ? "turn-process-stack" : open ? "turn-process-body" : "turn-process-current"}>
+      {!collapsible || open ? process : liveProcess.map((entry) => entry.kind === "message"
+        ? <button key={entry.item.id} type="button" className="process-commentary-preview" onClick={expandProcess} aria-label="展开过程文本">{processTextPreview(entry.item.text)}</button>
+        : renderTimelineEntry(entry, processContext))}
+    </div>
+  </section>;
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
     {processBlock}
+    {turn.reply === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.reply }, context)}
     {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, context)}
     {turn.finalError === undefined ? null : renderTimelineEntry({ kind: "error", items: turn.finalError }, context)}
   </>;
@@ -1175,30 +1164,20 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
 
 function renderTimelineTurns(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined, autoCollapse: boolean): ReactNode[] {
   const turns = groupTimelineTurns(items);
-  const activeActivityId = isToolActivityRunning(items, status) ? lastActivityGroupId(items) : undefined;
   const activeTurnKey = status.runState === "idle" ? undefined : turns.at(-1)?.key;
-  const context: TurnRenderContext = { streamingMessageId, status, activeActivityId, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage };
+  const context: TurnRenderContext = { streamingMessageId, status, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage };
   // 全部属性都显式传：TurnRenderContext 的键名与组件 props 一致，展开时不会漏项。
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} active={turn.key === activeTurnKey} autoCollapse={autoCollapse} {...context} />);
 }
 
-function ThinkingItem({ item, baseDir }: { item: ThinkingTimelineItem; baseDir?: string }) {
-  // 思考时默认展开看流式内容；思考结束后自动收起成一行标题。
-  const [open, setOpen] = useState(() => item.state === "running");
-  const wasRunning = useRef(item.state === "running");
-  useEffect(() => {
-    if (wasRunning.current && item.state === "completed") {
-      setOpen(false);
-      wasRunning.current = false;
-    } else if (item.state === "running") {
-      wasRunning.current = true;
-    }
-  }, [item.state]);
+function ThinkingItem({ item, baseDir, onExpand }: { item: ThinkingTimelineItem; baseDir?: string; onExpand?: () => void }) {
+  const [open, setOpen] = useState(false);
   return (
     <article className={`thinking-item ${item.state}`}>
-      <button className="thinking-summary" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      <button className="thinking-summary" type="button" onClick={() => { if (!open) onExpand?.(); setOpen((value) => !value); }} aria-expanded={open}>
         <span className="thinking-state-icon">{item.state === "running" ? <LoaderCircle size={14} className="spin" /> : <Brain size={14} />}</span>
         <span className="thinking-title">{item.state === "running" ? "思考中" : "思考"}</span>
+        {open || item.text === "" ? null : <span className="thinking-preview">{processTextPreview(item.text)}</span>}
         {item.state === "running" ? <ElapsedClock startedAt={item.createdAt} /> : null}
       </button>
       {open ? <div className="thinking-details"><div className="message-content"><MarkdownMessage text={item.text} streaming={item.state === "running"} baseDir={baseDir} /></div></div> : null}

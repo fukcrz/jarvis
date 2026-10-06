@@ -122,6 +122,12 @@ launch paths behave identically; `npm run dev` (`tsx watch`) does not.
 
 Attachments, archive, terminal/files/Git panels, and extension dialogs are intentionally outside the MVP.
 
+## Assistant Content and Process Display
+
+Jarvis keeps Pi thinking, assistant text, and tool calls in their original content-block order across streaming, refresh, reconnect, and persisted history. Native thinking appears as a preview that opens to the full text. Assistant text with a valid Pi `TextSignatureV1` phase of `commentary` joins the process; `final_answer` remains visible as the final reply. Text without a valid phase remains an ordinary visible reply, regardless of its language or length.
+
+While a run is active, the process shows current work and summaries of consecutive tools. Opening it reveals the ordered record and tool details; manual expansion survives later events and completion. Failed operations and pending extension input remain accessible, and user `!cmd` output stays outside the process fold. This changes presentation without changing prompts or model output behavior. See [docs/assistant-transcript.md](docs/assistant-transcript.md) for the event and snapshot contract.
+
 ## Run-End Notifications
 
 When a session run finishes (or fails), Jarvis can pop a browser notification so you

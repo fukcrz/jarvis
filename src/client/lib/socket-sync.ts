@@ -50,9 +50,12 @@ export function coalesceStreamEvents(events: SessionEvent[]): SessionEvent[] {
     const previous = result.at(-1);
     const previousPayload = previous?.type === "assistant.delta" && isRecord(previous.payload) ? previous.payload : undefined;
     const payload = event.type === "assistant.delta" && isRecord(event.payload) ? event.payload : undefined;
-    const sameMessage = previousPayload?.["messageId"] === payload?.["messageId"];
+    const sameMessage = previousPayload?.["messageId"] === payload?.["messageId"]
+      && previousPayload?.["contentIndex"] === payload?.["contentIndex"]
+      && previousPayload?.["assistantMessageId"] === payload?.["assistantMessageId"]
+      && previousPayload?.["phase"] === payload?.["phase"];
     if (previous !== undefined && previous.type === "assistant.delta" && event.type === "assistant.delta" && sameMessage && typeof previousPayload?.["delta"] === "string" && typeof payload?.["delta"] === "string") {
-      result[result.length - 1] = { ...event, payload: { messageId: payload["messageId"], delta: previousPayload["delta"] + payload["delta"] } };
+      result[result.length - 1] = { ...event, payload: { ...previousPayload, ...payload, delta: previousPayload["delta"] + payload["delta"] } };
       continue;
     }
     const previousBash = previous?.type === "bash.delta" && isRecord(previous.payload) ? previous.payload : undefined;
@@ -63,9 +66,11 @@ export function coalesceStreamEvents(events: SessionEvent[]): SessionEvent[] {
     }
     const previousThinking = previous?.type === "thinking.delta" && isRecord(previous.payload) ? previous.payload : undefined;
     const thinkingPayload = event.type === "thinking.delta" && isRecord(event.payload) ? event.payload : undefined;
-    const sameThinking = previousThinking?.["thinkingId"] === thinkingPayload?.["thinkingId"];
+    const sameThinking = previousThinking?.["thinkingId"] === thinkingPayload?.["thinkingId"]
+      && previousThinking?.["contentIndex"] === thinkingPayload?.["contentIndex"]
+      && previousThinking?.["assistantMessageId"] === thinkingPayload?.["assistantMessageId"];
     if (previous !== undefined && previous.type === "thinking.delta" && event.type === "thinking.delta" && sameThinking && typeof previousThinking?.["delta"] === "string" && typeof thinkingPayload?.["delta"] === "string") {
-      result[result.length - 1] = { ...event, payload: { thinkingId: thinkingPayload["thinkingId"], createdAt: thinkingPayload["createdAt"], delta: previousThinking["delta"] + thinkingPayload["delta"] } };
+      result[result.length - 1] = { ...event, payload: { ...previousThinking, ...thinkingPayload, delta: previousThinking["delta"] + thinkingPayload["delta"] } };
       continue;
     }
     result.push(event);

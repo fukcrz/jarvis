@@ -1,148 +1,317 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { chromium } from "playwright";
 
-// 回合过程折叠冒烟：运行中展开 → 回合结束自动收起 → 手动展开不被覆盖；
-// 失败回合把末尾错误留在折叠外；等待响应的扩展交互、用户 !cmd 所在的回合保持展开。
-const baseUrl = (process.env["JARVIS_URL"] ?? "http://127.0.0.1:28471").replace(/\/$/, "");
-const screenshotDir = process.env["JARVIS_SMOKE_SHOTS"] ?? tmpdir();
+// Run the built app with isolated Pi/Jarvis data and an ephemeral port.
+// Feed structured Pi events through the real server handler, then persist the
+// same authoritative messages so refresh and reconnect use real API snapshots.
+const shotDir = process.env["JARVIS_SMOKE_SHOTS"] ?? join(tmpdir(), "jarvis-fold-smoke");
+await mkdir(shotDir, { recursive: true });
+const envKeys = ["JARVIS_HOME", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "NODE_ENV", "PORT", "HOST", "LOG_LEVEL", "JARVIS_DESKTOP"];
+const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+const home = await mkdtemp(join(tmpdir(), "jarvis-fold-home-"));
+const workspacePath = await mkdtemp(join(tmpdir(), "jarvis-fold-ws-"));
 const failures = [];
-const browser = await chromium.launch({ headless: true });
+const reports = [];
+let app;
+let browser;
 
-async function api(path, options) {
+function restoreEnv() {
+  for (const key of envKeys) {
+    if (previousEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = previousEnv[key];
+  }
+}
+
+async function api(baseUrl, path, options) {
   const response = await fetch(`${baseUrl}${path}`, options);
-  if (!response.ok) throw new Error(`${options?.method ?? "GET"} ${path} failed with ${String(response.status)}`);
+  if (!response.ok) throw new Error(`${options?.method ?? "GET"} ${path}: ${String(response.status)}`);
   return response.json();
 }
 
-function emitter(page, sessionId) {
-  let sequence = 950_000_000;
-  return async (type, payload) => {
-    sequence += 1;
-    await page.evaluate(({ id, event }) => {
-      const socket = window.__jarvisSockets?.find((candidate) => candidate.url.includes(`/sessions/${id}/events`) && candidate.readyState === 1);
-      if (socket === undefined) throw new Error("Session event socket is not open");
-      socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) }));
-    }, { id: sessionId, event: { version: 1, sessionId, seq: sequence, emittedAt: new Date().toISOString(), type, payload } });
-  };
+async function inspectLayout(page) {
+  return page.evaluate(() => ({
+    width: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    rows: [...document.querySelectorAll(".thinking-summary, .process-commentary-preview, .activity-narration")].map((node) => {
+      const box = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return { text: node.textContent, left: box.left, right: box.right, height: box.height, display: style.display, whiteSpace: style.whiteSpace, overflow: style.overflow, textAlign: style.textAlign };
+    }),
+  }));
 }
 
-function status(sessionId, runState, extra = {}) {
-  return { status: { sessionId, runState, ...extra } };
+async function snapshot(page, name) {
+  await page.locator(".timeline-shell").ariaSnapshot().then((text) => writeFile(join(shotDir, `${name}.md`), text));
 }
 
-async function foldState(page, index) {
-  const fold = page.locator(".turn-process").nth(index);
-  return {
-    count: await page.locator(".turn-process").count(),
-    expanded: await fold.locator(".turn-process-summary").getAttribute("aria-expanded"),
-    header: (await fold.locator(".turn-process-summary").textContent()) ?? "",
-  };
+async function waitForSocket(page, sessionId, count = 1) {
+  await page.waitForFunction(({ id, minimum }) => {
+    const sockets = window.__jarvisSockets?.filter((socket) => socket.url.includes(`/sessions/${id}/events`)) ?? [];
+    return sockets.length >= minimum && sockets.at(-1)?.readyState === 1;
+  }, { id: sessionId, minimum: count }, { timeout: 15_000 });
 }
 
-const temporaryPath = await mkdtemp(join(tmpdir(), "jarvis-fold-smoke-"));
-let ownedWorkspaceId;
-try {
-  const { workspace } = await api("/api/workspaces", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ cwd: temporaryPath, label: "Fold Smoke" }),
-  });
-  ownedWorkspaceId = workspace.id;
-  const { session } = await api(`/api/workspaces/${workspace.id}/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-  const sessionId = session.id;
-
-  const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
-  await context.addInitScript(() => {
-    const NativeWebSocket = window.WebSocket;
-    window.__jarvisSockets = [];
-    window.WebSocket = class extends NativeWebSocket {
-      constructor(...args) { super(...args); window.__jarvisSockets.push(this); }
+function createFixture(services, ref) {
+  const active = services.sessions.active.get(`${ref.workspaceId}:${ref.sessionId}`);
+  assert.ok(active, "isolated session was not opened");
+  const handler = services.sessions.piEvents;
+  const manager = active.session.sessionManager;
+  const startedAt = Date.now() - 60_000;
+  const at = (seconds) => startedAt + seconds * 1_000;
+  const signature = (phase) => JSON.stringify({ v: 1, id: phase, phase });
+  const text = (value, phase) => ({ type: "text", text: value, ...(phase === undefined ? {} : { textSignature: signature(phase) }) });
+  let lastAssistantTimestamp = startedAt;
+  const assistant = (timestamp, content, extra = {}) => {
+    // Synthetic responses can end in the same millisecond; Pi starts each
+    // real response separately. Give this fixture distinct response identities.
+    lastAssistantTimestamp = Math.max(timestamp, lastAssistantTimestamp + 1);
+    return {
+      role: "assistant", timestamp: lastAssistantTimestamp, content, stopReason: "stop", api: "openai-responses", provider: "fixture", model: "fixture",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, ...extra,
     };
-  });
-  const page = await context.newPage();
-  page.on("pageerror", (error) => failures.push(`page error: ${error.message}`));
-  await page.goto(`${baseUrl}/#/chat/${workspace.id}/${sessionId}`, { waitUntil: "domcontentloaded" });
-  await page.locator(".timeline-shell").waitFor({ state: "visible", timeout: 20_000 });
-  await page.waitForFunction(() => window.__jarvisSockets?.some((socket) => socket.readyState === 1), undefined, { timeout: 15_000 });
-
-  const emit = emitter(page, sessionId);
-  // 时间戳都落在过去，否则运行中的计时器会因为 startedAt > now 而不显示。
-  const at = (offsetSeconds) => new Date(Date.now() + (offsetSeconds - 60) * 1_000).toISOString();
-
-  await emit("message.created", { message: { kind: "message", id: "u1", role: "user", createdAt: at(0), text: "帮我看看时间线的渲染顺序。" } });
-  await emit("run.started", status(sessionId, "running", { activeRun: { id: "run-1", startedAt: at(0) } }));
-  await emit("thinking.delta", { thinkingId: "t1", delta: "先看渲染函数。", createdAt: at(1) });
-  await emit("thinking.completed", { thinkingId: "t1", text: "先看渲染函数。", createdAt: at(1) });
-  await emit("assistant.delta", { messageId: "m1", delta: "先看 timeline.tsx 的渲染逻辑。" });
-  await emit("assistant.completed", { message: { kind: "message", id: "m1", role: "assistant", createdAt: at(2), text: "先看 timeline.tsx 的渲染逻辑。" } });
-  await emit("tool.upsert", { tool: { kind: "tool", id: "call_1", createdAt: at(3), name: "read", title: "Read file", state: "completed", target: "timeline.tsx" } });
-  await emit("tool.upsert", { tool: { kind: "tool", id: "call_2", createdAt: at(4), name: "bash", title: "Run command", state: "completed", target: "npm test", inputPreview: "npm test", exitCode: 0 } });
-  await emit("assistant.delta", { messageId: "m2", delta: "问题在分组函数，已修复。" });
-  await emit("assistant.completed", { message: { kind: "message", id: "m2", role: "assistant", createdAt: at(6), text: "问题在分组函数，已修复。" } });
-  await page.waitForTimeout(400);
-
-  // 运行中不出现折叠行：过程和以前一样直接铺在时间线上。
-  if (await page.locator(".turn-process").count() !== 0) failures.push("running: the fold row appeared while the turn was still running");
-  if (await page.locator(".turn-process-summary").count() !== 0) failures.push("running: the fold row appeared while the turn was still running");
-  if (await page.locator(".activity-group").count() === 0) failures.push("running: the process entries are not rendered inline");
-  await page.screenshot({ path: join(screenshotDir, "jarvis-fold-running.png") });
-
-  await emit("run.settled", status(sessionId, "idle"));
-  await page.waitForTimeout(400);
-  const settled = await foldState(page, 0);
-  if (settled.count !== 1) failures.push("settled: the finished turn has no fold row");
-  if (settled.expanded !== "false") failures.push("settled: the finished turn did not collapse");
-  if (!/^过程2 项操作\d+:\d\d$/.test(settled.header)) failures.push(`settled: unexpected fold header "${settled.header}"`);
-  if (await page.locator(".message-row.assistant").last().textContent() !== "问题在分组函数，已修复。") failures.push("settled: the final answer is not visible outside the fold");
-  if (await page.locator(".activity-group").count() !== 0) failures.push("settled: the collapsed fold still rendered its process entries");
-  await page.screenshot({ path: join(screenshotDir, "jarvis-fold-settled.png") });
-
-  await page.locator(".turn-process-summary").first().click();
-  await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "true", undefined, { timeout: 5_000 }).catch(() => failures.push("manual: clicking the fold row did not expand it"));
-  if (await page.locator(".activity-group").count() === 0) failures.push("manual: the expanded fold did not render its process entries");
-  await emit("session.updated", status(sessionId, "idle"));
-  await page.waitForTimeout(300);
-  if ((await foldState(page, 0)).expanded !== "true") failures.push("manual: a manually expanded turn was collapsed again");
-  await page.screenshot({ path: join(screenshotDir, "jarvis-fold-expanded.png") });
-
-  // 没有最终汇报、且以失败收尾：过程可折，末尾失败卡留在折叠外。
-  await emit("message.created", { message: { kind: "message", id: "u2", role: "user", createdAt: at(20), text: "再跑一次测试。" } });
-  await emit("assistant.delta", { messageId: "m3", delta: "正在运行测试。" });
-  await emit("tool.upsert", { tool: { kind: "tool", id: "call_3", createdAt: at(21), name: "bash", title: "Run command", state: "failed", inputPreview: "npm test", error: "1 failed" } });
-  await emit("timeline.upsert", { item: { kind: "error", id: "e1", createdAt: at(22), code: "PI_RUNTIME_ERROR", message: "HTTP 503", state: "failed", groupId: "run-a" } });
-  await emit("timeline.upsert", { item: { kind: "error", id: "e2", createdAt: at(23), code: "PI_RUNTIME_ERROR", message: "HTTP 403", state: "failed", groupId: "run-b" } });
-  await page.waitForTimeout(400);
-  if (await page.locator(".timeline-error").isVisible() !== true) failures.push("failed: the failure entry is not visible");
-  if (await page.locator(".timeline-error").count() !== 1) failures.push("failed: consecutive failures were not merged");
-  if (await page.locator(".turn-process").count() !== 2) failures.push("failed: the failing turn did not keep a process fold");
-
-  // 等待响应的扩展交互不能被关进折叠里。
-  await emit("message.created", { message: { kind: "message", id: "u3", role: "user", createdAt: at(30), text: "删除这个文件。" } });
-  await emit("assistant.delta", { messageId: "m4", delta: "需要你确认。" });
-  await emit("extension.uiRequest", { request: { id: "c0ffee00-0000-4000-8000-00000000000f", method: "confirm", title: "允许删除文件", message: "将删除构建缓存。" } });
-  await page.waitForTimeout(400);
-  if (await page.locator(".turn-process").count() !== 2) failures.push("pending: a turn waiting for user input was folded away");
-  if (await page.locator(".extension-operation.pending").count() !== 1) failures.push("pending: the pending interaction is not rendered");
-
-  // 用户 !cmd（`bash:` 前缀）所在回合不折叠，命令输出直接可见。
-  await emit("message.created", { message: { kind: "message", id: "u4", role: "user", createdAt: at(40), text: "查看状态。" } });
-  await emit("thinking.delta", { thinkingId: "t3", delta: "先看看仓库状态。", createdAt: at(41) });
-  await emit("thinking.completed", { thinkingId: "t3", text: "先看看仓库状态。", createdAt: at(41) });
-  await emit("tool.upsert", { tool: { kind: "tool", id: "bash:run-9", createdAt: at(42), name: "bash", title: "Run command", state: "completed", inputPreview: "git status", output: "clean" } });
-  await page.waitForTimeout(400);
-  if (await page.locator(".turn-process").count() !== 2) failures.push("command: a turn containing a user !cmd was folded away");
-  if (await page.locator(".command-summary").filter({ hasText: "git status" }).isVisible() !== true) failures.push("command: the user !cmd output is not visible");
-  await page.screenshot({ path: join(screenshotDir, "jarvis-fold-pinned.png") });
-
-  if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) failures.push("desktop: unexpected horizontal overflow");
-  await context.close();
-} finally {
-  await browser.close();
-  if (ownedWorkspaceId !== undefined) await api(`/api/workspaces/${ownedWorkspaceId}`, { method: "DELETE" }).catch(() => {});
-  await rm(temporaryPath, { recursive: true, force: true });
+  };
+  const update = (partial, event) => handler.handle(active, { type: "message_update", message: partial, assistantMessageEvent: { ...event, partial } });
+  const end = (message) => {
+    handler.handle(active, { type: "message_end", message });
+    // Pi persists immediately after delivering message_end to subscribers.
+    manager.appendMessage(message);
+  };
+  const user = (value, timestamp = Date.now()) => end({ role: "user", timestamp, content: [{ type: "text", text: value }] });
+  const start = () => handler.handle(active, { type: "agent_start" });
+  const settle = () => services.sessions.settleRun(active, active.state.activeRun?.id);
+  const toolStart = (call) => handler.handle(active, { type: "tool_execution_start", toolCallId: call.id, toolName: call.name, args: call.arguments });
+  const toolEnd = (call, value, isError = false) => {
+    const result = { content: [{ type: "text", text: value }], ...(call.name === "bash" ? { details: { exitCode: isError ? 1 : 0 } } : {}) };
+    handler.handle(active, { type: "tool_execution_end", toolCallId: call.id, toolName: call.name, result, isError });
+    manager.appendMessage({ role: "toolResult", toolCallId: call.id, toolName: call.name, timestamp: Date.now(), content: result.content, details: result.details, isError });
+  };
+  const callEnd = (partial, contentIndex) => update(partial, { type: "toolcall_end", contentIndex, toolCall: partial.content[contentIndex] });
+  return { active, handler, manager, at, text, assistant, update, end, user, start, settle, toolStart, toolEnd, callEnd };
 }
 
-if (failures.length > 0) throw new Error(failures.join("\n"));
-console.log("OK: timeline fold smoke passed");
+async function exercise(baseUrl, workspace, viewport, label) {
+  const { session } = await api(baseUrl, `/api/workspaces/${workspace.id}/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  const fixture = createFixture(app.jarvis, { workspaceId: workspace.id, sessionId: session.id });
+  const context = await browser.newContext({ viewport, ...(label === "mobile" ? { isMobile: true, hasTouch: true } : {}) });
+  try {
+    await context.addInitScript(() => {
+      const NativeWebSocket = window.WebSocket;
+      window.__jarvisSockets = [];
+      window.WebSocket = class extends NativeWebSocket {
+        constructor(...args) { super(...args); window.__jarvisSockets.push(this); }
+      };
+    });
+    const page = await context.newPage();
+    let runtimeRequests = 0;
+    page.on("pageerror", (error) => failures.push(`${label}: ${error.message}`));
+    page.on("request", (request) => { if (request.url().endsWith(`/sessions/${session.id}/runtime`)) runtimeRequests += 1; });
+    await page.goto(`${baseUrl}/#/chat/${workspace.id}/${session.id}`, { waitUntil: "domcontentloaded" });
+    await page.locator(".timeline-shell").waitFor({ state: "visible", timeout: 20_000 });
+    await waitForSocket(page, session.id);
+
+    fixture.start();
+    fixture.user("检查内容归类与过程展示。", fixture.at(0));
+    const commentary = "Preparing\n先检查事件顺序、内容块身份和实时快照。\n正在核对投影与渲染逻辑。";
+    const initialThought = "先核对 Pi 的结构化内容块。\nReasoning stays separate from commentary and final replies.";
+    const calls = [
+      { type: "toolCall", id: `${label}-read-1`, name: "read", arguments: { path: "src/server/projection.ts" } },
+      { type: "toolCall", id: `${label}-read-2`, name: "read", arguments: { path: "src/client/transcript.ts" } },
+      { type: "toolCall", id: `${label}-bash`, name: "bash", arguments: { command: "npm test" } },
+    ];
+    const first = fixture.assistant(fixture.at(1), [{ type: "thinking", thinking: initialThought }, fixture.text(commentary, "commentary"), ...calls], { stopReason: "toolUse" });
+    fixture.update(first, { type: "thinking_start", contentIndex: 0 });
+    fixture.update(first, { type: "thinking_delta", contentIndex: 0, delta: initialThought });
+    await page.locator(".thinking-item.running").waitFor();
+    assert.equal(await page.locator(".thinking-details").count(), 0, `${label}: thinking should start with a preview`);
+    await snapshot(page, `${label}-thinking-start`);
+    await page.locator(".thinking-summary").click();
+    await page.locator(".thinking-details").waitFor();
+    fixture.update(first, { type: "text_start", contentIndex: 1 });
+    fixture.update(first, { type: "text_delta", contentIndex: 1, delta: commentary });
+    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "true");
+    assert.equal(await page.locator(".thinking-details").count(), 1, `${label}: adding commentary remounted the expanded thought`);
+    fixture.update(first, { type: "thinking_end", contentIndex: 0, content: initialThought });
+    fixture.update(first, { type: "text_end", contentIndex: 1, content: commentary });
+    for (const index of [2, 3, 4]) fixture.callEnd(first, index);
+    fixture.end(first);
+    await page.locator(".turn-process-summary").first().click();
+    fixture.toolStart(calls[0]);
+    fixture.toolEnd(calls[0], "projection source retained");
+    fixture.toolStart(calls[1]);
+    fixture.toolEnd(calls[1], "transcript source retained");
+    fixture.toolStart(calls[2]);
+    await page.locator(".command-item.running").waitFor();
+    assert.equal(await page.locator(".turn-process-summary").first().getAttribute("aria-expanded"), "false");
+    assert.equal(await page.locator(".activity-narration").textContent(), "读取 2 · 命令 1");
+    assert.equal(await page.locator(".tool-item.completed").count(), 0, `${label}: completed operations should be in the summary`);
+    assert.equal(await page.locator(".message-row.assistant").count(), 0, `${label}: explicit commentary escaped the process`);
+    await snapshot(page, `${label}-running`);
+    await page.screenshot({ path: join(shotDir, `${label}-running.png`) });
+    const runningLayout = await inspectLayout(page);
+    assert.ok(runningLayout.documentWidth <= viewport.width + 1, `${label}: running layout overflows`);
+
+    // Manual expansion of a group/row expands the owning process and survives updates.
+    await page.locator(".activity-narration").click();
+    await page.locator(".tool-summary").filter({ hasText: "projection.ts" }).click();
+    await page.getByText("projection source retained", { exact: true }).waitFor();
+    fixture.toolEnd(calls[2], "612 passed");
+    assert.equal(await page.locator(".turn-process-summary").first().getAttribute("aria-expanded"), "true");
+    await page.locator(".turn-process-summary").first().click();
+
+    const laterThought = "继续核对刷新与重连。\n中英文内容都按 phase 归类，逐行内容保留在原始块中。";
+    const second = fixture.assistant(fixture.at(20), [{ type: "thinking", thinking: laterThought }, fixture.text("Reviewing\n正在验证刷新与重连。", "commentary")]);
+    fixture.update(second, { type: "thinking_start", contentIndex: 0 });
+    fixture.update(second, { type: "thinking_delta", contentIndex: 0, delta: laterThought });
+    await page.locator(".thinking-item.running").waitFor();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await waitForSocket(page, session.id);
+    await page.locator(".thinking-item.running").waitFor();
+    assert.equal(await page.locator(".turn-process").count(), 1, `${label}: refreshing duplicated the process`);
+    assert.equal(await page.locator(".thinking-preview").textContent(), laterThought.split("\n").at(-1));
+    const refreshLayout = await inspectLayout(page);
+    assert.ok(refreshLayout.documentWidth <= viewport.width + 1, `${label}: thought preview overflows`);
+    const previewStyle = await page.locator(".thinking-preview").evaluate((node) => ({ whiteSpace: getComputedStyle(node).whiteSpace, overflow: getComputedStyle(node).overflow }));
+    assert.deepEqual(previewStyle, { whiteSpace: "nowrap", overflow: "hidden" });
+    await snapshot(page, `${label}-refresh-running`);
+    await page.locator(".thinking-summary").click();
+    await page.locator(".thinking-details").waitFor();
+
+    const requestCount = runtimeRequests;
+    await page.evaluate((id) => window.__jarvisSockets.find((socket) => socket.url.includes(`/sessions/${id}/events`) && socket.readyState === 1)?.close(), session.id);
+    fixture.update(second, { type: "thinking_delta", contentIndex: 0, delta: "\n离线期间继续思考。" });
+    await waitForSocket(page, session.id, 2);
+    await page.waitForFunction(() => document.querySelector(".thinking-details")?.textContent?.includes("离线期间继续思考。") === true, undefined, { timeout: 10_000 });
+    assert.ok(runtimeRequests > requestCount, `${label}: reconnect did not refresh the runtime`);
+    assert.equal(await page.locator(".turn-process-summary").first().getAttribute("aria-expanded"), "true", `${label}: reconnect collapsed manual expansion`);
+    fixture.update(second, { type: "thinking_end", contentIndex: 0, content: laterThought });
+    fixture.update(second, { type: "text_delta", contentIndex: 1, delta: second.content[1].text });
+    fixture.update(second, { type: "text_end", contentIndex: 1, content: second.content[1].text });
+    fixture.end(second);
+    const finalText = "已完成调整。思考、过程播报与最终回答按结构化信息归类，工具操作保留原顺序。\n\n刷新和重连会恢复当前内容；展开过程可查看完整记录。";
+    fixture.end(fixture.assistant(fixture.at(30), [fixture.text(finalText, "final_answer")]));
+    fixture.settle();
+    await page.waitForFunction(() => document.querySelector(".working-indicator, .thinking-item.running, .tool-item.running") === null);
+    assert.equal(await page.locator(".turn-process-summary").first().getAttribute("aria-expanded"), "true", `${label}: completion collapsed manual expansion`);
+    assert.equal(await page.locator(".thinking-details").last().count(), 1, `${label}: completed thought lost its manual expansion`);
+    assert.deepEqual(await page.locator(".message-row.assistant").last().locator(".message-content p").allTextContents(), finalText.split("\n\n"));
+    await page.locator(".turn-process-body .thinking-summary").first().click();
+    const expandedOrder = await page.locator(".turn-process-body .thinking-item, .turn-process-body .message-row, .turn-process-body .tool-item").evaluateAll((nodes) => nodes.map((node) => node.className));
+    assert.deepEqual(expandedOrder.map((name) => name.includes("thinking-item") ? "thinking" : name.includes("message-row") ? "commentary" : "tool"), ["thinking", "commentary", "tool", "tool", "tool", "thinking", "commentary"]);
+    await snapshot(page, `${label}-expanded`);
+    await page.screenshot({ path: join(shotDir, `${label}-expanded.png`) });
+    await page.locator(".turn-process-summary").first().click();
+    assert.equal(await page.locator(".turn-process-current .tool-item").count(), 0);
+    await page.screenshot({ path: join(shotDir, `${label}-settled.png`) });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await waitForSocket(page, session.id);
+    await page.locator(".message-row.assistant").last().waitFor();
+    assert.equal(await page.locator(".message-row.assistant").count(), 1, `${label}: history duplicated commentary or final text`);
+    await page.locator(".turn-process-summary").first().click();
+    const historyOrder = await page.locator(".turn-process-body .thinking-item, .turn-process-body .message-row, .turn-process-body .tool-item").evaluateAll((nodes) => nodes.map((node) => node.className));
+    assert.deepEqual(historyOrder, expandedOrder, `${label}: history reordered the source blocks`);
+    await page.locator(".turn-process-summary").first().click();
+
+    // Missing or invalid phase stays an ordinary reply; later tools and final blocks keep their order.
+    fixture.start();
+    fixture.user("再检查没有 phase 的回复和多段最终回答。");
+    const between = { type: "toolCall", id: `${label}-between`, name: "read", arguments: { path: "order.ts" } };
+    const mixed = fixture.assistant(Date.now(), [
+      { type: "text", text: "Preparing\n正在检查代码。", textSignature: "invalid-signature" },
+      fixture.text("第一段最终回答。", "final_answer"), between, fixture.text("第二段最终回答。", "final_answer"),
+    ], { stopReason: "toolUse" });
+    fixture.end(mixed);
+    fixture.toolStart(between);
+    fixture.toolEnd(between, "ordered result");
+    fixture.settle();
+    await page.getByText("第二段最终回答。", { exact: true }).waitFor();
+    const mixedOrder = await page.locator(".message-row.assistant, .tool-item").evaluateAll((nodes) => nodes.map((node) => node.textContent));
+    assert.ok(mixedOrder.findIndex((value) => value.includes("Preparing")) < mixedOrder.findIndex((value) => value.includes("第一段最终回答")));
+    assert.ok(mixedOrder.findIndex((value) => value.includes("第一段最终回答")) < mixedOrder.findIndex((value) => value.includes("order.ts")));
+    assert.ok(mixedOrder.findIndex((value) => value.includes("order.ts")) < mixedOrder.findIndex((value) => value.includes("第二段最终回答")));
+    assert.equal(await page.locator(".turn-process-body .message-row").count(), 0, `${label}: ordinary reply was folded`);
+
+    // Failed tools and full error diagnostics remain reachable without opening old work.
+    fixture.start();
+    fixture.user("再跑一次失败场景。");
+    const failedCall = { type: "toolCall", id: `${label}-failed`, name: "bash", arguments: { command: "npm run failing-check" } };
+    fixture.end(fixture.assistant(Date.now(), [fixture.text("正在运行测试。", "commentary"), failedCall], { stopReason: "toolUse" }));
+    fixture.toolStart(failedCall);
+    fixture.toolEnd(failedCall, "1 failed\n完整工具失败输出。", true);
+    fixture.end(fixture.assistant(Date.now(), [], { stopReason: "error", errorMessage: "HTTP 503\n第一次请求的完整错误。" }));
+    fixture.end(fixture.assistant(Date.now() + 1, [], { stopReason: "error", errorMessage: "HTTP 403\n第二次请求的完整错误。" }));
+    app.jarvis.sessions.failRun(fixture.active, fixture.active.state.activeRun?.id, "PI_RUNTIME_ERROR", "HTTP 403");
+    await page.locator(".timeline-error").waitFor();
+    assert.equal(await page.locator(".timeline-error").count(), 1, `${label}: adjacent failures were not grouped`);
+    await snapshot(page, `${label}-failed`);
+    await page.screenshot({ path: join(shotDir, `${label}-failed.png`) });
+    await page.locator(".timeline-error-header").click();
+    assert.equal(await page.locator(".timeline-error-attempt").count(), 2);
+    await page.locator(".command-summary").filter({ hasText: "npm run failing-check" }).click();
+    await page.getByText("1 failed\n完整工具失败输出。", { exact: true }).waitFor();
+
+    // A real bridge dialog pins the process and can be cancelled in the browser.
+    fixture.start();
+    fixture.user("确认删除临时缓存。");
+    fixture.end(fixture.assistant(Date.now(), [fixture.text("需要确认。", "commentary")]));
+    const confirmation = fixture.active.extensionUi.context.confirm("删除临时缓存", "缓存将被删除，不可恢复。");
+    await page.locator(".extension-operation.pending").waitFor();
+    assert.equal(await page.locator(".turn-process .extension-operation.pending").count(), 0, `${label}: pending input was folded away`);
+    await snapshot(page, `${label}-pending`);
+    await page.locator(".extension-operation.pending").getByRole("button", { name: "拒绝", exact: true }).click();
+    assert.equal(await confirmation, false);
+    fixture.settle();
+
+    // User !cmd output stays directly reachable, without a process fold.
+    fixture.start();
+    fixture.user("查看仓库状态。");
+    const timestamp = Date.now();
+    const entryId = fixture.manager.appendMessage({ role: "bashExecution", timestamp, command: "git status", output: "clean", exitCode: 0, cancelled: false, truncated: false });
+    app.jarvis.sessions.publishTool(fixture.active, { kind: "tool", id: `bash:${entryId}`, createdAt: new Date(timestamp).toISOString(), name: "bash", title: "Run command", state: "completed", inputPreview: "git status", output: "clean" });
+    fixture.settle();
+    const command = page.locator(".command-item").filter({ hasText: "git status" });
+    await command.waitFor();
+    assert.equal(await page.locator(".turn-process .command-summary").filter({ hasText: "git status" }).count(), 0);
+    await snapshot(page, `${label}-command`);
+    await command.locator(".command-summary").click();
+    await command.getByText("clean", { exact: true }).waitFor();
+    const completedLayout = await inspectLayout(page);
+    assert.ok(completedLayout.documentWidth <= viewport.width + 1, `${label}: expanded or pinned content overflows`);
+    reports.push({ label, viewport, runtimeRequests, runningLayout, refreshLayout, completedLayout });
+  } finally {
+    await context.close();
+  }
+}
+
+try {
+  process.env.JARVIS_HOME = home;
+  process.env.PI_CODING_AGENT_DIR = join(home, "agent");
+  process.env.PI_CODING_AGENT_SESSION_DIR = join(home, "sessions");
+  process.env.NODE_ENV = "production";
+  process.env.HOST = "127.0.0.1";
+  process.env.LOG_LEVEL = "error";
+  delete process.env.PORT;
+  delete process.env.JARVIS_DESKTOP;
+  const { buildApp } = await import(pathToFileURL(resolve("dist/server/server/app.js")).href);
+  app = await buildApp({ serveStatic: true, staticRoot: resolve("dist/client") });
+  const baseUrl = new URL(await app.listen({ host: "127.0.0.1", port: 0 })).origin;
+  assert.notEqual(new URL(baseUrl).port, "9528");
+  const { workspace } = await api(baseUrl, "/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: workspacePath, label: "过程展示检查" }) });
+  browser = await chromium.launch({ headless: true });
+  for (const [label, viewport] of [["desktop", { width: 1440, height: 960 }], ["mobile", { width: 390, height: 844 }]]) {
+    await exercise(baseUrl, workspace, viewport, label);
+  }
+  assert.deepEqual(failures, []);
+  await writeFile(join(shotDir, "report.json"), JSON.stringify({ baseUrl, reports, failures }, null, 2));
+  console.log(`OK: structured process smoke passed on desktop and mobile; artifacts: ${shotDir}`);
+} finally {
+  await browser?.close();
+  app?.jarvis.events.terminateAll();
+  await app?.close();
+  restoreEnv();
+  await rm(home, { recursive: true, force: true });
+  await rm(workspacePath, { recursive: true, force: true });
+}

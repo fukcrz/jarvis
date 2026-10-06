@@ -610,7 +610,10 @@ export class SessionService {
       model: this.modelSnapshot(active),
       thinking: this.thinkingSnapshot(active),
       liveMessages: [...active.liveMessages.values()],
+      ...(active.liveThinking.size === 0 ? {} : { liveThinking: [...active.liveThinking.values()] }),
       ...(active.liveErrors.size === 0 ? {} : { liveErrors: [...active.liveErrors.values()] }),
+      partialAssistantItems: [...active.partialAssistantItems.entries()].sort(([left], [right]) => left - right).map(([, item]) => item),
+      streamingMessageIds: [...active.streamingMessageIds],
       ...(active.partial === undefined ? {} : { partial: active.partial }),
       ...(active.partialThinking === undefined ? {} : { partialThinking: active.partialThinking }),
       activeTools: toExternalTimelineItems([...active.activeTools.values()], active.ref) as ToolTimelineItem[],
@@ -846,12 +849,7 @@ export class SessionService {
     this.setAttention(active, "running", run.startedAt);
     this.markUserMessage(active, run.startedAt);
     active.updatedAt = run.startedAt;
-    active.liveMessages.clear();
-    active.liveErrors.clear();
-    active.assistantStreamId = undefined;
-    active.partial = undefined;
-    active.partialThinking = undefined;
-    active.activeTools.clear();
+    this.resetLiveStream(active);
     active.activeBash = item;
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
@@ -1278,8 +1276,12 @@ export class SessionService {
 
   private resetLiveStream(active: ActiveSession): void {
     active.liveMessages.clear();
+    active.liveThinking.clear();
     active.liveErrors.clear();
     active.assistantStreamId = undefined;
+    active.partialAssistantItems.clear();
+    active.streamingMessageIds.clear();
+    active.toolStartedAt.clear();
     active.partial = undefined;
     active.partialThinking = undefined;
     active.activeTools.clear();
@@ -1308,11 +1310,7 @@ export class SessionService {
       ...(lastError === undefined ? {} : { lastError }),
     };
     this.setAttention(active, "completed_unread");
-    active.liveMessages.clear();
-    active.liveErrors.clear();
-    active.partial = undefined;
-    active.partialThinking = undefined;
-    active.activeTools.clear();
+    this.resetLiveStream(active);
     active.activeBash = undefined;
     active.compactionAbortRequested = false;
     active.extensionFailure = undefined;
@@ -1344,11 +1342,7 @@ export class SessionService {
       active.activeTools.set(tool.id, cancelled);
       this.events.publishSession(active.ref, { type: "tool.upsert", runId, payload: { tool: toExternalTimelineItem(cancelled, active.ref) } });
     }
-    active.liveMessages.clear();
-    active.liveErrors.clear();
-    active.partial = undefined;
-    active.partialThinking = undefined;
-    active.activeTools.clear();
+    this.resetLiveStream(active);
     active.activeBash = undefined;
     active.compactionAbortRequested = false;
     active.extensionFailure = undefined;

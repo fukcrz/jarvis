@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptySessionQueue, type QueuedMessage, type SessionEvent, type SessionQueue, type SessionStreamSnapshot } from "../shared/protocol";
+import { emptySessionQueue, type MessageTimelineItem, type QueuedMessage, type SessionEvent, type SessionQueue, type SessionStreamSnapshot, type ThinkingTimelineItem, type ToolTimelineItem } from "../shared/protocol";
 import { addOptimisticUserMessage, applySessionEvents, emptyTranscript, hydrateTranscript } from "./transcript";
 
 function queued(id: string, kind: "steer" | "followUp", text: string): QueuedMessage {
@@ -700,6 +700,97 @@ describe("transcript reducer", () => {
       version: 1, sessionId: "session", runId: "run", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z", type: "thinking.completed", payload: { thinkingId: "t2", createdAt: "2026-08-09T00:00:00.000Z", text: "full text" },
     }]);
     expect(completed.items).toEqual([expect.objectContaining({ kind: "thinking", id: "t2", state: "completed", text: "full text" })]);
+  });
+});
+
+describe("ordered assistant blocks", () => {
+  const createdAt = "2026-08-09T00:00:00.000Z";
+  const first: MessageTimelineItem = { kind: "message", id: "a", role: "assistant", createdAt, text: "正在检查", phase: "commentary", contentIndex: 0, assistantMessageId: "a" };
+  const thought: ThinkingTimelineItem = { kind: "thinking", id: "a:thinking:1", createdAt, state: "completed", text: "Reasoning", contentIndex: 1, assistantMessageId: "a" };
+  const tool: ToolTimelineItem = { kind: "tool", id: "tool", createdAt, name: "read", title: "Read file", state: "queued", contentIndex: 2, assistantMessageId: "a" };
+  const final: MessageTimelineItem = { ...first, id: "a:text:3", text: "Done", phase: "final_answer", contentIndex: 3 };
+  const event = (seq: number, type: SessionEvent["type"], payload: unknown): SessionEvent => ({ version: 1, sessionId: "session", seq, emittedAt: createdAt, type, payload });
+
+  it("hydrates multiple blocks in order without adding the legacy aggregate again", () => {
+    const result = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, {
+      ...snapshotWithQueue(), seq: 4, partialAssistantItems: [first, thought, final],
+      partial: { ...first, text: "legacy aggregate" }, partialThinking: thought, activeTools: [tool],
+      streamingMessageIds: [final.id],
+    });
+    expect(result.items).toEqual([first, thought, tool, final]);
+    expect(result.streamingMessageId).toBe(final.id);
+    expect(result.streamingMessageIds).toEqual([final.id]);
+  });
+
+  it("replaces all provisional blocks, drops missing blocks and restores source order", () => {
+    const streamed = applySessionEvents(emptyTranscript, [
+      event(1, "assistant.delta", { messageId: first.id, delta: "temporary", contentIndex: 0, assistantMessageId: "a" }),
+      event(2, "assistant.delta", { messageId: "discarded", delta: "discard", contentIndex: 4, assistantMessageId: "a" }),
+      event(3, "assistant.delta", { messageId: final.id, delta: "partial", contentIndex: 3, assistantMessageId: "a" }),
+      event(4, "assistant.completed", { items: [first, thought, tool, final], replaceIds: [first.id, "discarded", final.id] }),
+    ]);
+    expect(streamed.items).toEqual([first, thought, tool, final]);
+    expect(streamed.streamingMessageId).toBeUndefined();
+    const replayed = applySessionEvents(streamed, [event(4, "assistant.completed", { items: [] })]);
+    expect(replayed).toBe(streamed);
+  });
+
+  it("ignores legacy partial mirrors when the new snapshot contains empty arrays", () => {
+    const result = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, {
+      ...snapshotWithQueue(), partialAssistantItems: [], streamingMessageIds: [],
+      partial: first, partialThinking: thought,
+    });
+    expect(result.items).toEqual([]);
+    expect(result.streamingMessageId).toBeUndefined();
+  });
+
+  it("hydrates sealed text and completed thinking without a streaming cursor", () => {
+    const result = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, {
+      ...snapshotWithQueue(), partialAssistantItems: [first], liveThinking: [thought], streamingMessageIds: [],
+    });
+    expect(result.items).toEqual([first, thought]);
+    expect(result.streamingMessageId).toBeUndefined();
+  });
+
+  it("seals one cursor at a time and removes every unfinished text block on retry", () => {
+    const streamed = applySessionEvents(emptyTranscript, [
+      event(1, "assistant.delta", { messageId: first.id, delta: "first", contentIndex: 0, assistantMessageId: "a" }),
+      event(2, "assistant.delta", { messageId: final.id, delta: "final", contentIndex: 3, assistantMessageId: "a" }),
+      event(3, "assistant.completed", { message: first }),
+      event(4, "assistant.delta", { messageId: "unfinished", delta: "other", contentIndex: 4, assistantMessageId: "a" }),
+    ]);
+    expect(streamed.streamingMessageIds).toEqual([final.id, "unfinished"]);
+    const retried = applySessionEvents(streamed, [event(5, "run.retrying", { status: { sessionId: "session", runState: "running" } })]);
+    expect(retried.items).toEqual([first]);
+    expect(retried.streamingMessageId).toBeUndefined();
+    expect(retried.streamingMessageIds).toBeUndefined();
+  });
+
+  it("does not reuse a cached message after authoritative phase changes", () => {
+    const plain = { ...first, phase: undefined };
+    const result = hydrateTranscript({ ...emptyTranscript, items: [plain] }, { items: [first], start: 0, total: 1, hasMore: false }, snapshotWithQueue());
+    expect(result.items[0]).not.toBe(plain);
+    expect(result.items[0]).toEqual(first);
+  });
+
+  it("does not complete a different structured thinking block on text delta", () => {
+    const result = applySessionEvents(emptyTranscript, [
+      event(1, "thinking.delta", { thinkingId: thought.id, delta: "Reasoning", contentIndex: 1, assistantMessageId: "a" }),
+      event(2, "assistant.delta", { messageId: first.id, delta: "Text", contentIndex: 0, assistantMessageId: "a", phase: "commentary" }),
+    ]);
+    expect(result.items[0]).toMatchObject({ id: first.id, phase: "commentary" });
+    expect(result.items[1]).toMatchObject({ id: thought.id, state: "running" });
+  });
+
+  it("accepts empty authoritative thinking and settles every running card", () => {
+    const result = applySessionEvents(emptyTranscript, [
+      event(1, "thinking.delta", { thinkingId: thought.id, delta: "temporary", contentIndex: 1 }),
+      event(2, "thinking.completed", { thinkingId: thought.id, text: "", contentIndex: 1 }),
+      event(3, "thinking.delta", { thinkingId: "other", delta: "unfinished" }),
+      event(4, "run.failed", { status: { sessionId: "session", runState: "idle" } }),
+    ]);
+    expect(result.items[0]).toMatchObject({ text: "", state: "completed", contentIndex: 1 });
+    expect(result.items[1]).toMatchObject({ text: "unfinished", state: "completed" });
   });
 });
 

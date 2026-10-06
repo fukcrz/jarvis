@@ -111,6 +111,26 @@ describe("coalesceStreamEvents", () => {
   });
 });
 
+describe("coalescing structured block metadata", () => {
+  it("preserves metadata and stops at phase or content-index boundaries", () => {
+    const a = { ...delta(1, "a", "Preparing"), payload: { messageId: "a", delta: "Preparing", phase: "commentary", contentIndex: 0, assistantMessageId: "response", createdAt: "source" } };
+    const b = { ...a, seq: 2, payload: { ...a.payload, delta: "\n正在检查" } };
+    const changed = { ...a, seq: 3, payload: { ...a.payload, phase: "final_answer", delta: "Done" } };
+    const otherIndex = { ...changed, seq: 4, payload: { ...changed.payload, contentIndex: 1 } };
+    const result = coalesceStreamEvents([a, b, changed, otherIndex]);
+    expect(result).toHaveLength(3);
+    expect(result[0]?.payload).toEqual({ ...a.payload, delta: "Preparing\n正在检查" });
+    expect(result[1]?.payload).toEqual(changed.payload);
+    expect(result[2]?.payload).toEqual(otherIndex.payload);
+  });
+
+  it("preserves thinking identity, timestamp and index", () => {
+    const a: SessionEvent = { ...delta(1, "unused", ""), type: "thinking.delta", payload: { thinkingId: "t", delta: "A", contentIndex: 2, assistantMessageId: "r", createdAt: "source" } };
+    const b: SessionEvent = { ...a, seq: 2, payload: { thinkingId: "t", delta: "B", contentIndex: 2, assistantMessageId: "r", createdAt: "source" } };
+    expect(coalesceStreamEvents([a, b])[0]?.payload).toEqual({ thinkingId: "t", delta: "AB", contentIndex: 2, assistantMessageId: "r", createdAt: "source" });
+  });
+});
+
 describe("mergeSessionSnapshots", () => {
   it("lets the HTTP snapshot overwrite live fields and keeps unsynced local sessions", () => {
     const local = session("a", { runState: "running", attentionState: "running", starred: true });

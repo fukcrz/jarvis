@@ -150,7 +150,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     // Do not snapshot transient streaming cards. A later hydrate is the only
     // authoritative source for a run that continued while this session was
     // inactive.
-    if (transcript.status.runState !== "idle" || transcript.streamingMessageId !== undefined) {
+    if (transcript.status.runState !== "idle" || transcript.streamingMessageId !== undefined || (transcript.streamingMessageIds?.length ?? 0) > 0) {
       transcriptCache.current.delete(sessionKey);
       return;
     }

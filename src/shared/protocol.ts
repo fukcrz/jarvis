@@ -367,12 +367,20 @@ export interface ImageAttachment {
   url?: string;
 }
 
+export type AssistantTextPhase = "commentary" | "final_answer";
+
 export interface MessageTimelineItem {
   kind: "message";
   id: string;
   role: "user" | "assistant";
   createdAt: string;
   text: string;
+  /** Assistant text phase from structured provider metadata, when available. */
+  phase?: AssistantTextPhase;
+  /** Original Pi assistant content-block index. */
+  contentIndex?: number;
+  /** Identity of the source assistant response, shared by its ordered blocks. */
+  assistantMessageId?: string;
   /** Images attached to a user message. */
   images?: ImageAttachment[];
 }
@@ -399,6 +407,9 @@ export interface ToolTimelineItem {
   kind: "tool";
   id: string;
   createdAt: string;
+  /** Original Pi assistant content-block index, when available. */
+  contentIndex?: number;
+  assistantMessageId?: string;
   name: string;
   title: string;
   state: ToolState;
@@ -442,13 +453,16 @@ export interface SubagentView {
   failed: number;
 }
 
-/** 模型推理过程：思考时展开流式展示，完成后自动收起。 */
+/** 模型推理内容：默认单行预览，可展开查看全文。 */
 export interface ThinkingTimelineItem {
   kind: "thinking";
   id: string;
   createdAt: string;
   state: ThinkingState;
   text: string;
+  /** Original Pi assistant content-block index, when available. */
+  contentIndex?: number;
+  assistantMessageId?: string;
 }
 
 export interface ContextSummaryTimelineItem {
@@ -495,8 +509,15 @@ export interface SessionStreamSnapshot {
   thinking: SessionThinkingSnapshot;
   /** Messages from the current run that may not yet have reached JSONL. */
   liveMessages: MessageTimelineItem[];
+  /** Completed thinking which may not yet have reached JSONL. */
+  liveThinking?: ThinkingTimelineItem[];
   /** Failed attempts from the current run, retained across reconnects. */
   liveErrors?: ErrorTimelineItem[];
+  /** Ordered text/thinking blocks from the current assistant message. */
+  partialAssistantItems?: Array<MessageTimelineItem | ThinkingTimelineItem>;
+  /** Text blocks still receiving deltas; an empty list means all text blocks are sealed. */
+  streamingMessageIds?: string[];
+  /** Legacy single-text compatibility field. */
   partial?: MessageTimelineItem;
   /** 当前 run 正在流式的思考块（尚未 message_end 定稿）。 */
   partialThinking?: ThinkingTimelineItem;

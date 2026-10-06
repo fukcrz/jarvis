@@ -471,10 +471,12 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .activity-narration { display: flex; align-items: flex-start; width: 100%; min-width: 0; gap: 7px; border: 0; background: transparent; padding: 4px 0; text-align: left; }
 .activity-narration:focus-visible { color: var(--ink); outline: none; }
 .activity-narration-icon { display: grid; flex: 0 0 auto; margin-top: 1px; color: inherit; }
+.activity-narration-icon svg { transition: transform .14s ease; }
+.activity-narration-icon svg.expanded { transform: rotate(90deg); }
 .activity-group.running .activity-narration-icon { color: var(--accent); }
 .activity-narration-text { min-width: 0; font-size: 11px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
 .activity-items { display: grid; gap: 4px; }
-.activity-group.narrated .activity-items { padding-left: 21px; }
+.activity-narration + .activity-items { padding-left: 20px; }
 .activity-items .tool-item { margin: 0; }
 .activity-items .tool-list-item { overflow: visible; border: 0; border-radius: 4px; background: transparent; }
 .activity-items .tool-list-item.running, .activity-items .tool-list-item.failed, .activity-items .tool-list-item.completed { border: 0; background: transparent; }
@@ -503,13 +505,19 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .turn-process-chevron.expanded { transform: rotate(90deg); }
 .turn-process-label, .turn-process-count, .turn-process-elapsed { flex: 0 0 auto; color: inherit; font-size: 12px; font-weight: 500; }
 .turn-process-body { margin-top: 4px; border-left: 1px solid var(--line); padding-left: 7px; }
+.turn-process-current { display: grid; min-width: 0; gap: 4px; padding-top: 3px; }
+.process-commentary-preview { display: block; width: 100%; min-width: 0; overflow: hidden; border: 0; background: transparent; padding: 4px 0; color: var(--muted); text-align: left; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.process-commentary-preview:focus-visible { outline: 1px solid var(--line-strong); outline-offset: 2px; }
+.turn-process-body .message-body.assistant { color: var(--muted); }
+.turn-process-body .message-content { font-size: 12px; }
 .thinking-item { overflow: hidden; }
 .thinking-item.running, .thinking-item.completed { border: 0; background: transparent; }
-.thinking-summary { display: flex; align-items: center; width: 100%; gap: 7px; border: 0; background: transparent; padding: 4px 0; text-align: left; }
+.thinking-summary { display: flex; align-items: center; width: 100%; min-width: 0; gap: 7px; border: 0; background: transparent; padding: 4px 0; text-align: left; }
 .thinking-summary:focus-visible { color: var(--ink); }
-.thinking-state-icon { display: grid; color: inherit; }
+.thinking-state-icon { display: grid; flex: 0 0 auto; color: inherit; }
 .thinking-item.running .thinking-state-icon { color: var(--accent); }
-.thinking-title { font-size: 11px; font-weight: 600; }
+.thinking-title { flex: 0 0 auto; font-size: 11px; font-weight: 600; }
+.thinking-preview { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--subtle); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .run-elapsed { flex: 0 0 auto; color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .thinking-details { border-top: 1px solid rgb(255 255 255 / .07); padding: 7px 2px 8px 0; }
 .thinking-details .message-content { color: var(--muted); font-size: 12px; line-height: 1.6; }
