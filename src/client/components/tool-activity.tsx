@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import type { SubagentCallView, SubagentView, ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
@@ -22,8 +22,14 @@ export function ToolActivity({ items, active, expanded = false, onExpand }: Tool
   const visible = !collapsible || open ? items : items.filter((item) =>
     item.state === "failed" || active && (item.state === "running" || item.state === "queued"));
 
-  useEffect(() => {
-    if (!touched.current) setOpen(expanded);
+  useLayoutEffect(() => {
+    if (!expanded) {
+      touched.current = false;
+      setOpen(false);
+      setOpenToolId(undefined);
+    } else if (!touched.current) {
+      setOpen(true);
+    }
   }, [expanded]);
 
   return (
@@ -32,7 +38,7 @@ export function ToolActivity({ items, active, expanded = false, onExpand }: Tool
         <span className="activity-narration-icon"><ChevronRight size={13} className={open ? "expanded" : ""} /></span>
         <span className="activity-narration-text">{summarizeToolActivity(items)}</span>
       </button>}
-      {visible.length === 0 ? null : <div className="activity-items">{visible.map((item) => <ToolRow key={item.id} item={item} pending={active && (item.state === "running" || item.state === "queued")} open={openToolId === item.id} onToggle={() => { if (openToolId !== item.id) { touched.current = true; onExpand?.(); } setOpenToolId((current) => current === item.id ? undefined : item.id); }} />)}</div>}
+      {visible.length === 0 ? null : <div className="activity-items">{visible.map((item) => <ToolRow key={item.id} item={item} pending={active && (item.state === "running" || item.state === "queued")} open={openToolId === item.id} onToggle={() => { if (openToolId !== item.id) { touched.current = true; onExpand?.(); setOpen(true); } setOpenToolId((current) => current === item.id ? undefined : item.id); }} />)}</div>}
     </article>
   );
 }

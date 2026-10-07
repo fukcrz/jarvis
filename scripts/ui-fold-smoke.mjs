@@ -154,6 +154,23 @@ async function exercise(baseUrl, workspace, viewport, label) {
     const runningLayout = await inspectLayout(page);
     assert.ok(runningLayout.documentWidth <= viewport.width + 1, `${label}: running layout overflows`);
 
+    // Opening a visible running row expands its group and owning process together.
+    await page.locator(".command-item.running .command-summary").click();
+    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "true" && document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true");
+    assert.equal(await page.locator(".tool-item.completed").count(), 2, `${label}: opening a running row should reveal completed siblings`);
+
+    // Collapsing the owning process also folds the activity group and its row details.
+    await page.locator(".turn-process-summary").first().click();
+    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false" && document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "false");
+    assert.equal(await page.locator(".tool-item.completed").count(), 0, `${label}: collapsing the process should hide completed siblings`);
+    assert.equal(await page.locator(".tool-details").count(), 0, `${label}: collapsing the process should hide row details`);
+
+    // Reopening the process restores a consistent expanded activity group.
+    await page.locator(".turn-process-summary").first().click();
+    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true");
+    assert.equal(await page.locator(".tool-item.completed").count(), 2, `${label}: reopening the process should reveal completed siblings`);
+    await page.locator(".turn-process-summary").first().click();
+
     // Manual expansion of a group/row expands the owning process and survives updates.
     await page.locator(".activity-narration").click();
     await page.locator(".tool-summary").filter({ hasText: "projection.ts" }).click();
