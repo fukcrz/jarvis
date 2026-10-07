@@ -141,27 +141,29 @@ export class SessionService {
   }
 
   async markViewed(ref: SessionRef): Promise<SessionSummary> {
-    const key = activeKey(ref);
-    const transition = this.sessionTransitions.get(key);
-    if (transition !== undefined) await transition;
-    if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is being deleted", 409);
+    return this.withSessionTransition(ref, async () => {
+      const key = activeKey(ref);
+      if (this.deleting.has(key)) throw new AppError("SESSION_BUSY", "This session is being deleted", 409);
 
-    const pending = this.pendingOpens.get(key);
-    const active = this.active.get(key) ?? (pending === undefined ? undefined : await pending);
-    if (active !== undefined) {
-      if (active.state.runState === "idle" && !active.extensionUi.hasPendingDialogs) {
-        this.setAttention(active, "idle");
-        this.publishSummary(active);
+      const pending = this.pendingOpens.get(key);
+      const active = this.active.get(key) ?? (pending === undefined ? undefined : await pending);
+      if (active !== undefined) {
+        if (active.state.runState === "idle" && !active.extensionUi.hasPendingDialogs) {
+          this.setAttention(active, "idle");
+          this.publishSummary(active);
+        }
+        return this.summaryFromActive(active);
       }
-      return this.summaryFromActive(active);
-    }
 
-    if (!isVisibleSessionId(ref.sessionId)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
-    const workspace = this.workspaces.get(ref.workspaceId);
-    const path = await findSessionFile(workspace, ref.sessionId);
-    if (path === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
-    await this.attention.setAttention(ref, "idle", new Date().toISOString());
-    return this.summaryFromStored(workspace, ref, path);
+      if (!isVisibleSessionId(ref.sessionId)) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+      const workspace = this.workspaces.get(ref.workspaceId);
+      const path = await findSessionFile(workspace, ref.sessionId);
+      if (path === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+      await this.attention.setAttention(ref, "idle", new Date().toISOString());
+      const summary = await this.summaryFromStored(workspace, ref, path);
+      this.events.publishWorkspace(ref.workspaceId, { version: 1, type: "session.updated", workspaceId: ref.workspaceId, session: summary });
+      return summary;
+    });
   }
 
   async fileReferences(workspaceId: string, query?: string): Promise<SessionFileReference[]> {

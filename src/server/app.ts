@@ -117,16 +117,17 @@ export async function buildApp(options: {
 } = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: { level: process.env["LOG_LEVEL"] ?? "info" }, bodyLimit: 25 * 1024 * 1024 });
   const production = process.env["NODE_ENV"] === "production";
-  const workspaces = new WorkspaceStore();
-  await workspaces.initialize(getAgentDir(), "pi agent");
   const events = new EventHub();
+  const workspaces = new WorkspaceStore(undefined, () => events.publishGlobal({ version: 1, type: "workspaces.changed" }));
+  await workspaces.initialize(getAgentDir(), "pi agent");
   const backgroundTasks = new BackgroundTaskService(workspaces);
   const sessions = new SessionService(workspaces, events, backgroundTasks);
-  const settings = new SettingsService(() => sessions.globalModelRuntime(), () => sessions.refreshModelConfiguration());
+  const settings = new SettingsService(() => sessions.globalModelRuntime(), () => sessions.refreshModelConfiguration(), (type) => events.publishGlobal({ version: 1, type }));
   await settings.initialize();
   const auth = new AuthService();
   await auth.initialize();
-  const services: JarvisServices = { workspaces, sessions, backgroundTasks, events, tunnel: new TunnelService((message) => app.log.info({ tunnel: message })), auth };
+  const tunnel = new TunnelService((message) => app.log.info({ tunnel: message }), () => events.publishGlobal({ version: 1, type: "tunnel.changed" }));
+  const services: JarvisServices = { workspaces, sessions, backgroundTasks, events, tunnel, auth };
   await app.register(cors, { origin: production ? [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] : true });
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
@@ -179,12 +180,21 @@ export async function buildApp(options: {
     return { auth: { required: auth.enabled(), authenticated: true } };
   });
   app.post("/api/auth/logout", async (request, reply) => {
+    const token = readAuthCookie(request.headers.cookie);
     clearAuthCookie(reply);
+    reply.raw.once("finish", () => {
+      if (token !== undefined) events.terminateAuthenticated(token);
+      events.publishGlobal({ version: 1, type: "security.changed" });
+    });
     return { auth: auth.status(undefined) };
   });
   app.post("/api/auth/logout-all", async (request, reply) => {
     await auth.revokeAllSessions();
     clearAuthCookie(reply);
+    reply.raw.once("finish", () => {
+      events.terminateAuthenticated();
+      events.publishGlobal({ version: 1, type: "security.changed" });
+    });
     return { auth: auth.status(undefined) };
   });
   app.put("/api/auth/password", async (request, reply) => {
@@ -192,6 +202,10 @@ export async function buildApp(options: {
     const result = await auth.setPassword(body.newPassword, body.currentPassword);
     if (result.token === undefined) clearAuthCookie(reply);
     else applyAuthCookie(reply, result.token, request);
+    reply.raw.once("finish", () => {
+      events.terminateAuthenticatedExcept(result.token, result.token === undefined ? 1012 : 4401, "Authentication changed");
+      events.publishGlobal({ version: 1, type: "security.changed" });
+    });
     return { auth: auth.status(result.token) };
   });
 
@@ -505,17 +519,24 @@ export async function buildApp(options: {
     return { resolved: true };
   });
 
+  app.get("/api/events", { websocket: true }, (socket, request) => {
+    const authorized = authorizeSocket(auth, request, socket);
+    if (authorized === undefined) return;
+    events.addGlobal(socket, authorized.token);
+  });
   app.get("/api/workspaces/:workspaceId/events", { websocket: true }, (socket, request) => {
-    if (!authorizeSocket(auth, request, socket)) return;
+    const authorized = authorizeSocket(auth, request, socket);
+    if (authorized === undefined) return;
     const params = z.object({ workspaceId: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return socket.close(1008, "Invalid workspace id");
-    events.addWorkspace(params.data.workspaceId, socket);
+    events.addWorkspace(params.data.workspaceId, socket, authorized.token);
   });
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/events", { websocket: true }, (socket, request) => {
-    if (!authorizeSocket(auth, request, socket)) return;
+    const authorized = authorizeSocket(auth, request, socket);
+    if (authorized === undefined) return;
     const parsed = safeSessionRef(request.params);
     if (parsed === undefined) return socket.close(1008, "Invalid session ref");
-    events.addSession(parsed, socket);
+    events.addSession(parsed, socket, authorized.token);
   });
 
   if (options.serveStatic === true) {

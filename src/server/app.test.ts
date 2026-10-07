@@ -37,6 +37,7 @@ beforeEach(async () => {
   process.env["PI_CODING_AGENT_DIR"] = join(jarvisHome, "agent");
   process.env["PI_CODING_AGENT_SESSION_DIR"] = sessionDir;
   app = await buildApp();
+  await app.ready();
 });
 
 afterEach(async () => {
@@ -1127,9 +1128,13 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
     const source = await writeConversationSession(workspacePath);
     const listSpy = vi.spyOn(SessionManager, "list");
+    const socket = await server.injectWS(`/api/workspaces/${workspace.id}/events`);
+    const received = nextInjectSocketMessage(socket);
 
     const viewed = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/${source.id}/viewed`, payload: {} });
     expect(viewed.statusCode).toBe(200);
+    await expect(received).resolves.toMatchObject({ type: "session.updated", workspaceId: workspace.id, session: { id: source.id, attentionState: "idle" } });
+    socket.close();
     expect(viewed.json()).toMatchObject({ session: { id: source.id, workspaceId: workspace.id, runState: "idle", attentionState: "idle" } });
     expect(listSpy).not.toHaveBeenCalled();
 
@@ -2274,6 +2279,120 @@ describe("tunnel entries", () => {
     expect(JSON.parse(stored)).toMatchObject({ version: 1, password: { hash: expect.any(String), salt: expect.any(String) } });
   });
 
+  it("broadcasts workspace registry changes to clients that do not yet subscribe to the workspace", async () => {
+    const server = activeApp();
+    const socket = await server.injectWS("/api/events");
+    try {
+      const cwd = join(jarvisHome, "global-workspace");
+      await mkdir(cwd);
+      const created = nextInjectSocketMessage(socket);
+      const response = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd, label: "Global" } });
+      expect(response.statusCode).toBe(200);
+      const workspace = response.json<{ workspace: { id: string } }>().workspace;
+      await expect(created).resolves.toEqual({ version: 1, type: "workspaces.changed" });
+      const mutations = [
+        { method: "PATCH" as const, url: `/api/workspaces/${workspace.id}`, payload: { label: "Renamed" } },
+        { method: "POST" as const, url: `/api/workspaces/${workspace.id}/open`, payload: {} },
+        { method: "PUT" as const, url: "/api/workspaces/order", payload: { ids: server.jarvis.workspaces.list().map((item) => item.id).reverse() } },
+        { method: "DELETE" as const, url: `/api/workspaces/${workspace.id}` },
+      ];
+      for (const mutation of mutations) {
+        const changed = nextInjectSocketMessage(socket);
+        expect((await server.inject(mutation)).statusCode).toBe(200);
+        await expect(changed).resolves.toEqual({ version: 1, type: "workspaces.changed" });
+      }
+    } finally {
+      socket.close();
+    }
+  });
+
+  it("publishes scoped settings, model and tunnel invalidations without configuration payloads", async () => {
+    const server = activeApp();
+    const socket = await server.injectWS("/api/events");
+    try {
+      let received = nextInjectSocketMessage(socket);
+      expect((await server.inject({ method: "PATCH", url: "/api/settings", payload: { assistantName: "Remote Jarvis" } })).statusCode).toBe(200);
+      await expect(received).resolves.toEqual({ version: 1, type: "settings.changed" });
+      received = nextInjectSocketMessage(socket);
+      expect((await server.inject({ method: "PUT", url: "/api/settings/providers/openai/override", payload: { baseUrl: "https://proxy.example.com/v1", headers: { "X-Secret": "private-key" } } })).statusCode).toBe(200);
+      await expect(received).resolves.toEqual({ version: 1, type: "models.changed" });
+      received = nextInjectSocketMessage(socket);
+      expect((await server.inject({ method: "PUT", url: "/api/settings/enabled-models", payload: { models: [] } })).statusCode).toBe(200);
+      await expect(received).resolves.toEqual({ version: 1, type: "models.changed" });
+      received = nextInjectSocketMessage(socket);
+      const added = await server.inject({ method: "POST", url: "/api/tunnel", payload: { method: "frp", frp: { server: "localhost:7000", token: "private-tunnel-token" } } });
+      expect(added.statusCode).toBe(200);
+      const tunnel = added.json<{ tunnel: { id: string } }>().tunnel;
+      await expect(received).resolves.toEqual({ version: 1, type: "tunnel.changed" });
+      received = nextInjectSocketMessage(socket);
+      expect((await server.inject({ method: "DELETE", url: `/api/tunnel/${tunnel.id}` })).statusCode).toBe(200);
+      await expect(received).resolves.toEqual({ version: 1, type: "tunnel.changed" });
+    } finally {
+      socket.close();
+    }
+  });
+
+  it("closes the logging-out token's sockets and leaves other devices connected", async () => {
+    const server = activeApp();
+    const configured = await server.inject({ method: "PUT", url: "/api/auth/password", payload: { newPassword: "logout-socket-password" } });
+    const first = sessionCookie(configured);
+    const login = await server.inject({ method: "POST", url: "/api/auth/login", payload: { password: "logout-socket-password" } });
+    const second = sessionCookie(login);
+    expect(first).not.toBe(second);
+    const workspace = server.jarvis.workspaces.list()[0];
+    if (workspace === undefined) throw new Error("Expected default workspace");
+    const paths = ["/api/events", `/api/workspaces/${workspace.id}/events`, `/api/workspaces/${workspace.id}/sessions/${randomUUID()}/events`];
+    const sockets = await Promise.all(paths.map((path) => server.injectWS(path, { headers: { cookie: first } })));
+    const other = await server.injectWS("/api/events", { headers: { cookie: second } });
+    try {
+      const securityChanged = nextInjectSocketMessage(other);
+      const closed = sockets.map(nextInjectSocketClose);
+      const response = await server.inject({ method: "POST", url: "/api/auth/logout", headers: { cookie: first }, payload: {} });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["set-cookie"]).toContain("Max-Age=0");
+      await expect(Promise.all(closed)).resolves.toEqual([4401, 4401, 4401]);
+      await expect(securityChanged).resolves.toEqual({ version: 1, type: "security.changed" });
+      const received = nextInjectSocketMessage(other);
+      server.jarvis.events.publishGlobal({ version: 1, type: "settings.changed" });
+      await expect(received).resolves.toEqual({ version: 1, type: "settings.changed" });
+      const otherClosed = nextInjectSocketClose(other);
+      expect((await server.inject({ method: "POST", url: "/api/auth/logout-all", headers: { cookie: second }, payload: {} })).statusCode).toBe(200);
+      await expect(otherClosed).resolves.toBe(4401);
+    } finally {
+      for (const socket of [...sockets, other]) socket.close();
+    }
+  });
+
+  it("closes old sockets on enabling or changing authentication and accepts the new cookie", async () => {
+    const server = activeApp();
+    const anonymous = await server.injectWS("/api/events");
+    const anonymousClosed = nextInjectSocketClose(anonymous);
+    const configured = await server.inject({ method: "PUT", url: "/api/auth/password", payload: { newPassword: "first-socket-password" } });
+    await expect(anonymousClosed).resolves.toBe(4401);
+    const first = sessionCookie(configured);
+    const old = await server.injectWS("/api/events", { headers: { cookie: first } });
+    const oldClosed = nextInjectSocketClose(old);
+    const changed = await server.inject({ method: "PUT", url: "/api/auth/password", headers: { cookie: first }, payload: { currentPassword: "first-socket-password", newPassword: "next-socket-password" } });
+    expect(changed.statusCode).toBe(200);
+    await expect(oldClosed).resolves.toBe(4401);
+    const second = sessionCookie(changed);
+    const current = await server.injectWS("/api/events", { headers: { cookie: second } });
+    try {
+      const received = nextInjectSocketMessage(current);
+      server.jarvis.events.publishGlobal({ version: 1, type: "security.changed" });
+      await expect(received).resolves.toEqual({ version: 1, type: "security.changed" });
+      const closed = nextInjectSocketClose(current);
+      const disabled = await server.inject({ method: "PUT", url: "/api/auth/password", headers: { cookie: second }, payload: { currentPassword: "next-socket-password", newPassword: null } });
+      expect(disabled.statusCode).toBe(200);
+      await expect(closed).resolves.toBe(1012);
+      expect((await server.inject({ method: "GET", url: "/api/auth/status" })).json()).toMatchObject({ auth: { required: false, authenticated: true } });
+    } finally {
+      anonymous.close();
+      old.close();
+      current.close();
+    }
+  });
+
   it("closes unauthenticated WebSocket upgrades with 4401", async () => {
     const server = activeApp();
     const configured = await server.inject({ method: "PUT", url: "/api/auth/password", payload: { newPassword: "socket-password-value" } });
@@ -2283,8 +2402,10 @@ describe("tunnel entries", () => {
     if (workspace === undefined) throw new Error("Expected default workspace");
     const path = `/api/workspaces/${workspace.id}/events`;
 
-    const anonymous = await server.injectWS(path);
-    await expect(nextInjectSocketClose(anonymous)).resolves.toBe(4401);
+    for (const endpoint of ["/api/events", path, `/api/workspaces/${workspace.id}/sessions/${randomUUID()}/events`]) {
+      const anonymous = await server.injectWS(endpoint);
+      await expect(nextInjectSocketClose(anonymous)).resolves.toBe(4401);
+    }
 
     const authorized = await server.injectWS(path, { headers: { cookie } });
     const received = nextInjectSocketMessage(authorized);

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, ChevronDown, Folder, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
-import type { ComposerCommand, ImageAttachment, ModelDescriptor, RunState, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
-import { api, isSessionConflict } from "./api";
+import type { ComposerCommand, GlobalEvent, ImageAttachment, ModelDescriptor, RunState, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
+import { api, isSessionConflict, notifyUnauthorized } from "./api";
 import { listenDesktopOpenSession } from "./desktop";
 import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
@@ -33,6 +33,7 @@ import {
   retainSessionListCopy,
   sessionKey,
   withoutDraft,
+  withoutKeys,
   withoutSession,
 } from "./lib/socket-sync";
 import { isChatPath, pathParams, readDrafts, readExpandedWorkspaces, readSessionFocusMode, SESSION_FOCUS_STORAGE_KEY, sessionRouteNeedsSync } from "./lib/app-storage";
@@ -43,6 +44,7 @@ import { useIsMobile } from "./hooks/use-is-mobile";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, useSidebarResize } from "./hooks/use-sidebar-resize";
 import { useWorkspaceEvents } from "./hooks/use-workspace-events";
+import { useGlobalEvents } from "./hooks/use-global-events";
 import { extensionToastDuration, type ExtensionToast } from "./extension-notifications";
 
 const COMMAND_RETRY_BASE_DELAY_MS = 750;
@@ -70,6 +72,7 @@ export function App() {
   const [focusNow, setFocusNow] = useState(Date.now());
   const [loading, setLoading] = useState(true);
   const [assistantName, setAssistantName] = useState("Jarvis");
+  const [settingsRefreshKeys, setSettingsRefreshKeys] = useState({ models: 0, tunnel: 0, security: 0 });
   const [pageError, setPageError] = useState<string | undefined>();
   const [globalExtensionToasts, setGlobalExtensionToasts] = useState<ExtensionToast[]>([]);
   const [sessionNotice, setSessionNotice] = useState<string | undefined>();
@@ -149,6 +152,16 @@ export function App() {
   const composerFocusRef = useRef<(() => void) | undefined>(undefined);
   // 桌面端：新建会话（含复用空会话、创建分支）后自动聚焦输入框，PromptEditor 挂载时消费。
   const [newSessionFocusId, setNewSessionFocusId] = useState<string | undefined>();
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
+  const sessionsByWorkspaceRef = useRef(sessionsByWorkspace);
+  sessionsByWorkspaceRef.current = sessionsByWorkspace;
+  const selectionRef = useRef({ workspaceId, sessionId, pathname: location.pathname, navigate });
+  selectionRef.current = { workspaceId, sessionId, pathname: location.pathname, navigate };
+  const workspaceLoadGenerationRef = useRef(0);
+  const sessionLoadGenerationRef = useRef(new Map<string, number>());
+  const settingsLoadGenerationRef = useRef(0);
+  const workspaceIdsKey = JSON.stringify(workspaces.map((workspace) => workspace.id).sort());
 
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId);
   const selectedSession = selectedWorkspace === undefined
@@ -315,10 +328,68 @@ export function App() {
     };
   }, [selectedRef, selectedRefKey, stream.connection]);
 
-  const loadWorkspaces = useCallback(async () => {
-    const values = await api.listWorkspaces();
+  const clearRemovedSessionState = useCallback((removedIds: ReadonlySet<string>) => {
+    if (removedIds.size === 0) return;
+    setDrafts((current) => withoutKeys(current, removedIds));
+    setAttachmentsBySession((current) => withoutKeys(current, removedIds));
+    setRenameTarget((current) => current !== undefined && removedIds.has(current.session.id) ? undefined : current);
+    setSessionMenu((current) => current !== undefined && removedIds.has(current.session.id) ? undefined : current);
+    setMobileActionTarget((current) => current?.kind === "session" && removedIds.has(current.session.id) ? undefined : current);
+    setNewSessionFocusId((current) => current !== undefined && removedIds.has(current) ? undefined : current);
+  }, []);
+
+  const applyWorkspaceRegistry = useCallback((values: Workspace[]) => {
+    const remainingIds = new Set(values.map((workspace) => workspace.id));
+    const removedIds = new Set([
+      ...workspacesRef.current.map((workspace) => workspace.id),
+      ...Object.keys(sessionsByWorkspaceRef.current),
+    ].filter((id) => !remainingIds.has(id)));
+    const removedSessionIds = new Set<string>();
+    for (const id of removedIds) {
+      for (const session of sessionsByWorkspaceRef.current[id] ?? []) removedSessionIds.add(session.id);
+      for (const sessionId of deletedSessionsRef.current[id] ?? []) removedSessionIds.add(sessionId);
+      delete deletedSessionsRef.current[id];
+      sessionLoadGenerationRef.current.delete(id);
+      creatingSessionWorkspacesRef.current.delete(id);
+    }
+    for (const key of viewedIdleKeysRef.current) {
+      if (removedIds.has(key.split(":")[0] ?? "")) viewedIdleKeysRef.current.delete(key);
+    }
+    clearRemovedSessionState(removedSessionIds);
+    setSessionsByWorkspace((current) => withoutKeys(current, removedIds));
+    setExpandedWorkspaceIds((current) => withoutKeys(current, removedIds));
+    setProjectMenu((current) => current !== undefined && removedIds.has(current.workspace.id) ? undefined : current);
+    setMobileActionTarget((current) => current?.kind === "project" && removedIds.has(current.workspace.id) ? undefined : current);
+    setProjectRenameTarget((current) => current !== undefined && removedIds.has(current.id) ? undefined : current);
+    setProjectRemoveTarget((current) => current !== undefined && removedIds.has(current.id) ? undefined : current);
+    setSessionCleanupTarget((current) => current !== undefined && removedIds.has(current.id) ? undefined : current);
+    setFilesWorkspaceId((current) => current !== undefined && !remainingIds.has(current) ? undefined : current);
+    setGlobalExtensionToasts((current) => current.filter((toast) => toast.workspaceId === undefined || remainingIds.has(toast.workspaceId)));
+    const selected = selectionRef.current;
+    if (selected.workspaceId !== undefined && !remainingIds.has(selected.workspaceId)) {
+      setSessionId(undefined);
+      setSideChatOpen(false);
+      setSideChatRunState(undefined);
+    }
+    workspacesRef.current = values;
     setWorkspaces(values);
-    setWorkspaceId((current) => current !== undefined && values.some((workspace) => workspace.id === current) ? current : values[0]?.id);
+    setWorkspaceId((current) => current !== undefined && remainingIds.has(current) ? current : values[0]?.id);
+    const route = pathParams(selected.pathname);
+    if (route.workspaceId !== undefined && !remainingIds.has(route.workspaceId)) selected.navigate("/projects", { replace: true });
+  }, [clearRemovedSessionState]);
+
+  const loadWorkspaces = useCallback(async () => {
+    const generation = ++workspaceLoadGenerationRef.current;
+    const values = await api.listWorkspaces();
+    if (generation !== workspaceLoadGenerationRef.current) return undefined;
+    applyWorkspaceRegistry(values);
+    return values;
+  }, [applyWorkspaceRegistry]);
+
+  const refreshSettings = useCallback(async () => {
+    const generation = ++settingsLoadGenerationRef.current;
+    const settings = await api.settings();
+    if (generation === settingsLoadGenerationRef.current) setAssistantName(settings.assistantName);
   }, []);
 
   const reorderWorkspaces = useCallback((sourceId: string, targetId: string, placeAfter: boolean): void => {
@@ -344,9 +415,21 @@ export function App() {
     });
   }, [workspaces]);
 
-  const loadProjectSessions = useCallback(async (projects: Workspace[]): Promise<Record<string, SessionSummary[]>> => {
-    const entries = await Promise.all(projects.map(async (workspace) => [workspace.id, await api.listSessions(workspace.id)] as const));
-    return Object.fromEntries(entries);
+  const resyncWorkspaceSessions = useCallback(async (workspaceId: string) => {
+    if (!workspacesRef.current.some((workspace) => workspace.id === workspaceId)) return;
+    const generation = (sessionLoadGenerationRef.current.get(workspaceId) ?? 0) + 1;
+    sessionLoadGenerationRef.current.set(workspaceId, generation);
+    const baseline = sessionsByWorkspaceRef.current;
+    try {
+      const sessions = await api.listSessions(workspaceId);
+      if (sessionLoadGenerationRef.current.get(workspaceId) !== generation || !workspacesRef.current.some((workspace) => workspace.id === workspaceId)) return;
+      setSessionsByWorkspace((current) => ({
+        ...current,
+        ...mergeSessionSnapshots(current, { [workspaceId]: sessions }, [workspaceId], deletedSessionsRef.current, viewedIdleKeysRef.current, baseline),
+      }));
+    } catch {
+      // 断线、认证失效或工作区刚被删除时，下一次全局恢复会重新读取。
+    }
   }, []);
 
   // 移动端全文搜索：跨项目并行查询，服务端对会话正文做全文匹配。
@@ -356,23 +439,35 @@ export function App() {
   }, [workspaces]);
 
   useEffect(() => {
-    void Promise.all([loadWorkspaces(), api.settings().then((settings) => { setAssistantName(settings.assistantName); })]).catch((error: unknown) => setPageError(errorMessage(error, "无法加载应用设置"))).finally(() => setLoading(false));
-  }, [loadWorkspaces]);
+    let disposed = false;
+    void Promise.all([loadWorkspaces(), refreshSettings()]).catch((error: unknown) => {
+      if (!disposed) setPageError(errorMessage(error, "无法加载应用设置"));
+    }).finally(() => { if (!disposed) setLoading(false); });
+    return () => { disposed = true; };
+  }, [loadWorkspaces, refreshSettings]);
 
   useEffect(() => {
     if (workspaces.length === 0) {
       setSessionsByWorkspace({});
       return;
     }
-    let disposed = false;
-    void loadProjectSessions(workspaces).then((sessions) => {
-      if (disposed) return;
-      setSessionsByWorkspace((current) => mergeSessionSnapshots(current, sessions, workspaces.map((workspace) => workspace.id), deletedSessionsRef.current, viewedIdleKeysRef.current));
-    }).catch((error: unknown) => {
-      if (!disposed) setPageError(errorMessage(error, "无法加载会话"));
-    });
-    return () => { disposed = true; };
-  }, [workspaces, loadProjectSessions]);
+    for (const workspace of workspacesRef.current) void resyncWorkspaceSessions(workspace.id);
+  }, [workspaceIdsKey, resyncWorkspaceSessions]);
+
+  const previousSessionsRef = useRef<Record<string, SessionSummary[]>>({});
+  useEffect(() => {
+    const removedSessionIds = new Set<string>();
+    for (const [id, previous] of Object.entries(previousSessionsRef.current)) {
+      const currentIds = new Set((sessionsByWorkspace[id] ?? []).map((session) => session.id));
+      for (const session of previous) {
+        if (currentIds.has(session.id)) continue;
+        removedSessionIds.add(session.id);
+        viewedIdleKeysRef.current.delete(sessionKey(id, session.id));
+      }
+    }
+    previousSessionsRef.current = sessionsByWorkspace;
+    clearRemovedSessionState(removedSessionIds);
+  }, [sessionsByWorkspace, clearRemovedSessionState]);
 
   useEffect(() => {
     const { workspaceId: pathWorkspaceId, sessionId: pathSessionId, files: filesRoute } = pathParams(location.pathname);
@@ -399,6 +494,11 @@ export function App() {
         // A stale URL (e.g. the last workspace was deleted) must not pin the app.
         if (pathWorkspaceId !== undefined || pathSessionId !== undefined) navigate("/projects", { replace: true });
       }
+      return;
+    }
+    if (!loading && pathWorkspaceId !== undefined && !workspaces.some((workspace) => workspace.id === pathWorkspaceId)) {
+      setSessionId(undefined);
+      navigate("/projects", { replace: true });
       return;
     }
     // URL 已切到别的项目/会话时，等 state 跟上再判断过期；否则会拿上一个项目的列表把这次导航弹回 /projects。
@@ -431,7 +531,11 @@ export function App() {
       return;
     }
     const first = sessions[0]?.id;
-    if (first === undefined) return;
+    if (first === undefined) {
+      setSessionId(undefined);
+      if (pathSessionId !== undefined) navigate(`/sessions/${workspace.id}`, { replace: true });
+      return;
+    }
     if (pathWorkspaceId === workspace.id && pathSessionId !== undefined) {
       // The URL points at this workspace with a stale session id: fix the URL.
       navigate(`/chat/${workspace.id}/${first}`, { replace: true });
@@ -480,14 +584,30 @@ export function App() {
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [globalExtensionToasts]);
 
-  const resyncWorkspaceSessions = useCallback((workspaceId: string) => {
-    void api.listSessions(workspaceId).then((sessions) => {
-      setSessionsByWorkspace((current) => ({
-        ...current,
-        ...mergeSessionSnapshots(current, { [workspaceId]: sessions }, [workspaceId], deletedSessionsRef.current, viewedIdleKeysRef.current),
-      }));
-    }).catch(() => undefined);
-  }, []);
+  useGlobalEvents({
+    onEvent: (event: GlobalEvent) => {
+      if (event.type === "workspaces.changed") {
+        void loadWorkspaces().catch(() => undefined);
+      } else if (event.type === "settings.changed") {
+        void refreshSettings().catch(() => undefined);
+      } else if (event.type === "models.changed") {
+        setSettingsRefreshKeys((current) => ({ ...current, models: current.models + 1 }));
+        void stream.refresh();
+      } else if (event.type === "tunnel.changed") {
+        setSettingsRefreshKeys((current) => ({ ...current, tunnel: current.tunnel + 1 }));
+      } else {
+        setSettingsRefreshKeys((current) => ({ ...current, security: current.security + 1 }));
+        // Cookie 续期后，旧 socket 仍可能使用前一 token；其他标签页退出时也核对本端 Cookie。
+        void api.authStatus().then(({ auth }) => { if (!auth.authenticated) notifyUnauthorized(); }).catch(() => undefined);
+      }
+    },
+    onResync: () => {
+      void loadWorkspaces().then((values) => { values?.forEach((workspace) => resyncWorkspaceSessions(workspace.id)); }).catch(() => undefined);
+      void refreshSettings().catch(() => undefined);
+      setSettingsRefreshKeys((current) => ({ models: current.models + 1, tunnel: current.tunnel + 1, security: current.security + 1 }));
+      void stream.refresh();
+    },
+  });
 
   useWorkspaceEvents({
     workspaces,
@@ -502,6 +622,7 @@ export function App() {
 
 
   const applyViewedSession = useCallback((session: SessionSummary) => {
+    if (!workspacesRef.current.some((workspace) => workspace.id === session.workspaceId) || deletedSessionsRef.current[session.workspaceId]?.has(session.id) === true) return;
     if (session.runState === "idle" && (session.attentionState === undefined || session.attentionState === "idle")) {
       viewedIdleKeysRef.current.add(sessionKey(session.workspaceId, session.id));
     } else {
@@ -589,6 +710,7 @@ export function App() {
     creatingSessionWorkspacesRef.current.add(targetWorkspaceId);
     try {
       const session = await api.createSession(targetWorkspaceId);
+      if (!workspacesRef.current.some((workspace) => workspace.id === targetWorkspaceId)) return;
       setSessionsByWorkspace((current) => ({ ...current, [targetWorkspaceId]: mergeSession(current[targetWorkspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       openCreatedSession(targetWorkspaceId, session.id);
     } catch (error) {
@@ -600,7 +722,8 @@ export function App() {
 
   const addWorkspace = async (path: string, label?: string) => {
     const workspace = await api.addWorkspace(path, label);
-    setWorkspaces((current) => mergeWorkspace(current, workspace));
+    ++workspaceLoadGenerationRef.current;
+    applyWorkspaceRegistry(mergeWorkspace(workspacesRef.current, workspace));
     setSessionsByWorkspace((current) => current[workspace.id] === undefined ? { ...current, [workspace.id]: [] } : current);
     setExpandedWorkspaceIds((current) => ({ ...current, [workspace.id]: true }));
     setWorkspaceId(workspace.id);
@@ -611,6 +734,7 @@ export function App() {
   const toggleSessionStarred = async (target: { workspaceId: string; session: SessionSummary }) => {
     try {
       const session = await api.setSessionStarred({ workspaceId: target.workspaceId, sessionId: target.session.id }, target.session.starred !== true);
+      if (!workspacesRef.current.some((workspace) => workspace.id === target.workspaceId)) return;
       setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       setPageError(undefined);
     } catch (error) {
@@ -623,6 +747,7 @@ export function App() {
     if (target === undefined) return;
     try {
       const session = await api.renameSession({ workspaceId: target.workspaceId, sessionId: target.session.id }, renameValue);
+      if (!workspacesRef.current.some((workspace) => workspace.id === target.workspaceId)) return;
       setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       setRenameTarget(undefined);
       setPageError(undefined);
@@ -636,7 +761,9 @@ export function App() {
     if (target === undefined) return;
     try {
       const workspace = await api.renameWorkspace(target.id, projectRenameValue);
-      setWorkspaces((current) => mergeWorkspace(current, workspace));
+      if (!workspacesRef.current.some((candidate) => candidate.id === target.id)) return;
+      ++workspaceLoadGenerationRef.current;
+      applyWorkspaceRegistry(mergeWorkspace(workspacesRef.current, workspace));
       setProjectRenameTarget(undefined);
       setPageError(undefined);
     } catch (error) {
@@ -650,24 +777,8 @@ export function App() {
     setProjectRemovePending(true);
     try {
       await api.removeWorkspace(target.id);
-      const remaining = workspaces.filter((workspace) => workspace.id !== target.id);
-      setWorkspaces(remaining);
-      setSessionsByWorkspace((current) => {
-        const next = { ...current };
-        delete next[target.id];
-        return next;
-      });
-      setExpandedWorkspaceIds((current) => {
-        const next = { ...current };
-        delete next[target.id];
-        return next;
-      });
-      if (workspaceId === target.id) {
-        setWorkspaceId(remaining[0]?.id);
-        setSessionId(undefined);
-        // Back out of the chat/session page; the guard effect fixes up the rest.
-        navigate("/projects", { replace: true });
-      }
+      ++workspaceLoadGenerationRef.current;
+      applyWorkspaceRegistry(workspacesRef.current.filter((workspace) => workspace.id !== target.id));
       setProjectRemoveTarget(undefined);
       setPageError(undefined);
     } catch (error) {
@@ -679,22 +790,8 @@ export function App() {
 
   const removeWorkspaceFromSettings = async (target: Workspace) => {
     await api.removeWorkspace(target.id);
-    const remaining = workspaces.filter((workspace) => workspace.id !== target.id);
-    setWorkspaces(remaining);
-    setSessionsByWorkspace((current) => {
-      const next = { ...current };
-      delete next[target.id];
-      return next;
-    });
-    setExpandedWorkspaceIds((current) => {
-      const next = { ...current };
-      delete next[target.id];
-      return next;
-    });
-    if (workspaceId === target.id) {
-      setWorkspaceId(remaining[0]?.id);
-      setSessionId(undefined);
-    }
+    ++workspaceLoadGenerationRef.current;
+    applyWorkspaceRegistry(workspacesRef.current.filter((workspace) => workspace.id !== target.id));
   };
 
   const deleteSession = async (target: { workspaceId: string; session: SessionSummary }) => {
@@ -758,6 +855,7 @@ export function App() {
   const forkSessionFromTarget = async (target: { workspaceId: string; sessionId: string }) => {
     try {
       const session = await api.forkSession(target);
+      if (!workspacesRef.current.some((workspace) => workspace.id === target.workspaceId)) return;
       setSessionsByWorkspace((current) => ({ ...current, [target.workspaceId]: mergeSession(current[target.workspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       setPageError(undefined);
       setNewSessionFocusId(session.id);
@@ -894,6 +992,7 @@ export function App() {
     setForkPending(true);
     try {
       const session = await api.forkSession(selectedRef, message.id);
+      if (!workspacesRef.current.some((workspace) => workspace.id === selectedRef.workspaceId)) return;
       setSessionsByWorkspace((current) => ({ ...current, [selectedRef.workspaceId]: mergeSession(current[selectedRef.workspaceId] ?? [], session, viewedIdleKeysRef.current) }));
       setForkTarget(undefined);
       setPageError(undefined);
@@ -1111,10 +1210,10 @@ export function App() {
           </div>
           {selectedRef === undefined ? null : <div className="chat-header-actions"><SideChatToggle open={sideChatOpen} running={sideChatRunState === "running" || sideChatRunState === "stopping"} onClick={() => { setFilesWorkspaceId(undefined); setSideChatOpen((current) => !current); }} /><Tooltip label="文件"><Button variant="ghost" size="icon" aria-label="文件" onClick={() => { setSideChatOpen(false); setFilesWorkspaceId(selectedRef.workspaceId); }}><Folder size={16} /></Button></Tooltip></div>}
         </header>}
-        {isSettingsPage ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigateBackOr(navigate, () => navigate("/projects", { replace: true }))} /> : renderChatContent()}
+        {isSettingsPage ? <SettingsPage assistantName={assistantName} refreshKeys={settingsRefreshKeys} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={applyWorkspaceRegistry} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigateBackOr(navigate, () => navigate("/projects", { replace: true }))} /> : renderChatContent()}
       </section> : null}
       {isMobile ? <div className="mobile-app">
-        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={setWorkspaces} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigateBackOr(navigate, () => navigate("/projects", { replace: true }))} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={visibleSessionsByWorkspace} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onOpenProjectMenu={(workspace) => setMobileActionTarget({ kind: "project", workspace })} onOpenSearch={() => setSearchOpen(true)} focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} /> : <section className="mobile-chat-page">
+        {mobilePage === "settings" ? <SettingsPage assistantName={assistantName} refreshKeys={settingsRefreshKeys} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={applyWorkspaceRegistry} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => navigateBackOr(navigate, () => navigate("/projects", { replace: true }))} /> : mobilePage === "sessions" ? <MobileSessionSwitcher workspaces={workspaces} sessionsByWorkspace={visibleSessionsByWorkspace} onCreateSession={(targetWorkspaceId) => { void createSession(targetWorkspaceId); }} onSelectSession={chooseSession} onOpenSessionMenu={openMobileSessionMenu} onOpenProjectMenu={(workspace) => setMobileActionTarget({ kind: "project", workspace })} onOpenSearch={() => setSearchOpen(true)} focusMode={focusMode} onToggleFocusMode={() => setFocusMode((current) => !current)} onAddProject={() => { setWorkspaceDialogOpen(true); }} assistantName={assistantName} onOpenSettings={() => navigate("/settings")} /> : <section className="mobile-chat-page">
           <header className="mobile-chat-header">
             <Button variant="ghost" size="icon" aria-label="返回会话列表" onClick={() => { setSideChatOpen(false); navigate("/projects", { replace: true }); }}><ArrowLeft size={16} /></Button>
             <button type="button" className="mobile-chat-session" aria-haspopup="dialog" aria-expanded={userNavigatorOpen} onClick={() => setUserNavigatorOpen(true)}><span>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</span><ChevronDown size={14} /></button>

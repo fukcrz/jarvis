@@ -1,18 +1,23 @@
-import type { SessionEvent, SessionRef, WorkspaceEvent } from "../shared/protocol.js";
+import type { GlobalEvent, SessionEvent, SessionRef, WorkspaceEvent } from "../shared/protocol.js";
 import { PROTOCOL_VERSION } from "../shared/protocol.js";
 import { parseSocketHeartbeat, SOCKET_HEARTBEAT_INTERVAL_MS, SOCKET_PING_TYPE, SOCKET_PONG_TYPE, socketHeartbeatMessage } from "../shared/socket-heartbeat.js";
 
-interface SocketLike {
+export interface SocketLike {
   readyState: number;
   send(payload: string): void;
+  close?: (code?: number, reason?: string) => void;
   terminate?: () => void;
   ping?: () => void;
   on(event: "close" | "pong" | "message", listener: ((raw?: unknown) => void) | (() => void)): unknown;
 }
 
+export const SOCKET_UNAUTHORIZED_CLOSE_CODE = 4401;
+
 export class EventHub {
   private readonly sessionSockets = new Map<string, Set<SocketLike>>();
   private readonly workspaceSockets = new Map<string, Set<SocketLike>>();
+  private readonly globalSockets = new Set<SocketLike>();
+  private readonly socketTokens = new WeakMap<SocketLike, string | undefined>();
   private readonly seqBySession = new Map<string, number>();
   /** 上一轮心跳 ping 后尚未收到 pong 的连接；下一轮仍无回应则断开。 */
   private readonly pendingPong = new WeakSet<SocketLike>();
@@ -27,12 +32,22 @@ export class EventHub {
     this.heartbeatTimer.unref?.();
   }
 
-  addSession(ref: SessionRef, socket: SocketLike): void {
+  addSession(ref: SessionRef, socket: SocketLike, token?: string): void {
+    this.socketTokens.set(socket, token);
     this.add(this.sessionSockets, sessionKey(ref), socket);
   }
 
-  addWorkspace(workspaceId: string, socket: SocketLike): void {
+  addWorkspace(workspaceId: string, socket: SocketLike, token?: string): void {
+    this.socketTokens.set(socket, token);
     this.add(this.workspaceSockets, workspaceId, socket);
+  }
+
+  addGlobal(socket: SocketLike, token?: string): void {
+    this.socketTokens.set(socket, token);
+    this.globalSockets.add(socket);
+    this.attachSocket(socket, () => {
+      this.globalSockets.delete(socket);
+    });
   }
 
   currentSeq(ref: SessionRef): number {
@@ -58,6 +73,26 @@ export class EventHub {
     this.send(this.workspaceSockets.get(workspaceId), event);
   }
 
+  publishGlobal(event: GlobalEvent): void {
+    this.send(this.globalSockets, event);
+  }
+
+  /** 关闭使用指定认证会话的连接；token 未提供时关闭所有连接。 */
+  terminateAuthenticated(token?: string, code = SOCKET_UNAUTHORIZED_CLOSE_CODE, reason = "Unauthorized"): void {
+    for (const socket of this.allSockets()) {
+      if (token !== undefined && this.socketTokens.get(socket) !== token) continue;
+      this.closeSocket(socket, code, reason);
+    }
+  }
+
+  /** 关闭认证连接，但保留刚签发的新会话连接。 */
+  terminateAuthenticatedExcept(token: string | undefined, code = SOCKET_UNAUTHORIZED_CLOSE_CODE, reason = "Unauthorized"): void {
+    for (const socket of this.allSockets()) {
+      if (this.socketTokens.get(socket) === token) continue;
+      this.closeSocket(socket, code, reason);
+    }
+  }
+
   /** 向所有工作区连接广播同一通知（用于重启等全局状态）。 */
   broadcastWorkspace(event: { version: typeof PROTOCOL_VERSION; type: "extension.notify"; notification: { id: string; message: string; notifyType?: "info" | "warning" | "error"; sessionId?: string } }): void {
     for (const workspaceId of this.workspaceSockets.keys()) {
@@ -68,27 +103,30 @@ export class EventHub {
   /** 断开全部连接（优雅停机/自重启前调用，避免 ws 阻止 Fastify close）。 */
   terminateAll(): void {
     this.stopHeartbeat();
-    for (const sockets of [...this.sessionSockets.values(), ...this.workspaceSockets.values()]) {
-      for (const socket of sockets) {
-        try {
-          socket.terminate?.();
-        } catch {
-          // 断开失败不影响其余 socket。
-        }
+    for (const socket of this.allSockets()) {
+      try {
+        socket.terminate?.();
+      } catch {
+        // 断开失败不影响其余 socket。
       }
     }
     this.sessionSockets.clear();
     this.workspaceSockets.clear();
+    this.globalSockets.clear();
   }
 
   private add(collection: Map<string, Set<SocketLike>>, key: string, socket: SocketLike): void {
     const sockets = collection.get(key) ?? new Set<SocketLike>();
     collection.set(key, sockets);
     sockets.add(socket);
-    socket.on("close", () => {
+    this.attachSocket(socket, () => {
       sockets.delete(socket);
       if (sockets.size === 0) collection.delete(key);
     });
+  }
+
+  private attachSocket(socket: SocketLike, remove: () => void): void {
+    socket.on("close", remove);
     socket.on("pong", () => {
       this.pendingPong.delete(socket);
     });
@@ -105,7 +143,8 @@ export class EventHub {
         try {
           if (socket.readyState === 1) socket.send(socketHeartbeatMessage(SOCKET_PONG_TYPE));
         } catch {
-          sockets.delete(socket);
+          remove();
+          this.closeSocket(socket, 1011, "Socket write failed");
         }
         return;
       }
@@ -115,7 +154,7 @@ export class EventHub {
 
   /** 心跳巡检：对无 pong 回应的连接调用 terminate，触发客户端 close → 自动重连。 */
   private sweep(): void {
-    for (const sockets of [...this.sessionSockets.values(), ...this.workspaceSockets.values()]) {
+    for (const sockets of [...this.sessionSockets.values(), ...this.workspaceSockets.values(), this.globalSockets]) {
       for (const socket of sockets) {
         if (this.pendingPong.has(socket)) {
           // 上一轮 ping 无回应：判定为死连接，主动断开。
@@ -142,13 +181,34 @@ export class EventHub {
     }
   }
 
+  private allSockets(): Set<SocketLike> {
+    const sockets = new Set<SocketLike>(this.globalSockets);
+    for (const collection of [...this.sessionSockets.values(), ...this.workspaceSockets.values()]) {
+      for (const socket of collection) sockets.add(socket);
+    }
+    return sockets;
+  }
+
+  private closeSocket(socket: SocketLike, code: number, reason: string): void {
+    try {
+      if (socket.close !== undefined) socket.close(code, reason);
+      else socket.terminate?.();
+    } catch {
+      try {
+        socket.terminate?.();
+      } catch {
+        // Best effort; close listeners still remove the socket when available.
+      }
+    }
+  }
+
   private stopHeartbeat(): void {
     if (this.heartbeatTimer === undefined) return;
     clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = undefined;
   }
 
-  private send(sockets: Set<SocketLike> | undefined, value: SessionEvent | WorkspaceEvent): void {
+  private send(sockets: Set<SocketLike> | undefined, value: SessionEvent | WorkspaceEvent | GlobalEvent): void {
     if (sockets === undefined) return;
     const payload = JSON.stringify(value);
     for (const socket of sockets) {

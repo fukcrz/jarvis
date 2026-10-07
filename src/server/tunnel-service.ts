@@ -67,7 +67,10 @@ export class TunnelService {
   private readonly instances = new Map<string, TunnelInstance>();
   private defaultPort = 0;
 
-  constructor(private readonly logInfo: (message: string) => void = () => undefined) {
+  constructor(
+    private readonly logInfo: (message: string) => void = () => undefined,
+    private readonly onChanged: () => void = () => undefined,
+  ) {
     const home = process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis");
     this.configPath = join(home, "tunnel.json");
     this.binDir = join(home, "bin");
@@ -104,6 +107,7 @@ export class TunnelService {
     this.tunnels.push(tunnel);
     await this.persist();
     this.instances.set(tunnel.id, this.createInstance(tunnel));
+    this.onChanged();
     if (tunnel.enabled) await this.startTunnel(tunnel.id);
     return this.snapshot(tunnel.id);
   }
@@ -137,6 +141,7 @@ export class TunnelService {
     // 自动启动：开启时启动，关闭时保持停止。手动启动/停止不受影响。
     if (next.enabled && !wasEnabled) await this.startTunnel(tunnelId);
     if (!next.enabled && wasEnabled) this.logInfo(`穿透已停止自动启动（${next.method}）`);
+    this.onChanged();
     return this.snapshot(tunnelId);
   }
 
@@ -156,6 +161,7 @@ export class TunnelService {
     instance.url = undefined;
     instance.error = undefined;
     instance.pid = undefined;
+    this.onChanged();
     return this.snapshot(tunnelId);
   }
 
@@ -170,6 +176,7 @@ export class TunnelService {
     this.instances.delete(tunnelId);
     this.tunnels = this.tunnels.filter((item) => item.id !== tunnel.id);
     await this.persist();
+    this.onChanged();
     this.logInfo(`已删除穿透条目（${tunnel.method}）`);
   }
 
@@ -254,6 +261,7 @@ export class TunnelService {
     instance.startedAt = Date.now();
     instance.error = undefined;
     instance.url = undefined;
+    this.onChanged();
     let plan: SpawnPlan;
     try {
       plan = await this.buildPlan(instance.config, port);
@@ -325,6 +333,7 @@ export class TunnelService {
     instance.state = "running";
     instance.url = url;
     instance.error = undefined;
+    this.onChanged();
   }
 
   private appendLog(instance: TunnelInstance, line: string): void {
@@ -338,6 +347,7 @@ export class TunnelService {
     instance.url = undefined;
     instance.pid = undefined;
     instance.child = undefined;
+    this.onChanged();
   }
 
   private handleExit(instance: TunnelInstance, code: number | null, signal: string | null): void {
@@ -346,6 +356,7 @@ export class TunnelService {
     if (instance.stopping) {
       instance.state = "idle";
       instance.pid = undefined;
+      this.onChanged();
       return;
     }
     const reason = signal !== null ? `信号 ${signal}` : `退出码 ${code ?? "?"}`;
@@ -353,6 +364,7 @@ export class TunnelService {
     instance.state = "error";
     instance.error = `隧道已断开（${reason}），正在自动重连…`;
     instance.url = undefined;
+    this.onChanged();
     this.scheduleRestart(instance);
   }
 

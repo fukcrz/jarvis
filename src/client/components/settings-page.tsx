@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
 import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderOverride, ProviderStatus, Workspace } from "../../shared/protocol";
@@ -28,6 +28,7 @@ import { SettingsEmpty, SettingsFormSection, SettingsGroup, SettingsRow, Setting
 
 interface SettingsPageProps {
   assistantName: string;
+  refreshKeys: { models: number; tunnel: number; security: number };
   onAssistantNameChange: (name: string) => void;
   workspaces: Workspace[];
   onWorkspacesChange: (workspaces: Workspace[]) => void;
@@ -39,7 +40,7 @@ interface SettingsPageProps {
 type SettingsMessageTone = "success" | "error";
 
 /** 设置入口：分组首页 + 内部子页栈，PC/移动端使用同一信息架构。 */
-export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onAssistantNameChange, onBack }: SettingsPageProps) {
+export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onAssistantNameChange, onBack }: SettingsPageProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const route = parseSettingsPath(location.pathname) ?? { page: "home" };
@@ -63,7 +64,9 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
   const [tunnelSummary, setTunnelSummary] = useState<string>();
   const [securitySummary, setSecuritySummary] = useState<string>();
 
-  const showMessage = (nextMessage: string, tone: SettingsMessageTone = "success") => { setMessageTone(tone); setMessage(nextMessage); };
+  const reloadGeneration = useRef(0);
+  const showMessage = useCallback((nextMessage: string, tone: SettingsMessageTone = "success") => { setMessageTone(tone); setMessage(nextMessage); }, []);
+  useEffect(() => { setName(assistantName); }, [assistantName]);
   const push = (nextRoute: SettingsRoute) => { navigate(settingsPath(nextRoute)); };
   const replaceTop = (nextRoute: SettingsRoute) => { navigate(settingsPath(nextRoute), { replace: true }); };
   const goBack = () => {
@@ -82,22 +85,27 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
     return () => window.clearTimeout(timer);
   }, [message]);
 
-  const reload = async () => {
-    setLoading(true);
+  const reload = useCallback(async (background = false) => {
+    const generation = ++reloadGeneration.current;
+    if (!background) setLoading(true);
     try {
       const [available, custom, enabled] = await Promise.all([api.providers(), api.customProviders(), api.enabledModels()]);
+      if (generation !== reloadGeneration.current) return;
       setProviders(available);
       setCustomProviders(custom);
       setEnabledDraft(initializeDraft(available, enabled));
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : "无法加载设置", "error");
+      if (generation === reloadGeneration.current) showMessage(error instanceof Error ? error.message : "无法加载设置", "error");
     } finally {
-      setLoading(false);
+      if (generation === reloadGeneration.current) setLoading(false);
     }
-  };
-  useEffect(() => { void reload(); }, []);
+  }, [showMessage]);
+  useEffect(() => {
+    void reload(refreshKeys.models > 0);
+    return () => { ++reloadGeneration.current; };
+  }, [reload, refreshKeys.models]);
 
-  // 首页只展示当前摘要；具体页会各自读取和轮询完整数据。
+  // 全局事件仅刷新对应摘要，具体子页按同一刷新序号读取。
   useEffect(() => {
     let disposed = false;
     void api.tunnelList().then((tunnels) => {
@@ -105,10 +113,18 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
       const running = tunnels.filter((tunnel) => tunnel.state === "running").length;
       setTunnelSummary(tunnels.length === 0 ? "未设置" : running > 0 ? `${String(running)} 运行中` : "已停止");
     }).catch(() => { if (!disposed) setTunnelSummary(""); });
+    return () => { disposed = true; };
+  }, [refreshKeys.tunnel]);
+  useEffect(() => {
+    let disposed = false;
     void api.authStatus().then(({ auth }) => { if (!disposed) setSecuritySummary(auth.required ? "已启用" : "未启用"); })
       .catch(() => { if (!disposed) setSecuritySummary(""); });
     return () => { disposed = true; };
-  }, []);
+  }, [refreshKeys.security]);
+
+  useEffect(() => {
+    setWorkspaceRemoveTarget((current) => current !== undefined && !workspaces.some((workspace) => workspace.id === current.id) ? undefined : current);
+  }, [workspaces]);
 
   useEffect(() => {
     if (operation === undefined || operation.state !== "running") return;
@@ -383,25 +399,25 @@ export function SettingsPage({ assistantName, workspaces, onWorkspacesChange, on
       onEditCustom={(provider) => push({ page: "provider-edit", providerId: provider.id })} onAddProvider={() => push({ page: "provider-new" })} onBack={goBack} />;
   } else if (route.page === "provider") {
     const provider = providers.find((item) => item.id === route.providerId);
-    page = provider === undefined ? <SettingsSubpage title="供应商" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <ProviderDetailPage provider={provider} custom={customById.get(provider.id)} draft={enabledDraft} busy={busy}
+    page = provider === undefined ? <SettingsSubpage title="供应商" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <ProviderDetailPage key={provider.id} provider={provider} custom={customById.get(provider.id)} draft={enabledDraft} busy={busy}
       onToggleModel={toggleModelInstant} onEnableModels={enableModelsInstant} onCustomModels={persistCustomModels} onLogin={startLogin} onLogout={logout}
       onEdit={() => push(customById.has(provider.id) ? { page: "provider-edit", providerId: provider.id } : { page: "provider-override", providerId: provider.id })} onFetch={api.fetchProviderModels} onBack={goBack} />;
   } else if (route.page === "provider-new") {
     page = <ProviderWizardPage providers={providers} busy={busy === "provider"} onSave={saveProvider} onLogin={startLogin} onBack={goBack} />;
   } else if (route.page === "provider-edit") {
     const custom = customProviders.find((item) => item.id === route.providerId);
-    page = custom === undefined ? <SettingsSubpage title="供应商" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <ProviderWizardPage providers={providers} editing={custom} busy={busy === "provider"} onSave={saveProvider} onDelete={setProviderRemoveTarget} onLogin={startLogin} onFetch={api.fetchProviderModels} onBack={goBack} />;
+    page = custom === undefined ? <SettingsSubpage title="供应商" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <ProviderWizardPage key={JSON.stringify(custom)} providers={providers} editing={custom} busy={busy === "provider"} onSave={saveProvider} onDelete={setProviderRemoveTarget} onLogin={startLogin} onFetch={api.fetchProviderModels} onBack={goBack} />;
   } else if (route.page === "provider-override") {
     const provider = providers.find((item) => item.id === route.providerId);
-    page = provider === undefined ? <SettingsSubpage title="编辑连接" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <BuiltinOverridePage provider={provider} busy={busy === "provider"} onSave={(override) => saveOverride(provider.id, override)} onClear={() => clearOverride(provider.id)} onFetch={api.fetchProviderModels} onBack={goBack} />;
+    page = provider === undefined ? <SettingsSubpage title="编辑连接" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <BuiltinOverridePage key={`${provider.id}:${JSON.stringify(provider.override ?? {})}`} provider={provider} busy={busy === "provider"} onSave={(override) => saveOverride(provider.id, override)} onClear={() => clearOverride(provider.id)} onFetch={api.fetchProviderModels} onBack={goBack} />;
   } else if (route.page === "model-scope") {
     page = <ModelScopePage providers={providers} customById={customById} draft={enabledDraft} busy={busy === "model-manager"} onToggleModel={toggleModelInstant} onBack={goBack} />;
   } else if (route.page === "workspaces") {
     page = <WorkspacesPage workspaces={workspaces} busy={workspaceBusy} onMove={moveWorkspace} onRemove={setWorkspaceRemoveTarget} onAdd={() => setWorkspaceDialogOpen(true)} onBack={goBack} />;
   } else if (route.page === "tunnel") {
-    page = <SettingsSubpage title="内网穿透" onBack={goBack}><TunnelPanel onMessage={(nextMessage, tone) => showMessage(nextMessage, tone)} /></SettingsSubpage>;
+    page = <SettingsSubpage title="内网穿透" onBack={goBack}><TunnelPanel refreshKey={refreshKeys.tunnel} onMessage={showMessage} /></SettingsSubpage>;
   } else {
-    page = <SettingsSubpage title="安全" onBack={goBack}><SecurityPanel onMessage={(nextMessage, tone) => showMessage(nextMessage, tone)} /></SettingsSubpage>;
+    page = <SettingsSubpage title="安全" onBack={goBack}><SecurityPanel refreshKey={refreshKeys.security} onMessage={showMessage} /></SettingsSubpage>;
   }
 
   return <section className="settings-page">

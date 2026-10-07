@@ -136,6 +136,11 @@ export function withoutSession(current: SessionSummary[], sessionId: string): Se
   return next.length === current.length ? current : next;
 }
 
+export function withoutKeys<T>(current: Record<string, T>, keys: ReadonlySet<string>): Record<string, T> {
+  if (!Object.keys(current).some((key) => keys.has(key))) return current;
+  return Object.fromEntries(Object.entries(current).filter(([key]) => !keys.has(key)));
+}
+
 export function withoutDraft(current: Record<string, string>, sessionId: string): Record<string, string> {
   if (!(sessionId in current)) return current;
   const next = { ...current };
@@ -146,6 +151,7 @@ export function withoutDraft(current: Record<string, string>, sessionId: string)
 /**
  * HTTP 会话列表是权威快照；当前列表里尚未出现在快照中的非空项（刚创建、事件已到列表未到）保留。
  * 空草稿不落盘，快照没有则丢掉，避免幽灵新会话。已标记删除的 id 两侧都丢掉。
+ * baseline 为请求开始时的列表：重同步时移除快照中缺失、期间也未更新的旧会话。
  */
 export function mergeSessionSnapshots(
   current: Record<string, SessionSummary[]>,
@@ -153,18 +159,27 @@ export function mergeSessionSnapshots(
   workspaceIds: string[],
   deleted: Record<string, Set<string> | undefined>,
   viewedIdleKeys: ReadonlySet<string> = EMPTY_VIEWED_IDLE_KEYS,
+  baseline?: Record<string, SessionSummary[]>,
 ): Record<string, SessionSummary[]> {
   const next: Record<string, SessionSummary[]> = {};
   for (const workspaceId of workspaceIds) {
     const deletedIds = deleted[workspaceId];
+    const baselineById = new Map(baseline?.[workspaceId]?.map((session) => [session.id, session]) ?? []);
     const byId = new Map<string, SessionSummary>();
     for (const session of snapshots[workspaceId] ?? []) {
       if (deletedIds?.has(session.id) === true) continue;
       byId.set(session.id, applyViewedIdleGuard(session, viewedIdleKeys));
     }
     for (const session of current[workspaceId] ?? []) {
-      if (byId.has(session.id) || deletedIds?.has(session.id) === true) continue;
-      if (isEmptySession(session)) continue;
+      if (deletedIds?.has(session.id) === true) continue;
+      const unchanged = baselineById.get(session.id) === session;
+      if (byId.has(session.id)) {
+        if (baseline !== undefined && !unchanged) byId.set(session.id, applyViewedIdleGuard(session, viewedIdleKeys));
+        continue;
+      }
+      if (isEmptySession(session) && (baseline === undefined || unchanged)) continue;
+      // 重同步时快照中缺失的旧项已删除；请求在途期间新增/更新的项仍以事件为准。
+      if (baseline !== undefined && unchanged) continue;
       byId.set(session.id, session);
     }
     next[workspaceId] = sortSessionSummaries([...byId.values()]);

@@ -47,13 +47,15 @@ Login is required for local, LAN and tunnel requests alike.
 HMAC signing secret; the password itself is never written to disk. Sessions are
 stateless signed tokens, so they survive a restart.
 - **Revocation** — changing or clearing the password invalidates every existing
-session; *退出所有设备* does the same on demand, while *退出登录* only clears the
-current browser.
+session; *退出所有设备* does the same on demand, while *退出登录* clears the
+current browser and closes connections using that browser's token.
 - **Brute force** — after 3 failed attempts a client is asked to wait (5s, then
 doubling, capped at 15 minutes). All tunnel traffic shares one client address,
 so a hostile visitor can also delay logins by up to 15 minutes at a time.
-- **WebSocket** — an unauthenticated handshake is closed with code `4401`; the
-client drops back to the login page instead of reconnecting in a loop.
+- **WebSocket** — an unauthenticated handshake or revoked connection is closed
+with code `4401`. The client checks its current cookie and either reconnects with
+the new password-change session or returns to login. Clearing the password uses
+normal reconnect recovery because access becomes open again.
 
 Clearing the password in Settings → 安全 (the *关闭认证* button) turns
 authentication off again.
@@ -96,6 +98,20 @@ The same build is what the preview packages ship (`npm pack` runs `prepack`,
 which builds `dist/` automatically).
 
 Jarvis stores only its Workspace registry in `~/.jarvis/workspaces.json`. On first run it registers the Pi agent directory (`~/.pi/agent`, or `PI_CODING_AGENT_DIR`) as a workspace named `pi agent`. Pi JSONL remains the authoritative conversation history. Do not write to the same Pi session concurrently from Jarvis and the Pi CLI.
+
+## Synchronization across clients
+
+Clients subscribe to `/api/events` for workspace registry, assistant name,
+provider/model configuration, tunnel and authentication changes. These events
+carry only a version and a change type; clients read the updated values through
+the existing authenticated APIs.
+
+Workspace additions, removal, labels, order and open times synchronize across
+browsers. Removing a workspace closes its local panels, clears associated drafts
+and menus, and recovers stale routes. Session updates (including marking a stored
+session viewed) continue to use workspace subscriptions. Reconnects, foreground
+recovery and restored browser pages refetch registries, sessions and settings to
+recover changes missed while disconnected.
 
 ## Pi CLI compatibility
 

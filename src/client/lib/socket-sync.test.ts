@@ -12,6 +12,7 @@ import {
   shouldReconnectVisibleSocket,
   socketHeartbeatMessage,
   touchViewedIdleKeys,
+  withoutKeys,
   SOCKET_PING_TYPE,
   SOCKET_PONG_TYPE,
   SOCKET_RECONNECT_COOLDOWN_MS,
@@ -148,6 +149,44 @@ describe("mergeSessionSnapshots", () => {
     expect(merged.ws?.[1]).toMatchObject({ id: "b", runState: "running" });
   });
 
+  it("removes sessions deleted during disconnection when their snapshot is missing", () => {
+    const gone = session("gone", { preview: "removed while offline" });
+    const keep = session("keep", { preview: "still here" });
+    const baseline = { ws: [gone, keep] };
+    const merged = mergeSessionSnapshots(baseline, { ws: [keep] }, ["ws"], {}, new Set(), baseline);
+    expect(merged.ws?.map((item) => item.id)).toEqual(["keep"]);
+  });
+
+  it("keeps event updates and creations that arrive while the resync snapshot is in flight", () => {
+    const old = session("changed", { preview: "before" });
+    const baseline = { ws: [old] };
+    const changed = { ...old, preview: "updated by event" };
+    const created = session("new", { preview: "created by event" });
+    const merged = mergeSessionSnapshots({ ws: [changed, created] }, { ws: [] }, ["ws"], {}, new Set(), baseline);
+    expect(merged.ws?.map((item) => item.id).sort()).toEqual(["changed", "new"]);
+    expect(merged.ws?.find((item) => item.id === "changed")?.preview).toBe("updated by event");
+  });
+
+  it("keeps a newly created empty slot while an older resync response is in flight", () => {
+    const created = session("new-empty");
+    const baseline = { ws: [] };
+    const merged = mergeSessionSnapshots({ ws: [created] }, { ws: [] }, ["ws"], {}, new Set(), baseline);
+    expect(merged.ws?.map((item) => item.id)).toEqual(["new-empty"]);
+  });
+
+  it("does not let a stale resync snapshot overwrite newer session events", () => {
+    const old = session("a", { preview: "before" });
+    const baseline = { ws: [old] };
+    const running = { ...old, runState: "running" as const, attentionState: "running" as const };
+    const merged = mergeSessionSnapshots({ ws: [running] }, { ws: [old] }, ["ws"], {}, new Set(), baseline);
+    expect(merged.ws?.[0]).toMatchObject({ runState: "running", attentionState: "running" });
+  });
+
+  it("prunes removed workspaces from reconciled snapshots", () => {
+    const merged = mergeSessionSnapshots({ ws: [session("a")], gone: [session("b", { workspaceId: "gone" })] }, { ws: [session("a")] }, ["ws"], {});
+    expect(Object.keys(merged)).toEqual(["ws"]);
+  });
+
   it("drops empty drafts that are missing from the HTTP snapshot", () => {
     const ghost = session("ghost");
     const keep = session("keep", { preview: "hello" });
@@ -182,6 +221,15 @@ describe("mergeSessionSnapshots", () => {
     );
     expect(merged.ws?.[0]).toMatchObject({ id: "a", attentionState: "idle" });
     expect(merged.ws?.[0]?.attentionAt).toBeUndefined();
+  });
+});
+
+describe("withoutKeys", () => {
+  it("cleans removed session drafts/attachments and keeps unrelated state", () => {
+    const drafts = { deleted: "draft", kept: "another draft" };
+    expect(withoutKeys(drafts, new Set(["deleted"]))).toEqual({ kept: "another draft" });
+    expect(withoutKeys(drafts, new Set(["missing"]))).toBe(drafts);
+    expect(withoutKeys({ deleted: ["attachment"], kept: [] }, new Set(["deleted"]))).toEqual({ kept: [] });
   });
 });
 

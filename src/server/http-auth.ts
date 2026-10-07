@@ -24,9 +24,10 @@ export function clearAuthCookie(reply: FastifyReply): void {
 
 interface CloseableSocket { close(code?: number, reason?: string): void }
 
-/** WebSocket 握手鉴权：失败用 4401 关闭，客户端据此回到登录页而不是无限重连。 */
-export function authorizeSocket(auth: AuthService, request: FastifyRequest, socket: CloseableSocket): boolean {
-  if (auth.status(readAuthCookie(request.headers.cookie)).authenticated) return true;
+/** WebSocket 握手鉴权：返回连接所用 token，失败用 4401 关闭。 */
+export function authorizeSocket(auth: AuthService, request: FastifyRequest, socket: CloseableSocket): { token?: string } | undefined {
+  const token = readAuthCookie(request.headers.cookie);
+  if (auth.status(token).authenticated) return token === undefined ? {} : { token };
   socket.close(4401, "Unauthorized");
-  return false;
+  return undefined;
 }

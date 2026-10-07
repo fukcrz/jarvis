@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Check, LogOut, ShieldCheck } from "lucide-react";
 import type { AuthStatus } from "../../shared/protocol";
 import { api, notifyUnauthorized } from "../api";
@@ -8,7 +8,7 @@ import { Dialog, DialogContent } from "./ui/dialog";
 type SettingsMessageTone = "success" | "error";
 
 /** 安全子页内容：访问密码、登录设备与认证关闭确认。 */
-export function SecurityPanel({ onMessage }: { onMessage: (message: string, tone?: SettingsMessageTone) => void }) {
+export function SecurityPanel({ onMessage, refreshKey = 0 }: { onMessage: (message: string, tone?: SettingsMessageTone) => void; refreshKey?: number }) {
   const [status, setStatus] = useState<AuthStatus | undefined>();
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -17,14 +17,16 @@ export function SecurityPanel({ onMessage }: { onMessage: (message: string, tone
   const [confirmPassword, setConfirmPassword] = useState("");
   const [disableOpen, setDisableOpen] = useState(false);
   const enabled = status?.required === true;
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
 
   useEffect(() => {
     let disposed = false;
     void api.authStatus().then(({ auth }) => { if (!disposed) setStatus(auth); })
-      .catch((error: unknown) => { if (!disposed) onMessage(error instanceof Error ? error.message : "无法读取认证状态", "error"); })
+      .catch((error: unknown) => { if (!disposed) onMessageRef.current(error instanceof Error ? error.message : "无法读取认证状态", "error"); })
       .finally(() => { if (!disposed) setLoading(false); });
     return () => { disposed = true; };
-  }, [onMessage]);
+  }, [refreshKey]);
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -73,8 +75,10 @@ export function SecurityPanel({ onMessage }: { onMessage: (message: string, tone
     if (busy) return;
     setBusy(true);
     const request = allDevices ? api.logoutAll() : api.logout();
-    void request.catch((error: unknown) => { onMessage(error instanceof Error ? error.message : "退出登录失败", "error"); })
-      .finally(() => { notifyUnauthorized(); });
+    void request.then(() => { notifyUnauthorized(); }).catch((error: unknown) => {
+      onMessage(error instanceof Error ? error.message : "退出登录失败", "error");
+      setBusy(false);
+    });
   };
 
   return <section className="settings-section">

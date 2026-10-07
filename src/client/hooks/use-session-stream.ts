@@ -294,6 +294,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
       return;
     }
     let disposed = false;
+    let unauthorized = false;
     let socket: WebSocket | undefined;
     let reconnectTimer: number | undefined;
     let pingTimer: number | undefined;
@@ -380,7 +381,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     };
 
     const connect = () => {
-      if (disposed) return;
+      if (disposed || unauthorized) return;
       stopReconnectAndPing();
       lastReconnectAt = Date.now();
       dispatch({ type: "connection", value: attempt === 0 ? "connecting" : "reconnecting" });
@@ -440,8 +441,11 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
           window.clearInterval(pingTimer);
           pingTimer = undefined;
         }
-        // 4401：服务端因未登录关闭握手，不再重连，交由 AuthGate 回到登录页。
+        // 4401 停止本轮重连/巡检，由 AuthGate 检查最新 Cookie 后恢复或登录。
         if (event.code === 4401) {
+          unauthorized = true;
+          stopReconnectAndPing();
+          dispatch({ type: "connection", value: "offline" });
           notifyUnauthorized();
           return;
         }
@@ -453,7 +457,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     };
 
     const reconnectNow = () => {
-      if (disposed) return;
+      if (disposed || unauthorized) return;
       hydrated = false;
       buffered = [];
       hydrateGeneration += 1;
@@ -463,7 +467,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     };
 
     const resync = () => {
-      if (disposed) return;
+      if (disposed || unauthorized) return;
       const readyState = socket?.readyState ?? WebSocket.CLOSED;
       if (shouldReconnectVisibleSocket({
         visible: document.visibilityState === "visible",

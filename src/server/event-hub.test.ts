@@ -7,6 +7,8 @@ class FakeSocket {
   readyState = 1;
   readonly sent: string[] = [];
   terminated = false;
+  closeCode: number | undefined;
+  closeReason: string | undefined;
   /** false 时协议层 ping 不回 pong。 */
   respondToProtocolPing = true;
   /** false 时应用层 ping 不回 pong。 */
@@ -44,7 +46,9 @@ class FakeSocket {
     for (const listener of this.closeListeners) listener();
   }
 
-  close(): void {
+  close(code?: number, reason?: string): void {
+    this.closeCode = code;
+    this.closeReason = reason;
     this.readyState = 3;
     for (const listener of this.closeListeners) listener();
   }
@@ -79,6 +83,96 @@ describe("EventHub", () => {
       expect(hub.currentSeq(ref)).toBe(3);
     } finally {
       hub.terminateAll();
+    }
+  });
+
+  it("delivers global invalidations only to global subscribers and removes closed ones", () => {
+    const hub = new EventHub();
+    try {
+      const global = new FakeSocket();
+      const workspace = new FakeSocket();
+      hub.addGlobal(global);
+      hub.addWorkspace("workspace", workspace);
+      hub.publishGlobal({ version: 1, type: "settings.changed" });
+      expect(global.sent.map((payload) => JSON.parse(payload))).toEqual([{ version: 1, type: "settings.changed" }]);
+      expect(workspace.sent).toEqual([]);
+      global.close();
+      hub.publishGlobal({ version: 1, type: "workspaces.changed" });
+      expect(global.sent).toHaveLength(1);
+    } finally {
+      hub.terminateAll();
+    }
+  });
+
+  it("terminates only the logging-out token across global, workspace and session subscriptions", () => {
+    const hub = new EventHub();
+    try {
+      const global = new FakeSocket();
+      const workspace = new FakeSocket();
+      const session = new FakeSocket();
+      const other = new FakeSocket();
+      const anonymous = new FakeSocket();
+      hub.addGlobal(global, "first");
+      hub.addWorkspace("workspace", workspace, "first");
+      hub.addSession({ workspaceId: "workspace", sessionId: "session" }, session, "first");
+      hub.addGlobal(other, "second");
+      hub.addGlobal(anonymous);
+      hub.terminateAuthenticated("first");
+      for (const socket of [global, workspace, session]) expect(socket.closeCode).toBe(4401);
+      expect(other.readyState).toBe(1);
+      expect(anonymous.readyState).toBe(1);
+      hub.publishGlobal({ version: 1, type: "models.changed" });
+      expect(global.sent).toEqual([]);
+      expect(other.sent).toHaveLength(1);
+      hub.terminateAuthenticated();
+      expect(other.closeCode).toBe(4401);
+      expect(anonymous.closeCode).toBe(4401);
+    } finally {
+      hub.terminateAll();
+    }
+  });
+
+  it("keeps the newly issued token on password changes and anonymous sockets when authentication is disabled", () => {
+    const hub = new EventHub();
+    try {
+      const old = new FakeSocket();
+      const current = new FakeSocket();
+      const anonymous = new FakeSocket();
+      hub.addGlobal(old, "old");
+      hub.addWorkspace("workspace", current, "new");
+      hub.addGlobal(anonymous);
+      hub.terminateAuthenticatedExcept("new");
+      expect(old.closeCode).toBe(4401);
+      expect(anonymous.closeCode).toBe(4401);
+      expect(current.readyState).toBe(1);
+      const open = new FakeSocket();
+      hub.addGlobal(open);
+      hub.terminateAuthenticatedExcept(undefined, 1012, "Authentication changed");
+      expect(current.closeCode).toBe(1012);
+      expect(open.readyState).toBe(1);
+    } finally {
+      hub.terminateAll();
+    }
+  });
+
+  it("keeps global sockets in the heartbeat and shutdown lifecycle", () => {
+    vi.useFakeTimers();
+    const hub = new EventHub();
+    try {
+      const alive = new FakeSocket();
+      const dead = new FakeSocket();
+      dead.respondToProtocolPing = false;
+      dead.respondToAppPing = false;
+      hub.addGlobal(alive);
+      hub.addGlobal(dead);
+      vi.advanceTimersByTime(SOCKET_HEARTBEAT_INTERVAL_MS * 2);
+      expect(alive.terminated).toBe(false);
+      expect(dead.terminated).toBe(true);
+      hub.terminateAll();
+      expect(alive.terminated).toBe(true);
+    } finally {
+      hub.terminateAll();
+      vi.useRealTimers();
     }
   });
 

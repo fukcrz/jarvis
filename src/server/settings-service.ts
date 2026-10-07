@@ -39,6 +39,7 @@ export class SettingsService {
   constructor(
     private readonly modelRuntime: () => Promise<ModelRuntime>,
     private readonly refreshSessions: () => Promise<void>,
+    private readonly onChanged: (type: "settings.changed" | "models.changed") => void = () => undefined,
     settingsPath = join(process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis"), "settings.json"),
   ) {
     this.settingsPath = settingsPath;
@@ -65,6 +66,7 @@ export class SettingsService {
   async updateSettings(input: Partial<Pick<AppSettings, "assistantName">>): Promise<AppSettings> {
     if (input.assistantName !== undefined) this.settings.assistantName = normalizeAssistantName(input.assistantName);
     await this.persistSettings();
+    this.onChanged("settings.changed");
     return this.getSettings();
   }
 
@@ -252,6 +254,7 @@ export class SettingsService {
     if (noMatch !== undefined) throw new AppError("MODEL_CONFIGURATION_INVALID", `Model pattern "${noMatch.pattern}" does not match any model`, 400);
     SettingsManager.create(process.cwd(), getAgentDir()).setEnabledModels(patterns.length === 0 ? undefined : patterns);
     await this.refreshSessions();
+    this.onChanged("models.changed");
     return { patterns, resolved: patterns.length === 0 ? [] : await this.resolveEnabledModels(runtime, patterns) };
   }
 
@@ -286,7 +289,7 @@ export class SettingsService {
         // Credentials have already been committed by Pi. Preserve that outcome
         // even if updating one of Jarvis's open session pickers fails.
         operation.error = `登录已完成，但模型列表刷新失败：${asMessage(error)}`;
-      });
+      }).finally(() => this.onChanged("models.changed"));
     }).catch((error: unknown) => {
       operation.prompt = undefined;
       operation.resolvePrompt = undefined;
@@ -325,6 +328,7 @@ export class SettingsService {
     const runtime = await this.modelRuntime();
     await runtime.logout(providerId);
     await this.refreshSessions();
+    this.onChanged("models.changed");
   }
 
   private requestPrompt(operation: LoginOperation, prompt: AuthPrompt): Promise<string> {
@@ -368,6 +372,7 @@ export class SettingsService {
     const firstError = result.errors.values().next().value as Error | undefined;
     if (firstError !== undefined) throw new AppError("MODEL_CONFIGURATION_INVALID", firstError.message, 400);
     await this.refreshSessions();
+    this.onChanged("models.changed");
   }
 
   private async readModelsConfig(): Promise<ModelConfig> {

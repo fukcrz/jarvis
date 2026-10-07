@@ -29,7 +29,7 @@ function methodName(method: TunnelMethod): string {
   return TUNNEL_METHODS.find((item) => item.id === method)?.name ?? method;
 }
 
-export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?: "success" | "error") => void }) {
+export function TunnelPanel({ onMessage, refreshKey = 0 }: { onMessage: (message: string, tone?: "success" | "error") => void; refreshKey?: number }) {
   const [tunnels, setTunnels] = useState<TunnelSnapshot[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<TunnelSnapshot | undefined>();
@@ -47,7 +47,16 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
     const load = async () => {
       try {
         const next = await api.tunnelList();
-        if (!disposed) setTunnels(next);
+        if (!disposed) {
+          setTunnels(next);
+          setEditing((current) => {
+            if (current === undefined) return current;
+            const saved = next.find((item) => item.id === current.id);
+            if (saved === undefined) return current;
+            const config = (item: TunnelSnapshot) => JSON.stringify([item.name, item.method, item.enabled, item.sish, item.frp]);
+            return config(saved) === config(current) ? current : saved;
+          });
+        }
       } catch (error) {
         if (!disposed) onMessageRef.current(error instanceof Error ? error.message : "无法读取穿透状态", "error");
       }
@@ -57,7 +66,17 @@ export function TunnelPanel({ onMessage }: { onMessage: (message: string, tone?:
     const onVisible = () => { if (!document.hidden) void load(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { disposed = true; window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
-  }, []);
+  }, [refreshKey]);
+
+  useEffect(() => {
+    const ids = new Set(tunnels.map((tunnel) => tunnel.id));
+    setDetailId((current) => current !== undefined && !ids.has(current) ? undefined : current);
+    setRemoveTarget((current) => current !== undefined && !ids.has(current.id) ? undefined : current);
+    if (editing !== undefined && !ids.has(editing.id)) {
+      setEditing(undefined);
+      setEditorOpen(false);
+    }
+  }, [tunnels, editing]);
 
   const run = async (operation: string, id: string, fn: () => Promise<TunnelSnapshot>) => {
     if (busy !== undefined) return;

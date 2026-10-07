@@ -17,7 +17,10 @@ export class WorkspaceStore {
   private readonly filePath: string;
   private workspaces: Workspace[] = [];
 
-  constructor(filePath = join(process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis"), "workspaces.json")) {
+  constructor(
+    filePath = join(process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis"), "workspaces.json"),
+    private readonly onChanged: () => void = () => undefined,
+  ) {
     this.filePath = filePath;
   }
 
@@ -69,6 +72,7 @@ export class WorkspaceStore {
     };
     this.workspaces.push(workspace);
     await this.persist();
+    this.onChanged();
     return workspace;
   }
 
@@ -83,6 +87,7 @@ export class WorkspaceStore {
       return { ...workspace, sortOrder };
     });
     await this.persist();
+    this.onChanged();
     return this.list();
   }
 
@@ -91,6 +96,7 @@ export class WorkspaceStore {
     workspace.label = normalizeLabel(label, workspace.cwd);
     workspace.updatedAt = new Date().toISOString();
     await this.persist();
+    this.onChanged();
     return workspace;
   }
 
@@ -98,6 +104,7 @@ export class WorkspaceStore {
     const workspace = this.get(id);
     workspace.lastOpenedAt = new Date().toISOString();
     await this.persist();
+    this.onChanged();
     return workspace;
   }
 
@@ -105,6 +112,7 @@ export class WorkspaceStore {
     this.get(id);
     this.workspaces = this.workspaces.filter((workspace) => workspace.id !== id);
     await this.persist();
+    this.onChanged();
   }
 
   private async persist(): Promise<void> {

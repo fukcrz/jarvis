@@ -640,6 +640,13 @@ export type WorkspaceEvent =
   | { version: typeof PROTOCOL_VERSION; type: "session.deleted"; workspaceId: string; sessionId: string }
   | { version: typeof PROTOCOL_VERSION; type: "extension.notify"; workspaceId: string; notification: { id: string; message: string; notifyType?: "info" | "warning" | "error"; sessionId?: string } };
 
+export type GlobalEvent =
+  | { version: typeof PROTOCOL_VERSION; type: "workspaces.changed" }
+  | { version: typeof PROTOCOL_VERSION; type: "settings.changed" }
+  | { version: typeof PROTOCOL_VERSION; type: "models.changed" }
+  | { version: typeof PROTOCOL_VERSION; type: "tunnel.changed" }
+  | { version: typeof PROTOCOL_VERSION; type: "security.changed" };
+
 export interface ApiErrorBody {
   error: {
     code: string;
@@ -696,6 +703,29 @@ const sessionSummarySchema = z.object({
   attentionState: z.enum(["idle", "running", "completed_unread", "failed", "waiting_interaction"]).default("idle"),
   starred: z.boolean().optional(),
 });
+
+export const globalEventSchema = z.discriminatedUnion("type", [
+  z.object({
+    version: z.literal(PROTOCOL_VERSION),
+    type: z.literal("workspaces.changed"),
+  }),
+  z.object({
+    version: z.literal(PROTOCOL_VERSION),
+    type: z.literal("settings.changed"),
+  }),
+  z.object({
+    version: z.literal(PROTOCOL_VERSION),
+    type: z.literal("models.changed"),
+  }),
+  z.object({
+    version: z.literal(PROTOCOL_VERSION),
+    type: z.literal("tunnel.changed"),
+  }),
+  z.object({
+    version: z.literal(PROTOCOL_VERSION),
+    type: z.literal("security.changed"),
+  }),
+]);
 
 export const workspaceEventSchema = z.discriminatedUnion("type", [
   z.object({
