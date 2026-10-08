@@ -100,11 +100,7 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
     saveMobileExpandedGroups(expandedGroupIds);
   }, [expandedGroupIds]);
   const requestCreateSession = () => {
-    if (workspaceFilter === "all") {
-      setProjectPickerOpen(true);
-      return;
-    }
-    props.onCreateSession(workspaceFilter);
+    setProjectPickerOpen(true);
   };
   // 按项目分桶：组顺序跟 PC 侧栏一致；组内按关注档、进入该档时间、用户发送时间排。
   const groups = useMemo<MobileSessionGroup[]>(() => {
