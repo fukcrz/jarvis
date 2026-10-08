@@ -12,7 +12,8 @@ export type UpdatePhase =
   | { kind: "available"; offer: UpdateOffer }
   | { kind: "downloading"; offer: UpdateOffer; received: number; total?: number }
   | { kind: "download-failed"; offer: UpdateOffer; error: string }
-  | { kind: "ready"; offer: UpdateOffer; busy: boolean; error?: string }
+  | { kind: "ready"; offer: UpdateOffer; error?: string }
+  | { kind: "confirm-install"; offer: UpdateOffer; running: number }
   | { kind: "installing"; offer: UpdateOffer }
   | { kind: "up-to-date" }
   | { kind: "check-failed"; error: string };
@@ -38,7 +39,8 @@ export type UpdateAction =
   | { type: "download-progress"; received: number; total?: number }
   | { type: "download-finished" }
   | { type: "download-failed"; error: string }
-  | { type: "install-blocked" }
+  | { type: "install-confirm"; running: number }
+  | { type: "install-cancel" }
   | { type: "install-failed"; error: string }
   | { type: "install-started" };
 
@@ -54,11 +56,12 @@ export function updatePhaseLocksCheck(phase: UpdatePhase): boolean {
     || phase.kind === "downloading"
     || phase.kind === "download-failed"
     || phase.kind === "ready"
+    || phase.kind === "confirm-install"
     || phase.kind === "installing";
 }
 
 export function canDismissUpdate(phase: UpdatePhase): boolean {
-  return phase.kind !== "closed" && phase.kind !== "downloading" && phase.kind !== "installing";
+  return phase.kind !== "closed" && phase.kind !== "downloading" && phase.kind !== "installing" && phase.kind !== "confirm-install";
 }
 
 export function updateCheckDisposition(session: UpdateSession, manual: boolean, version: string, downloadedVersion?: string): UpdateCheckDisposition {
@@ -79,7 +82,7 @@ export function reduceUpdateSession(session: UpdateSession, action: UpdateAction
     case "check-found": {
       if (updateCheckDisposition(session, action.manual, action.offer.version, action.downloaded ? action.offer.version : undefined) === "drop") return session;
       const held = { version: action.offer.version, downloaded: action.downloaded };
-      if (action.downloaded) return { ...session, phase: { kind: "ready", offer: action.offer, busy: false }, held };
+      if (action.downloaded) return { ...session, phase: { kind: "ready", offer: action.offer }, held };
       return { ...session, phase: { kind: "available", offer: action.offer }, held };
     }
     case "check-failed":
@@ -98,26 +101,27 @@ export function reduceUpdateSession(session: UpdateSession, action: UpdateAction
       return { ...session, phase: { ...session.phase, received: action.received, total: action.total } };
     case "download-finished":
       if (session.phase.kind !== "downloading") return session;
-      return { ...session, phase: { kind: "ready", offer: session.phase.offer, busy: false }, held: { version: session.phase.offer.version, downloaded: true } };
+      return { ...session, phase: { kind: "ready", offer: session.phase.offer }, held: { version: session.phase.offer.version, downloaded: true } };
     case "download-failed":
       if (session.phase.kind !== "downloading") return session;
       return { ...session, phase: { kind: "download-failed", offer: session.phase.offer, error: action.error }, held: { version: session.phase.offer.version, downloaded: false } };
-    case "install-blocked":
+    case "install-confirm": {
+      if (session.phase.kind !== "ready" || action.running <= 0) return session;
+      return { ...session, phase: { kind: "confirm-install", offer: session.phase.offer, running: action.running }, held: { version: session.phase.offer.version, downloaded: true } };
+    }
+    case "install-cancel": {
+      if (session.phase.kind !== "confirm-install") return session;
+      return { ...session, phase: { kind: "ready", offer: session.phase.offer }, held: { version: session.phase.offer.version, downloaded: true } };
+    }
     case "install-failed":
     case "install-started": {
-      const offer = session.phase.kind === "ready" || session.phase.kind === "installing" ? session.phase.offer : undefined;
+      const offer = session.phase.kind === "ready" || session.phase.kind === "confirm-install" || session.phase.kind === "installing" ? session.phase.offer : undefined;
       if (offer === undefined) return session;
       if (action.type === "install-started") {
-        if (session.phase.kind !== "ready") return session;
+        if (session.phase.kind === "installing") return session;
         return { ...session, phase: { kind: "installing", offer }, held: { version: offer.version, downloaded: true } };
       }
-      return {
-        ...session,
-        phase: action.type === "install-blocked"
-          ? { kind: "ready", offer, busy: true }
-          : { kind: "ready", offer, busy: false, error: action.error },
-        held: { version: offer.version, downloaded: true },
-      };
+      return { ...session, phase: { kind: "ready", offer, error: action.error }, held: { version: offer.version, downloaded: true } };
     }
     default:
       return session;
@@ -154,6 +158,10 @@ export function downloadProgressLabel(received: number, total?: number): string 
     return `${String(percent)}% · ${formatByteSize(received)} / ${formatByteSize(total)}`;
   }
   return received > 0 ? formatByteSize(received) : "";
+}
+
+export function runningSessionLabel(count: number): string {
+  return `当前有 ${String(count)} 个正在运行的会话`;
 }
 
 export function updateErrorMessage(error: unknown): string {

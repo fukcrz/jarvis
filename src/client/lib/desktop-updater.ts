@@ -40,13 +40,13 @@ export async function relaunchDesktop(): Promise<void> {
   await invoke("plugin:process|restart");
 }
 
-export async function desktopSessionsRunning(): Promise<boolean> {
+export async function desktopSessionRunCount(): Promise<number> {
   const response = await fetch("/api/health");
   if (!response.ok) throw new Error("无法确认任务状态");
   const body: unknown = await response.json();
-  if (typeof body !== "object" || body === null || !("running" in body)) return false;
+  if (typeof body !== "object" || body === null || !("running" in body)) return 0;
   const running = body.running;
-  return typeof running === "number" && running > 0;
+  return typeof running === "number" && running > 0 ? running : 0;
 }
 
 class DesktopUpdate implements AvailableUpdate {

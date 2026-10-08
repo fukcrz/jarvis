@@ -6,6 +6,7 @@ import {
   reduceUpdateSession,
   updateCheckDisposition,
   updateErrorMessage,
+  runningSessionLabel,
   updateNotes,
   updateVersionLabel,
   type UpdateAction,
@@ -37,7 +38,7 @@ describe("desktop update session", () => {
       { type: "download-progress", received: 20, total: 100 },
       { type: "download-finished" },
     ]);
-    expect(ready.phase).toEqual({ kind: "ready", offer, busy: false });
+    expect(ready.phase).toEqual({ kind: "ready", offer });
     expect(ready.held).toEqual({ version: "0.1.15", downloaded: true });
     const dismissed = apply([{ type: "dismiss" }], ready);
     expect(apply([{ type: "check-found", manual: false, offer, downloaded: true }], dismissed).phase.kind).toBe("closed");
@@ -45,7 +46,7 @@ describe("desktop update session", () => {
       { type: "check-started", manual: true },
       { type: "check-found", manual: true, offer, downloaded: true },
     ], dismissed);
-    expect(again.phase).toEqual({ kind: "ready", offer, busy: false });
+    expect(again.phase).toEqual({ kind: "ready", offer });
     expect(again.held?.downloaded).toBe(true);
   });
 
@@ -77,14 +78,15 @@ describe("desktop update session", () => {
     expect(apply([{ type: "download-started" }, { type: "download-finished" }], failed).phase.kind).toBe("ready");
   });
 
-  it("does not install while work is running and keeps the package after an install error", () => {
+  it("asks before installing when sessions are running and keeps the package after cancel or failure", () => {
     const ready = apply([
       { type: "check-found", manual: true, offer, downloaded: true },
-      { type: "install-blocked" },
+      { type: "install-confirm", running: 2 },
     ]);
-    expect(ready.phase).toEqual({ kind: "ready", offer, busy: true });
+    expect(ready.phase).toEqual({ kind: "confirm-install", offer, running: 2 });
+    expect(apply([{ type: "install-cancel" }], ready).phase).toEqual({ kind: "ready", offer });
     const failed = apply([{ type: "install-started" }, { type: "install-failed", error: "denied" }], ready);
-    expect(failed.phase).toEqual({ kind: "ready", offer, busy: false, error: "denied" });
+    expect(failed.phase).toEqual({ kind: "ready", offer, error: "denied" });
     expect(failed.held).toEqual({ version: "0.1.15", downloaded: true });
   });
 
@@ -114,5 +116,6 @@ describe("desktop update labels", () => {
     expect(updateErrorMessage(" reset ")).toBe("reset");
     expect(updateErrorMessage(new Error("boom"))).toBe("boom");
     expect(updateErrorMessage({ code: 1 })).toBe("失败");
+    expect(runningSessionLabel(2)).toBe("当前有 2 个正在运行的会话");
   });
 });

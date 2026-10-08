@@ -6,6 +6,7 @@ import {
   downloadProgressLabel,
   initialUpdateSession,
   reduceUpdateSession,
+  runningSessionLabel,
   updateCheckDisposition,
   updateErrorMessage,
   updatePhaseLocksCheck,
@@ -15,7 +16,7 @@ import {
   type UpdatePhase,
 } from "../lib/desktop-update";
 import { isDesktopShell } from "../lib/desktop-shell";
-import { checkDesktopUpdate, desktopSessionsRunning, relaunchDesktop, type AvailableUpdate, type DownloadProgress } from "../lib/desktop-updater";
+import { checkDesktopUpdate, desktopSessionRunCount, relaunchDesktop, type AvailableUpdate, type DownloadProgress } from "../lib/desktop-updater";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 
@@ -111,12 +112,17 @@ export function DesktopUpdatePrompt() {
 
   const install = async () => {
     const held = heldRef.current;
+    const current = sessionRef.current.phase;
     if (held === undefined || !held.downloaded || actingRef.current) return;
+    if (current.kind !== "ready" && current.kind !== "confirm-install") return;
     actingRef.current = true;
     try {
-      if (await desktopSessionsRunning()) {
-        dispatch({ type: "install-blocked" });
-        return;
+      if (current.kind === "ready") {
+        const running = await desktopSessionRunCount();
+        if (running > 0) {
+          dispatch({ type: "install-confirm", running });
+          return;
+        }
       }
       dispatch({ type: "install-started" });
       await held.install();
@@ -126,6 +132,10 @@ export function DesktopUpdatePrompt() {
     } finally {
       actingRef.current = false;
     }
+  };
+
+  const cancelInstall = () => {
+    dispatch({ type: "install-cancel" });
   };
 
   async function applyFound(manual: boolean, update: AvailableUpdate) {
@@ -176,10 +186,10 @@ export function DesktopUpdatePrompt() {
   if (!isDesktopShell() || phase.kind === "closed") return null;
   const locked = phase.kind === "downloading" || phase.kind === "installing";
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) dismiss(); }}>
+    <Dialog open onOpenChange={(open) => { if (!open) { if (sessionRef.current.phase.kind === "confirm-install") cancelInstall(); else dismiss(); } }}>
       <DialogContent title={phaseTitle(phase)} className={locked ? "update-dialog update-dialog-locked" : "update-dialog"} onEscapeKeyDown={(event) => { if (locked) event.preventDefault(); }} onPointerDownOutside={(event) => { if (locked) event.preventDefault(); }}>
         <UpdatePromptBody phase={phase} />
-        <UpdatePromptActions phase={phase} onDismiss={dismiss} onDownload={() => { void download(); }} onInstall={() => { void install(); }} onRetryCheck={() => { void runCheck(true); }} />
+        <UpdatePromptActions phase={phase} onDismiss={dismiss} onCancelInstall={cancelInstall} onDownload={() => { void download(); }} onInstall={() => { void install(); }} onRetryCheck={() => { void runCheck(true); }} />
       </DialogContent>
     </Dialog>
   );
@@ -191,7 +201,8 @@ function phaseTitle(phase: UpdatePhase): string {
     case "available": return "发现新版本";
     case "downloading": return "正在下载";
     case "download-failed": return "下载失败";
-    case "ready": return "可以安装";
+    case "ready":
+    case "confirm-install": return "可以安装";
     case "installing": return "正在安装";
     case "up-to-date": return "已是最新版本";
     case "check-failed": return "检查失败";
@@ -200,15 +211,15 @@ function phaseTitle(phase: UpdatePhase): string {
 }
 
 function UpdatePromptBody({ phase }: { phase: UpdatePhase }) {
-  const offer = phase.kind === "available" || phase.kind === "downloading" || phase.kind === "download-failed" || phase.kind === "ready" || phase.kind === "installing" ? phase.offer : undefined;
+  const offer = phase.kind === "available" || phase.kind === "downloading" || phase.kind === "download-failed" || phase.kind === "ready" || phase.kind === "confirm-install" || phase.kind === "installing" ? phase.offer : undefined;
   return (
     <>
       {offer === undefined ? null : <p className="update-version">{updateVersionLabel(offer)}</p>}
       {offer?.notes === undefined ? null : <pre className="update-notes">{offer.notes}</pre>}
       {phase.kind === "checking" || phase.kind === "installing" ? <UpdateProgress name={phase.kind === "checking" ? "检查更新" : "安装进度"} /> : null}
       {phase.kind === "downloading" ? <UpdateProgress name="下载进度" received={phase.received} total={phase.total} label={downloadProgressLabel(phase.received, phase.total)} /> : null}
-      {phase.kind === "ready" ? <p className="delete-session-message">安装后会重启。</p> : null}
-      {phase.kind === "ready" && phase.busy ? <p className="update-status">有任务正在运行</p> : null}
+      {phase.kind === "confirm-install" ? <p className="update-status">{runningSessionLabel(phase.running)}</p> : null}
+      {phase.kind === "ready" || phase.kind === "confirm-install" ? <p className="delete-session-message">安装后会重启。</p> : null}
       {phase.kind === "ready" && phase.error !== undefined ? <p className="update-status error" role="alert">{phase.error}</p> : null}
       {phase.kind === "download-failed" || phase.kind === "check-failed" ? <p className="update-status error" role="alert">{phase.error}</p> : null}
     </>
@@ -228,9 +239,10 @@ function UpdateProgress({ name, received, total, label }: { name: string; receiv
   );
 }
 
-function UpdatePromptActions({ phase, onDismiss, onDownload, onInstall, onRetryCheck }: { phase: UpdatePhase; onDismiss: () => void; onDownload: () => void; onInstall: () => void; onRetryCheck: () => void }) {
+function UpdatePromptActions({ phase, onDismiss, onCancelInstall, onDownload, onInstall, onRetryCheck }: { phase: UpdatePhase; onDismiss: () => void; onCancelInstall: () => void; onDownload: () => void; onInstall: () => void; onRetryCheck: () => void }) {
   if (phase.kind === "available") return <div className="dialog-actions"><Button variant="secondary" onClick={onDismiss}>稍后</Button><Button onClick={onDownload}>下载</Button></div>;
   if (phase.kind === "download-failed") return <div className="dialog-actions"><Button variant="secondary" onClick={onDismiss}>稍后</Button><Button onClick={onDownload}>重新下载</Button></div>;
+  if (phase.kind === "confirm-install") return <div className="dialog-actions"><Button variant="secondary" onClick={onCancelInstall}>取消</Button><Button onClick={onInstall}>安装</Button></div>;
   if (phase.kind === "ready") return <div className="dialog-actions"><Button variant="secondary" onClick={onDismiss}>稍后</Button><Button onClick={onInstall}>安装</Button></div>;
   if (phase.kind === "up-to-date") return <div className="dialog-actions"><Button variant="secondary" onClick={onDismiss}>关闭</Button></div>;
   if (phase.kind === "check-failed") return <div className="dialog-actions"><Button variant="secondary" onClick={onDismiss}>关闭</Button><Button onClick={onRetryCheck}>重试</Button></div>;
