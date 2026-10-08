@@ -14,7 +14,6 @@ use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_notification::NotificationExt;
-use tauri_plugin_updater::UpdaterExt;
 
 const DEFAULT_PORT: u16 = 9528;
 const STARTUP_SLOW_AFTER_SECS: u64 = 30;
@@ -26,6 +25,7 @@ struct AppState {
   notifications_enabled: AtomicBool,
   last_session: Mutex<Option<(String, String)>>,
   quitting: AtomicBool,
+  update_check_requested: AtomicBool,
 }
 
 #[derive(Clone, Serialize)]
@@ -53,8 +53,9 @@ pub fn run() {
       notifications_enabled: AtomicBool::new(notifications_enabled),
       last_session: Mutex::new(None),
       quitting: AtomicBool::new(false),
+      update_check_requested: AtomicBool::new(false),
     })
-    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url])
+    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, take_update_check])
     .setup(|app| {
       let handle = app.handle().clone();
       build_tray(&handle)?;
@@ -73,12 +74,7 @@ pub fn run() {
     .on_menu_event(|app, event| match event.id().as_ref() {
       "show" => show_main(app),
       "quit" => quit_app(app),
-      "check-update" => {
-        let handle = app.clone();
-        tauri::async_runtime::spawn(async move {
-          let _ = check_update(handle, false).await;
-        });
-      }
+      "check-update" => request_update_check(app),
       _ => {}
     })
     .build(tauri::generate_context!())
@@ -103,6 +99,17 @@ fn set_notifications_enabled(state: State<AppState>, enabled: bool) {
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
   open_http_url(&url)
+}
+
+#[tauri::command]
+fn take_update_check(state: State<AppState>) -> bool {
+  state.update_check_requested.swap(false, Ordering::Relaxed)
+}
+
+fn request_update_check(app: &AppHandle) {
+  app.state::<AppState>().update_check_requested.store(true, Ordering::Relaxed);
+  show_main(app);
+  let _ = app.emit("jarvis://check-update", ());
 }
 
 fn open_http_url(url: &str) -> Result<(), String> {
@@ -207,10 +214,6 @@ fn mark_backend_ready(app: &AppHandle, port: u16) {
     return;
   }
   open_ui(app, port);
-  let handle = app.clone();
-  tauri::async_runtime::spawn(async move {
-    let _ = check_update(handle, true).await;
-  });
 }
 
 fn open_ui(app: &AppHandle, port: u16) {
@@ -356,15 +359,6 @@ fn quit_app(app: &AppHandle) {
   app.exit(0);
 }
 
-fn sidecar_busy(app: &AppHandle) -> bool {
-  let port = app.state::<AppState>().port.lock().ok().and_then(|slot| *slot);
-  let Some(port) = port else { return false };
-  let url = format!("http://127.0.0.1:{port}/api/health");
-  let Ok(response) = ureq::get(&url).timeout(Duration::from_secs(2)).call() else { return false };
-  let Ok(body) = response.into_json::<serde_json::Value>() else { return false };
-  body.get("running").and_then(serde_json::Value::as_u64).unwrap_or(0) > 0
-}
-
 /// `None` = 没人听端口；`Some(true)` = 已有 Jarvis；`Some(false)` = 被其他程序占用。
 fn probe_existing_jarvis(port: u16) -> Option<bool> {
   probe_jarvis(port, Duration::from_secs(1))
@@ -377,39 +371,6 @@ fn probe_jarvis(port: u16, timeout: Duration) -> Option<bool> {
     Err(ureq::Error::Status(_, _)) => Some(false),
     Err(_) => None,
   }
-}
-
-async fn check_update(app: AppHandle, silent: bool) -> Result<(), String> {
-  let updater = app.updater().map_err(|error| error.to_string())?;
-  let update = updater.check().await.map_err(|error| error.to_string())?;
-  let Some(update) = update else {
-    if !silent {
-      native_message(&app, "已是最新版本");
-    }
-    return Ok(());
-  };
-  show_main(&app);
-  let version = update.version.clone();
-  let confirmed = app
-    .dialog()
-    .message(format!("安装 {version}？安装后会重启。"))
-    .title("Jarvis")
-    .buttons(MessageDialogButtons::OkCancelCustom("安装".into(), "取消".into()))
-    .blocking_show();
-  if !confirmed {
-    return Ok(());
-  }
-  if sidecar_busy(&app) {
-    native_message(&app, "有任务正在运行");
-    return Ok(());
-  }
-  update.download_and_install(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
-  app.request_restart();
-  Ok(())
-}
-
-fn native_message(app: &AppHandle, message: &str) {
-  let _ = app.dialog().message(message).title("Jarvis").blocking_show();
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {

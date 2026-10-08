@@ -39,3 +39,34 @@ export function listenDesktopOpenSession(handler: (workspaceId: string, sessionI
     unlisten?.();
   };
 }
+
+export function listenDesktopCheckUpdate(handler: () => void): { stop: () => void; ready: Promise<void> } {
+  if (!isDesktopShell()) return { stop: () => undefined, ready: Promise.resolve() };
+  let disposed = false;
+  let unlisten: (() => void) | undefined;
+  const ready = import("@tauri-apps/api/event").then(async ({ listen }) => {
+    if (disposed) return;
+    const fn = await listen("jarvis://check-update", () => handler());
+    if (disposed) {
+      fn();
+      return;
+    }
+    unlisten = fn;
+  }).then(() => undefined, () => undefined);
+  return {
+    ready,
+    stop: () => {
+      disposed = true;
+      unlisten?.();
+    },
+  };
+}
+
+export async function showDesktopWindow(): Promise<void> {
+  if (!isDesktopShell()) return;
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  const window = getCurrentWindow();
+  await window.show();
+  await window.unminimize();
+  await window.setFocus();
+}

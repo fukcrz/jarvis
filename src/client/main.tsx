@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { HashRouter } from "react-router";
 import { App } from "./app";
 import { AuthGate } from "./components/auth-gate";
+import { DesktopUpdatePrompt } from "./components/update-prompt";
 import { openExternalUrl } from "./desktop";
 import { installExternalLinkHandler } from "./lib/external-links";
 import "./styles.css";
@@ -37,6 +38,7 @@ window.addEventListener("pointermove", (event) => {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <HashRouter>
+      <DesktopUpdatePrompt />
       <AuthGate>
         <App />
       </AuthGate>

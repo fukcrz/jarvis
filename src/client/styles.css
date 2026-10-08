@@ -1048,3 +1048,17 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .text-file-preview-line { display: inline-grid; grid-template-columns: 38px max-content; min-width: 100%; padding-right: 14px; }
 .text-file-preview-line-number { padding-right: 8px; color: #666671; text-align: right; user-select: none; }
 .text-file-preview-line-content { display: block; position: relative; min-height: 1.45em; white-space: pre; }
+.update-dialog { width: min(420px, calc(100vw - 32px)); }
+.update-dialog .dialog-body { gap: 12px; }
+.update-dialog-locked .dialog-header > .button-icon { display: none; }
+.update-version { margin: 0; color: var(--ink); font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.update-notes { max-height: 140px; overflow: auto; margin: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 8px 10px; color: var(--muted); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.update-progress { display: grid; gap: 6px; }
+.update-progress-track { height: 6px; overflow: hidden; border-radius: 99px; background: var(--surface); }
+.update-progress-fill { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--accent); }
+.update-progress-fill.known { transition: width .15s ease; }
+.update-progress-fill.unknown { width: 32%; animation: update-progress-slide 1.2s ease-in-out infinite; }
+@keyframes update-progress-slide { 0% { transform: translateX(-140%); } 100% { transform: translateX(380%); } }
+.update-progress-label { margin: 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.update-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.update-status.error { color: #ffb4b6; }
