@@ -154,6 +154,65 @@ export function selectAnswerLabel(options: string[], value: string): string {
   return parseSelectOptions(options)?.find((option) => option.value === value)?.label ?? value;
 }
 
+export interface SettledChoiceRow {
+  key: string;
+  index?: number;
+  label: string;
+  description?: string;
+  selected: boolean;
+}
+
+/** 答完后的选项列：没选的仍在，自定义正文和选项同一行，不另起标签。 */
+export function settledSelectRows(options: ExtensionSelectOption[], selectedValue: string | undefined, customText?: string): SettledChoiceRow[] {
+  const chosen = options.find((option) => option.value === selectedValue);
+  if (chosen?.custom === true) {
+    const rows = offeredChoiceRows(options, new Set());
+    const typed = customText?.trim() ?? "";
+    if (typed !== "") rows.push({ key: "typed", label: typed, selected: true });
+    return rows;
+  }
+  return offeredChoiceRows(options, chosen?.index === undefined ? new Set() : new Set([chosen.index]));
+}
+
+/** 多选答完：纯序号打勾；整段自定义文字作为并列的一行。 */
+export function settledMultiRows(options: ExtensionSelectOption[], value: string): SettledChoiceRow[] {
+  const offered = options.filter((option) => option.custom !== true);
+  const trimmed = value.trim();
+  const splitAt = trimmed.indexOf(MULTI_NOTE_SEPARATOR);
+  const head = splitAt === -1 ? trimmed : trimmed.slice(0, splitAt).trim();
+  const note = splitAt === -1 ? "" : trimmed.slice(splitAt + MULTI_NOTE_SEPARATOR.length).trim();
+  const selected = selectedChoiceIndexes(offered, head);
+  const rows = offeredChoiceRows(offered, selected);
+  if (selected.size === 0 && trimmed !== "") rows.push({ key: "typed", label: trimmed, selected: true });
+  else if (note !== "") rows.push({ key: "typed", label: note, selected: true });
+  return rows;
+}
+
+function offeredChoiceRows(options: ExtensionSelectOption[], selected: ReadonlySet<number>): SettledChoiceRow[] {
+  return options.filter((option) => option.custom !== true).map((option) => ({
+    key: option.value,
+    ...(option.index === undefined ? {} : { index: option.index }),
+    label: option.label,
+    ...(option.description === undefined ? {} : { description: option.description }),
+    selected: option.index !== undefined && selected.has(option.index),
+  }));
+}
+
+function selectedChoiceIndexes(options: ExtensionSelectOption[], head: string): Set<number> {
+  if (head === "") return new Set();
+  const tokens = head.split(/[,\s]+/).filter((token) => token !== "");
+  if (tokens.length > 0 && tokens.every((token) => /^\d+\.?$/.test(token))) {
+    const indexes = tokens.map((token) => Number.parseInt(token, 10));
+    return indexes.every((index) => options.some((option) => option.index === index)) ? new Set(indexes) : new Set();
+  }
+  const labels = head.split(",").map((part) => part.trim()).filter((part) => part !== "");
+  const matched = labels.flatMap((label) => {
+    const option = options.find((candidate) => candidate.label === label);
+    return option?.index === undefined ? [] : [option.index];
+  });
+  return matched.length === labels.length ? new Set(matched) : new Set();
+}
+
 /**
  * 多选提交值。扩展只认「纯序号」或「整段自定义」二选一：
  * - 只勾选项 → `"1,3"`

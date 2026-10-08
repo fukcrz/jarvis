@@ -6,7 +6,7 @@ import { userMessageOutline as outlineFromItems } from "../../shared/user-messag
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { copyText } from "../lib/clipboard";
 import { imageDataUrl } from "../lib/image";
-import { encodeMultiSelectValue, multiSelectAnswerLabel, parseMultiSelectDialog, parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, splitDialogHeading, type ExtensionSelectOption } from "../lib/extension-dialog";
+import { encodeMultiSelectValue, multiSelectAnswerLabel, parseMultiSelectDialog, parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, settledMultiRows, settledSelectRows, splitDialogHeading, type ExtensionSelectOption, type SettledChoiceRow } from "../lib/extension-dialog";
 import { MarkdownMessage } from "./markdown-message";
 import { ImagePreview } from "./image-lightbox";
 import { ToolActivity } from "./tool-activity";
@@ -661,9 +661,44 @@ const dialogDrafts = new Map<string, string>();
 /** 多选勾选草稿：与文本草稿分开，避免和输入内容抢同一个字符串。 */
 const dialogSelections = new Map<string, number[]>();
 
-function ExtensionUiOperation({ item, onRespond }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"] }) {
+function ExtensionUiOperation({ item, onRespond, customText }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"]; customText?: string }) {
   if (item.request.method === "notify") return <ExtensionNotification item={item} />;
+  const settled = item.outcome === "answered" ? settledQuestion(item, customText) : undefined;
+  if (settled !== undefined) return <SettledChoices question={settled.question} header={settled.header} rows={settled.rows} />;
   return <ExtensionDialogOperation item={item} onRespond={onRespond} />;
+}
+
+function settledQuestion(item: ExtensionUiTimelineItem, customText?: string): { question: string; header?: string; rows: SettledChoiceRow[] } | undefined {
+  if (item.request.method === "select") {
+    const dialog = parseSelectDialog(item.request);
+    if (dialog === undefined) return undefined;
+    return { question: dialog.question, ...(dialog.header === undefined ? {} : { header: dialog.header }), rows: settledSelectRows(dialog.options, item.value, customText) };
+  }
+  if (item.request.method === "input") {
+    const dialog = parseMultiSelectDialog(item.request);
+    if (dialog === undefined) return undefined;
+    return { question: dialog.question, ...(dialog.header === undefined ? {} : { header: dialog.header }), rows: settledMultiRows(dialog.options, item.value ?? "") };
+  }
+  return undefined;
+}
+
+export function SettledChoices({ question, header, rows }: { question: string; header?: string; rows: SettledChoiceRow[] }) {
+  return (
+    <article className="extension-operation answered settled-choices">
+      <p className="extension-operation-title extension-dialog-question">{header === undefined ? null : <span className="extension-dialog-header">{header}</span>}{question}</p>
+      <div className="extension-select-list settled">
+        {rows.map((row) => <div key={row.key} className={`extension-select-option${row.selected ? " checked" : " missed"}`}>
+          <div className="extension-select-choice">
+            <span className="extension-select-index" aria-hidden>{row.selected ? <Check size={11} /> : row.index ?? ""}</span>
+            <span className="extension-select-body">
+              <span className="extension-select-label">{row.label}</span>
+              {row.description === undefined ? null : <span className="extension-select-description">{row.description}</span>}
+            </span>
+          </div>
+        </div>)}
+      </div>
+    </article>
+  );
 }
 
 function ExtensionDialogOperation({ item, onRespond }: { item: ExtensionUiTimelineItem; onRespond: TimelineProps["onExtensionUiRespond"] }) {
@@ -1085,13 +1120,69 @@ interface TurnRenderContext {
   onExtensionUiRespond?: TimelineProps["onExtensionUiRespond"];
   onEditUserMessage?: TimelineProps["onEditUserMessage"];
   onForkMessage?: TimelineProps["onForkMessage"];
+  customAnswers?: ReadonlyMap<string, string>;
+}
+
+export interface PresentedTurnProcess {
+  entries: TimelineRenderItem[];
+  customAnswers: ReadonlyMap<string, string>;
+}
+
+/** 问询的工具原文和自定义跟进输入不单独展示；自定义正文挂回对应的选项列。 */
+export function presentTurnProcess(entries: TimelineRenderItem[]): PresentedTurnProcess {
+  const customAnswers = new Map<string, string>();
+  const hidden = new Set<string>();
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (entry?.kind !== "extension-ui" || entry.item.request.method !== "select" || entry.item.outcome !== "answered") continue;
+    const dialog = parseSelectDialog(entry.item.request);
+    const chosen = dialog?.options.find((option) => option.value === entry.item.value);
+    if (chosen?.custom !== true) continue;
+    const followUp = nextCustomInput(entries, index);
+    if (followUp === undefined) continue;
+    if (followUp.outcome === undefined) {
+      hidden.add(entry.item.id);
+      continue;
+    }
+    hidden.add(followUp.id);
+    if (followUp.outcome === "answered" && followUp.value !== undefined && followUp.value !== "") customAnswers.set(entry.item.id, followUp.value);
+  }
+  return {
+    customAnswers,
+    entries: entries.flatMap((entry): TimelineRenderItem[] => {
+      if (entry.kind === "activity") {
+        const items = entry.items.filter((item) => item.name !== "ask_user_question");
+        return items.length === 0 ? [] : [{ kind: "activity", items }];
+      }
+      if (entry.kind === "extension-ui" && hidden.has(entry.item.id)) return [];
+      return [entry];
+    }),
+  };
+}
+
+function nextCustomInput(entries: TimelineRenderItem[], from: number): ExtensionUiTimelineItem | undefined {
+  for (let index = from + 1; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (entry === undefined || entry.kind !== "extension-ui") continue;
+    const request = entry.item.request;
+    if (request.method === "select" || request.method !== "input" || parseMultiSelectDialog(request) !== undefined) return undefined;
+    return entry.item;
+  }
+  return undefined;
+}
+
+function isAnsweredQuestionCard(item: ExtensionUiTimelineItem): boolean {
+  if (item.outcome !== "answered") return false;
+  if (item.request.method === "select") return parseSelectDialog(item.request) !== undefined;
+  if (item.request.method === "input") return parseMultiSelectDialog(item.request) !== undefined;
+  return false;
 }
 
 function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, expanded = false, showActivePreview = true): ReactNode {
   if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
-  if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} />;
+  if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} customText={context.customAnswers?.get(entry.item.id)} />;
   if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} onExpand={context.onExpandProcess} />;
   return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={context.status.runState !== "idle" && entry.items.some((item) => item.state === "queued" || item.state === "running")} expanded={expanded} showActivePreview={showActivePreview} onExpand={context.onExpandProcess} />;
 }
@@ -1108,7 +1199,7 @@ export function liveTurnProcessEntries(turn: TimelineTurn): TimelineRenderItem[]
       return entry === current || entry.items.some((item) => item.state === "running" || item.state === "queued" || item.state === "failed") ? [entry] : [];
     }
     if (entry.kind === "error" && entry.items.some((item) => item.state === "failed")) return [entry];
-    if (entry.kind === "extension-ui" && entry.item.outcome === undefined) return [entry];
+    if (entry.kind === "extension-ui" && (entry.item.outcome === undefined || isAnsweredQuestionCard(entry.item))) return [entry];
     return entry === current ? [entry] : [];
   });
 }
@@ -1117,9 +1208,15 @@ export function processTextPreview(text: string): string {
   return text.split(/\r?\n/).filter((line) => line.trim() !== "").at(-1)?.trim() ?? "";
 }
 
+function keepsCollapsedQuestion(entry: TimelineRenderItem): boolean {
+  return entry.kind === "extension-ui" && isAnsweredQuestionCard(entry.item);
+}
+
 function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRenderContext & { turn: TimelineTurn; active: boolean; autoCollapse: boolean }) {
-  const foldable = shouldFoldTurnProcess(turn);
-  const summary = summarizeTurnProcess(turn);
+  const presented = useMemo(() => presentTurnProcess(turn.process), [turn.process]);
+  const displayTurn = { ...turn, process: presented.entries };
+  const foldable = shouldFoldTurnProcess(displayTurn);
+  const summary = summarizeTurnProcess(displayTurn);
   const pinned = isTurnPinned(turn);
   const collapsible = foldable && !pinned;
   const [open, setOpen] = useState(false);
@@ -1134,11 +1231,12 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
   }, [active, autoCollapse]);
 
   const expandProcess = () => { touched.current = true; setOpen(true); };
-  const processContext = { ...context, onExpandProcess: expandProcess };
+  const processContext = { ...context, onExpandProcess: expandProcess, customAnswers: presented.customAnswers };
   const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
-  const process = renderProcessEntries(turn.process, processContext, open || pinned);
-  const liveProcess = active ? liveTurnProcessEntries(turn) : turn.process.filter((entry) =>
-    entry.kind === "activity" && entry.items.some((item) => item.state === "failed")
+  const process = renderProcessEntries(displayTurn.process, processContext, open || pinned);
+  const liveProcess = active ? liveTurnProcessEntries(displayTurn) : displayTurn.process.filter((entry) =>
+    keepsCollapsedQuestion(entry)
+    || entry.kind === "activity" && entry.items.some((item) => item.state === "failed")
     || entry.kind === "error" && entry.items.some((item) => item.state === "failed"));
   const processBlock = process.length === 0 ? null : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
     {!collapsible ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => { touched.current = true; setOpen((value) => !value); }}>

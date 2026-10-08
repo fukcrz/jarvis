@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { encodeMultiSelectValue, MULTI_SELECT_PLACEHOLDER, multiSelectAnswerLabel, parseMultiSelectDialog, parseSelectDialog, parseSelectOptions, previewSummary, selectAnswerLabel, selectDialogTitle, splitDialogHeading } from "./extension-dialog";
+import { encodeMultiSelectValue, MULTI_SELECT_PLACEHOLDER, multiSelectAnswerLabel, parseMultiSelectDialog, parseSelectDialog, parseSelectOptions, previewSummary, selectAnswerLabel, selectDialogTitle, settledMultiRows, settledSelectRows, splitDialogHeading } from "./extension-dialog";
 
 /**
  * 标题按 `rpc-fallback.ts` 的 `buildPreviewBlock` 拼法构造：问题 + `\n\n` +
@@ -117,6 +117,46 @@ describe("parseSelectDialog", () => {
 });
 
 describe("selectAnswerLabel", () => {
+  it("答完后保留未选项，自定义正文与选项并列", () => {
+    const options = parseSelectOptions(OPTIONS);
+    expect(options).toBeDefined();
+    if (options === undefined) return;
+    const chosen = options[1];
+    const custom = options[3];
+    expect(settledSelectRows(options, chosen?.value).map((row) => [row.label, row.selected])).toEqual([
+      [FIRST_LABEL, false],
+      [SECOND_LABEL, true],
+      [THIRD_LABEL, false],
+    ]);
+    const typed = settledSelectRows(options, custom?.value, "啥意思？我听不懂。你要不再给我讲讲吧");
+    expect(typed.map((row) => row.label)).toEqual([
+      FIRST_LABEL,
+      SECOND_LABEL,
+      THIRD_LABEL,
+      "啥意思？我听不懂。你要不再给我讲讲吧",
+    ]);
+    expect(typed.at(-1)).toEqual({ key: "typed", label: "啥意思？我听不懂。你要不再给我讲讲吧", selected: true });
+    expect(typed.some((row) => row.label === "自定义" || row.label === CUSTOM_OPTION)).toBe(false);
+  });
+
+  it("多选的自定义文字也是并列的一行", () => {
+    const dialog = parseMultiSelectDialog({
+      title: "保留哪些？\n\n1. NULL 历史订单 — 保留\n2. 推广订单 — 保留\n\n说明",
+      placeholder: MULTI_SELECT_PLACEHOLDER,
+    });
+    expect(dialog).toBeDefined();
+    if (dialog === undefined) return;
+    expect(settledMultiRows(dialog.options, "1").map((row) => [row.label, row.selected])).toEqual([
+      ["NULL 历史订单", true],
+      ["推广订单", false],
+    ]);
+    expect(settledMultiRows(dialog.options, "啥意思").map((row) => [row.label, row.selected])).toEqual([
+      ["NULL 历史订单", false],
+      ["推广订单", false],
+      ["啥意思", true],
+    ]);
+  });
+
   it("已选择结果只显示标签", () => {
     expect(selectAnswerLabel(OPTIONS, OPTIONS[0]!)).toBe(FIRST_LABEL);
     expect(selectAnswerLabel(OPTIONS, OPTIONS[3]!)).toBe(CUSTOM_OPTION);

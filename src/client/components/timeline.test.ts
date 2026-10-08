@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, liveTurnProcessEntries, processTextPreview, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, liveTurnProcessEntries, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -342,10 +344,56 @@ describe("liveTurnProcessEntries", () => {
   });
 });
 
+describe("presentTurnProcess", () => {
+  it("drops the ask tool and the custom follow-up, keeping the typed answer on the select", () => {
+    const select: ExtensionUiTimelineItem = {
+      kind: "extension-ui",
+      id: "select",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      outcome: "answered",
+      value: "2. Type something.",
+      request: { id: "select", method: "select", title: "是否按这个方案改？", options: ["1. 按方案改 — 补回归测试", "2. Type something."] },
+    };
+    const input: ExtensionUiTimelineItem = {
+      kind: "extension-ui",
+      id: "input",
+      createdAt: "2026-01-01T00:00:01.000Z",
+      outcome: "answered",
+      value: "啥意思？我听不懂",
+      request: { id: "input", method: "input", title: "是否按这个方案改？\n\nType your answer:" },
+    };
+    const presented = presentTurnProcess([
+      { kind: "activity", items: [{ ...tool("ask", "ask_user_question"), title: "ask user question" }] },
+      { kind: "extension-ui", item: select },
+      { kind: "extension-ui", item: input },
+    ]);
+    expect(presented.entries).toEqual([{ kind: "extension-ui", item: select }]);
+    expect(presented.customAnswers.get("select")).toBe("啥意思？我听不懂");
+    expect(shouldFoldTurnProcess({ key: "t", process: presented.entries })).toBe(false);
+  });
+});
+
 describe("processTextPreview", () => {
   it("uses the last nonempty line only for the preview without altering the source", () => {
     expect(processTextPreview("Preparing\n正在检查代码\n\n")).toBe("正在检查代码");
     expect(processTextPreview("\n")).toBe("");
+  });
+});
+
+describe("SettledChoices", () => {
+  it("puts the typed answer on the same row as the other options", () => {
+    const markup = renderToStaticMarkup(createElement(SettledChoices, {
+      question: "是否按这个方案修改并补回归测试？",
+      rows: [
+        { key: "a", index: 1, label: "按方案改", description: "补回归测试", selected: false },
+        { key: "typed", label: "啥意思？我听不懂。你要不再给我讲讲吧", selected: true },
+      ],
+    }));
+    expect(markup).toContain("按方案改");
+    expect(markup).toContain("啥意思？我听不懂。你要不再给我讲讲吧");
+    expect(markup).not.toContain("自定义");
+    expect(markup).not.toContain("Type something");
+    expect(markup).not.toContain("已提交");
   });
 });
 
