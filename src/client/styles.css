@@ -497,6 +497,26 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .activity-items .tool-list-item .detail-command-line { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
 .activity-items .tool-list-item .detail-command-line code { color: var(--accent-strong); }
 .activity-items .tool-list-item .detail-input + div { margin-top: 1px; }
+.activity-items .subagent-summary { align-items: flex-start; }
+.activity-items .subagent-summary .tool-state-icon { margin-top: 1px; }
+.activity-items .subagent-summary-copy { display: grid; min-width: 0; gap: 1px; }
+.activity-items .subagent-preview { overflow: hidden; margin: 0; color: var(--subtle); font-size: 11px; font-weight: 400; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.activity-items .subagent-calls { display: grid; min-width: 0; gap: 2px; }
+.activity-items .subagent-call { display: grid; min-width: 0; gap: 2px; }
+.activity-items .subagent-call-summary { display: flex; align-items: center; width: 100%; min-width: 0; gap: 7px; border: 0; background: transparent; padding: 3px 0; color: var(--subtle); text-align: left; font-size: 11px; }
+.activity-items .subagent-call-summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-items .subagent-call.running .subagent-call-summary { color: var(--muted); }
+.activity-items .subagent-call.failed .subagent-call-summary { color: var(--warm); }
+.activity-items .subagent-call-preview { padding-left: 20px; }
+.activity-items .subagent-call-body { display: grid; min-width: 0; gap: 4px; padding: 1px 0 6px 20px; }
+.activity-items .subagent-task,
+.activity-items .subagent-note,
+.activity-items .subagent-error { min-width: 0; max-width: 100%; margin: 0; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.activity-items .subagent-task { color: var(--ink); }
+.activity-items .subagent-note { color: var(--muted); white-space: pre-wrap; }
+.activity-items .subagent-error { color: #ffb6b8; white-space: pre-wrap; }
+.activity-items .subagent-steps { display: grid; min-width: 0; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.activity-items .subagent-steps li { min-width: 0; color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .turn-process, .turn-process-stack { min-width: 0; color: var(--muted); }
 .turn-process-stack, .turn-process-body { display: grid; gap: 4px; }
 .turn-process-summary { display: flex; align-items: center; width: 100%; min-width: 0; gap: 7px; border: 0; border-radius: 4px; background: transparent; padding: 4px 0; text-align: left; }
