@@ -1,4 +1,31 @@
+import type { ImageAttachment } from "../../shared/protocol";
+import { composerImageAttachments } from "./image";
+
 export type ComposerDraftSyncAction = "skip" | "apply" | "defer";
+
+/** Preserve text committed by an IME while a queue restore waits for compositionend. */
+export function mergeDeferredComposerDraft(incoming: string, previous: string, current: string): string {
+  if (previous !== "" && incoming.endsWith(previous)) return `${incoming.slice(0, -previous.length)}${current}`;
+  if (previous === "" && incoming !== "" && current !== "") return `${incoming}\n\n${current}`;
+  return incoming;
+}
+
+type QueuedDraftMessage = {
+  text: string;
+  images?: readonly ImageAttachment[];
+};
+
+export function mergeQueuedMessagesIntoDraft(
+  messages: readonly QueuedDraftMessage[],
+  currentDraft: string,
+  currentAttachments: readonly ImageAttachment[],
+): { draft: string; attachments: ImageAttachment[] } {
+  const queuedAttachments = messages.flatMap((message) => composerImageAttachments(message.images));
+  return {
+    draft: [...messages.map((message) => message.text), currentDraft].filter((value) => value.trim() !== "").join("\n\n"),
+    attachments: [...queuedAttachments, ...currentAttachments],
+  };
+}
 
 /**
  * 组字尚未落定（含 compositionend 后仍带着 input.type.compose 的那次提交）。

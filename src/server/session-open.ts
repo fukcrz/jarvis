@@ -21,6 +21,7 @@ import type { SessionAttentionStore, SideChatSource } from "./session-attention-
 import { sessionModifiedAt } from "./session-files.js";
 import { activeKey } from "./session-helpers.js";
 import type { SessionPiEvents } from "./session-pi-events.js";
+import { SessionMessageQueue } from "./session-queue.js";
 
 function sideChatNotice(source: SideChatSource | undefined): string {
   if (source === undefined) return SIDE_CHAT_NOTICE;
@@ -119,6 +120,14 @@ export async function createActiveSession(
   const headerTimestamp = manager.getHeader()?.timestamp;
   const createdAt = typeof headerTimestamp === "string" && Number.isFinite(Date.parse(headerTimestamp)) ? new Date(headerTimestamp).toISOString() : now;
   const sortMeta = await deps.attention.get(actualRef);
+  const messageQueue = new SessionMessageQueue(session, (queue) => {
+    active.queue = queue;
+    deps.events.publishSession(active.ref, {
+      type: "queue.updated",
+      ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
+      payload: queue,
+    });
+  });
   const active: ActiveSession = {
     ref: actualRef,
     cwd: workspace.cwd,
@@ -144,7 +153,7 @@ export async function createActiveSession(
     activeTools: new Map(),
     activeBash: undefined,
     queue: emptySessionQueue,
-    queueSyncSuspended: false,
+    messageQueue,
     compactionAbortRequested: false,
     pendingRunError: undefined,
     settlementTimer: undefined,

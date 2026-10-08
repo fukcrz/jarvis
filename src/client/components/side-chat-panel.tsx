@@ -6,6 +6,7 @@ import { api, isSessionConflict } from "../api";
 import { useSessionStream, type ExtensionPanelState } from "../hooks/use-session-stream";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
 import { composerImageAttachments } from "../lib/image";
+import { mergeQueuedMessagesIntoSideChatDrafts, sideChatDraftKey, type SideChatDraft } from "../lib/side-chat-draft";
 import { parseBashCommand, randomUUID } from "../lib/utils";
 import { ContextButton } from "./context-button";
 import { ModelSelector } from "./model-selector";
@@ -36,6 +37,7 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
   const [draft, setDraft] = useState("");
   const [draftNonce, setDraftNonce] = useState(0);
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+  const sideDraftsRef = useRef(new Map<string, SideChatDraft>());
   const [editingMessage, setEditingMessage] = useState<{ id: string; draft: string; attachments: ImageAttachment[] }>();
   const [editDraftInjection, setEditDraftInjection] = useState<{ text: string; nonce: number }>();
   const [commands, setCommands] = useState<ComposerCommand[]>([]);
@@ -49,7 +51,19 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
   parentKeyRef.current = parentKey;
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  const sideRefRef = useRef(sideRef);
+  sideRefRef.current = sideRef;
   const composerFocusRef = useRef<(() => void) | undefined>(undefined);
+
+  const updateAttachments = useCallback((value: ImageAttachment[], targetRef = sideRefRef.current) => {
+    attachmentsRef.current = value;
+    setAttachments(value);
+    if (targetRef !== undefined) {
+      sideDraftsRef.current.set(sideChatDraftKey(targetRef), { draft: draftRef.current, attachments: value });
+    }
+  }, []);
 
   const stream = useSessionStream(open ? sideRef : undefined, assistantName, "侧聊", { manageDocumentTitle: false });
 
@@ -59,11 +73,13 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
   }, [open, onRunStateChange, sideRef, stream.transcript.status.runState]);
 
   useEffect(() => {
+    sideRefRef.current = undefined;
     setSideRef(undefined);
     setError(undefined);
     setDraft("");
+    draftRef.current = "";
     setDraftNonce((nonce) => nonce + 1);
-    setAttachments([]);
+    updateAttachments([]);
     setEditingMessage(undefined);
     setEditDraftInjection(undefined);
     setCommands([]);
@@ -84,10 +100,11 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
       if (!disposed && parentKeyRef.current === selectedKey) setError(caught instanceof Error ? caught.message : "无法加载侧聊");
     });
     return () => { disposed = true; };
-  }, [parentKey]);
+  }, [parentKey, updateAttachments]);
 
   useEffect(() => {
     if (!open || parentRef === undefined) {
+      sideRefRef.current = undefined;
       setSideRef(undefined);
       return;
     }
@@ -95,7 +112,15 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
     let disposed = false;
     void api.ensureSideChat(parentRef).then((session) => {
       if (disposed || parentKeyRef.current !== selectedKey) return;
-      setSideRef({ workspaceId: parentRef.workspaceId, sessionId: session.id });
+      const nextRef = { workspaceId: parentRef.workspaceId, sessionId: session.id };
+      const cached = sideDraftsRef.current.get(sideChatDraftKey(nextRef));
+      sideRefRef.current = nextRef;
+      setSideRef(nextRef);
+      draftRef.current = cached?.draft ?? "";
+      attachmentsRef.current = cached?.attachments ?? [];
+      setDraft(cached?.draft ?? "");
+      setAttachments(cached?.attachments ?? []);
+      setDraftNonce((nonce) => nonce + 1);
       onRunStateChange?.(session.runState);
       setError(undefined);
     }).catch((caught: unknown) => {
@@ -105,7 +130,15 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
   }, [open, parentKey]);
 
   function bindSession(parent: SessionRef, session: SessionSummary): void {
-    setSideRef({ workspaceId: parent.workspaceId, sessionId: session.id });
+    const nextRef = { workspaceId: parent.workspaceId, sessionId: session.id };
+    const cached = sideDraftsRef.current.get(sideChatDraftKey(nextRef));
+    sideRefRef.current = nextRef;
+    setSideRef(nextRef);
+    draftRef.current = cached?.draft ?? "";
+    attachmentsRef.current = cached?.attachments ?? [];
+    setDraft(cached?.draft ?? "");
+    setAttachments(cached?.attachments ?? []);
+    setDraftNonce((nonce) => nonce + 1);
     onRunStateChange?.(session.runState);
   }
 
@@ -153,10 +186,28 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
     return (await api.searchSessionFiles(parentRef.workspaceId, query)).filter((session) => session.id !== parentRef.sessionId && session.id !== sideRef?.sessionId);
   }, [parentRef?.workspaceId, parentRef?.sessionId, sideRef?.sessionId]);
 
-  const updateDraft = useCallback((value: string, external = false) => {
+  const updateDraft = useCallback((value: string, external = false, targetRef = sideRefRef.current) => {
+    draftRef.current = value;
     setDraft(value);
+    if (targetRef !== undefined) {
+      sideDraftsRef.current.set(sideChatDraftKey(targetRef), { draft: value, attachments: attachmentsRef.current });
+    }
     if (external) setDraftNonce((nonce) => nonce + 1);
   }, []);
+
+  const restoreQueuedMessages = useCallback((
+    targetRef: SessionRef,
+    messages: readonly { text: string; images?: ImageAttachment[] }[],
+  ): void => {
+    if (messages.length === 0) return;
+    sideDraftsRef.current = mergeQueuedMessagesIntoSideChatDrafts(sideDraftsRef.current, targetRef, messages);
+    const currentRef = sideRefRef.current;
+    if (currentRef?.workspaceId !== targetRef.workspaceId || currentRef.sessionId !== targetRef.sessionId) return;
+    const restored = sideDraftsRef.current.get(sideChatDraftKey(targetRef));
+    if (restored === undefined) return;
+    updateDraft(restored.draft, true, targetRef);
+    updateAttachments(restored.attachments, targetRef);
+  }, [updateAttachments, updateDraft]);
 
   const submitPrompt = async (text: string, images: ImageAttachment[], behavior?: "steer" | "followUp"): Promise<boolean> => {
     if (sideRef === undefined) return false;
@@ -190,13 +241,13 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
   };
 
   const abort = async () => {
-    if (sideRef === undefined) return;
+    const targetRef = sideRef;
+    if (targetRef === undefined) return;
     try {
-      const result = await api.abort(sideRef, stream.transcript.status.activeRun?.id);
+      const result = await api.abort(targetRef, stream.transcript.status.activeRun?.id);
       const dequeued = result.dequeued;
       if (dequeued !== undefined && (dequeued.steering.length > 0 || dequeued.followUp.length > 0)) {
-        const texts = [...dequeued.steering, ...dequeued.followUp].map((message) => message.text);
-        updateDraft([...texts, draftRef.current].filter((value) => value.trim() !== "").join("\n\n"), true);
+        restoreQueuedMessages(targetRef, [...dequeued.steering, ...dequeued.followUp]);
       }
     } catch (caught) {
       if (await recoverConflict(caught)) return;
@@ -251,24 +302,22 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
   };
 
   const dequeueAll = async () => {
-    if (sideRef === undefined) return;
+    const targetRef = sideRef;
+    if (targetRef === undefined) return;
     try {
-      const { steering, followUp } = await api.dequeueQueue(sideRef);
-      const texts = [...steering, ...followUp].map((message) => message.text);
-      if (texts.length === 0) return;
-      updateDraft([texts.join("\n\n"), draftRef.current].filter((value) => value.trim() !== "").join("\n\n"), true);
+      const { steering, followUp } = await api.dequeueQueue(targetRef);
+      restoreQueuedMessages(targetRef, [...steering, ...followUp]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "无法取回排队消息");
     }
   };
 
   const removeQueued = async (messageId: string, restore: boolean) => {
-    if (sideRef === undefined) return;
+    const targetRef = sideRef;
+    if (targetRef === undefined) return;
     try {
-      const { removed } = await api.removeQueued(sideRef, messageId);
-      if (restore && removed !== undefined) {
-        updateDraft([removed.text, draftRef.current].filter((value) => value.trim() !== "").join("\n\n"), true);
-      }
+      const { removed } = await api.removeQueued(targetRef, messageId);
+      if (restore && removed !== undefined) restoreQueuedMessages(targetRef, [removed]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "无法移除该排队消息");
     }
@@ -291,13 +340,13 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
       ? { id: message.id, draft: draftRef.current, attachments: [...attachments] }
       : { ...current, id: message.id });
     setEditDraftInjection({ text: message.text, nonce: Date.now() });
-    setAttachments(composerImageAttachments(message.images));
+    updateAttachments(composerImageAttachments(message.images));
   };
 
   const cancelMessageEdit = () => {
     const edit = editingMessage;
     if (edit === undefined) return;
-    setAttachments(edit.attachments);
+    updateAttachments(edit.attachments);
     setEditDraftInjection({ text: edit.draft, nonce: Date.now() });
     setEditingMessage(undefined);
   };
@@ -334,17 +383,22 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
   const reset = async () => {
     if (parentRef === undefined || resetPending) return;
     setResetPending(true);
+    const resetParentKey = `${parentRef.workspaceId}:${parentRef.sessionId}`;
+    const resetRef = sideRefRef.current;
     try {
       const session = await api.resetSideChat(parentRef);
+      if (parentKeyRef.current !== resetParentKey) return;
+      const oldRef = resetRef;
+      if (oldRef !== undefined) sideDraftsRef.current.delete(sideChatDraftKey(oldRef));
       bindSession(parentRef, session);
-      setDraft("");
-      setDraftNonce((nonce) => nonce + 1);
-      setAttachments([]);
+      updateDraft("", true);
+      updateAttachments([]);
       setEditingMessage(undefined);
       setEditDraftInjection(undefined);
       setResetOpen(false);
       setError(undefined);
     } catch (caught) {
+      if (parentKeyRef.current !== resetParentKey) return;
       setError(caught instanceof Error ? caught.message : "无法重置侧聊");
     } finally {
       setResetPending(false);
@@ -364,7 +418,7 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
       <Timeline key={`${sideRef.workspaceId}:${sideRef.sessionId}`} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error ?? error} onDismissNotice={() => setError(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={workspaceCwd} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} />
       <div className="chat-dock">
         <SideChatExtensionPanels panels={stream.extensionPanels} />
-        <PromptEditor key={sideRef.sessionId} initialValue={draft} draftNonce={draftNonce} busy={busy} commands={commands.length === 0 ? EMPTY_COMMANDS : commands} searchFiles={searchFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={attachments} onAttachmentsChange={setAttachments} onAttachmentError={setError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage === undefined ? undefined : cancelMessageEdit} queue={stream.transcript.queue ?? emptySessionQueue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueued} onToggleKind={toggleQueuedKind} focusRequestRef={composerFocusRef} autoFocus={open && !isMobile} controls={controls} />
+        <PromptEditor key={sideRef.sessionId} initialValue={draft} draftNonce={draftNonce} busy={busy} commands={commands.length === 0 ? EMPTY_COMMANDS : commands} searchFiles={searchFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={attachments} onAttachmentsChange={updateAttachments} onAttachmentError={setError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage === undefined ? undefined : cancelMessageEdit} queue={stream.transcript.queue ?? emptySessionQueue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueued} onToggleKind={toggleQueuedKind} focusRequestRef={composerFocusRef} autoFocus={open && !isMobile} controls={controls} />
       </div>
     </div>;
 

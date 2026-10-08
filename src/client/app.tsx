@@ -38,7 +38,8 @@ import {
 } from "./lib/socket-sync";
 import { isChatPath, pathParams, readDrafts, readExpandedWorkspaces, readSessionFocusMode, SESSION_FOCUS_STORAGE_KEY, sessionRouteNeedsSync } from "./lib/app-storage";
 import { markSessionUserActivity, mergeWorkspace, sessionCleanupConfirmMessage } from "./lib/session-list";
-import { composerImageAttachments } from "./lib/image";
+import { composerImageAttachments, sameImageAttachments } from "./lib/image";
+import { mergeQueuedMessagesIntoDraft } from "./lib/composer-draft";
 import { errorMessage, isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel } from "./lib/utils";
 import { useIsMobile } from "./hooks/use-is-mobile";
 import { useSessionStream } from "./hooks/use-session-stream";
@@ -137,6 +138,8 @@ export function App() {
   draftsRef.current = drafts;
   const [draftNonce, setDraftNonce] = useState(0);
   const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, ImageAttachment[]>>({});
+  const attachmentsBySessionRef = useRef(attachmentsBySession);
+  attachmentsBySessionRef.current = attachmentsBySession;
   const [editingMessage, setEditingMessage] = useState<{ id: string; sessionId: string; draft: string; attachments: ImageAttachment[] }>();
   const [editDraftInjection, setEditDraftInjection] = useState<{ text: string; nonce: number }>();
   const [forkTarget, setForkTarget] = useState<Extract<import("../shared/protocol").TimelineItem, { kind: "message" }>>();
@@ -187,6 +190,7 @@ export function App() {
   const selectedDraft = selectedSessionId === undefined ? "" : drafts[selectedSessionId] ?? "";
   const updateDraft = useCallback((id: string, value: string, external = false) => {
     if (draftsRef.current[id] === value) return;
+    draftsRef.current = { ...draftsRef.current, [id]: value };
     setDrafts((current) => current[id] === value ? current : { ...current, [id]: value });
     if (external) setDraftNonce((nonce) => nonce + 1);
   }, []);
@@ -196,9 +200,10 @@ export function App() {
   const selectedAttachments = selectedSessionId === undefined ? [] : attachmentsBySession[selectedSessionId] ?? [];
   const updateSelectedAttachments = useCallback((value: ImageAttachment[]) => {
     if (selectedSessionId === undefined) return;
+    attachmentsBySessionRef.current = { ...attachmentsBySessionRef.current, [selectedSessionId]: value };
     setAttachmentsBySession((current) => {
       const existing = current[selectedSessionId] ?? [];
-      if (existing.length === 0 && value.length === 0) return current;
+      if (sameImageAttachments(existing, value)) return current;
       return { ...current, [selectedSessionId]: value };
     });
   }, [selectedSessionId]);
@@ -922,33 +927,47 @@ export function App() {
     }
   };
 
+  const restoreQueuedMessages = useCallback((
+    targetRef: SessionRef,
+    messages: readonly { text: string; images?: ImageAttachment[] }[],
+  ): void => {
+    if (messages.length === 0) return;
+    const targetSessionId = targetRef.sessionId;
+    const currentAttachments = attachmentsBySessionRef.current[targetSessionId] ?? [];
+    const merged = mergeQueuedMessagesIntoDraft(messages, draftsRef.current[targetSessionId] ?? "", currentAttachments);
+    const selected = selectionRef.current;
+    const isSelected = selected.workspaceId === targetRef.workspaceId && selected.sessionId === targetSessionId;
+    updateDraft(targetSessionId, merged.draft, isSelected);
+    if (sameImageAttachments(currentAttachments, merged.attachments)) return;
+    attachmentsBySessionRef.current = { ...attachmentsBySessionRef.current, [targetSessionId]: merged.attachments };
+    setAttachmentsBySession((current) => ({ ...current, [targetSessionId]: merged.attachments }));
+  }, [updateDraft]);
+
   /** 全部取回排队消息并合并进当前草稿（对齐 Pi TUI 的 Alt+Up）。 */
   const dequeueAll = useCallback(async (): Promise<void> => {
-    if (selectedRef === undefined) return;
+    const targetRef = selectedRef;
+    if (targetRef === undefined) return;
     try {
-      const { steering, followUp } = await api.dequeueQueue(selectedRef);
-      const texts = [...steering, ...followUp].map((message) => message.text);
-      if (texts.length === 0) return;
-      updateSelectedDraft([texts.join("\n\n"), selectedDraft].filter((value) => value.trim() !== "").join("\n\n"), true);
+      const { steering, followUp } = await api.dequeueQueue(targetRef);
+      restoreQueuedMessages(targetRef, [...steering, ...followUp]);
       setPageError(undefined);
     } catch (error) {
       setPageError(errorMessage(error, "无法取回排队消息"));
     }
-  }, [selectedRef, selectedDraft, updateSelectedDraft]);
+  }, [restoreQueuedMessages, selectedRef]);
 
   /** 单条排队消息：移除；restore=true 时文本合并回草稿（取回）。 */
   const removeQueuedMessage = useCallback(async (messageId: string, restore: boolean): Promise<void> => {
-    if (selectedRef === undefined) return;
+    const targetRef = selectedRef;
+    if (targetRef === undefined) return;
     try {
-      const { removed } = await api.removeQueued(selectedRef, messageId);
-      if (restore && removed !== undefined) {
-        updateSelectedDraft([removed.text, selectedDraft].filter((value) => value.trim() !== "").join("\n\n"), true);
-      }
+      const { removed } = await api.removeQueued(targetRef, messageId);
+      if (restore && removed !== undefined) restoreQueuedMessages(targetRef, [removed]);
       setPageError(undefined);
     } catch (error) {
       setPageError(errorMessage(error, "无法移除该排队消息"));
     }
-  }, [selectedRef, selectedDraft, updateSelectedDraft]);
+  }, [restoreQueuedMessages, selectedRef]);
 
   /** 切换排队消息的投递方式：后续 ↔ 紧急（插队）。 */
   const toggleQueuedKind = useCallback(async (messageId: string): Promise<void> => {
@@ -1027,14 +1046,14 @@ export function App() {
   };
 
   const abort = async () => {
-    if (selectedRef === undefined) return;
+    const targetRef = selectedRef;
+    if (targetRef === undefined) return;
     try {
-      const result = await api.abort(selectedRef, stream.transcript.status.activeRun?.id);
+      const result = await api.abort(targetRef, stream.transcript.status.activeRun?.id);
       // 停止时取回排队消息（对齐 Pi TUI 的 Escape 行为）。
       const dequeued = result.dequeued;
       if (dequeued !== undefined && (dequeued.steering.length > 0 || dequeued.followUp.length > 0)) {
-        const texts = [...dequeued.steering, ...dequeued.followUp].map((message) => message.text);
-        updateSelectedDraft([...texts, selectedDraft].filter((value) => value.trim() !== "").join("\n\n"), true);
+        restoreQueuedMessages(targetRef, [...dequeued.steering, ...dequeued.followUp]);
       }
     } catch (error) {
       if (await recoverSessionConflict(error)) return;

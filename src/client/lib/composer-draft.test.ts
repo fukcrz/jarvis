@@ -1,5 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { composerDraftSyncAction, isComposerCompositionPending } from "./composer-draft";
+import { composerDraftSyncAction, isComposerCompositionPending, mergeDeferredComposerDraft, mergeQueuedMessagesIntoDraft } from "./composer-draft";
+
+describe("mergeQueuedMessagesIntoDraft", () => {
+  it("merges queued text and images before the current draft without deduplicating", () => {
+    const duplicate = { mimeType: "image/png", data: "same" };
+    expect(mergeQueuedMessagesIntoDraft([
+      { text: "第一条", images: [duplicate, duplicate] },
+      { text: "第二条", images: [{ mimeType: "image/jpeg", data: "next" }] },
+    ], "当前草稿", [{ mimeType: "image/gif", data: "existing" }])).toEqual({
+      draft: "第一条\n\n第二条\n\n当前草稿",
+      attachments: [duplicate, duplicate, { mimeType: "image/jpeg", data: "next" }, { mimeType: "image/gif", data: "existing" }],
+    });
+  });
+
+  it("restores image-only messages", () => {
+    expect(mergeQueuedMessagesIntoDraft([
+      { text: "", images: [{ mimeType: "image/png", data: "only-image" }] },
+    ], "", [])).toEqual({
+      draft: "",
+      attachments: [{ mimeType: "image/png", data: "only-image" }],
+    });
+  });
+});
+
+describe("mergeDeferredComposerDraft", () => {
+  it("keeps text committed during IME composition when queue messages are restored", () => {
+    expect(mergeDeferredComposerDraft("排队消息\n\n原草稿", "原草稿", "原草稿已确认")).toBe("排队消息\n\n原草稿已确认");
+  });
+
+  it("keeps image-only restore text separate from a composition started on an empty draft", () => {
+    expect(mergeDeferredComposerDraft("排队消息", "", "已确认")).toBe("排队消息\n\n已确认");
+  });
+
+  it("keeps multiple queue restores accumulated during the same composition", () => {
+    expect(mergeDeferredComposerDraft("第二条\n\n第一条\n\n原草稿", "原草稿", "原草稿已确认"))
+      .toBe("第二条\n\n第一条\n\n原草稿已确认");
+  });
+});
 
 describe("composerDraftSyncAction", () => {
   it("ignores parent re-renders that did not bump the draft nonce", () => {

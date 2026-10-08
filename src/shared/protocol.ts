@@ -552,6 +552,8 @@ export interface QueuedMessage {
   kind: "steer" | "followUp";
   text: string;
   createdAt: string;
+  /** 完整图片附件，用于取回草稿及重新入队。 */
+  images?: ImageAttachment[];
 }
 
 export interface SessionQueue {
@@ -766,7 +768,10 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 export function recordQueuedMessage(value: unknown): QueuedMessage | undefined {
   if (!isRecord(value) || typeof value["id"] !== "string" || typeof value["text"] !== "string" || typeof value["createdAt"] !== "string") return undefined;
   if (value["kind"] !== "steer" && value["kind"] !== "followUp") return undefined;
-  return { id: value["id"], kind: value["kind"], text: value["text"], createdAt: value["createdAt"] };
+  const images = Array.isArray(value["images"]) ? value["images"].flatMap((image): ImageAttachment[] =>
+    isRecord(image) && typeof image["mimeType"] === "string" && typeof image["data"] === "string"
+      ? [{ mimeType: image["mimeType"], data: image["data"] }] : []) : [];
+  return { id: value["id"], kind: value["kind"], text: value["text"], createdAt: value["createdAt"], ...(images.length === 0 ? {} : { images }) };
 }
 
 export function recordSessionQueue(value: unknown): SessionQueue | undefined {

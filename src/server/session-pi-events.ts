@@ -19,7 +19,6 @@ export interface SessionPiHost {
   publishContextUsage(active: ActiveSession, runId?: string): void;
   publishTool(active: ActiveSession, tool: ToolTimelineItem, runId?: string): void;
   cancelCompaction(active: ActiveSession): void;
-  syncQueue(active: ActiveSession): void;
   deferAgentSettlement(active: ActiveSession): void;
 }
 
@@ -65,9 +64,6 @@ export class SessionPiEvents {
         return;
       case "auto_retry_end":
         this.onAutoRetryEnd(active, event);
-        return;
-      case "queue_update":
-        if (!active.queueSyncSuspended) this.host.syncQueue(active);
         return;
       case "agent_settled":
         this.host.deferAgentSettlement(active);

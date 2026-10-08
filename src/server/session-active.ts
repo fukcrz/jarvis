@@ -12,6 +12,7 @@ import type {
   ToolTimelineItem,
 } from "../shared/protocol.js";
 import type { ExtensionUiBridge } from "./extension-ui.js";
+import type { SessionMessageQueue } from "./session-queue.js";
 
 export interface ActiveRun {
   id: string;
@@ -53,10 +54,9 @@ export interface ActiveSession {
   partial?: MessageTimelineItem;
   /** 当前 run 正在流式的思考块（message_end 定稿前）。 */
   partialThinking?: ThinkingTimelineItem;
-  /** 排队等待投递的用户消息镜像（来自 Pi 的 queue_update 事件）。 */
+  /** 来自 Pi 底层队列的完整用户消息，含图片附件。 */
   queue: SessionQueue;
-  /** clearQueue+重入队期间暂停镜像同步，避免发布中间态。 */
-  queueSyncSuspended: boolean;
+  messageQueue: SessionMessageQueue;
   activeTools: Map<string, ToolTimelineItem>;
   /** Memoized projection of the current immutable branch. The leaf id is its version. */
   timelineCache?: { leafId: string | null; items: TimelineItem[] };

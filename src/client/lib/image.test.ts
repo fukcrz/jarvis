@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { composerImageAttachments } from "./image";
+import { composerImageAttachments, sameImageAttachments } from "./image";
+
+describe("sameImageAttachments", () => {
+  it("distinguishes equally sized attachment lists with different images", () => {
+    expect(sameImageAttachments(
+      [{ mimeType: "image/png", data: "queued" }],
+      [{ mimeType: "image/png", data: "draft" }],
+    )).toBe(false);
+  });
+
+  it("matches attachment content in order", () => {
+    expect(sameImageAttachments(
+      [{ mimeType: "image/png", data: "first" }, { mimeType: "image/jpeg", data: "second" }],
+      [{ mimeType: "image/png", data: "first" }, { mimeType: "image/jpeg", data: "second" }],
+    )).toBe(true);
+  });
+});
 
 describe("composerImageAttachments", () => {
   it("keeps data-bearing images and drops url-only ones", () => {

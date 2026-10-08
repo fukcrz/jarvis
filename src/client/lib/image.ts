@@ -155,6 +155,13 @@ export function imageDataUrl(attachment: ImageAttachment): string {
   return `data:${attachment.mimeType};base64,${attachment.data ?? ""}`;
 }
 
+export function sameImageAttachments(left: readonly ImageAttachment[], right: readonly ImageAttachment[]): boolean {
+  return left.length === right.length && left.every((attachment, index) => {
+    const other = right[index];
+    return other !== undefined && attachment.mimeType === other.mimeType && attachment.data === other.data && attachment.url === other.url;
+  });
+}
+
 /** Copy user-message images into composer attachments (data-only, API-safe). */
 export function composerImageAttachments(images: readonly ImageAttachment[] | undefined): ImageAttachment[] {
   return (images ?? []).flatMap((image) => typeof image.data === "string" && image.data !== "" ? [{ mimeType: image.mimeType, data: image.data }] : []);

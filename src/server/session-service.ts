@@ -83,8 +83,6 @@ import {
   isCompactionCancellation,
   isOperationCancellation,
   isVisibleSessionId,
-  mergeQueuedMessages,
-  queuedMessage,
   runtimeFailureCode,
   sameThinkingLevels,
   sessionForkEntryId,
@@ -123,7 +121,6 @@ export class SessionService {
       publishContextUsage: (active, runId) => this.publishContextUsage(active, runId),
       publishTool: (active, tool, runId) => this.publishTool(active, tool, runId),
       cancelCompaction: (active) => this.cancelCompaction(active),
-      syncQueue: (active) => this.syncQueue(active),
       deferAgentSettlement: (active) => this.deferAgentSettlement(active),
     });
   }
@@ -570,6 +567,7 @@ export class SessionService {
       console.warn("Pi extension shutdown failed", error);
     }
     active.unsubscribe();
+    active.messageQueue.dispose();
     active.session.dispose();
     const key = activeKey(active.ref);
     if (this.active.get(key) === active) this.active.delete(key);
@@ -733,7 +731,7 @@ export class SessionService {
     return active.modelSwitching || active.state.runState !== "idle" || active.session.isStreaming;
   }
 
-  /** 把消息排入 Pi 的 steering/follow-up 队列；Pi 同步发出 queue_update 驱动镜像。 */
+  /** 把消息排入 Pi 的队列；完整内容由 messageQueue 记录并发布。 */
   private async enqueuePrompt(active: ActiveSession, kind: "steer" | "followUp", text: string, images: Array<ImageAttachment & { data: string }>): Promise<void> {
     this.markUserMessage(active, new Date().toISOString());
     this.publishSummary(active);
@@ -748,73 +746,28 @@ export class SessionService {
   /** 切换一条排队消息的投递方式（followUp ↔ steer）；其余消息按原顺序重入队。 */
   async setQueuedKind(ref: SessionRef, messageId: string, kind: "steer" | "followUp"): Promise<QueuedMessage | undefined> {
     const active = await this.getActive(ref);
-    const match = [...active.queue.steering, ...active.queue.followUp].find((item) => item.id === messageId);
-    if (match === undefined || match.kind === kind) return match;
-    // 目标消息以新 kind 入队：steering 队列先于 followUp 投递，
-    // 所以从“后续”切到“插队”会插到所有后续消息之前。
-    await this.replayQueue(active, match, { ...match, kind });
-    return { ...match, kind };
+    return active.messageQueue.remove(messageId, kind);
   }
 
   /** 全部取回排队消息（对齐 Pi TUI 的 Alt+Up / Escape 行为），返回给调用方恢复草稿。 */
   async dequeueQueue(ref: SessionRef): Promise<{ steering: QueuedMessage[]; followUp: QueuedMessage[] }> {
     const active = await this.getActive(ref);
-    const { steering, followUp } = active.session.clearQueue();
-    const removed = {
-      steering: steering.map((text) => queuedMessage("steer", text)),
-      followUp: followUp.map((text) => queuedMessage("followUp", text)),
-    };
-    this.syncQueue(active);
-    return removed;
+    return active.messageQueue.takeAll();
   }
 
   /** 删除（或取回）一条排队消息；其余消息按原顺序重新入队。 */
   async removeQueued(ref: SessionRef, messageId: string): Promise<QueuedMessage | undefined> {
     const active = await this.getActive(ref);
-    const match = [...active.queue.steering, ...active.queue.followUp].find((item) => item.id === messageId);
-    if (match === undefined) return undefined;
-    await this.replayQueue(active, match);
-    return match;
+    return active.messageQueue.remove(messageId);
   }
 
-  /** Pi 只提供全量 clearQueue；取出后把其余消息按原顺序重新入队。 */
-  private async replayQueue(active: ActiveSession, skip: QueuedMessage, append?: QueuedMessage): Promise<void> {
-    const queue = active.queue;
-    const { steering, followUp } = active.session.clearQueue();
-    active.queueSyncSuspended = true;
-    try {
-      for (const [index, text] of steering.entries()) {
-        if (skip.kind === "steer" && skip.text === text && queue.steering[index]?.id === skip.id) continue;
-        await active.session.steer(text);
-      }
-      for (const [index, text] of followUp.entries()) {
-        if (skip.kind === "followUp" && skip.text === text && queue.followUp[index]?.id === skip.id) continue;
-        await active.session.followUp(text);
-      }
-      if (append?.kind === "steer") await active.session.steer(append.text);
-      else if (append?.kind === "followUp") await active.session.followUp(append.text);
-    } finally {
-      active.queueSyncSuspended = false;
-      this.syncQueue(active);
-    }
-  }
-
-  /** 把 Pi 的 queue_update 载荷同步为镜像并发布给浏览器。 */
+  /** 发布完整队列快照给浏览器。 */
   private publishQueue(active: ActiveSession): void {
     this.events.publishSession(active.ref, {
       type: "queue.updated",
       ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),
       payload: { steering: active.queue.steering, followUp: active.queue.followUp },
     });
-  }
-
-  private syncQueue(active: ActiveSession): void {
-    const previous = active.queue;
-    active.queue = {
-      steering: mergeQueuedMessages(previous.steering, active.session.getSteeringMessages(), "steer"),
-      followUp: mergeQueuedMessages(previous.followUp, active.session.getFollowUpMessages(), "followUp"),
-    };
-    this.publishQueue(active);
   }
 
   /**
@@ -992,12 +945,7 @@ export class SessionService {
     if (runId !== undefined && activeRun?.id !== runId) throw new AppError("RUN_NOT_ACTIVE", "This run is no longer active", 409);
     // 停止前取回排队消息（对齐 Pi TUI Escape：清队列并把消息恢复到编辑器），
     // 避免 agent 空闲后 follow-up 自动触发新 run 继续执行。
-    const { steering, followUp } = active.session.clearQueue();
-    const dequeued: { steering: QueuedMessage[]; followUp: QueuedMessage[] } = {
-      steering: steering.map((text) => queuedMessage("steer", text)),
-      followUp: followUp.map((text) => queuedMessage("followUp", text)),
-    };
-    if (dequeued.steering.length > 0 || dequeued.followUp.length > 0) this.syncQueue(active);
+    const dequeued = active.messageQueue.takeAll();
     active.state = { ...active.state, runState: "stopping" };
     this.events.publishSession(active.ref, { type: "run.stopping", ...(activeRun === undefined ? {} : { runId: activeRun.id }), payload: { status: active.state } });
     this.publishSummary(active);

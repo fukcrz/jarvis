@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clamp, firstUserMessage, isVisibleSessionId, mergeQueuedMessages, queuedMessage, sessionBranchSearchText, snippetAround } from "./session-helpers.js";
+import { clamp, firstUserMessage, isVisibleSessionId, queuedMessage, sessionBranchSearchText, snippetAround } from "./session-helpers.js";
 
 describe("isVisibleSessionId", () => {
   it("hides pi-subagent child sessions", () => {
@@ -17,14 +17,14 @@ describe("clamp", () => {
   });
 });
 
-describe("mergeQueuedMessages", () => {
-  it("reuses matching entries to keep ids stable", () => {
-    const first = queuedMessage("followUp", "hello");
-    const merged = mergeQueuedMessages([first], ["hello", "world"], "followUp");
-    expect(merged).toHaveLength(2);
-    expect(merged[0]?.id).toBe(first.id);
-    expect(merged[1]?.text).toBe("world");
-    expect(merged[1]?.kind).toBe("followUp");
+describe("queuedMessage", () => {
+  it("gives repeated image messages independent identities", () => {
+    const images = [{ mimeType: "image/png", data: "image" }];
+    const first = queuedMessage("followUp", "hello", images);
+    const second = queuedMessage("followUp", "hello", images);
+    expect(first.id).not.toBe(second.id);
+    expect(first.images).toEqual(images);
+    expect(first.kind).toBe("followUp");
   });
 });
 

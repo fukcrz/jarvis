@@ -4,8 +4,8 @@ import { EditorView as CodeMirrorView } from "@codemirror/view";
 import { ArrowUp, Command, FileCode2, History, LoaderCircle, Plus, RotateCcw, Square, X, Zap } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionFileReference, SessionQueue, WorkspaceFile } from "../../shared/protocol";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
-import { composerDraftSyncAction, isComposerCompositionPending } from "../lib/composer-draft";
-import { imageDataUrl, prepareImage } from "../lib/image";
+import { composerDraftSyncAction, isComposerCompositionPending, mergeDeferredComposerDraft } from "../lib/composer-draft";
+import { imageDataUrl, prepareImage, sameImageAttachments } from "../lib/image";
 import { lockVisualViewportKeyboardInset, unlockVisualViewportKeyboardInset } from "../lib/visual-viewport";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { ImagePreview } from "./image-lightbox";
@@ -78,8 +78,10 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   const initialValueRef = useRef(initialValue);
   const valueRef = useRef(initialValue);
   const composingRef = useRef(false);
-  const pendingExternalDraftRef = useRef<string | undefined>(undefined);
+  const pendingExternalDraftRef = useRef<{ incoming: string; previous: string } | undefined>(undefined);
   const appliedDraftNonceRef = useRef(draftNonce);
+  const draftNonceRef = useRef(draftNonce);
+  draftNonceRef.current = draftNonce;
   const viewRef = useRef<EditorView | undefined>(undefined);
   const busyRef = useRef(busy);
   const submittingRef = useRef(false);
@@ -87,6 +89,13 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   const completionTimerRef = useRef<number | undefined>(undefined);
   const completionItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const attachmentsRef = useRef(attachments);
+  const attachmentRevisionRef = useRef(0);
+  const lastAttachmentsRef = useRef(attachments);
+  if (!sameImageAttachments(lastAttachmentsRef.current, attachments)) {
+    attachmentRevisionRef.current += 1;
+  }
+  lastAttachmentsRef.current = attachments;
+  attachmentsRef.current = attachments;
   const injectedTextRef = useRef(injectedText);
   /** 已应用的扩展注入编号：重连/重新水合会重建内容相同、对象身份不同的注入，
       重复应用会把用户后来写进编辑器的内容整体覆盖掉。 */
@@ -103,7 +112,6 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   const [hasDraft, setHasDraft] = useState(() => initialValue.trim() !== "");
 
   useEffect(() => { busyRef.current = busy; }, [busy]);
-  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
 
   const applyInjectedText = useCallback((view: EditorView, injection: { text: string; nonce: number } | undefined) => {
     if (injection === undefined) return;
@@ -253,7 +261,7 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
     view.focus();
   }, []);
 
-  const syncDraftFromApp = useCallback((view: EditorView, incoming: string, nonceChanged: boolean, force = false) => {
+  const syncDraftFromApp = useCallback((view: EditorView, incoming: string, nonceChanged: boolean, force = false, previous = initialValueRef.current) => {
     const action = composerDraftSyncAction({
       nonceChanged,
       current: view.state.doc.toString(),
@@ -261,7 +269,10 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
       composing: !force && (composingRef.current || view.composing),
     });
     if (action === "defer") {
-      pendingExternalDraftRef.current = incoming;
+      pendingExternalDraftRef.current = {
+        incoming,
+        previous: pendingExternalDraftRef.current?.previous ?? previous,
+      };
       return;
     }
     if (action === "skip") {
@@ -272,12 +283,14 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   }, [applyExternalDraft]);
 
   useEffect(() => {
-    initialValueRef.current = initialValue;
+    const previous = initialValueRef.current;
     const view = viewRef.current;
-    if (view === undefined) return;
-    const nonceChanged = appliedDraftNonceRef.current !== draftNonce;
-    appliedDraftNonceRef.current = draftNonce;
-    syncDraftFromApp(view, initialValue, nonceChanged);
+    if (view !== undefined) {
+      const nonceChanged = appliedDraftNonceRef.current !== draftNonce;
+      appliedDraftNonceRef.current = draftNonce;
+      syncDraftFromApp(view, initialValue, nonceChanged, false, previous);
+    }
+    initialValueRef.current = initialValue;
   }, [draftNonce, initialValue, syncDraftFromApp]);
 
   // Command resources arrive asynchronously. Re-run completion against the
@@ -354,17 +367,19 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
       composingRef.current = false;
       const view = viewRef.current;
       if (view === undefined) return false;
-      const pending = pendingExternalDraftRef.current;
-      // compositionend 时 view.composing 可能还没清掉；只刷真正的外部草稿。
-      if (pending !== undefined) {
-        syncDraftFromAppRef.current(view, pending, true, true);
-        return false;
-      }
-      // Android Chrome 会把上屏推迟到下一帧 flush；立即读文档可能仍是组字前的内容。
+      // Android Chrome 会把上屏推迟到下一帧 flush；此时再把排队恢复
+      // 合并到真实文档，不能用组字前的 App 草稿覆盖已确认的文字。
       requestAnimationFrame(() => {
         if (composingRef.current) return;
         const current = viewRef.current;
         if (current === undefined) return;
+        const pending = pendingExternalDraftRef.current;
+        if (pending !== undefined) {
+          const merged = mergeDeferredComposerDraft(pending.incoming, pending.previous, current.state.doc.toString());
+          syncDraftFromAppRef.current(current, merged, true, true);
+          onDraftChangeRef.current(merged);
+          return;
+        }
         flushComposerDraftFromViewRef.current(!current.composing);
       });
       return false;
@@ -398,6 +413,8 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
   const submit = useCallback(async (behavior?: "steer" | "followUp") => {
     if (submittingRef.current) return;
     const text = viewRef.current?.state.doc.toString() ?? valueRef.current;
+    const attachmentRevision = attachmentRevisionRef.current;
+    const draftNonce = draftNonceRef.current;
     if (text.trim() === "" && attachmentsRef.current.length === 0) return;
     submittingRef.current = true;
     try {
@@ -405,6 +422,9 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
       if (!submitted) return;
       closeCompletion();
       const view = viewRef.current;
+      // A completed send must not erase a draft or images restored while its
+      // request was in flight. User typing is covered by the document check.
+      if (draftNonceRef.current !== draftNonce || attachmentRevisionRef.current !== attachmentRevision || (view?.state.doc.toString() ?? valueRef.current) !== text) return;
       if (view === undefined) {
         valueRef.current = "";
         onDraftChange("");

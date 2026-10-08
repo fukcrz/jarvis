@@ -1,4 +1,5 @@
-import type { MessageTimelineItem, QueuedMessage, RetryStatus, SessionRef, SessionSummary, ThinkingLevel, TimelineItem } from "../shared/protocol.js";
+import { randomUUID } from "node:crypto";
+import type { ImageAttachment, MessageTimelineItem, QueuedMessage, RetryStatus, SessionRef, SessionSummary, ThinkingLevel, TimelineItem } from "../shared/protocol.js";
 import { isRecord } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { isUnsupportedExtensionInteraction, UNSUPPORTED_EXTENSION_INTERACTION } from "./extension-ui.js";
@@ -37,28 +38,9 @@ export function sameThinkingLevels(left: readonly ThinkingLevel[], right: readon
   return left.length === right.length && left.every((level, index) => level === right[index]);
 }
 
-/** 稳定 id：同一文本重复排队也保持独立条目。 */
-export function queuedMessage(kind: "steer" | "followUp", text: string): QueuedMessage {
-  let hash = 5381;
-  for (let index = 0; index < text.length; index += 1) hash = ((hash << 5) + hash + text.charCodeAt(index)) >>> 0;
-  const createdAt = new Date().toISOString();
-  return { id: `${kind}:${hash.toString(36)}:${createdAt}`, kind, text, createdAt };
-}
-
-/** 增量合并：按顺序复用已有条目（文本相同）以保持 id 稳定，新增/剩余条目补全新 id。 */
-export function mergeQueuedMessages(previous: QueuedMessage[], current: readonly string[], kind: "steer" | "followUp"): QueuedMessage[] {
-  const result: QueuedMessage[] = [];
-  const used = new Set<number>();
-  for (const text of current) {
-    const matchIndex = previous.findIndex((item, index) => !used.has(index) && item.kind === kind && item.text === text);
-    if (matchIndex === -1) {
-      result.push(queuedMessage(kind, text));
-    } else {
-      used.add(matchIndex);
-      result.push(previous[matchIndex]!);
-    }
-  }
-  return result;
+/** 同一文字、同一时刻的排队消息也有独立身份。 */
+export function queuedMessage(kind: "steer" | "followUp", text: string, images: ImageAttachment[] = []): QueuedMessage {
+  return { id: randomUUID(), kind, text, createdAt: new Date().toISOString(), ...(images.length === 0 ? {} : { images }) };
 }
 
 export function clamp(value: number, minimum: number, maximum: number): number {

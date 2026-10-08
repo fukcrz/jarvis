@@ -877,21 +877,21 @@ describe("extension UI events", () => {
 });
 
 describe("transcript queue", () => {
-  it("hydrates the queue from the runtime snapshot", () => {
+  it("hydrates the queue and its images from the runtime snapshot", () => {
     const queue: SessionQueue = {
-      steering: [queued("s1", "steer", "Steer now")],
-      followUp: [queued("f1", "followUp", "Later note")],
+      steering: [{ ...queued("s1", "steer", "Steer now"), images: [{ mimeType: "image/png", data: "steer-image" }] }],
+      followUp: [{ ...queued("f1", "followUp", ""), images: [{ mimeType: "image/jpeg", data: "follow-up-image" }] }],
     };
     const state = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, snapshotWithQueue(queue));
     expect(state.queue).toEqual(queue);
   });
 
-  it("applies queue.updated events and keeps invalid payloads untouched", () => {
+  it("applies queue.updated events with images and keeps invalid payloads untouched", () => {
+    const message = { ...queued("s1", "steer", "Steer now"), images: [{ mimeType: "image/png", data: "image" }] };
     const first = applySessionEvents(emptyTranscript, [
-      queueEvent(1, { steering: [queued("s1", "steer", "Steer now")], followUp: [] }),
+      queueEvent(1, { steering: [message], followUp: [] }),
     ]);
-    expect(first.queue.steering).toHaveLength(1);
-    expect(first.queue.steering[0]).toMatchObject({ id: "s1", kind: "steer", text: "Steer now" });
+    expect(first.queue.steering).toEqual([message]);
 
     // 投递后队列收缩。
     const second = applySessionEvents(first, [
