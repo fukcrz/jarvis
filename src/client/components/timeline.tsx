@@ -1087,13 +1087,13 @@ interface TurnRenderContext {
   onForkMessage?: TimelineProps["onForkMessage"];
 }
 
-function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, expanded = false): ReactNode {
+function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, expanded = false, showActivePreview = true): ReactNode {
   if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} />;
   if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} onExpand={context.onExpandProcess} />;
-  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={context.status.runState !== "idle" && entry.items.some((item) => item.state === "queued" || item.state === "running")} expanded={expanded} onExpand={context.onExpandProcess} />;
+  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={context.status.runState !== "idle" && entry.items.some((item) => item.state === "queued" || item.state === "running")} expanded={expanded} showActivePreview={showActivePreview} onExpand={context.onExpandProcess} />;
 }
 
 function renderProcessEntries(process: TimelineRenderItem[], context: TurnRenderContext, expanded: boolean): ReactNode[] {
@@ -1150,7 +1150,7 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
     <div key="entries" className={!collapsible ? "turn-process-stack" : open ? "turn-process-body" : "turn-process-current"}>
       {!collapsible || open ? process : liveProcess.map((entry) => entry.kind === "message"
         ? <button key={entry.item.id} type="button" className="process-commentary-preview" onClick={expandProcess} aria-label="展开过程文本">{processTextPreview(entry.item.text)}</button>
-        : renderTimelineEntry(entry, processContext))}
+        : renderTimelineEntry(entry, processContext, false, !touched.current))}
     </div>
   </section>;
   return <>

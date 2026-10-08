@@ -9,18 +9,22 @@ interface ToolActivityProps {
   active: boolean;
   /** The enclosing process was expanded by the user. */
   expanded?: boolean;
+  /** Keep the default live preview while its enclosing process is folded. */
+  showActivePreview?: boolean;
   onExpand?: () => void;
 }
 
-/** Consecutive operations share one summary; current work and failures stay visible. */
-export function ToolActivity({ items, active, expanded = false, onExpand }: ToolActivityProps) {
+/** Consecutive operations share one summary; untouched folds preview live work and failures. */
+export function ToolActivity({ items, active, expanded = false, showActivePreview = true, onExpand }: ToolActivityProps) {
   const [open, setOpen] = useState(expanded);
   const touched = useRef(false);
   const [openToolId, setOpenToolId] = useState<string>();
   const state = activityState(items, active);
   const collapsible = items.length > 1 && !items.some((item) => item.id.startsWith("bash:"));
-  const visible = !collapsible || open ? items : items.filter((item) =>
-    item.state === "failed" || active && (item.state === "running" || item.state === "queued"));
+  const explicitlyHiddenByProcess = !expanded && !showActivePreview;
+  const visible = !explicitlyHiddenByProcess && (open || !collapsible && showActivePreview)
+    ? items
+    : collapsedToolActivityItems(items, active, showActivePreview && !touched.current);
 
   useLayoutEffect(() => {
     if (!expanded) {
@@ -34,13 +38,18 @@ export function ToolActivity({ items, active, expanded = false, onExpand }: Tool
 
   return (
     <article className={`activity-group ${state}`}>
-      {!collapsible ? null : <button className="activity-narration" type="button" onClick={() => { touched.current = true; if (!open) onExpand?.(); setOpen((value) => !value); }} aria-expanded={open}>
+      {!collapsible ? null : <button className="activity-narration" type="button" onClick={() => { touched.current = true; if (!open) onExpand?.(); else setOpenToolId(undefined); setOpen((value) => !value); }} aria-expanded={open}>
         <span className="activity-narration-icon"><ChevronRight size={13} className={open ? "expanded" : ""} /></span>
         <span className="activity-narration-text">{summarizeToolActivity(items)}</span>
       </button>}
       {visible.length === 0 ? null : <div className="activity-items">{visible.map((item) => <ToolRow key={item.id} item={item} pending={active && (item.state === "running" || item.state === "queued")} open={openToolId === item.id} onToggle={() => { if (openToolId !== item.id) { touched.current = true; onExpand?.(); setOpen(true); } setOpenToolId((current) => current === item.id ? undefined : item.id); }} />)}</div>}
     </article>
   );
+}
+
+export function collapsedToolActivityItems(items: ToolTimelineItem[], active: boolean, showActivePreview: boolean): ToolTimelineItem[] {
+  return items.filter((item) => item.state === "failed"
+    || showActivePreview && active && (item.state === "running" || item.state === "queued"));
 }
 
 export function summarizeToolActivity(items: ToolTimelineItem[]): string {

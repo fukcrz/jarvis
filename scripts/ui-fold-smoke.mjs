@@ -9,6 +9,7 @@ import { chromium } from "playwright";
 // Feed structured Pi events through the real server handler, then persist the
 // same authoritative messages so refresh and reconnect use real API snapshots.
 const shotDir = process.env["JARVIS_SMOKE_SHOTS"] ?? join(tmpdir(), "jarvis-fold-smoke");
+const focusedFoldCases = process.env["JARVIS_FOLD_SMOKE_FOCUSED"] === "1";
 await mkdir(shotDir, { recursive: true });
 const envKeys = ["JARVIS_HOME", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "NODE_ENV", "PORT", "HOST", "LOG_LEVEL", "JARVIS_DESKTOP"];
 const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
@@ -32,6 +33,16 @@ async function api(baseUrl, path, options) {
   return response.json();
 }
 
+async function waitForSessionListed(baseUrl, workspaceId, sessionId) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const { sessions } = await api(baseUrl, `/api/workspaces/${workspaceId}/sessions`);
+    if (sessions.some((session) => session.id === sessionId)) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Session ${sessionId} was not listed in workspace ${workspaceId}`);
+}
+
 async function inspectLayout(page) {
   return page.evaluate(() => ({
     width: window.innerWidth,
@@ -48,11 +59,45 @@ async function snapshot(page, name) {
   await page.locator(".timeline-shell").ariaSnapshot().then((text) => writeFile(join(shotDir, `${name}.md`), text));
 }
 
+async function waitForTimeline(page, label) {
+  try {
+    await page.locator(".timeline-shell").waitFor({ state: "visible", timeout: 20_000 });
+  } catch (error) {
+    const state = await page.evaluate(() => ({
+      href: location.href,
+      root: document.getElementById("root")?.textContent?.slice(0, 300),
+      title: document.title,
+    })).catch(() => undefined);
+    throw new Error(`${label}: ${error instanceof Error ? error.message : String(error)}; page state: ${JSON.stringify(state)}`);
+  }
+}
+
+async function openChat(page, baseUrl, workspaceId, sessionId, label) {
+  const url = `${baseUrl}/#/chat/${workspaceId}/${sessionId}`;
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  try {
+    await page.locator(".timeline-shell").waitFor({ state: "visible", timeout: 5_000 });
+  } catch {
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await waitForTimeline(page, label);
+  }
+  await waitForSocket(page, sessionId);
+}
+
 async function waitForSocket(page, sessionId, count = 1) {
-  await page.waitForFunction(({ id, minimum }) => {
-    const sockets = window.__jarvisSockets?.filter((socket) => socket.url.includes(`/sessions/${id}/events`)) ?? [];
-    return sockets.length >= minimum && sockets.at(-1)?.readyState === 1;
-  }, { id: sessionId, minimum: count }, { timeout: 15_000 });
+  try {
+    await page.waitForFunction(({ id, minimum }) => {
+      const sockets = window.__jarvisSockets?.filter((socket) => socket.url.includes(`/sessions/${id}/events`)) ?? [];
+      return sockets.length >= minimum && sockets.at(-1)?.readyState === 1;
+    }, { id: sessionId, minimum: count }, { timeout: 15_000 });
+  } catch (error) {
+    const state = await page.evaluate((id) => ({
+      href: location.href,
+      root: document.getElementById("root")?.textContent?.slice(0, 300),
+      sockets: (window.__jarvisSockets ?? []).map((socket) => ({ url: socket.url, readyState: socket.readyState, session: socket.url.includes(`/sessions/${id}/events`) })),
+    }), sessionId).catch(() => undefined);
+    throw new Error(`${error instanceof Error ? error.message : String(error)}; socket state: ${JSON.stringify(state)}`);
+  }
 }
 
 function createFixture(services, ref) {
@@ -84,17 +129,35 @@ function createFixture(services, ref) {
   const start = () => handler.handle(active, { type: "agent_start" });
   const settle = () => services.sessions.settleRun(active, active.state.activeRun?.id);
   const toolStart = (call) => handler.handle(active, { type: "tool_execution_start", toolCallId: call.id, toolName: call.name, args: call.arguments });
+  const toolUpdate = (call, value) => handler.handle(active, { type: "tool_execution_update", toolCallId: call.id, toolName: call.name, args: call.arguments, partialResult: { content: [{ type: "text", text: value }] } });
   const toolEnd = (call, value, isError = false) => {
     const result = { content: [{ type: "text", text: value }], ...(call.name === "bash" ? { details: { exitCode: isError ? 1 : 0 } } : {}) };
     handler.handle(active, { type: "tool_execution_end", toolCallId: call.id, toolName: call.name, result, isError });
     manager.appendMessage({ role: "toolResult", toolCallId: call.id, toolName: call.name, timestamp: Date.now(), content: result.content, details: result.details, isError });
   };
   const callEnd = (partial, contentIndex) => update(partial, { type: "toolcall_end", contentIndex, toolCall: partial.content[contentIndex] });
-  return { active, handler, manager, at, text, assistant, update, end, user, start, settle, toolStart, toolEnd, callEnd };
+  return { active, handler, manager, at, text, assistant, update, end, user, start, settle, toolStart, toolUpdate, toolEnd, callEnd };
+}
+
+async function waitForFoldEvent(page, type, match) {
+  await page.waitForFunction(({ type, match }) => window.__foldEvents?.some((event) => {
+    if (event.type !== type) return false;
+    if (type === "run.settled") return event.runId === match.runId;
+    const tool = event.payload?.tool;
+    return tool?.id === match.id && tool.state === match.state && (match.output === undefined || tool.output === match.output);
+  }), { type, match }, { timeout: 10_000 });
+  // The stream hook batches events in rAF. Cross the flush and following paint
+  // before checking rows whose updates are deliberately hidden by folding.
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+}
+
+async function waitForToolEvent(page, call, state, output) {
+  await waitForFoldEvent(page, "tool.upsert", { id: call.id, state, output });
 }
 
 async function exercise(baseUrl, workspace, viewport, label) {
   const { session } = await api(baseUrl, `/api/workspaces/${workspace.id}/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  await waitForSessionListed(baseUrl, workspace.id, session.id);
   const fixture = createFixture(app.jarvis, { workspaceId: workspace.id, sessionId: session.id });
   const context = await browser.newContext({ viewport, ...(label === "mobile" ? { isMobile: true, hasTouch: true } : {}) });
   try {
@@ -107,11 +170,12 @@ async function exercise(baseUrl, workspace, viewport, label) {
     });
     const page = await context.newPage();
     let runtimeRequests = 0;
-    page.on("pageerror", (error) => failures.push(`${label}: ${error.message}`));
+    page.on("pageerror", (error) => {
+      failures.push(`${label}: ${error.message}`);
+      console.error(`${label}: page error: ${error.message}`);
+    });
     page.on("request", (request) => { if (request.url().endsWith(`/sessions/${session.id}/runtime`)) runtimeRequests += 1; });
-    await page.goto(`${baseUrl}/#/chat/${workspace.id}/${session.id}`, { waitUntil: "domcontentloaded" });
-    await page.locator(".timeline-shell").waitFor({ state: "visible", timeout: 20_000 });
-    await waitForSocket(page, session.id);
+    await openChat(page, baseUrl, workspace.id, session.id, label);
 
     fixture.start();
     fixture.user("检查内容归类与过程展示。", fixture.at(0));
@@ -144,7 +208,7 @@ async function exercise(baseUrl, workspace, viewport, label) {
     fixture.toolStart(calls[1]);
     fixture.toolEnd(calls[1], "transcript source retained");
     fixture.toolStart(calls[2]);
-    await page.locator(".command-item.running").waitFor();
+    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false" && document.querySelectorAll(".activity-group .tool-item").length === 0);
     assert.equal(await page.locator(".turn-process-summary").first().getAttribute("aria-expanded"), "false");
     assert.equal(await page.locator(".activity-narration").textContent(), "读取 2 · 命令 1");
     assert.equal(await page.locator(".tool-item.completed").count(), 0, `${label}: completed operations should be in the summary`);
@@ -154,14 +218,16 @@ async function exercise(baseUrl, workspace, viewport, label) {
     const runningLayout = await inspectLayout(page);
     assert.ok(runningLayout.documentWidth <= viewport.width + 1, `${label}: running layout overflows`);
 
-    // Opening a visible running row expands its group and owning process together.
+    // Expand the process before opening a running row hidden by the default fold.
+    await page.locator(".turn-process-summary").first().click();
+    await page.locator(".command-item.running .command-summary").waitFor();
     await page.locator(".command-item.running .command-summary").click();
     await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "true" && document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true");
     assert.equal(await page.locator(".tool-item.completed").count(), 2, `${label}: opening a running row should reveal completed siblings`);
 
     // Collapsing the owning process also folds the activity group and its row details.
     await page.locator(".turn-process-summary").first().click();
-    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false" && document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "false");
+    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false" && document.querySelectorAll(".turn-process .tool-item").length === 0);
     assert.equal(await page.locator(".tool-item.completed").count(), 0, `${label}: collapsing the process should hide completed siblings`);
     assert.equal(await page.locator(".tool-details").count(), 0, `${label}: collapsing the process should hide row details`);
 
@@ -169,10 +235,8 @@ async function exercise(baseUrl, workspace, viewport, label) {
     await page.locator(".turn-process-summary").first().click();
     await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true");
     assert.equal(await page.locator(".tool-item.completed").count(), 2, `${label}: reopening the process should reveal completed siblings`);
-    await page.locator(".turn-process-summary").first().click();
 
     // Manual expansion of a group/row expands the owning process and survives updates.
-    await page.locator(".activity-narration").click();
     await page.locator(".tool-summary").filter({ hasText: "projection.ts" }).click();
     await page.getByText("projection source retained", { exact: true }).waitFor();
     fixture.toolEnd(calls[2], "612 passed");
@@ -303,6 +367,179 @@ async function exercise(baseUrl, workspace, viewport, label) {
   }
 }
 
+async function exerciseCommandFolds(baseUrl, workspace, viewport, label, shell) {
+  const scenario = `${label}-${shell}`;
+  const { session } = await api(baseUrl, `/api/workspaces/${workspace.id}/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  await waitForSessionListed(baseUrl, workspace.id, session.id);
+  const fixture = createFixture(app.jarvis, { workspaceId: workspace.id, sessionId: session.id });
+  const context = await browser.newContext({ viewport, ...(label === "mobile" ? { isMobile: true, hasTouch: true } : {}) });
+  try {
+    await context.addInitScript(() => {
+      const NativeWebSocket = window.WebSocket;
+      window.__jarvisSockets = [];
+      window.__foldEvents = [];
+      window.WebSocket = class extends NativeWebSocket {
+        constructor(...args) {
+          super(...args);
+          window.__jarvisSockets.push(this);
+          this.addEventListener("message", ({ data }) => {
+            try {
+              const event = JSON.parse(data);
+              if (event.type === "tool.upsert" || event.type === "run.settled") window.__foldEvents.push(event);
+            } catch { /* Heartbeats are not session events. */ }
+          });
+        }
+      };
+    });
+    const page = await context.newPage();
+    page.on("pageerror", (error) => {
+      failures.push(`${scenario}: ${error.message}`);
+      console.error(`${scenario}: page error: ${error.message}`);
+    });
+    await openChat(page, baseUrl, workspace.id, session.id, scenario);
+
+    fixture.start();
+    fixture.user(`检查 ${shell} 命令折叠。`, fixture.at(0));
+    fixture.end(fixture.assistant(fixture.at(1), [fixture.text("准备执行命令。\n当前进度。", "commentary")]));
+    await page.locator(".process-commentary-preview").waitFor();
+    assert.equal(await page.locator(".turn-process-summary").getAttribute("aria-expanded"), "false", `${scenario}: untouched process opened`);
+    assert.equal(await page.locator(".process-commentary-preview").textContent(), "当前进度。");
+    assert.equal(await page.locator(".turn-process-body").count(), 0, `${scenario}: untouched process showed details`);
+
+    const commands = [1, 2, 3, 4].map((number) => ({
+      type: "toolCall", id: `${scenario}-command-${number}`, name: shell, arguments: { command: `fold-${shell}-${number}` },
+    }));
+    fixture.end(fixture.assistant(fixture.at(2), commands.slice(0, 3), { stopReason: "toolUse" }));
+    await waitForToolEvent(page, commands[2], "queued");
+    const group = page.locator(".activity-group").first();
+    await group.locator(".activity-narration").waitFor();
+    assert.equal(await page.locator(".turn-process-summary").getAttribute("aria-expanded"), "false", `${scenario}: queued tools opened process`);
+    assert.equal(await group.locator(".activity-narration").getAttribute("aria-expanded"), "false", `${scenario}: group should start collapsed`);
+    assert.equal(await group.locator(".activity-narration-text").textContent(), "命令 3");
+    assert.equal(await group.locator(".tool-item.queued").count(), 3, `${scenario}: untouched group hid queued previews`);
+    assert.equal(await group.locator(".tool-item.completed").count(), 0);
+    assert.equal(await group.locator(".tool-details").count(), 0);
+    await snapshot(page, `${scenario}-default-preview`);
+    await page.screenshot({ path: join(shotDir, `${scenario}-default-preview.png`) });
+
+    fixture.toolStart(commands[0]);
+    fixture.toolUpdate(commands[0], "first partial");
+    await waitForToolEvent(page, commands[0], "running", "first partial");
+    assert.equal(await group.locator(".tool-item.running").count(), 1, `${scenario}: untouched group hid its running preview`);
+    fixture.toolEnd(commands[0], "first complete");
+    await waitForToolEvent(page, commands[0], "completed", "first complete");
+    assert.equal(await group.locator(".tool-item.completed").count(), 0, `${scenario}: completed work remained in the default preview`);
+    assert.equal(await group.locator(".tool-item.queued").count(), 2, `${scenario}: remaining queued work disappeared from the default preview`);
+
+    await page.locator(".turn-process-summary").click();
+    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true");
+    assert.equal(await group.locator(".tool-item").count(), 3, `${scenario}: expanded group omitted queued/completed rows`);
+    await group.locator(".tool-item").nth(0).locator(".tool-summary").click();
+    await group.getByText("first complete", { exact: true }).waitFor();
+    await group.locator(".activity-narration").click();
+    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "false" && document.querySelectorAll(".activity-group .tool-item").length === 0);
+    assert.equal(await group.locator(".tool-item.completed, .tool-item.queued, .tool-item.running").count(), 0, `${scenario}: folded group exposed normal rows`);
+    assert.equal(await group.locator(".tool-details").count(), 0, `${scenario}: folded group retained details`);
+    await snapshot(page, `${scenario}-group-collapsed`);
+    await page.screenshot({ path: join(shotDir, `${scenario}-group-collapsed.png`) });
+
+    fixture.toolStart(commands[1]);
+    fixture.toolUpdate(commands[1], "second partial");
+    await waitForToolEvent(page, commands[1], "running", "second partial");
+    assert.equal(await group.locator(".tool-item").count(), 0, `${scenario}: running update reopened folded group`);
+    fixture.toolEnd(commands[1], "second failed", true);
+    await waitForToolEvent(page, commands[1], "failed");
+    await group.locator(".tool-item.failed").waitFor();
+    fixture.toolStart(commands[2]);
+    fixture.toolUpdate(commands[2], "third partial");
+    await waitForToolEvent(page, commands[2], "running", "third partial");
+    assert.equal(await group.locator(".tool-item").count(), 1, `${scenario}: folded group should show only the failure`);
+    assert.equal(await group.locator(".tool-item.failed").count(), 1, `${scenario}: failed row was hidden`);
+    assert.equal(await group.locator(".tool-item.running, .tool-item.queued, .tool-item.completed").count(), 0, `${scenario}: normal row remained visible`);
+    assert.equal(await group.locator(".tool-details").count(), 0);
+    fixture.toolEnd(commands[2], "third complete");
+    await waitForToolEvent(page, commands[2], "completed", "third complete");
+    assert.equal(await group.locator(".tool-item").count(), 1, `${scenario}: completion reopened group`);
+    await group.locator(".activity-narration").click();
+    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true" && document.querySelectorAll(".activity-group .tool-item").length === 3);
+    await group.locator(".tool-item.failed .tool-summary").click();
+    await group.getByText("second failed", { exact: true }).waitFor();
+    await group.locator(".activity-narration").click();
+    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "false" && document.querySelectorAll(".activity-group .tool-item").length === 1);
+    assert.equal(await group.locator(".tool-details").count(), 0);
+
+    await page.locator(".turn-process-summary").click();
+    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false");
+    assert.equal(await group.locator(".tool-item.failed").count(), 1, `${scenario}: parent fold hid failure`);
+    assert.equal(await group.locator(".tool-item.completed, .tool-item.queued, .tool-item.running").count(), 0);
+    await snapshot(page, `${scenario}-process-collapsed`);
+    await page.screenshot({ path: join(shotDir, `${scenario}-process-collapsed.png`) });
+
+    fixture.end(fixture.assistant(fixture.at(3), [commands[3]], { stopReason: "toolUse" }));
+    await waitForToolEvent(page, commands[3], "queued");
+    fixture.toolStart(commands[3]);
+    fixture.toolUpdate(commands[3], "fourth partial");
+    await waitForToolEvent(page, commands[3], "running", "fourth partial");
+    assert.equal(await page.locator(".turn-process-summary").getAttribute("aria-expanded"), "false", `${scenario}: new running tool opened parent`);
+    assert.equal(await group.locator(".activity-narration").getAttribute("aria-expanded"), "false", `${scenario}: new running tool opened group`);
+    assert.equal(await group.locator(".tool-item.failed").count(), 1);
+    assert.equal(await group.locator(".tool-item.running, .tool-item.queued, .tool-item.completed").count(), 0);
+    fixture.toolEnd(commands[3], "fourth complete");
+    await waitForToolEvent(page, commands[3], "completed", "fourth complete");
+    const runId = fixture.active.state.activeRun?.id;
+    assert.ok(runId, `${scenario}: missing active run before settlement`);
+    fixture.settle();
+    await waitForFoldEvent(page, "run.settled", { runId });
+    assert.equal(await page.locator(".turn-process-summary").getAttribute("aria-expanded"), "false", `${scenario}: settlement reopened process`);
+    assert.equal(await group.locator(".tool-item.failed").count(), 1);
+    assert.equal(await group.locator(".tool-item.completed, .tool-item.queued, .tool-item.running").count(), 0);
+    await page.locator(".turn-process-summary").click();
+    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true" && document.querySelectorAll(".activity-group .tool-item").length === 4);
+    assert.equal(await group.locator(".tool-item.failed").count(), 1);
+
+    fixture.start();
+    fixture.user(`检查单条 ${shell} 命令。`);
+    const single = { type: "toolCall", id: `${scenario}-single`, name: shell, arguments: { command: `single-${shell}` } };
+    fixture.end(fixture.assistant(Date.now(), [fixture.text("检查单条命令。", "commentary"), single], { stopReason: "toolUse" }));
+    await waitForToolEvent(page, single, "queued");
+    const singleProcess = page.locator(".turn-process").last();
+    assert.equal(await singleProcess.locator(".activity-narration").count(), 0, `${scenario}: single command has group toggle`);
+    assert.equal(await singleProcess.locator(".turn-process-summary").getAttribute("aria-expanded"), "false");
+    assert.equal(await singleProcess.locator(".tool-item.queued").count(), 1, `${scenario}: untouched parent hid queued single command`);
+    await singleProcess.locator(".turn-process-summary").click();
+    await singleProcess.locator(".tool-item.queued").waitFor();
+    await singleProcess.locator(".turn-process-summary").click();
+    await page.waitForFunction(() => {
+      const processes = document.querySelectorAll(".turn-process");
+      const latest = processes[processes.length - 1];
+      return latest?.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false" && latest.querySelectorAll(".tool-item").length === 0;
+    });
+    fixture.toolStart(single);
+    fixture.toolUpdate(single, "single partial");
+    await waitForToolEvent(page, single, "running", "single partial");
+    assert.equal(await singleProcess.locator(".tool-item").count(), 0, `${scenario}: collapsed parent exposed its running single command`);
+    fixture.toolEnd(single, "single complete");
+    await waitForToolEvent(page, single, "completed", "single complete");
+    const singleRunId = fixture.active.state.activeRun?.id;
+    assert.ok(singleRunId, `${scenario}: missing single-command run before settlement`);
+    fixture.settle();
+    await waitForFoldEvent(page, "run.settled", { runId: singleRunId });
+    assert.equal(await singleProcess.locator(".turn-process-summary").getAttribute("aria-expanded"), "false");
+    assert.equal(await singleProcess.locator(".tool-item").count(), 0, `${scenario}: collapsed single-tool process exposed completed work`);
+    await singleProcess.locator(".turn-process-summary").click();
+    await singleProcess.locator(".tool-item.completed").waitFor();
+    await singleProcess.locator(".tool-summary").click();
+    await singleProcess.getByText("single complete", { exact: true }).waitFor();
+    await singleProcess.locator(".turn-process-summary").click();
+    assert.equal(await singleProcess.locator(".tool-details").count(), 0, `${scenario}: collapsing single-tool process retained details`);
+    await singleProcess.locator(".turn-process-summary").click();
+    await singleProcess.locator(".tool-item.completed").waitFor();
+    reports.push({ scenario, viewport, commandFolds: true });
+  } finally {
+    await context.close();
+  }
+}
+
 try {
   process.env.JARVIS_HOME = home;
   process.env.PI_CODING_AGENT_DIR = join(home, "agent");
@@ -319,7 +556,8 @@ try {
   const { workspace } = await api(baseUrl, "/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: workspacePath, label: "过程展示检查" }) });
   browser = await chromium.launch({ headless: true });
   for (const [label, viewport] of [["desktop", { width: 1440, height: 960 }], ["mobile", { width: 390, height: 844 }]]) {
-    await exercise(baseUrl, workspace, viewport, label);
+    if (!focusedFoldCases) await exercise(baseUrl, workspace, viewport, label);
+    for (const shell of ["bash", "powershell"]) await exerciseCommandFolds(baseUrl, workspace, viewport, label, shell);
   }
   assert.deepEqual(failures, []);
   await writeFile(join(shotDir, "report.json"), JSON.stringify({ baseUrl, reports, failures }, null, 2));

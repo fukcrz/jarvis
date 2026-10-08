@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { SubagentView, ToolTimelineItem } from "../../shared/protocol";
-import { summarizeToolActivity, ToolActivity } from "./tool-activity";
+import { collapsedToolActivityItems, summarizeToolActivity, ToolActivity } from "./tool-activity";
 
 function subagentTool(state: ToolTimelineItem["state"], view: SubagentView): ToolTimelineItem {
   return {
@@ -17,6 +17,18 @@ function subagentTool(state: ToolTimelineItem["state"], view: SubagentView): Too
 }
 
 describe("ToolActivity summaries", () => {
+  it("keeps a live preview only until the group is manually collapsed", () => {
+    const completed: ToolTimelineItem = { kind: "tool", id: "done", createdAt: "", name: "read", title: "Read file", state: "completed" };
+    const queued: ToolTimelineItem = { ...completed, id: "queued", state: "queued" };
+    const running: ToolTimelineItem = { ...completed, id: "running", state: "running" };
+    const failed: ToolTimelineItem = { ...completed, id: "failed", state: "failed" };
+    const items = [completed, queued, running, failed];
+
+    expect(collapsedToolActivityItems(items, true, true)).toEqual([queued, running, failed]);
+    expect(collapsedToolActivityItems(items, true, false)).toEqual([failed]);
+    expect(collapsedToolActivityItems(items, false, true)).toEqual([failed]);
+  });
+
   it("summarizes consecutive operations while keeping running and failed rows visible", () => {
     const base: ToolTimelineItem = { kind: "tool", id: "a", createdAt: "", name: "read", title: "Read file", state: "completed", target: "a.ts", output: "retained output" };
     const items = [base, { ...base, id: "b", target: "b.ts" }, { ...base, id: "c", state: "running" as const, target: "current.ts" }, { ...base, id: "d", name: "bash", title: "Run command", state: "failed" as const, inputPreview: "npm test", error: "failed output" }];
@@ -26,6 +38,9 @@ describe("ToolActivity summaries", () => {
     expect(compact).toContain("current.ts");
     expect(compact).toContain("npm test");
     expect(compact).not.toContain("a.ts");
+    const processCollapsed = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, showActivePreview: false }));
+    expect(processCollapsed).not.toContain("current.ts");
+    expect(processCollapsed).toContain("npm test");
     const expanded = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, expanded: true }));
     expect(expanded).toContain("a.ts");
     expect(expanded).toContain("b.ts");
