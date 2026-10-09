@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type ImageAttachment, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol.js";
+import { THINKING_LEVELS, type AssistantGenerationStats, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type ImageAttachment, type LiveGenerationStats, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type TokenUsage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol.js";
 import { isRecord } from "../shared/protocol.js";
 
 export interface TranscriptState {
@@ -11,6 +11,9 @@ export interface TranscriptState {
   model: SessionModelSnapshot;
   thinking: SessionThinkingSnapshot;
   contextUsage?: ContextUsage;
+  sessionUsage?: TokenUsage;
+  latestGeneration?: AssistantGenerationStats;
+  liveGeneration?: LiveGenerationStats;
   streamingMessageId?: string;
   /** Text blocks awaiting authoritative completion; the singular field remains for callers. */
   streamingMessageIds?: string[];
@@ -59,6 +62,9 @@ export function hydrateTranscript(previous: TranscriptState, page: TimelinePage,
     model: snapshot.model,
     thinking: snapshot.thinking,
     ...(snapshot.contextUsage === undefined ? {} : { contextUsage: snapshot.contextUsage }),
+    ...(snapshot.sessionUsage === undefined ? {} : { sessionUsage: snapshot.sessionUsage }),
+    ...(snapshot.latestGeneration === undefined ? {} : { latestGeneration: snapshot.latestGeneration }),
+    ...(snapshot.liveGeneration === undefined ? {} : { liveGeneration: snapshot.liveGeneration }),
     ...(partialTextIds.length === 0 ? {} : { streamingMessageId: partialTextIds.at(-1), streamingMessageIds: partialTextIds }),
     queue: snapshot.queue ?? emptySessionQueue,
   };
@@ -106,17 +112,22 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const items = Array.isArray(payload?.["items"]) ? payload["items"].flatMap(recordTimelineItem) : undefined;
     const status = recordStatus(payload?.["status"]);
     if (items === undefined || status === undefined) return next;
-    return { ...next, items, start: 0, total: items.length, hasMore: false, status, streamingMessageId: undefined, streamingMessageIds: undefined };
+    return { ...next, items, start: 0, total: items.length, hasMore: false, status, streamingMessageId: undefined, streamingMessageIds: undefined, liveGeneration: undefined };
   }
   if (event.type === "context.updated") {
     const payload = isRecord(event.payload) ? event.payload : {};
-    const contextUsage = payload["contextUsage"];
-    if (isRecord(contextUsage)) {
-      const tokens = typeof contextUsage["tokens"] === "number" || contextUsage["tokens"] === null ? contextUsage["tokens"] : null;
-      const percent = typeof contextUsage["percent"] === "number" || contextUsage["percent"] === null ? contextUsage["percent"] : null;
-      const contextWindow = typeof contextUsage["contextWindow"] === "number" ? contextUsage["contextWindow"] : 0;
-      return { ...next, contextUsage: { tokens, percent, contextWindow } };
-    }
+    const contextUsage = recordContextUsage(payload["contextUsage"]);
+    return contextUsage === undefined ? next : { ...next, contextUsage };
+  }
+  if (event.type === "usage.updated") {
+    const payload = isRecord(event.payload) ? event.payload : {};
+    const sessionUsage = recordTokenUsage(payload["sessionUsage"]);
+    const latestGeneration = recordGeneration(payload["latestGeneration"]);
+    return {
+      ...next,
+      ...(sessionUsage === undefined ? {} : { sessionUsage }),
+      ...(latestGeneration === undefined ? {} : { latestGeneration }),
+    };
   }
   if (event.type === "message.created") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -141,8 +152,9 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
       ...(phase === undefined ? {} : { phase }),
       text: (existing?.text ?? "") + delta,
     };
+    const liveGeneration = recordLiveGeneration(payload?.["liveGeneration"]);
     const streamingMessageIds = [...new Set([...(next.streamingMessageIds ?? (next.streamingMessageId === undefined ? [] : [next.streamingMessageId])), messageId])];
-    return { ...next, items: sortTimelineByCreatedAt(upsertStreamingMessage(next.items, message)), streamingMessageId: messageId, streamingMessageIds };
+    return { ...next, items: sortTimelineByCreatedAt(upsertStreamingMessage(next.items, message)), streamingMessageId: messageId, streamingMessageIds, ...(liveGeneration === undefined ? {} : { liveGeneration }) };
   }
   if (event.type === "assistant.completed") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -155,12 +167,19 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
       const insertion = next.items.findIndex((item) => replaced.has(item.id));
       const retained = next.items.filter((item) => !replaced.has(item.id));
       const position = insertion === -1 ? retained.length : next.items.slice(0, insertion).filter((item) => !replaced.has(item.id)).length;
-      const updated = { ...next, items: sortTimelineByCreatedAt([...retained.slice(0, position), ...items, ...retained.slice(position)]) };
+      const updated = { ...next, items: sortTimelineByCreatedAt([...retained.slice(0, position), ...items, ...retained.slice(position)]), liveGeneration: undefined };
       return completeStreamingBlocks(updated, replaced);
     }
     const message = recordMessage(payload?.["message"]);
     if (message === undefined) return next;
-    return completeStreamingBlocks({ ...next, items: sortTimelineByCreatedAt(mergeTimeline(next.items, [message])) }, new Set([message.id]));
+    const provisional = payload?.["authoritative"] === false;
+    const liveGeneration = recordLiveGeneration(payload?.["liveGeneration"]);
+    const completed = completeStreamingBlocks({
+      ...next,
+      items: sortTimelineByCreatedAt(mergeTimeline(next.items, [message])),
+      ...(provisional ? liveGeneration === undefined ? {} : { liveGeneration } : { liveGeneration: undefined }),
+    }, new Set([message.id]));
+    return completed;
   }
   if (event.type === "thinking.delta") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -276,6 +295,7 @@ function withoutStreamingMessage(state: TranscriptState, completeThinking = fals
     ...state,
     streamingMessageId: undefined,
     streamingMessageIds: undefined,
+    liveGeneration: undefined,
     items: state.items
       .filter((item) => !removeStreamingMessage || !streamingMessageIds.has(item.id))
       .map((item) => completeThinking && item.kind === "thinking" && item.state === "running" ? { ...item, state: "completed" as const } : item),
@@ -317,6 +337,7 @@ function sameTimelineItem(left: TimelineItem, right: TimelineItem): boolean {
     && left.phase === right.phase
     && left.contentIndex === right.contentIndex
     && left.assistantMessageId === right.assistantMessageId
+    && sameGeneration(left.generation, right.generation)
     && sameImages(left.images, right.images);
 }
 
@@ -404,11 +425,61 @@ function recordMessage(value: unknown): MessageTimelineItem | undefined {
   if ((value["role"] !== "user" && value["role"] !== "assistant") || typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["text"] !== "string") return undefined;
   const images = Array.isArray(value["images"]) ? value["images"].flatMap(recordImageAttachment) : [];
   const phase = recordAssistantPhase(value["phase"]);
-  return { kind: "message", id: value["id"], role: value["role"], createdAt: value["createdAt"], text: value["text"], ...recordBlockMetadata(value), ...(phase === undefined ? {} : { phase }), ...(images.length === 0 ? {} : { images }) };
+  const generation = recordGeneration(value["generation"]);
+  return { kind: "message", id: value["id"], role: value["role"], createdAt: value["createdAt"], text: value["text"], ...recordBlockMetadata(value), ...(phase === undefined ? {} : { phase }), ...(generation === undefined ? {} : { generation }), ...(images.length === 0 ? {} : { images }) };
 }
 
 function recordAssistantPhase(value: unknown): MessageTimelineItem["phase"] {
   return value === "commentary" || value === "final_answer" ? value : undefined;
+}
+
+function recordContextUsage(value: unknown): ContextUsage | undefined {
+  if (!isRecord(value)) return undefined;
+  const tokens = typeof value["tokens"] === "number" && Number.isFinite(value["tokens"]) || value["tokens"] === null ? value["tokens"] as number | null : null;
+  const contextWindow = typeof value["contextWindow"] === "number" && Number.isFinite(value["contextWindow"]) && value["contextWindow"] >= 0 ? value["contextWindow"] : 0;
+  const percent = typeof value["percent"] === "number" && Number.isFinite(value["percent"]) || value["percent"] === null ? value["percent"] as number | null : null;
+  return { tokens, contextWindow, percent };
+}
+
+function recordTokenUsage(value: unknown): TokenUsage | undefined {
+  if (!isRecord(value)) return undefined;
+  const number = (key: string): number | undefined => typeof value[key] === "number" && Number.isFinite(value[key]) && value[key] >= 0 ? value[key] : undefined;
+  const input = number("input");
+  const output = number("output");
+  const cacheRead = number("cacheRead");
+  const cacheWrite = number("cacheWrite");
+  const total = number("total");
+  if (input === undefined || output === undefined || cacheRead === undefined || cacheWrite === undefined || total === undefined) return undefined;
+  const reasoning = number("reasoning");
+  const cost = typeof value["cost"] === "number" && Number.isFinite(value["cost"]) && value["cost"] >= 0 ? value["cost"] : undefined;
+  return { input, output, cacheRead, cacheWrite, total, ...(reasoning === undefined ? {} : { reasoning }), ...(cost === undefined ? {} : { cost }) };
+}
+
+function recordGeneration(value: unknown): AssistantGenerationStats | undefined {
+  if (!isRecord(value)) return undefined;
+  const usage = recordTokenUsage(value["usage"]);
+  if (usage === undefined) return undefined;
+  const durationMs = typeof value["durationMs"] === "number" && Number.isFinite(value["durationMs"]) && value["durationMs"] >= 0 ? value["durationMs"] : undefined;
+  return { usage, ...(durationMs === undefined ? {} : { durationMs }) };
+}
+
+function recordLiveGeneration(value: unknown): LiveGenerationStats | undefined {
+  if (!isRecord(value) || typeof value["assistantMessageId"] !== "string" || typeof value["startedAt"] !== "string") return undefined;
+  const estimatedOutputTokens = typeof value["estimatedOutputTokens"] === "number" && Number.isFinite(value["estimatedOutputTokens"]) && value["estimatedOutputTokens"] >= 0 ? value["estimatedOutputTokens"] : undefined;
+  return { assistantMessageId: value["assistantMessageId"], startedAt: value["startedAt"], ...(estimatedOutputTokens === undefined ? {} : { estimatedOutputTokens }) };
+}
+
+function sameGeneration(left: AssistantGenerationStats | undefined, right: AssistantGenerationStats | undefined): boolean {
+  if (left === right) return true;
+  if (left === undefined || right === undefined) return false;
+  return left.durationMs === right.durationMs
+    && left.usage.input === right.usage.input
+    && left.usage.output === right.usage.output
+    && left.usage.cacheRead === right.usage.cacheRead
+    && left.usage.cacheWrite === right.usage.cacheWrite
+    && left.usage.total === right.usage.total
+    && left.usage.reasoning === right.usage.reasoning
+    && left.usage.cost === right.usage.cost;
 }
 
 function recordBlockMetadata(value: unknown): Pick<MessageTimelineItem, "contentIndex" | "assistantMessageId"> {

@@ -55,6 +55,19 @@ describe("projectHistory", () => {
     ]);
   });
 
+  it("restores generation metadata onto only the final visible assistant block", () => {
+    const timestamp = Date.parse("2026-08-09T00:00:01.000Z");
+    const generation = { usage: { input: 10, output: 6, cacheRead: 2, cacheWrite: 1, total: 19 }, durationMs: 1250 };
+    const items = projectHistory([
+      { type: "message", id: "assistant-entry", timestamp, message: { role: "assistant", timestamp, content: [{ type: "thinking", thinking: "private" }, { type: "text", text: "Answer" }] } },
+      { type: "custom", id: "generation-entry", timestamp: timestamp + 1, customType: "jarvis.generation", data: { assistantMessageId: `message:assistant:${timestamp}`, generation } },
+    ]);
+    expect(items).toEqual([
+      expect.objectContaining({ kind: "thinking", text: "private" }),
+      expect.objectContaining({ kind: "message", text: "Answer", generation }),
+    ]);
+  });
+
   it("preserves interleaved thinking, text, tools and multilingual phases", () => {
     const at = Date.parse("2026-08-09T00:00:01.000Z");
     const items = projectHistory([{ type: "message", id: "entry", message: { role: "assistant", timestamp: at, content: [

@@ -3,6 +3,8 @@ import type {
   ComposerCommand,
   ErrorTimelineItem,
   MessageTimelineItem,
+  AssistantGenerationStats,
+  LiveGenerationStats,
   SessionAttentionState,
   SessionQueue,
   SessionRef,
@@ -48,6 +50,12 @@ export interface ActiveSession {
   /** Ordered assistant text/thinking blocks keyed by their Pi content index. */
   partialAssistantItems: Map<number, MessageTimelineItem | ThinkingTimelineItem>;
   streamingMessageIds: Set<string>;
+  /** First visible assistant text event for the current response. */
+  assistantGenerationStartedAt?: number;
+  /** Runtime-only estimate for the response currently being streamed. */
+  liveGeneration?: LiveGenerationStats;
+  /** Latest completed response, retained for the usage dialog. */
+  latestGeneration?: AssistantGenerationStats;
   /** Actual execution starts, separate from a tool call's place in the transcript. */
   toolStartedAt: Map<string, number>;
   /** Legacy single-text compatibility mirror. */

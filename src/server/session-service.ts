@@ -12,6 +12,7 @@ import {
 import type {
   BashAccepted,
   CompactAccepted,
+  AssistantGenerationStats,
   ComposerCommand,
   ContextUsage,
   ImageAttachment,
@@ -26,6 +27,7 @@ import type {
   SessionCleanupResult,
   SessionSummary,
   SessionThinkingSnapshot,
+  TokenUsage,
   ThinkingLevel,
   TimelinePage,
   ToolTimelineItem,
@@ -119,6 +121,7 @@ export class SessionService {
       summaryFromActive: (active, preview) => this.summaryFromActive(active, preview),
       thinkingSnapshot: (active) => this.thinkingSnapshot(active),
       publishContextUsage: (active, runId) => this.publishContextUsage(active, runId),
+      publishUsage: (active, runId) => this.publishUsage(active, runId),
       publishTool: (active, tool, runId) => this.publishTool(active, tool, runId),
       cancelCompaction: (active) => this.cancelCompaction(active),
       deferAgentSettlement: (active) => this.deferAgentSettlement(active),
@@ -602,6 +605,8 @@ export class SessionService {
   async runtime(ref: SessionRef): Promise<SessionStreamSnapshot> {
     const active = await this.getActive(ref, { waitForExtensions: false });
     const contextUsage = this.contextUsageSnapshot(active);
+    const sessionUsage = this.sessionUsageSnapshot(active);
+    const latestGeneration = active.latestGeneration ?? this.latestGenerationFromTimeline(active);
     return {
       // Read all fields without an await so this projection and its seq form
       // one join-time snapshot for the client-side watermark algorithm.
@@ -619,6 +624,9 @@ export class SessionService {
       activeTools: toExternalTimelineItems([...active.activeTools.values()], active.ref) as ToolTimelineItem[],
       ...(active.activeBash === undefined ? {} : { activeBash: active.activeBash }),
       ...(contextUsage === undefined ? {} : { contextUsage }),
+      ...(sessionUsage === undefined ? {} : { sessionUsage }),
+      ...(latestGeneration === undefined ? {} : { latestGeneration }),
+      ...(active.liveGeneration === undefined ? {} : { liveGeneration: active.liveGeneration }),
       queue: active.queue,
       extensionUi: active.extensionUi.snapshot(),
     };
@@ -1109,6 +1117,94 @@ export class SessionService {
     return active.session.getContextUsage();
   }
 
+  private sessionUsageSnapshot(active: ActiveSession): TokenUsage | undefined {
+    try {
+      const stats = active.session.getSessionStats();
+      const tokens = stats.tokens;
+      const values = [tokens.input, tokens.output, tokens.cacheRead, tokens.cacheWrite, tokens.total];
+      if (!values.every((value) => Number.isFinite(value) && value >= 0) || values.every((value) => value === 0)) return undefined;
+      return {
+        input: tokens.input,
+        output: tokens.output,
+        cacheRead: tokens.cacheRead,
+        cacheWrite: tokens.cacheWrite,
+        total: tokens.total,
+        ...(Number.isFinite(stats.cost) && stats.cost > 0 ? { cost: stats.cost } : {}),
+      };
+    } catch (error) {
+      const hasAssistantWithoutUsage = active.session.sessionManager.getEntries().some((entry) => {
+        if (!isRecord(entry) || entry["type"] !== "message" || !isRecord(entry["message"])) return false;
+        const message: unknown = entry["message"];
+        return isRecord(message) && message["role"] === "assistant" && !isRecord(message["usage"]);
+      });
+      if (!hasAssistantWithoutUsage) throw error;
+      // Older transcripts can contain assistant messages without usage. The
+      // SDK's aggregate assumes that field exists, so keep runtime hydration
+      // working by summing only the usage entries that are actually present.
+      return this.sessionUsageFromEntries(active);
+    }
+  }
+
+  private sessionUsageFromEntries(active: ActiveSession): TokenUsage | undefined {
+    let input = 0;
+    let output = 0;
+    let cacheRead = 0;
+    let cacheWrite = 0;
+    let cost = 0;
+
+    for (const entry of active.session.sessionManager.getEntries()) {
+      if (!isRecord(entry)) continue;
+      let usage: unknown;
+      const type = entry["type"];
+      if (type === "usage" || type === "compaction" || type === "branch_summary") {
+        usage = entry["usage"];
+      } else if (type === "message") {
+        const message: unknown = entry["message"];
+        if (isRecord(message)) {
+          const role: unknown = message["role"];
+          if (role === "assistant" || role === "toolResult") usage = message["usage"];
+        }
+      }
+      if (!isRecord(usage)) continue;
+
+      const inputValue = usage["input"];
+      const outputValue = usage["output"];
+      const cacheReadValue = usage["cacheRead"];
+      const cacheWriteValue = usage["cacheWrite"];
+      if (typeof inputValue !== "number" || !Number.isFinite(inputValue) || inputValue < 0) continue;
+      if (typeof outputValue !== "number" || !Number.isFinite(outputValue) || outputValue < 0) continue;
+      if (typeof cacheReadValue !== "number" || !Number.isFinite(cacheReadValue) || cacheReadValue < 0) continue;
+      if (typeof cacheWriteValue !== "number" || !Number.isFinite(cacheWriteValue) || cacheWriteValue < 0) continue;
+      input += inputValue;
+      output += outputValue;
+      cacheRead += cacheReadValue;
+      cacheWrite += cacheWriteValue;
+      const usageCost = usage["cost"];
+      if (isRecord(usageCost)) {
+        const totalCost = usageCost["total"];
+        if (typeof totalCost === "number" && Number.isFinite(totalCost) && totalCost >= 0) cost += totalCost;
+      }
+    }
+
+    const total = input + output + cacheRead + cacheWrite;
+    if (total === 0) return undefined;
+    return {
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      total,
+      ...(cost > 0 ? { cost } : {}),
+    };
+  }
+
+  private latestGenerationFromTimeline(active: ActiveSession): AssistantGenerationStats | undefined {
+    for (const item of [...this.timelineItems(active)].reverse()) {
+      if (item.kind === "message" && item.generation !== undefined) return item.generation;
+    }
+    return undefined;
+  }
+
   /**
    * Session branches are append-only. A projection remains valid while its
    * leaf id is unchanged, so repeated pagination and hydration requests do
@@ -1131,6 +1227,20 @@ export class SessionService {
       type: "context.updated",
       ...(runId === undefined ? {} : { runId }),
       payload: { contextUsage },
+    });
+  }
+
+  private publishUsage(active: ActiveSession, runId?: string): void {
+    const sessionUsage = this.sessionUsageSnapshot(active);
+    const latestGeneration = active.latestGeneration;
+    if (sessionUsage === undefined && latestGeneration === undefined) return;
+    this.events.publishSession(active.ref, {
+      type: "usage.updated",
+      ...(runId === undefined ? {} : { runId }),
+      payload: {
+        ...(sessionUsage === undefined ? {} : { sessionUsage }),
+        ...(latestGeneration === undefined ? {} : { latestGeneration }),
+      },
     });
   }
 
@@ -1231,6 +1341,8 @@ export class SessionService {
     active.assistantStreamId = undefined;
     active.partialAssistantItems.clear();
     active.streamingMessageIds.clear();
+    active.assistantGenerationStartedAt = undefined;
+    active.liveGeneration = undefined;
     active.toolStartedAt.clear();
     active.partial = undefined;
     active.partialThinking = undefined;

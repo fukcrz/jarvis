@@ -26,20 +26,23 @@ function setup() {
     events.push(envelope);
     return envelope;
   });
+  const appendCustomEntry = vi.fn();
   const active = {
     ref: { workspaceId: "workspace", sessionId: "session" }, cwd: "D:/fixture",
     state: { sessionId: "session", runState: "running", activeRun: { id: "run", startedAt: new Date(timestamp - 1000).toISOString() } },
+    session: { sessionManager: { appendCustomEntry } } as unknown as ActiveSession["session"],
     liveMessages: new Map(), liveThinking: new Map(), liveErrors: new Map(), partialAssistantItems: new Map(),
     streamingMessageIds: new Set(), toolStartedAt: new Map(), activeTools: new Map(),
-  } as ActiveSession;
+  } as unknown as ActiveSession;
+  const publishUsage = vi.fn();
   const host = {
     events: hub,
     publishTool: (session, tool) => {
       session.activeTools.set(tool.id, tool);
       hub.publishSession(session.ref, { type: "tool.upsert", runId: "run", payload: { tool } });
     },
-    publishContextUsage: vi.fn(), publishSummary: vi.fn(),
-  } as Pick<SessionPiHost, "events" | "publishTool" | "publishContextUsage" | "publishSummary"> as SessionPiHost;
+    publishContextUsage: vi.fn(), publishUsage, publishSummary: vi.fn(),
+  } as Pick<SessionPiHost, "events" | "publishTool" | "publishContextUsage" | "publishUsage" | "publishSummary"> as SessionPiHost;
   const handler = new SessionPiEvents(host);
   const update = (partial: AssistantMessage, event: AssistantMessageEvent) => handler.handle(active, { type: "message_update", message: partial, assistantMessageEvent: event });
   const snapshot = () => ({
@@ -51,7 +54,7 @@ function setup() {
     ...(active.partial === undefined ? {} : { partial: active.partial }),
     ...(active.partialThinking === undefined ? {} : { partialThinking: active.partialThinking }),
   });
-  return { active, events, handler, update, snapshot, close: () => hub.terminateAll() };
+  return { active, events, handler, update, snapshot, publishUsage, close: () => hub.terminateAll() };
 }
 
 describe("Pi assistant block streaming", () => {
@@ -131,6 +134,32 @@ describe("Pi assistant block streaming", () => {
       expect(fixture.active.liveMessages.size).toBe(2);
       expect(fixture.snapshot().partialAssistantItems).toEqual([]);
       expect(fixture.active.assistantStreamId).toBeUndefined();
+    } finally { fixture.close(); }
+  });
+
+  it("keeps live generation through text_end until message_end publishes exact usage", async () => {
+    const fixture = setup();
+    try {
+      const complete = {
+        ...message([{ type: "text", text: "Exact answer", textSignature: signature("final_answer") }]),
+        usage: { input: 12, output: 4, cacheRead: 3, cacheWrite: 1, totalTokens: 20, cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 } },
+      };
+      fixture.update(complete, { type: "text_start", contentIndex: 0, partial: complete });
+      fixture.update(complete, { type: "text_delta", contentIndex: 0, delta: "Exact answer", partial: complete });
+      fixture.update(complete, { type: "text_end", contentIndex: 0, content: "Exact answer", partial: complete });
+      const provisional = applySessionEvents(emptyTranscript, fixture.events);
+      expect(provisional.liveGeneration).toMatchObject({ assistantMessageId: `message:assistant:${timestamp}`, estimatedOutputTokens: 3 });
+      expect(provisional.streamingMessageId).toBeUndefined();
+
+      fixture.handler.handle(fixture.active, { type: "message_end", message: complete });
+      await Promise.resolve();
+      const completed = applySessionEvents(emptyTranscript, fixture.events);
+      expect(completed.liveGeneration).toBeUndefined();
+      expect(completed.items).toEqual([expect.objectContaining({
+        kind: "message", generation: expect.objectContaining({ usage: expect.objectContaining({ input: 12, output: 4, cacheRead: 3, cacheWrite: 1, total: 20 }) }),
+      })]);
+      expect(fixture.publishUsage).toHaveBeenCalledWith(fixture.active, "run");
+      expect(fixture.active.session.sessionManager.appendCustomEntry).toHaveBeenCalledWith("jarvis.generation", expect.objectContaining({ assistantMessageId: `message:assistant:${timestamp}` }));
     } finally { fixture.close(); }
   });
 

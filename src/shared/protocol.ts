@@ -329,6 +329,35 @@ export interface ContextUsage {
   percent: number | null;
 }
 
+/** Provider-reported token totals. Cost is omitted for free or subscription-backed requests. */
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Input, output, and cache tokens combined. */
+  total: number;
+  /** Reasoning tokens are included in `output` when a provider reports this split. */
+  reasoning?: number;
+  /** Provider-reported USD cost. */
+  cost?: number;
+}
+
+/** Exact metrics for one completed assistant response. */
+export interface AssistantGenerationStats {
+  usage: TokenUsage;
+  /** From the first streamed assistant block until Pi finalized this response. */
+  durationMs?: number;
+}
+
+/** Runtime-only state for an assistant response that is still streaming. */
+export interface LiveGenerationStats {
+  assistantMessageId: string;
+  startedAt: string;
+  /** Estimated from streamed text, never provider-reported usage. */
+  estimatedOutputTokens?: number;
+}
+
 export interface SessionSummary {
   id: string;
   workspaceId: string;
@@ -381,6 +410,8 @@ export interface MessageTimelineItem {
   contentIndex?: number;
   /** Identity of the source assistant response, shared by its ordered blocks. */
   assistantMessageId?: string;
+  /** Exact usage and duration, attached only to the last visible block of an assistant response. */
+  generation?: AssistantGenerationStats;
   /** Images attached to a user message. */
   images?: ImageAttachment[];
 }
@@ -526,6 +557,12 @@ export interface SessionStreamSnapshot {
   activeBash?: ToolTimelineItem;
   /** Estimated context usage, when the current model exposes a context window. */
   contextUsage?: ContextUsage;
+  /** Cumulative usage across the whole session, including compacted history. */
+  sessionUsage?: TokenUsage;
+  /** Metrics for the latest completed assistant response, when available. */
+  latestGeneration?: AssistantGenerationStats;
+  /** Current visible assistant response while text is streaming. */
+  liveGeneration?: LiveGenerationStats;
   /** Ephemeral extension UI state, retained across browser reconnects. */
   extensionUi?: ExtensionUiSnapshot;
   /** 排队等待投递的用户消息（忙时发送/Alt 发送）。 */
@@ -597,6 +634,7 @@ export type SessionEventType =
   | "model.changed"
   | "thinking.changed"
   | "context.updated"
+  | "usage.updated"
   | "queue.updated"
   | "session.rewritten"
   | "session.updated";
@@ -687,6 +725,7 @@ export const sessionEventSchema = z.object({
     "model.changed",
     "thinking.changed",
     "context.updated",
+    "usage.updated",
     "queue.updated",
     "session.rewritten",
     "session.updated",

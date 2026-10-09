@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { MessageTimelineItem, SessionSummary, SessionThinkingSnapshot, ThinkingTimelineItem, ToolTimelineItem } from "../shared/protocol.js";
+import { isRecord, type AssistantGenerationStats, type MessageTimelineItem, type SessionSummary, type SessionThinkingSnapshot, type ThinkingTimelineItem, type TokenUsage, type ToolTimelineItem } from "../shared/protocol.js";
 import type { EventHub } from "./event-hub.js";
 import { assistantTextBlockId, assistantTextPhaseFromContent, assistantThinkingBlockId, assistantTimelineItemsFromPi, contextSummaryFromEntry, errorFromPi, messageFromPi, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import type { ActiveRun, ActiveSession, PiEvent } from "./session-active.js";
@@ -17,6 +17,7 @@ export interface SessionPiHost {
   summaryFromActive(active: ActiveSession, previewOverride?: string): SessionSummary;
   thinkingSnapshot(active: ActiveSession): SessionThinkingSnapshot;
   publishContextUsage(active: ActiveSession, runId?: string): void;
+  publishUsage(active: ActiveSession, runId?: string): void;
   publishTool(active: ActiveSession, tool: ToolTimelineItem, runId?: string): void;
   cancelCompaction(active: ActiveSession): void;
   deferAgentSettlement(active: ActiveSession): void;
@@ -130,6 +131,7 @@ export class SessionPiEvents {
       return;
     }
     if (update.type === "text_start" || update.type === "text_delta" || update.type === "text_end") {
+      active.assistantGenerationStartedAt ??= Date.now();
       const phase = assistantTextPhaseFromContent(update.partial.content[contentIndex]);
       const text = update.type === "text_end" ? update.content
         : (existing?.kind === "message" ? existing.text : "") + (update.type === "text_delta" ? update.delta : "");
@@ -143,12 +145,19 @@ export class SessionPiEvents {
       else active.streamingMessageIds.add(item.id);
       const texts = [...active.partialAssistantItems.entries()].sort(([left], [right]) => left - right)
         .flatMap(([, block]) => block.kind === "message" ? [block] : []);
-      active.partial = { ...item, id: assistantMessageId, text: texts.map((block) => block.text).join("\n\n") };
+      const streamedText = texts.map((block) => block.text).join("\n\n");
+      active.partial = { ...item, id: assistantMessageId, text: streamedText };
+      const estimatedOutputTokens = estimateOutputTokens(streamedText);
+      active.liveGeneration = {
+        assistantMessageId,
+        startedAt: new Date(active.assistantGenerationStartedAt).toISOString(),
+        ...(estimatedOutputTokens <= 0 ? {} : { estimatedOutputTokens }),
+      };
       this.host.events.publishSession(active.ref, {
         type: update.type === "text_end" ? "assistant.completed" : "assistant.delta", runId,
-        payload: update.type === "text_end" ? { message: item }
+        payload: update.type === "text_end" ? { message: item, authoritative: false, liveGeneration: active.liveGeneration }
           : { messageId: item.id, createdAt: item.createdAt, contentIndex, assistantMessageId, phase,
-            delta: update.type === "text_delta" ? update.delta : "" },
+            delta: update.type === "text_delta" ? update.delta : "", liveGeneration: active.liveGeneration },
       });
       return;
     }
@@ -196,7 +205,9 @@ export class SessionPiEvents {
       ...[...active.partialAssistantItems.values()].map((item) => item.id),
       ...[...active.activeTools.values()].filter((item) => item.assistantMessageId === assistantId).map((item) => item.id),
     ];
-    const authoritative = assistantTimelineItemsFromPi(message, identity.createdAt, assistantId, assistantId);
+    const generation = assistantGenerationStats(message, active.assistantGenerationStartedAt);
+    const authoritative = assistantTimelineItemsFromPi(message, identity.createdAt, assistantId, assistantId, generation);
+    if (generation !== undefined) active.latestGeneration = generation;
     for (const id of provisionalIds) {
       active.liveMessages.delete(id);
       active.liveThinking.delete(id);
@@ -223,7 +234,21 @@ export class SessionPiEvents {
     active.streamingMessageIds.clear();
     active.partialThinking = undefined;
     active.partial = undefined;
+    active.assistantGenerationStartedAt = undefined;
+    active.liveGeneration = undefined;
     this.host.publishContextUsage(active, runId);
+    if (generation !== undefined) {
+      queueMicrotask(() => {
+        try {
+          active.session.sessionManager.appendCustomEntry("jarvis.generation", { assistantMessageId: assistantId, generation });
+        } catch (error) {
+          console.warn("Failed to persist Jarvis generation metadata", error);
+        }
+        this.host.publishUsage(active, runId);
+      });
+    } else {
+      this.host.publishUsage(active, runId);
+    }
     if (stopReason === "error") {
       this.markAssistantAttemptFailed(active, message, identity.createdAt, assistantId, runId);
     } else if (stopReason !== "aborted") {
@@ -340,6 +365,7 @@ export class SessionPiEvents {
       payload: { status: active.state, aborted: event.aborted, ...(errorMessage === undefined ? {} : { errorMessage }), willRetry: event.willRetry },
     });
     this.host.publishContextUsage(active, runId);
+    this.host.publishUsage(active, runId);
     this.host.publishSummary(active);
     if (handoff) {
       if (event.aborted) active.pendingRunError = undefined;
@@ -412,4 +438,59 @@ export class SessionPiEvents {
     this.host.events.publishSession(active.ref, { type: "run.retryEnd", runId, payload: { status: active.state } });
     this.host.publishSummary(active);
   }
+}
+
+function assistantGenerationStats(message: unknown, startedAt?: number): AssistantGenerationStats | undefined {
+  if (!isRecord(message)) return undefined;
+  const stopReason = stringValue(message["stopReason"]);
+  if (stopReason === "error" || stopReason === "aborted") return undefined;
+  const rawUsage = message["usage"];
+  if (!isRecord(rawUsage)) return undefined;
+  const number = (key: string): number | undefined => {
+    const value = rawUsage[key];
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  };
+  const input = number("input");
+  const output = number("output");
+  const cacheRead = number("cacheRead");
+  const cacheWrite = number("cacheWrite");
+  if (input === undefined || output === undefined || cacheRead === undefined || cacheWrite === undefined) return undefined;
+  const rawCost = isRecord(rawUsage["cost"]) ? rawUsage["cost"] : undefined;
+  const cost = typeof rawCost?.["total"] === "number" && Number.isFinite(rawCost["total"]) && rawCost["total"] > 0 ? rawCost["total"] : undefined;
+  const reasoning = typeof rawUsage["reasoning"] === "number" && Number.isFinite(rawUsage["reasoning"]) && rawUsage["reasoning"] >= 0 ? rawUsage["reasoning"] : undefined;
+  const durationMs = startedAt === undefined ? undefined : Math.max(0, Date.now() - startedAt);
+  const usage: TokenUsage = {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    total: input + output + cacheRead + cacheWrite,
+    ...(reasoning === undefined ? {} : { reasoning }),
+    ...(cost === undefined ? {} : { cost }),
+  };
+  return { usage, ...(durationMs === undefined ? {} : { durationMs }) };
+}
+
+/** A deliberately coarse live estimate; the completed response always replaces it with provider usage. */
+function estimateOutputTokens(text: string): number {
+  let tokens = 0;
+  let asciiRun = 0;
+  const flushAscii = () => {
+    if (asciiRun > 0) tokens += Math.ceil(asciiRun / 4);
+    asciiRun = 0;
+  };
+  for (const character of text) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    const cjk = codePoint >= 0x2e80 && codePoint <= 0x9fff
+      || codePoint >= 0xac00 && codePoint <= 0xd7af
+      || codePoint >= 0x3040 && codePoint <= 0x30ff;
+    if (cjk || codePoint > 0xffff) {
+      flushAscii();
+      tokens += 1;
+    } else {
+      asciiRun += 1;
+    }
+  }
+  flushAscii();
+  return tokens;
 }

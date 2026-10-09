@@ -1,4 +1,4 @@
-import { isRecord, type AssistantTextPhase, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
+import { isRecord, type AssistantGenerationStats, type AssistantTextPhase, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type TokenUsage, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
 import { attachSubagentView, subagentViewFromArgs } from "./subagent-view.js";
 import { numberValue, stringValue, toIso } from "./values.js";
 
@@ -6,6 +6,7 @@ const MAX_TOOL_OUTPUT_CHARS = 12_000;
 
 export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
   const items: TimelineItem[] = [];
+  const generations = generationEntries(entries);
   const toolIndex = new Map<string, number>();
   // A new user message starts a new operation. Until then, later successful
   // assistant output means the retained error attempts were recovered by Pi.
@@ -37,7 +38,8 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
     }
 
     if (role === "assistant") {
-      for (const item of assistantTimelineItemsFromPi(message, createdAt, entryId)) {
+      const assistantId = messageFromPi(message, "assistant", "", createdAt, entryId).id;
+      for (const item of assistantTimelineItemsFromPi(message, createdAt, entryId, undefined, generations.get(assistantId))) {
         if (item.kind === "tool") toolIndex.set(item.id, items.length);
         items.push(item);
       }
@@ -253,7 +255,7 @@ export function assistantThinkingBlockId(baseId: string, contentIndex?: number):
   return contentIndex === undefined || contentIndex === 0 ? `${baseId}:thinking` : `${baseId}:thinking:${String(contentIndex)}`;
 }
 
-export function assistantTimelineItemsFromPi(message: unknown, fallbackCreatedAt: string, fallbackId: string, assistantMessageId?: string): Array<MessageTimelineItem | ThinkingTimelineItem | ToolTimelineItem> {
+export function assistantTimelineItemsFromPi(message: unknown, fallbackCreatedAt: string, fallbackId: string, assistantMessageId?: string, generation?: AssistantGenerationStats): Array<MessageTimelineItem | ThinkingTimelineItem | ToolTimelineItem> {
   const record = isRecord(message) ? message : {};
   const projected = messageFromPi(message, "assistant", "", fallbackCreatedAt, fallbackId);
   const base = assistantMessageId === undefined ? projected : { ...projected, id: assistantMessageId };
@@ -265,10 +267,10 @@ export function assistantTimelineItemsFromPi(message: unknown, fallbackCreatedAt
   if (typeof content === "string") {
     const thinking = legacyThinkingFromText(content);
     const visible = visibleTextAfterThinkingMarker(content);
-    return [
+    return attachGeneration([
       ...(thinking === "" ? [] : [thinkingItem(thinking)]),
       ...(visible === "" ? [] : [{ ...base, text: visible, assistantMessageId: base.id }]),
-    ];
+    ], generation);
   }
   if (!Array.isArray(content)) return [];
   const items: Array<MessageTimelineItem | ThinkingTimelineItem | ToolTimelineItem> = [];
@@ -296,7 +298,48 @@ export function assistantTimelineItemsFromPi(message: unknown, fallbackCreatedAt
       items.push(toolFromCall(toolId, stringValue(part["name"]) || "tool", part["arguments"], base.createdAt, "queued", { contentIndex: index, assistantMessageId: base.id }));
     }
   }
+  return attachGeneration(items, generation);
+}
+
+function attachGeneration(items: Array<MessageTimelineItem | ThinkingTimelineItem | ToolTimelineItem>, generation: AssistantGenerationStats | undefined): Array<MessageTimelineItem | ThinkingTimelineItem | ToolTimelineItem> {
+  if (generation === undefined) return items;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind !== "message") continue;
+    items[index] = { ...item, generation };
+    break;
+  }
   return items;
+}
+
+function generationEntries(entries: readonly unknown[]): Map<string, AssistantGenerationStats> {
+  const result = new Map<string, AssistantGenerationStats>();
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry["type"] !== "custom" || entry["customType"] !== "jarvis.generation") continue;
+    const data = entry["data"];
+    if (!isRecord(data) || typeof data["assistantMessageId"] !== "string") continue;
+    const generation = recordGeneration(data["generation"]);
+    if (generation !== undefined) result.set(data["assistantMessageId"], generation);
+  }
+  return result;
+}
+
+function recordGeneration(value: unknown): AssistantGenerationStats | undefined {
+  if (!isRecord(value)) return undefined;
+  const usageValue = value["usage"];
+  if (!isRecord(usageValue)) return undefined;
+  const number = (key: string): number | undefined => typeof usageValue[key] === "number" && Number.isFinite(usageValue[key]) && usageValue[key] >= 0 ? usageValue[key] : undefined;
+  const input = number("input");
+  const output = number("output");
+  const cacheRead = number("cacheRead");
+  const cacheWrite = number("cacheWrite");
+  const total = number("total");
+  if (input === undefined || output === undefined || cacheRead === undefined || cacheWrite === undefined || total === undefined) return undefined;
+  const cost = typeof usageValue["cost"] === "number" && Number.isFinite(usageValue["cost"]) && usageValue["cost"] > 0 ? usageValue["cost"] : undefined;
+  const reasoning = typeof usageValue["reasoning"] === "number" && Number.isFinite(usageValue["reasoning"]) && usageValue["reasoning"] >= 0 ? usageValue["reasoning"] : undefined;
+  const durationMs = typeof value["durationMs"] === "number" && Number.isFinite(value["durationMs"]) && value["durationMs"] >= 0 ? value["durationMs"] : undefined;
+  const usage: TokenUsage = { input, output, cacheRead, cacheWrite, total, ...(reasoning === undefined ? {} : { reasoning }), ...(cost === undefined ? {} : { cost }) };
+  return { usage, ...(durationMs === undefined ? {} : { durationMs }) };
 }
 
 export function toolFromCall(

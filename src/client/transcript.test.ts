@@ -512,6 +512,26 @@ describe("transcript reducer", () => {
     expect(completed.items).toEqual([expect.objectContaining({ id: "partial", text: "# Complete" })]);
   });
 
+  it("keeps live generation through provisional text completion and clears it on authoritative completion", () => {
+    const liveGeneration = { assistantMessageId: "assistant", startedAt: "2026-08-09T00:00:00.000Z", estimatedOutputTokens: 4 };
+    const streaming = applySessionEvents(emptyTranscript, [{
+      version: 1, sessionId: "session", runId: "run", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "assistant.delta", payload: { messageId: "assistant", assistantMessageId: "assistant", delta: "Done", liveGeneration },
+    }]);
+    const provisional = applySessionEvents(streaming, [{
+      version: 1, sessionId: "session", runId: "run", seq: 2, emittedAt: "2026-08-09T00:00:01.000Z",
+      type: "assistant.completed", payload: { authoritative: false, liveGeneration, message: { kind: "message", id: "assistant", role: "assistant", createdAt: "2026-08-09T00:00:00.000Z", text: "Done" } },
+    }]);
+    expect(provisional.streamingMessageId).toBeUndefined();
+    expect(provisional.liveGeneration).toEqual(liveGeneration);
+    const completed = applySessionEvents(provisional, [{
+      version: 1, sessionId: "session", runId: "run", seq: 3, emittedAt: "2026-08-09T00:00:02.000Z",
+      type: "assistant.completed", payload: { message: { kind: "message", id: "assistant", role: "assistant", createdAt: "2026-08-09T00:00:00.000Z", text: "Done", generation: { usage: { input: 8, output: 4, cacheRead: 0, cacheWrite: 0, total: 12 }, durationMs: 2000 } } },
+    }]);
+    expect(completed.liveGeneration).toBeUndefined();
+    expect(completed.items).toEqual([expect.objectContaining({ id: "assistant", generation: expect.objectContaining({ usage: expect.objectContaining({ output: 4 }) }) })]);
+  });
+
   it("creates a running bash item from run.started and streams deltas into it", () => {
     const started = applySessionEvents(emptyTranscript, [{
       version: 1,

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { Archive, ArrowDown, Bell, Brain, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
-import type { ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
+import type { AssistantGenerationStats, ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
 import { userMessageOutline as outlineFromItems } from "../../shared/user-message";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { copyText } from "../lib/clipboard";
@@ -19,6 +19,7 @@ interface TimelineProps {
   sessionKey?: string;
   items: TimelineItem[];
   streamingMessageId?: string;
+  liveGeneration?: LiveGenerationStats;
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => Promise<void>;
@@ -119,7 +120,7 @@ export function formatUserMessageIndex(index: number): string {
   return String(index).padStart(2, "0");
 }
 
-export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage }: TimelineProps) {
+export function Timeline({ sessionKey, items, streamingMessageId, liveGeneration, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const touchYRef = useRef<number | undefined>(undefined);
   const loadingEarlierRef = useRef(false);
@@ -419,7 +420,7 @@ export function Timeline({ sessionKey, items, streamingMessageId, hasMore, loadi
         <div className="timeline-inner">
           <div className="timeline-feed">
             {hasMore ? <button type="button" className="timeline-load-earlier" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "加载中" : "更早"}</button> : null}
-            {renderTimelineTurns(items, streamingMessageId, status, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, workspaceCwd, highlightedMessageId, following)}
+            {renderTimelineTurns(items, streamingMessageId, liveGeneration, status, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, workspaceCwd, highlightedMessageId, following)}
             {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
             {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
             {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
@@ -601,7 +602,7 @@ function errorSummary(message: string): string {
   return `${firstLine.slice(0, 177)}…`;
 }
 
-const MessageItem = memo(function MessageItem({ item, streaming, highlighted, onEdit, onFork, baseDir }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; highlighted: boolean; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string }) {
+const MessageItem = memo(function MessageItem({ item, streaming, live, highlighted, onEdit, onFork, baseDir }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; live?: LiveGenerationStats; highlighted: boolean; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string }) {
   const images = item.images ?? [];
   return (
     <article data-user-message-id={item.role === "user" ? item.id : undefined} className={`message-row ${item.role} ${streaming ? "streaming" : ""} ${highlighted ? "navigator-highlight" : ""}`}>
@@ -615,11 +616,41 @@ const MessageItem = memo(function MessageItem({ item, streaming, highlighted, on
         {item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
           <MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} interactiveFiles={item.role === "assistant" && !streaming} />
         </div>}
+        {item.role === "assistant" && (live !== undefined || item.generation !== undefined) ? <AssistantGenerationMeta live={live} generation={item.generation} /> : null}
         <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : () => onEdit(item)} onFork={onFork} />
       </div>
     </article>
   );
 });
+
+function AssistantGenerationMeta({ live, generation }: { live?: LiveGenerationStats; generation?: AssistantGenerationStats }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (live === undefined) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [live?.startedAt]);
+  if (live !== undefined) {
+    const started = Date.parse(live.startedAt);
+    const durationMs = Number.isFinite(started) ? Math.max(0, now - started) : 0;
+    const speed = durationMs > 0 && (live.estimatedOutputTokens ?? 0) > 0 ? (live.estimatedOutputTokens ?? 0) / (durationMs / 1_000) : undefined;
+    return <div className="message-generation-meta streaming" aria-live="polite">{live.estimatedOutputTokens === undefined ? "生成中" : `≈${formatTokenCount(live.estimatedOutputTokens)} tokens`}{speed === undefined ? " · 计算中" : ` · ≈${formatTokenRate(speed)}`}{` · ${formatDuration(durationMs)}`}</div>;
+  }
+  if (generation === undefined) return null;
+  const speed = generation.durationMs === undefined || generation.durationMs <= 0 ? undefined : generation.usage.output / (generation.durationMs / 1_000);
+  return <div className="message-generation-meta">{formatTokenCount(generation.usage.output)} tokens{speed === undefined ? "" : ` · ${formatTokenRate(speed)}`}{generation.durationMs === undefined ? "" : ` · ${formatDuration(generation.durationMs)}`}</div>;
+}
+
+function formatTokenRate(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "—";
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} token/s`;
+}
+
+function formatDuration(durationMs: number): string {
+  const seconds = Math.max(0, Math.round(durationMs / 1_000));
+  return `${String(Math.floor(seconds / 60))}:${String(seconds % 60).padStart(2, "0")}`;
+}
 
 function MessageActions({ item, streaming, onEdit, onFork }: { item: MessageTimelineItem; streaming: boolean; onEdit?: () => void; onFork?: (item: MessageTimelineItem) => void }) {
   const [copied, setCopied] = useState(false);
@@ -1113,6 +1144,8 @@ function turnProcessLabel(summary: TurnProcessSummary): string {
 
 interface TurnRenderContext {
   streamingMessageId?: string;
+  liveGeneration?: LiveGenerationStats;
+  liveGenerationMessageId?: string;
   status: SessionStatus;
   onExpandProcess?: () => void;
   highlightedMessageId?: string;
@@ -1179,7 +1212,7 @@ function isAnsweredQuestionCard(item: ExtensionUiTimelineItem): boolean {
 }
 
 function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, expanded = false, showActivePreview = true): ReactNode {
-  if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
+  if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} live={entry.item.id === context.liveGenerationMessageId ? context.liveGeneration : undefined} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} customText={context.customAnswers?.get(entry.item.id)} />;
@@ -1260,10 +1293,11 @@ function TimelineTurnBlock({ turn, active, autoCollapse, ...context }: TurnRende
   </>;
 }
 
-function renderTimelineTurns(items: TimelineItem[], streamingMessageId: string | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined, autoCollapse: boolean): ReactNode[] {
+function renderTimelineTurns(items: TimelineItem[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined, autoCollapse: boolean): ReactNode[] {
   const turns = groupTimelineTurns(items);
   const activeTurnKey = status.runState === "idle" ? undefined : turns.at(-1)?.key;
-  const context: TurnRenderContext = { streamingMessageId, status, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage };
+  const liveGenerationMessageId = liveGeneration === undefined ? undefined : [...items].reverse().find((item) => item.kind === "message" && item.role === "assistant" && (item.assistantMessageId === liveGeneration.assistantMessageId || item.id === liveGeneration.assistantMessageId))?.id;
+  const context: TurnRenderContext = { streamingMessageId, liveGeneration, liveGenerationMessageId, status, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage };
   // 全部属性都显式传：TurnRenderContext 的键名与组件 props 一致，展开时不会漏项。
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} active={turn.key === activeTurnKey} autoCollapse={autoCollapse} {...context} />);
 }
