@@ -191,7 +191,8 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const item: ThinkingTimelineItem = existing === undefined
       ? { kind: "thinking", id, createdAt, state: "running", text: delta, ...recordBlockMetadata(payload) }
       : { ...existing, ...recordBlockMetadata(payload), state: "running", text: existing.text + delta };
-    return { ...next, items: sortTimelineByCreatedAt(mergeTimeline(next.items, [item])) };
+    const liveGeneration = recordLiveGeneration(payload?.["liveGeneration"]);
+    return { ...next, items: sortTimelineByCreatedAt(mergeTimeline(next.items, [item])), ...(liveGeneration === undefined ? {} : { liveGeneration }) };
   }
   if (event.type === "thinking.completed") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -201,7 +202,8 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const existing = next.items.find((item): item is ThinkingTimelineItem => item.kind === "thinking" && item.id === id);
     const text = typeof payload?.["text"] === "string" ? payload["text"] : (existing?.text ?? "");
     const item: ThinkingTimelineItem = { ...existing, kind: "thinking", id, createdAt: existing?.createdAt ?? createdAt, state: "completed", text, ...recordBlockMetadata(payload) };
-    return { ...next, items: sortTimelineByCreatedAt(mergeTimeline(next.items, [item])) };
+    const liveGeneration = recordLiveGeneration(payload?.["liveGeneration"]);
+    return { ...next, items: sortTimelineByCreatedAt(mergeTimeline(next.items, [item])), ...(liveGeneration === undefined ? {} : { liveGeneration }) };
   }
   if (event.type === "tool.upsert") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
@@ -466,7 +468,15 @@ function recordGeneration(value: unknown): AssistantGenerationStats | undefined 
 function recordLiveGeneration(value: unknown): LiveGenerationStats | undefined {
   if (!isRecord(value) || typeof value["assistantMessageId"] !== "string" || typeof value["startedAt"] !== "string") return undefined;
   const estimatedOutputTokens = typeof value["estimatedOutputTokens"] === "number" && Number.isFinite(value["estimatedOutputTokens"]) && value["estimatedOutputTokens"] >= 0 ? value["estimatedOutputTokens"] : undefined;
-  return { assistantMessageId: value["assistantMessageId"], startedAt: value["startedAt"], ...(estimatedOutputTokens === undefined ? {} : { estimatedOutputTokens }) };
+  const activeBlockKind = value["activeBlockKind"] === "thinking" || value["activeBlockKind"] === "text" ? value["activeBlockKind"] : undefined;
+  const activeContentIndex = typeof value["activeContentIndex"] === "number" && Number.isSafeInteger(value["activeContentIndex"]) && value["activeContentIndex"] >= 0 ? value["activeContentIndex"] : undefined;
+  return {
+    assistantMessageId: value["assistantMessageId"],
+    startedAt: value["startedAt"],
+    ...(estimatedOutputTokens === undefined ? {} : { estimatedOutputTokens }),
+    ...(activeBlockKind === undefined ? {} : { activeBlockKind }),
+    ...(activeContentIndex === undefined ? {} : { activeContentIndex }),
+  };
 }
 
 function sameGeneration(left: AssistantGenerationStats | undefined, right: AssistantGenerationStats | undefined): boolean {
@@ -541,7 +551,8 @@ function recordThinkingItem(value: unknown): ThinkingTimelineItem | undefined {
   const state = value["state"];
   if (state !== "running" && state !== "completed") return undefined;
   if (typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["text"] !== "string") return undefined;
-  return { kind: "thinking", id: value["id"], createdAt: value["createdAt"], state, text: value["text"], ...recordBlockMetadata(value) };
+  const generation = recordGeneration(value["generation"]);
+  return { kind: "thinking", id: value["id"], createdAt: value["createdAt"], state, text: value["text"], ...recordBlockMetadata(value), ...(generation === undefined ? {} : { generation }) };
 }
 
 function recordTool(value: unknown): ToolTimelineItem | undefined {

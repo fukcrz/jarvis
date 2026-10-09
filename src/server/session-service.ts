@@ -1200,7 +1200,7 @@ export class SessionService {
 
   private latestGenerationFromTimeline(active: ActiveSession): AssistantGenerationStats | undefined {
     for (const item of [...this.timelineItems(active)].reverse()) {
-      if (item.kind === "message" && item.generation !== undefined) return item.generation;
+      if ((item.kind === "message" || item.kind === "thinking") && item.generation !== undefined) return item.generation;
     }
     return undefined;
   }

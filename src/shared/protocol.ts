@@ -354,8 +354,11 @@ export interface AssistantGenerationStats {
 export interface LiveGenerationStats {
   assistantMessageId: string;
   startedAt: string;
-  /** Estimated from streamed text, never provider-reported usage. */
+  /** Estimated from streamed thinking and text, never provider-reported usage. */
   estimatedOutputTokens?: number;
+  /** Most recently streamed content block, retained until another block starts. */
+  activeBlockKind?: "thinking" | "text";
+  activeContentIndex?: number;
 }
 
 export interface SessionSummary {
@@ -491,6 +494,8 @@ export interface ThinkingTimelineItem {
   createdAt: string;
   state: ThinkingState;
   text: string;
+  /** Exact usage and duration when a response has no visible text block. */
+  generation?: AssistantGenerationStats;
   /** Original Pi assistant content-block index, when available. */
   contentIndex?: number;
   assistantMessageId?: string;
@@ -561,7 +566,7 @@ export interface SessionStreamSnapshot {
   sessionUsage?: TokenUsage;
   /** Metrics for the latest completed assistant response, when available. */
   latestGeneration?: AssistantGenerationStats;
-  /** Current visible assistant response while text is streaming. */
+  /** Current assistant response while thinking or text is streaming. */
   liveGeneration?: LiveGenerationStats;
   /** Ephemeral extension UI state, retained across browser reconnects. */
   extensionUi?: ExtensionUiSnapshot;

@@ -113,6 +113,7 @@ export class SessionPiEvents {
     const existing = active.partialAssistantItems.get(contentIndex);
 
     if (update.type === "thinking_start" || update.type === "thinking_delta" || update.type === "thinking_end") {
+      active.assistantGenerationStartedAt ??= Date.now();
       // partial is mutable response-so-far; only the event's delta/end is authoritative.
       const text = update.type === "thinking_end" ? update.content
         : (existing?.kind === "thinking" ? existing.text : "") + (update.type === "thinking_delta" ? update.delta : "");
@@ -123,10 +124,15 @@ export class SessionPiEvents {
       };
       active.partialAssistantItems.set(contentIndex, item);
       active.partialThinking = item.state === "running" ? item : undefined;
+      // Keep the most recently streamed block as the display target until a
+      // later block starts, so the live estimate does not disappear in the
+      // small gap between thinking_end/text_start or text_end/message_end.
+      active.liveGeneration = liveGenerationFor(active, assistantMessageId, "thinking", contentIndex);
       this.host.events.publishSession(active.ref, {
         type: update.type === "thinking_end" ? "thinking.completed" : "thinking.delta", runId,
         payload: { thinkingId: item.id, createdAt: item.createdAt, contentIndex, assistantMessageId,
-          ...(update.type === "thinking_end" ? { text } : { delta: update.type === "thinking_delta" ? update.delta : "" }) },
+          ...(update.type === "thinking_end" ? { text } : { delta: update.type === "thinking_delta" ? update.delta : "" }),
+          liveGeneration: active.liveGeneration },
       });
       return;
     }
@@ -147,12 +153,7 @@ export class SessionPiEvents {
         .flatMap(([, block]) => block.kind === "message" ? [block] : []);
       const streamedText = texts.map((block) => block.text).join("\n\n");
       active.partial = { ...item, id: assistantMessageId, text: streamedText };
-      const estimatedOutputTokens = estimateOutputTokens(streamedText);
-      active.liveGeneration = {
-        assistantMessageId,
-        startedAt: new Date(active.assistantGenerationStartedAt).toISOString(),
-        ...(estimatedOutputTokens <= 0 ? {} : { estimatedOutputTokens }),
-      };
+      active.liveGeneration = liveGenerationFor(active, assistantMessageId, "text", contentIndex);
       this.host.events.publishSession(active.ref, {
         type: update.type === "text_end" ? "assistant.completed" : "assistant.delta", runId,
         payload: update.type === "text_end" ? { message: item, authoritative: false, liveGeneration: active.liveGeneration }
@@ -411,6 +412,8 @@ export class SessionPiEvents {
     active.streamingMessageIds.clear();
     active.partial = undefined;
     active.partialThinking = undefined;
+    active.assistantGenerationStartedAt = undefined;
+    active.liveGeneration = undefined;
     const retrying = retryStatus(event.attempt, event.maxAttempts, event.delayMs, event.errorMessage);
     active.state = { ...active.state, retrying };
     const latestError = [...active.liveErrors.values()].at(-1);
@@ -469,6 +472,20 @@ function assistantGenerationStats(message: unknown, startedAt?: number): Assista
     ...(cost === undefined ? {} : { cost }),
   };
   return { usage, ...(durationMs === undefined ? {} : { durationMs }) };
+}
+
+function liveGenerationFor(active: ActiveSession, assistantMessageId: string, activeBlockKind?: "thinking" | "text", activeContentIndex?: number): NonNullable<ActiveSession["liveGeneration"]> {
+  const generatedText = [...active.partialAssistantItems.entries()]
+    .sort(([left], [right]) => left - right)
+    .flatMap(([, item]) => item.kind === "thinking" || item.kind === "message" ? [item.text] : [])
+    .join("");
+  const estimatedOutputTokens = estimateOutputTokens(generatedText);
+  return {
+    assistantMessageId,
+    startedAt: new Date(active.assistantGenerationStartedAt ?? Date.now()).toISOString(),
+    estimatedOutputTokens,
+    ...(activeBlockKind === undefined ? {} : { activeBlockKind, activeContentIndex }),
+  };
 }
 
 /** A deliberately coarse live estimate; the completed response always replaces it with provider usage. */

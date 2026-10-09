@@ -696,6 +696,23 @@ describe("transcript reducer", () => {
     expect(hydrated.items).toEqual([expect.objectContaining({ kind: "thinking", id: "message:assistant:0:thinking", state: "running", text: "so far" })]);
   });
 
+  it("keeps live generation on thinking events and restores it from a reconnect snapshot", () => {
+    const liveGeneration = { assistantMessageId: "assistant", startedAt: "2026-08-09T00:00:00.000Z", estimatedOutputTokens: 8, activeBlockKind: "thinking" as const, activeContentIndex: 0 };
+    const streamed = applySessionEvents(emptyTranscript, [{
+      version: 1, sessionId: "session", runId: "run", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "thinking.delta", payload: { thinkingId: "assistant:thinking", assistantMessageId: "assistant", contentIndex: 0, delta: "Planning", liveGeneration },
+    }]);
+    expect(streamed.liveGeneration).toEqual(liveGeneration);
+
+    const hydrated = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, {
+      ...snapshotWithQueue(), seq: 1, status: { sessionId: "session", runState: "running" },
+      partialAssistantItems: [{ kind: "thinking", id: "assistant:thinking", createdAt: "2026-08-09T00:00:00.000Z", state: "running", text: "Planning", assistantMessageId: "assistant", contentIndex: 0 }],
+      liveGeneration,
+    });
+    expect(hydrated.liveGeneration).toEqual(liveGeneration);
+    expect(hydrated.items).toEqual([expect.objectContaining({ id: "assistant:thinking", text: "Planning" })]);
+  });
+
   it("streams thinking deltas into a running thinking card", () => {
     const streamed = applySessionEvents(emptyTranscript, [
       { version: 1, sessionId: "session", runId: "run", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z", type: "thinking.delta", payload: { thinkingId: "t1", createdAt: "2026-08-09T00:00:00.000Z", delta: "Let me check" } },

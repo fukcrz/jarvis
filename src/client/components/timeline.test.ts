@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, liveTurnProcessEntries, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
+import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, liveTurnProcessEntries, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -377,6 +377,17 @@ describe("processTextPreview", () => {
   it("uses the last nonempty line only for the preview without altering the source", () => {
     expect(processTextPreview("Preparing\n正在检查代码\n\n")).toBe("正在检查代码");
     expect(processTextPreview("\n")).toBe("");
+  });
+});
+
+describe("MarkdownTextPreview", () => {
+  it("renders collapsed thinking preview text without Markdown markers", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownTextPreview, { text: "**已检查** `src/server`" }));
+    expect(markup).toContain("已检查 src/server");
+    expect(markup).not.toContain("**");
+    expect(markup).not.toContain("`src/server`");
+    expect(markup).not.toContain("<strong>");
+    expect(markup).not.toContain("<code>");
   });
 });
 

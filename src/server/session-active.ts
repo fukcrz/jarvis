@@ -50,7 +50,7 @@ export interface ActiveSession {
   /** Ordered assistant text/thinking blocks keyed by their Pi content index. */
   partialAssistantItems: Map<number, MessageTimelineItem | ThinkingTimelineItem>;
   streamingMessageIds: Set<string>;
-  /** First visible assistant text event for the current response. */
+  /** First visible assistant thinking/text event for the current response. */
   assistantGenerationStartedAt?: number;
   /** Runtime-only estimate for the response currently being streamed. */
   liveGeneration?: LiveGenerationStats;

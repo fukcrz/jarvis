@@ -307,6 +307,15 @@ function attachGeneration(items: Array<MessageTimelineItem | ThinkingTimelineIte
     const item = items[index];
     if (item?.kind !== "message") continue;
     items[index] = { ...item, generation };
+    return items;
+  }
+  // A provider can finish after reasoning without emitting visible text. Keep
+  // its exact usage available on the final thinking card rather than dropping
+  // it solely because there is no answer bubble to own the metric.
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind !== "thinking") continue;
+    items[index] = { ...item, generation };
     break;
   }
   return items;

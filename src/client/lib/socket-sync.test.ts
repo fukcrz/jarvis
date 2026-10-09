@@ -125,10 +125,12 @@ describe("coalescing structured block metadata", () => {
     expect(result[2]?.payload).toEqual(otherIndex.payload);
   });
 
-  it("preserves thinking identity, timestamp and index", () => {
-    const a: SessionEvent = { ...delta(1, "unused", ""), type: "thinking.delta", payload: { thinkingId: "t", delta: "A", contentIndex: 2, assistantMessageId: "r", createdAt: "source" } };
-    const b: SessionEvent = { ...a, seq: 2, payload: { thinkingId: "t", delta: "B", contentIndex: 2, assistantMessageId: "r", createdAt: "source" } };
-    expect(coalesceStreamEvents([a, b])[0]?.payload).toEqual({ thinkingId: "t", delta: "AB", contentIndex: 2, assistantMessageId: "r", createdAt: "source" });
+  it("preserves thinking identity, timestamp, index and the latest live estimate", () => {
+    const firstLive = { assistantMessageId: "r", startedAt: "2026-01-01T00:00:00.000Z", estimatedOutputTokens: 1, activeBlockKind: "thinking", activeContentIndex: 2 };
+    const latestLive = { ...firstLive, estimatedOutputTokens: 2 };
+    const a: SessionEvent = { ...delta(1, "unused", ""), type: "thinking.delta", payload: { thinkingId: "t", delta: "A", contentIndex: 2, assistantMessageId: "r", createdAt: "source", liveGeneration: firstLive } };
+    const b: SessionEvent = { ...a, seq: 2, payload: { thinkingId: "t", delta: "B", contentIndex: 2, assistantMessageId: "r", createdAt: "source", liveGeneration: latestLive } };
+    expect(coalesceStreamEvents([a, b])[0]?.payload).toEqual({ thinkingId: "t", delta: "AB", contentIndex: 2, assistantMessageId: "r", createdAt: "source", liveGeneration: latestLive });
   });
 });
 

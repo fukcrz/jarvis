@@ -53,6 +53,7 @@ function setup() {
     activeTools: [...active.activeTools.values()],
     ...(active.partial === undefined ? {} : { partial: active.partial }),
     ...(active.partialThinking === undefined ? {} : { partialThinking: active.partialThinking }),
+    ...(active.liveGeneration === undefined ? {} : { liveGeneration: active.liveGeneration }),
   });
   return { active, events, handler, update, snapshot, publishUsage, close: () => hub.terminateAll() };
 }
@@ -134,6 +135,45 @@ describe("Pi assistant block streaming", () => {
       expect(fixture.active.liveMessages.size).toBe(2);
       expect(fixture.snapshot().partialAssistantItems).toEqual([]);
       expect(fixture.active.assistantStreamId).toBeUndefined();
+    } finally { fixture.close(); }
+  });
+
+  it("counts thinking and text under one live response estimate", () => {
+    const fixture = setup();
+    try {
+      const complete = message([{ type: "thinking", thinking: "计划" }, { type: "text", text: "Done" }]);
+      fixture.update(complete, { type: "thinking_start", contentIndex: 0, partial: complete });
+      fixture.update(complete, { type: "thinking_delta", contentIndex: 0, delta: "计划", partial: complete });
+      const thinkingEvent = fixture.events.at(-1);
+      fixture.update(complete, { type: "thinking_end", contentIndex: 0, content: "计划", partial: complete });
+      fixture.update(complete, { type: "text_delta", contentIndex: 1, delta: "Done", partial: complete });
+      const textEvent = fixture.events.at(-1);
+
+      expect(thinkingEvent?.payload).toMatchObject({
+        liveGeneration: { assistantMessageId: `message:assistant:${timestamp}`, estimatedOutputTokens: 2, activeBlockKind: "thinking", activeContentIndex: 0 },
+      });
+      expect(textEvent?.payload).toMatchObject({
+        liveGeneration: { assistantMessageId: `message:assistant:${timestamp}`, estimatedOutputTokens: 3, activeBlockKind: "text", activeContentIndex: 1 },
+      });
+      const thinkingStartedAt = (thinkingEvent?.payload as { liveGeneration?: { startedAt?: string } } | undefined)?.liveGeneration?.startedAt;
+      const textStartedAt = (textEvent?.payload as { liveGeneration?: { startedAt?: string } } | undefined)?.liveGeneration?.startedAt;
+      expect(textStartedAt).toBe(thinkingStartedAt);
+
+      const streamed = applySessionEvents(emptyTranscript, fixture.events);
+      expect(streamed.liveGeneration).toMatchObject({ estimatedOutputTokens: 3, activeBlockKind: "text", activeContentIndex: 1 });
+      const refreshed = hydrateTranscript(emptyTranscript, { items: [], start: 0, total: 0, hasMore: false }, fixture.snapshot());
+      expect(refreshed.liveGeneration).toEqual(streamed.liveGeneration);
+    } finally { fixture.close(); }
+  });
+
+  it("does not double-round ASCII tokens across thinking and text blocks", () => {
+    const fixture = setup();
+    try {
+      const complete = message([{ type: "thinking", thinking: "ab" }, { type: "text", text: "cd" }]);
+      fixture.update(complete, { type: "thinking_delta", contentIndex: 0, delta: "ab", partial: complete });
+      fixture.update(complete, { type: "thinking_end", contentIndex: 0, content: "ab", partial: complete });
+      fixture.update(complete, { type: "text_delta", contentIndex: 1, delta: "cd", partial: complete });
+      expect(fixture.events.at(-1)?.payload).toMatchObject({ liveGeneration: { estimatedOutputTokens: 1, activeBlockKind: "text", activeContentIndex: 1 } });
     } finally { fixture.close(); }
   });
 
