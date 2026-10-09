@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { MarkdownMessage, imageFallbackTarget, mediaKindForSource, rewriteLocalImageUrls, separateAdjacentBoldTitles } from "./markdown-message";
+import { LocalMediaVersionContext } from "../lib/local-media";
 
 describe("MarkdownMessage", () => {
   it("renders Markdown while a message is still streaming", () => {
@@ -170,6 +171,35 @@ describe("MarkdownMessage", () => {
       baseDir: "/ws",
     }));
     expect(markup).toContain('<img class="message-image" src="/api/files?path=shots%2Fa.png&amp;cwd=%2Fws" alt="图" loading="lazy"/>');
+  });
+
+  it("versions local images including existing file API URLs without changing immutable images", () => {
+    const props = {
+      text: "![relative](shots/a.png) ![absolute](/tmp/a.png) ![served](/api/files?path=b.png&v=old) ![remote](https://example.com/c.png) ![embed](data:image/png;base64,AAAA) ![snapshot](/api/workspaces/ws/sessions/session/media/tool/0)",
+      baseDir: "/ws",
+    };
+    const render = (version: string) => renderToStaticMarkup(createElement(LocalMediaVersionContext.Provider, { value: version }, createElement(MarkdownMessage, props)));
+    const initial = render("open");
+    const refreshed = render("settled");
+    expect(initial).toContain('src="/api/files?path=shots%2Fa.png&amp;cwd=%2Fws&amp;v=open"');
+    expect(initial).toContain('src="/api/files?path=%2Ftmp%2Fa.png&amp;v=open"');
+    expect(initial).toContain('src="/api/files?path=b.png&amp;v=open"');
+    expect(refreshed).toContain('src="/api/files?path=shots%2Fa.png&amp;cwd=%2Fws&amp;v=settled"');
+    expect(refreshed).toContain('src="/api/files?path=b.png&amp;v=settled"');
+    for (const source of ["https://example.com/c.png", "data:image/png;base64,AAAA", "/api/workspaces/ws/sessions/session/media/tool/0"]) {
+      expect(initial).toContain(`src="${source}"`);
+      expect(refreshed).toContain(`src="${source}"`);
+    }
+  });
+
+  it("does not reload audio and video when the local image version changes", () => {
+    const markup = renderToStaticMarkup(createElement(LocalMediaVersionContext.Provider, { value: "settled" }, createElement(MarkdownMessage, {
+      text: "![video](clip.mp4) ![audio](voice.mp3)",
+      baseDir: "/ws",
+    })));
+    expect(markup).toContain('src="/api/files?path=clip.mp4&amp;cwd=%2Fws"');
+    expect(markup).toContain('src="/api/files?path=voice.mp3&amp;cwd=%2Fws"');
+    expect(markup).not.toContain("v=settled");
   });
 
   it("rewrites local file links to the /api/files endpoint and opens them in a new tab", () => {

@@ -3,6 +3,7 @@ import { api, notifyUnauthorized, sessionPath, socketUrl } from "../api";
 import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, type UserMessageOutline, sessionEventSchema } from "../../shared/protocol";
 import { appendUserMessageOutline, earlierPageLimit, userMessageOutline } from "../../shared/user-message";
 import { notifyRunFinished, type RunNotificationInfo } from "../notifications";
+import { randomUUID } from "../lib/utils";
 import {
   coalesceStreamEvents,
   parseSocketHeartbeat,
@@ -21,6 +22,7 @@ export const INITIAL_TIMELINE_LIMIT = 40;
 
 export interface StreamState {
   transcript: TranscriptState;
+  mediaRevision: number;
   connection: "connecting" | "live" | "reconnecting" | "offline";
   error?: string;
   sessionKey?: string;
@@ -46,7 +48,7 @@ type Action =
   | { type: "replace-user"; messageId: string; id: string; text: string; images: import("../../shared/protocol").ImageAttachment[] }
   | { type: "connection"; value: StreamState["connection"]; error?: string };
 
-const initialState: StreamState = { transcript: emptyTranscript, connection: "offline" };
+const initialState: StreamState = { transcript: emptyTranscript, mediaRevision: 0, connection: "offline" };
 
 function isCurrentSession(state: StreamState, sessionKey: string): boolean {
   return state.sessionKey === sessionKey;
@@ -83,12 +85,13 @@ export function shouldApplySessionRefresh(input: {
 
 export function reduceSessionStream(state: StreamState, action: Action): StreamState {
   if (action.type === "select") {
-    if (action.sessionKey === undefined) return initialState;
+    if (action.sessionKey === undefined) return { ...initialState, mediaRevision: state.mediaRevision };
     if (state.sessionKey === action.sessionKey) {
       return state.connection === "offline" ? { ...state, connection: "connecting", error: undefined } : state;
     }
     return {
       transcript: action.transcript ?? emptyTranscript,
+      mediaRevision: state.mediaRevision + 1,
       connection: "connecting",
       sessionKey: action.sessionKey,
     };
@@ -98,6 +101,7 @@ export function reduceSessionStream(state: StreamState, action: Action): StreamS
     return {
       ...state,
       transcript: hydrateTranscript(state.transcript, action.page, action.snapshot),
+      mediaRevision: state.mediaRevision + 1,
       error: undefined,
       sessionKey: action.sessionKey,
       ...(action.connection === undefined ? {} : { connection: action.connection }),
@@ -107,7 +111,15 @@ export function reduceSessionStream(state: StreamState, action: Action): StreamS
     if (!isCurrentSession(state, action.sessionKey)) return state;
     return { ...state, error: action.error };
   }
-  if (action.type === "events") return { ...state, transcript: applySessionEvents(state.transcript, action.events) };
+  if (action.type === "events") {
+    const refreshMedia = action.events.some((event) => event.seq > state.transcript.seq
+      && (event.type === "run.settled" || event.type === "run.failed" || event.type === "session.rewritten"));
+    return {
+      ...state,
+      transcript: applySessionEvents(state.transcript, action.events),
+      mediaRevision: state.mediaRevision + (refreshMedia ? 1 : 0),
+    };
+  }
   if (action.type === "model") return { ...state, transcript: { ...state.transcript, model: { ...state.transcript.model, current: action.model } } };
   if (action.type === "thinking") return { ...state, transcript: { ...state.transcript, thinking: action.thinking } };
   if (action.type === "prepend") return !isCurrentSession(state, action.sessionKey) ? state : { ...state, transcript: prependTranscript(state.transcript, action.page) };
@@ -125,6 +137,7 @@ type PanelSideEffect =
 
 export function useSessionStream(ref: SessionRef | undefined, assistantName = document.title, sessionName?: string, options?: { manageDocumentTitle?: boolean }) {
   const [state, dispatch] = useReducer(reduceSessionStream, initialState);
+  const [mediaSeed] = useState(randomUUID);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [userMessages, setUserMessages] = useState<UserMessageOutline[]>([]);
   const [userMessagesLoading, setUserMessagesLoading] = useState(false);
@@ -622,7 +635,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   }, []);
   const discardOptimisticUser = useCallback((id: string) => { dispatch({ type: "discard-optimistic-user", id }); }, []);
   const replaceUserMessage = useCallback((messageId: string, id: string, text: string, images: import("../../shared/protocol").ImageAttachment[]) => { dispatch({ type: "replace-user", messageId, id, text, images }); }, []);
-  return { ...state, refresh, loadEarlier, loadUntilMessage, loadingEarlier, userMessages, userMessagesLoading, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
+  return { ...state, localMediaVersion: `${mediaSeed}-${String(state.mediaRevision)}`, refresh, loadEarlier, loadUntilMessage, loadingEarlier, userMessages, userMessagesLoading, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
 }
 
 function runNotificationFor(event: SessionEvent, items: TimelineItem[]): RunNotificationInfo | undefined {

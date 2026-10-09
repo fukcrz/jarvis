@@ -905,6 +905,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     // 绝对路径：/api/files?path=/abs/demo.png
     const absolute = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(absolutePath)}` });
     expect(absolute.statusCode).toBe(200);
+    expect(absolute.headers["cache-control"]).toBe("private, no-store");
     expect(absolute.headers["content-type"]).toContain("image/png");
     expect(absolute.rawPayload).toEqual(png);
 
@@ -917,30 +918,36 @@ describe("Jarvis HTTP and WebSocket API", () => {
     // 相对路径无 cwd 时回退到进程 cwd：找不到 → 404
     const missing = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("nope.png")}` });
     expect(missing.statusCode).toBe(404);
+    expect(missing.headers["cache-control"]).toBe("private, no-store");
     expect(missing.json()).toMatchObject({ error: { code: "FILE_NOT_FOUND" } });
 
     // 非图片扩展名不再拒绝：文本文件按 text/plain 返回
     const textFile = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("secret.txt")}&cwd=${encodeURIComponent(workspaceRoot)}` });
     expect(textFile.statusCode).toBe(200);
+    expect(textFile.headers["cache-control"]).toBe("private, no-store");
     expect(textFile.headers["content-type"]).toContain("text/plain");
     expect(textFile.rawPayload.toString()).toBe("private");
 
-    const checkedText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("secret.txt")}&cwd=${encodeURIComponent(workspaceRoot)}&text=check` });
+    const checkedText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("secret.txt")}&cwd=${encodeURIComponent(workspaceRoot)}&text=check&v=check` });
     expect(checkedText.statusCode).toBe(200);
+    expect(checkedText.headers["cache-control"]).toBe("private, no-store");
     expect(checkedText.json()).toEqual({ file: { path: join(workspaceRoot, "secret.txt"), name: "secret.txt", content: "", size: 7, truncated: false } });
 
-    const previewText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("secret.txt")}&cwd=${encodeURIComponent(workspaceRoot)}&text=1` });
+    const previewText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("secret.txt")}&cwd=${encodeURIComponent(workspaceRoot)}&text=1&v=preview` });
     expect(previewText.statusCode).toBe(200);
+    expect(previewText.headers["cache-control"]).toBe("private, no-store");
     expect(previewText.json()).toEqual({ file: { path: join(workspaceRoot, "secret.txt"), name: "secret.txt", content: "private", size: 7, truncated: false } });
 
     await writeFile(join(workspaceRoot, "invalid.txt"), Buffer.from([0xff, 0xfe, 0xfd]));
     const invalidText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("invalid.txt")}&cwd=${encodeURIComponent(workspaceRoot)}&text=1` });
     expect(invalidText.statusCode).toBe(415);
+    expect(invalidText.headers["cache-control"]).toBe("private, no-store");
     expect(invalidText.json()).toMatchObject({ error: { code: "FILE_BINARY" } });
 
     await writeFile(join(workspaceRoot, "binary.txt"), Buffer.from([0x61, 0x00, 0x62]));
     const binaryText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("binary.txt")}&cwd=${encodeURIComponent(workspaceRoot)}&text=check` });
     expect(binaryText.statusCode).toBe(415);
+    expect(binaryText.headers["cache-control"]).toBe("private, no-store");
     expect(binaryText.json()).toMatchObject({ error: { code: "FILE_BINARY" } });
 
     await writeFile(join(workspaceRoot, "page.html"), "<script>alert(1)</script>");
@@ -956,6 +963,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     // download=1 附加附件分发头
     const download = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("notes.pdf")}&cwd=${encodeURIComponent(workspaceRoot)}&download=1` });
     expect(download.statusCode).toBe(200);
+    expect(download.headers["cache-control"]).toBe("private, no-store");
     expect(download.headers["content-disposition"]).toContain("attachment;");
     expect(download.headers["content-disposition"]).toContain("notes.pdf");
 
@@ -981,7 +989,44 @@ describe("Jarvis HTTP and WebSocket API", () => {
     // 目录 → 404
     const directory = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(workspaceRoot)}` });
     expect(directory.statusCode).toBe(404);
+    expect(directory.headers["cache-control"]).toBe("private, no-store");
     expect(directory.json()).toMatchObject({ error: { code: "FILE_NOT_FOUND" } });
+
+    const invalidQuery = await activeApp().inject({ method: "GET", url: "/api/files?v=refresh" });
+    expect(invalidQuery.statusCode).toBe(400);
+    expect(invalidQuery.headers["cache-control"]).toBe("private, no-store");
+    expect(invalidQuery.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("serves overwritten local images without caching and accepts URL versions", async () => {
+    const workspaceRoot = join(jarvisHome, "image-cache-workspace");
+    await mkdir(workspaceRoot, { recursive: true });
+    const imagePath = join(workspaceRoot, "shot.png");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const updatedPng = Buffer.concat([png, Buffer.from([0x00, 0x01])]);
+    const url = `/api/files?path=shot.png&cwd=${encodeURIComponent(workspaceRoot)}`;
+    await writeFile(imagePath, png);
+
+    const initial = await activeApp().inject({ method: "GET", url: `${url}&v=initial` });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.headers["cache-control"]).toBe("private, no-store");
+    expect(initial.headers["content-type"]).toContain("image/png");
+    expect(initial.headers["content-length"]).toBe(String(png.length));
+    expect(initial.rawPayload).toEqual(png);
+
+    await writeFile(imagePath, updatedPng);
+    const refreshed = await activeApp().inject({ method: "GET", url: `${url}&v=refreshed` });
+    expect(refreshed.statusCode).toBe(200);
+    expect(refreshed.headers["cache-control"]).toBe("private, no-store");
+    expect(refreshed.headers["content-type"]).toContain("image/png");
+    expect(refreshed.headers["content-length"]).toBe(String(updatedPng.length));
+    expect(refreshed.rawPayload).toEqual(updatedPng);
+
+    // v 仅改变 URL，不选择历史快照；旧版本号也读取当前文件。
+    const reusedVersion = await activeApp().inject({ method: "GET", url: `${url}&v=initial` });
+    expect(reusedVersion.statusCode).toBe(200);
+    expect(reusedVersion.headers["cache-control"]).toBe("private, no-store");
+    expect(reusedVersion.rawPayload).toEqual(updatedPng);
   });
 
   it("streams files with byte range support so media can seek", async () => {
@@ -990,16 +1035,18 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const registered = await activeApp().inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspaceRoot } });
     expect(registered.statusCode).toBe(200);
     await writeFile(join(workspaceRoot, "clip.mp4"), "01234567");
-    const url = (range?: string) => ({ method: "GET" as const, url: `/api/files?path=clip.mp4&cwd=${encodeURIComponent(workspaceRoot)}`, ...(range === undefined ? {} : { headers: { range } }) });
+    const url = (range?: string) => ({ method: "GET" as const, url: `/api/files?path=clip.mp4&cwd=${encodeURIComponent(workspaceRoot)}&v=media`, ...(range === undefined ? {} : { headers: { range } }) });
 
     const full = await activeApp().inject(url());
     expect(full.statusCode).toBe(200);
+    expect(full.headers["cache-control"]).toBe("private, no-store");
     expect(full.headers["accept-ranges"]).toBe("bytes");
     expect(full.headers["content-type"]).toContain("video/mp4");
     expect(full.rawPayload.toString()).toBe("01234567");
 
     const head = await activeApp().inject(url("bytes=0-3"));
     expect(head.statusCode).toBe(206);
+    expect(head.headers["cache-control"]).toBe("private, no-store");
     expect(head.headers["content-range"]).toBe("bytes 0-3/8");
     expect(head.headers["content-length"]).toBe("4");
     expect(head.rawPayload.toString()).toBe("0123");
@@ -1017,7 +1064,9 @@ describe("Jarvis HTTP and WebSocket API", () => {
     // 越界 → 416，并告知实际大小
     const unsatisfiable = await activeApp().inject(url("bytes=99-"));
     expect(unsatisfiable.statusCode).toBe(416);
+    expect(unsatisfiable.headers["cache-control"]).toBe("private, no-store");
     expect(unsatisfiable.headers["content-range"]).toBe("bytes */8");
+    expect(unsatisfiable.rawPayload.length).toBe(0);
 
     // 多段 Range（浏览器极少发）不做支持，退回整档返回
     const multi = await activeApp().inject(url("bytes=0-1,3-4"));
@@ -1425,7 +1474,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(raced.statusCode).toBe(200);
     expect(raced.rawPayload).toEqual(png);
     expect(media.headers["x-content-type-options"]).toBe("nosniff");
-    expect(media.headers["cache-control"]).toContain("private");
+    expect(media.headers["cache-control"]).toBe("private, max-age=3600");
   });
 
   it("requires login for tool image media after a password is set", async () => {

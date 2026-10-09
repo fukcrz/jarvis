@@ -7,6 +7,8 @@ import { api, ApiError, workspaceFileUrl } from "../api";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { copyText } from "../lib/clipboard";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
+import { LocalMediaVersionContext, localMediaUrl } from "../lib/local-media";
+import { randomUUID } from "../lib/utils";
 import { MAX_TABLE_ROWS, parseDelimited, previewKindForPath, type PreviewKind } from "../lib/file-preview";
 import { MarkdownMessage } from "./markdown-message";
 import { CodePreview } from "./code-preview";
@@ -25,6 +27,7 @@ interface FilePreviewState {
   path: string;
   name: string;
   kind: PreviewKind;
+  version?: string;
   content?: WorkspaceFileContent;
 }
 
@@ -177,26 +180,29 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
     const requestId = previewRequestRef.current;
     const name = path.split(/[/\\]/).pop() ?? path;
     const kind = previewKindForPath(path);
+    const version = randomUUID();
     if (kind !== "text" && kind !== "markdown" && kind !== "table") {
-      if (preview?.path === path && preview.kind === kind) return;
-      setPreview({ path, name, kind });
+      setPreview({ path, name, kind, version });
       setFocusedPath(directoryPath(path));
       setError(undefined);
       return;
     }
-    if (preview?.path === path && preview.content !== undefined) return;
+    if (preview?.path === path && preview.content !== undefined) {
+      setPreview({ ...preview, version });
+      return;
+    }
     previewLoadingPathRef.current = path;
     setLoadingPaths((current) => ({ ...current, [path]: true }));
     setError(undefined);
     try {
       const file = await api.workspaceFile(targetWorkspaceId, path);
       if (workspaceRef.current !== targetWorkspaceId || previewRequestRef.current !== requestId) return;
-      setPreview({ path, name, kind, content: file });
+      setPreview({ path, name, kind, version, content: file });
       setFocusedPath(directoryPath(path));
     } catch (reason: unknown) {
       if (workspaceRef.current !== targetWorkspaceId || previewRequestRef.current !== requestId) return;
       if (reason instanceof ApiError && reason.code === "FILE_BINARY") {
-        setPreview({ path, name, kind: "unsupported" });
+        setPreview({ path, name, kind: "unsupported", version });
         return;
       }
       setError(reason instanceof Error ? reason.message : "无法预览文件");
@@ -308,7 +314,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
   const canGoUp = isMobile && !showMobilePreview && rootPath !== "" && currentPath !== "" && currentPath !== rootPath;
   const directoryTitle = listListing?.name || pathBaseName(listPath);
   const copyable = preview?.content !== undefined && (preview.kind === "text" || preview.kind === "markdown" || preview.kind === "table");
-  const previewUrl = preview === undefined ? undefined : workspaceFileUrl("", preview.path);
+  const previewUrl = preview === undefined ? undefined : localMediaUrl(workspaceFileUrl("", preview.path), preview.version);
   const downloadUrl = preview === undefined ? undefined : workspaceFileUrl("", preview.path, { download: true });
   const previewTitle = preview === undefined
     ? undefined
@@ -445,7 +451,9 @@ export function FilePreviewBody({ state, url }: { state: FilePreviewState; url: 
     case "video":
       return <div className="file-preview-media"><video controls playsInline src={url} /></div>;
     case "markdown":
-      return <div className="message-content file-preview-markdown"><MarkdownMessage text={state.content?.content ?? ""} baseDir={directoryPath(state.path)} /></div>;
+      return <LocalMediaVersionContext.Provider value={state.version}>
+        <div className="message-content file-preview-markdown"><MarkdownMessage text={state.content?.content ?? ""} baseDir={directoryPath(state.path)} /></div>
+      </LocalMediaVersionContext.Provider>;
     case "table":
       return <TablePreview text={state.content?.content ?? ""} name={state.name} />;
     case "unsupported":

@@ -9,6 +9,7 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { PluggableList } from "unified";
 import { isTextFilePreviewPath, localFilePathFromHref, localFileReferenceFromHref, looksLikeFileReference } from "../lib/file-preview";
+import { LocalMediaVersionContext, localMediaUrl } from "../lib/local-media";
 
 const remarkPlugins: PluggableList = [remarkGfm];
 // 注意顺序：sanitize 先跑、highlight 后跑。
@@ -203,18 +204,21 @@ function MediaFallback({ label, src }: { label: string; src: string | undefined 
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- node 是 react-markdown 注入的 hast 节点，需从 DOM 属性中剥离。
 function MarkdownMedia({ node: _node, src, alt, title, ...rest }: ComponentProps<"img"> & { node?: HastNode }) {
-  const [failed, setFailed] = useState(false);
+  const version = useContext(LocalMediaVersionContext);
+  const [failedSource, setFailedSource] = useState<string>();
   const label = alt === undefined || alt === "" ? "图片预览" : alt;
   const kind = mediaKindForSource(src);
-  if (failed) return <MediaFallback label={label} src={src} />;
+  // 只刷新图片，避免任务结算打断历史消息中正在播放的音视频。
+  const source = kind === "image" ? localMediaUrl(src ?? "", version) : (src ?? "");
+  if (failedSource === source) return <MediaFallback label={label} src={source} />;
   // 视频/音频用浏览器原生控件直接渲染，不做灯箱也不自动播放。
   if (kind !== "image") return <span className={`message-media-frame${kind === "audio" ? " message-audio-frame" : ""}`}>
     {kind === "video"
-      ? <video src={src} controls preload="metadata" playsInline aria-label={label} title={title} onError={() => setFailed(true)} />
-      : <audio src={src} controls preload="metadata" aria-label={label} onError={() => setFailed(true)} />}
+      ? <video src={source} controls preload="metadata" playsInline aria-label={label} title={title} onError={() => setFailedSource(source)} />
+      : <audio src={source} controls preload="metadata" aria-label={label} onError={() => setFailedSource(source)} />}
   </span>;
-  return <ImagePreview className="message-image-frame" src={src ?? ""} alt={label}>
-    <img {...rest} className="message-image" src={src} alt={alt ?? ""} title={title} loading="lazy" onError={() => setFailed(true)} />
+  return <ImagePreview className="message-image-frame" src={source} alt={label}>
+    <img {...rest} className="message-image" src={source} alt={alt ?? ""} title={title} loading="lazy" onError={() => setFailedSource(source)} />
   </ImagePreview>;
 }
 

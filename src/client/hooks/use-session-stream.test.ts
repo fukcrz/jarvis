@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionStreamSnapshot, TimelinePage } from "../../shared/protocol";
+import type { SessionEvent, SessionStreamSnapshot, TimelinePage } from "../../shared/protocol";
 import { emptyTranscript } from "../transcript";
 import { applyOutlineEvents, reduceSessionStream, shouldApplySessionRefresh, type StreamState } from "./use-session-stream";
 
@@ -24,7 +24,7 @@ function snapshot(): SessionStreamSnapshot {
 }
 
 function hydrated(sessionKey: string, text: string): StreamState {
-  const selected = reduceSessionStream({ transcript: emptyTranscript, connection: "offline" }, { type: "select", sessionKey });
+  const selected = reduceSessionStream({ transcript: emptyTranscript, mediaRevision: 0, connection: "offline" }, { type: "select", sessionKey });
   return reduceSessionStream(selected, {
     type: "hydrate",
     sessionKey,
@@ -70,6 +70,37 @@ describe("session stream reducer", () => {
     const selected = hydrated("ws:b", "Current");
     const stale = reduceSessionStream(selected, { type: "prepend", sessionKey: "ws:a", page: page("Stale") });
     expect(stale).toBe(selected);
+  });
+
+  it("refreshes media when reopening a cached session or hydrating unchanged messages", () => {
+    const previous = hydrated("ws:a", "Hello");
+    const refreshed = reduceSessionStream(previous, { type: "hydrate", sessionKey: "ws:a", page: page("Hello"), snapshot: snapshot() });
+    expect(refreshed.mediaRevision).toBe(previous.mediaRevision + 1);
+    expect(refreshed.transcript.items[0]).toBe(previous.transcript.items[0]);
+
+    const closed = reduceSessionStream(refreshed, { type: "select" });
+    const reopened = reduceSessionStream(closed, { type: "select", sessionKey: "ws:a", transcript: refreshed.transcript });
+    expect(reopened.mediaRevision).toBeGreaterThan(refreshed.mediaRevision);
+    const stale = reduceSessionStream(reopened, { type: "hydrate", sessionKey: "ws:b", page: page("Stale"), snapshot: snapshot() });
+    expect(stale.mediaRevision).toBe(reopened.mediaRevision);
+  });
+
+  it.each(["run.settled", "run.failed", "session.rewritten"] as const)("refreshes media once on %s and ignores replayed events", (type) => {
+    const previous = hydrated("ws:a", "Hello");
+    const event: SessionEvent = { version: 1, sessionId: "session", type, seq: 2, emittedAt: "2026-08-09T00:00:02.000Z", payload: {} };
+    const refreshed = reduceSessionStream(previous, { type: "events", events: [event] });
+    expect(refreshed.mediaRevision).toBe(previous.mediaRevision + 1);
+    const replayed = reduceSessionStream(refreshed, { type: "events", events: [event] });
+    expect(replayed.mediaRevision).toBe(refreshed.mediaRevision);
+  });
+
+  it("keeps media versions stable during streaming, history loading, and connection changes", () => {
+    const previous = hydrated("ws:a", "Hello");
+    const event: SessionEvent = { version: 1, sessionId: "session", type: "assistant.delta", seq: 2, emittedAt: "2026-08-09T00:00:02.000Z", payload: { messageId: "a1", delta: "Next" } };
+    const streaming = reduceSessionStream(previous, { type: "events", events: [event] });
+    const earlier = reduceSessionStream(streaming, { type: "prepend", sessionKey: "ws:a", page: page("Earlier") });
+    const connecting = reduceSessionStream(earlier, { type: "connection", value: "reconnecting" });
+    expect(connecting.mediaRevision).toBe(previous.mediaRevision);
   });
 
   it("accepts only the latest refresh for the same session and history generation", () => {

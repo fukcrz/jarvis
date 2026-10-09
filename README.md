@@ -144,6 +144,31 @@ Jarvis keeps Pi thinking, assistant text, and tool calls in their original conte
 
 While a run is active, the process shows current work and summaries of consecutive tools. Opening it reveals the ordered record and tool details; manual expansion survives later events and completion. Failed operations and pending extension input remain accessible, and user `!cmd` output stays outside the process fold. This changes presentation without changing prompts or model output behavior. See [docs/assistant-transcript.md](docs/assistant-transcript.md) for the event and snapshot contract.
 
+## Local Images
+
+Markdown local images resolve through `/api/files` and show the current file,
+not a saved copy of the file at message time. Local file responses use
+`Cache-Control: private, no-store`. Image URLs receive a new version when opening
+or refreshing a session, reconnecting or returning to the foreground, and when
+a run settles or fails. Streaming text deltas do not reload existing images.
+Thumbnails and open lightboxes share the same version. Missing images can retry
+after the next refresh. File-browser previews receive a new version on opening
+or reselecting a file, including local images embedded in Markdown previews.
+
+Remote images, embedded data and uploaded/tool-result image snapshots keep their
+original URLs. Audio/video players are not reloaded by session image refreshes.
+Use a different filename for each result when older messages must retain the
+original image for comparison.
+
+The isolated Chromium regression covers desktop/mobile image overwrites,
+refresh, missing-file recovery and preview consistency without external model
+calls or production port 9528:
+
+```bash
+npm run build
+node scripts/ui-local-image-cache-smoke.mjs
+```
+
 ## Run-End Notifications
 
 When a session run finishes (or fails), Jarvis can pop a browser notification so you

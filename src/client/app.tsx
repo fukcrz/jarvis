@@ -385,16 +385,28 @@ export function App() {
 
   const loadWorkspaces = useCallback(async () => {
     const generation = ++workspaceLoadGenerationRef.current;
-    const values = await api.listWorkspaces();
-    if (generation !== workspaceLoadGenerationRef.current) return undefined;
-    applyWorkspaceRegistry(values);
-    return values;
+    try {
+      const values = await api.listWorkspaces();
+      if (generation !== workspaceLoadGenerationRef.current) return undefined;
+      applyWorkspaceRegistry(values);
+      setLoading(false);
+      return values;
+    } catch (error) {
+      if (generation !== workspaceLoadGenerationRef.current) return undefined;
+      setLoading(false);
+      throw error;
+    }
   }, [applyWorkspaceRegistry]);
 
   const refreshSettings = useCallback(async () => {
     const generation = ++settingsLoadGenerationRef.current;
-    const settings = await api.settings();
-    if (generation === settingsLoadGenerationRef.current) setAssistantName(settings.assistantName);
+    try {
+      const settings = await api.settings();
+      if (generation === settingsLoadGenerationRef.current) setAssistantName(settings.assistantName);
+    } catch (error) {
+      if (generation !== settingsLoadGenerationRef.current) return;
+      throw error;
+    }
   }, []);
 
   const reorderWorkspaces = useCallback((sourceId: string, targetId: string, placeAfter: boolean): void => {
@@ -445,9 +457,12 @@ export function App() {
 
   useEffect(() => {
     let disposed = false;
-    void Promise.all([loadWorkspaces(), refreshSettings()]).catch((error: unknown) => {
+    void loadWorkspaces().catch((error: unknown) => {
       if (!disposed) setPageError(errorMessage(error, "无法加载应用设置"));
-    }).finally(() => { if (!disposed) setLoading(false); });
+    });
+    void refreshSettings().catch((error: unknown) => {
+      if (!disposed) setPageError(errorMessage(error, "无法加载应用设置"));
+    });
     return () => { disposed = true; };
   }, [loadWorkspaces, refreshSettings]);
 
@@ -1189,7 +1204,7 @@ export function App() {
   const renderChatContent = () => <>
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <div className="chat-stage">
-      <Timeline sessionKey={selectedRefKey} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} liveGeneration={stream.transcript.liveGeneration} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} />
+      <Timeline sessionKey={selectedRefKey} localMediaVersion={stream.localMediaVersion} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} liveGeneration={stream.transcript.liveGeneration} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} />
       <div className="chat-dock">
         <ExtensionPanels panels={stream.extensionPanels} />
         <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage?.sessionId === selectedRef.sessionId ? cancelMessageEdit : undefined} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>

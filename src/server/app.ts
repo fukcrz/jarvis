@@ -100,7 +100,7 @@ const timelineQuery = z.object({ before: z.coerce.number().int().nonnegative().o
 // /api/files：通用本地文件接口。
 // AI 通过 md 语法引用本地图片（相对路径以 cwd 为基准，绝对路径直接使用），
 // 文件浏览器用它内联预览图片/PDF/音视频，并带 download=1 下载任意文件。
-const fileQuery = z.object({ path: z.string().min(1).max(2000), cwd: z.string().min(1).max(2000).optional(), download: z.enum(["1", "true"]).optional(), text: z.enum(["1", "true", "check"]).optional() }).strict();
+const fileQuery = z.object({ path: z.string().min(1).max(2000), cwd: z.string().min(1).max(2000).optional(), download: z.enum(["1", "true"]).optional(), text: z.enum(["1", "true", "check"]).optional(), v: z.string().optional() }).strict();
 
 export interface JarvisServices {
   workspaces: WorkspaceStore;
@@ -289,6 +289,7 @@ export async function buildApp(options: {
   // 通用文件服务：AI 在回复里写 ![](path) 引用本地图片（相对路径以 cwd 为基准），
   // 前端重写为 /api/files?path=...&cwd=...；文件浏览器也用它预览媒体与下载文件。
   app.get("/api/files", async (request, reply) => {
+    reply.header("cache-control", "private, no-store");
     const query = fileQuery.parse(request.query);
     const resolved = await resolveFileRequestPath(query.path, query.cwd);
     const metadata = await stat(resolved).catch(() => undefined);
@@ -305,7 +306,6 @@ export async function buildApp(options: {
     reply
       .type(fileResponseMimeType(ext))
       .header("x-content-type-options", "nosniff")
-      .header("cache-control", "private, max-age=3600")
       .header("accept-ranges", "bytes");
     if (ext === ".svg") {
       reply.header("content-security-policy", "default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'; img-src 'self' data:; style-src 'unsafe-inline'");

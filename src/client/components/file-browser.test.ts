@@ -16,6 +16,15 @@ describe("FilePreviewBody", () => {
     expect(markup).not.toContain("image-lightbox");
   });
 
+  it("refreshes embedded local images when a Markdown file is reopened", () => {
+    const render = (version: string) => renderToStaticMarkup(createElement(FilePreviewBody, {
+      state: { path: "/tmp/preview.md", name: "preview.md", kind: "markdown", version, content: { path: "/tmp/preview.md", name: "preview.md", content: "![shot](shot.png)", size: 17, truncated: false } },
+      url: "/api/files?path=preview.md",
+    }));
+    expect(render("opened")).toContain('src="/api/files?path=shot.png&amp;cwd=%2Ftmp&amp;v=opened"');
+    expect(render("reopened")).toContain('src="/api/files?path=shot.png&amp;cwd=%2Ftmp&amp;v=reopened"');
+  });
+
   it("keeps pdf, video, and audio on the media url", () => {
     const pdf = renderToStaticMarkup(createElement(FilePreviewBody, {
       state: { path: "/tmp/doc.pdf", name: "doc.pdf", kind: "pdf" },
