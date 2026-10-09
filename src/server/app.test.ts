@@ -246,6 +246,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     await mkdir(join(workspacePath, ".git"));
     await mkdir(join(workspacePath, "node_modules", "hidden"), { recursive: true });
     await writeFile(join(workspacePath, "README.md"), "# Test");
+    await writeFile(join(workspacePath, "config.json"), "{\"enabled\":true}");
     await writeFile(join(jarvisHome, "sibling.txt"), "outside");
     const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } });
     const workspace = created.json() as { workspace: { id: string } };
@@ -273,6 +274,10 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const file = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/file?path=${encodeURIComponent(join(jarvisHome, "sibling.txt"))}` });
     expect(file.statusCode).toBe(200);
     expect(file.json()).toMatchObject({ file: { name: "sibling.txt", content: "outside" } });
+
+    const jsonFile = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/file?path=${encodeURIComponent("config.json")}` });
+    expect(jsonFile.statusCode).toBe(200);
+    expect(jsonFile.json()).toMatchObject({ file: { name: "config.json", content: "{\"enabled\":true}" } });
   });
 
   it("searches workspace files for composer references without exposing ignored directories", async () => {
@@ -901,6 +906,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     await writeFile(join(workspaceRoot, "shot.png"), png);
     await writeFile(join(workspaceRoot, "notes.pdf"), "%PDF-1.4");
     await writeFile(join(workspaceRoot, "secret.txt"), "private");
+    await writeFile(join(workspaceRoot, "config.json"), "{\"enabled\":true}");
 
     // 绝对路径：/api/files?path=/abs/demo.png
     const absolute = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent(absolutePath)}` });
@@ -937,6 +943,10 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(previewText.statusCode).toBe(200);
     expect(previewText.headers["cache-control"]).toBe("private, no-store");
     expect(previewText.json()).toEqual({ file: { path: join(workspaceRoot, "secret.txt"), name: "secret.txt", content: "private", size: 7, truncated: false } });
+
+    const jsonText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("config.json")}&cwd=${encodeURIComponent(workspaceRoot)}&text=1` });
+    expect(jsonText.statusCode).toBe(200);
+    expect(jsonText.json()).toMatchObject({ file: { name: "config.json", content: "{\"enabled\":true}" } });
 
     await writeFile(join(workspaceRoot, "invalid.txt"), Buffer.from([0xff, 0xfe, 0xfd]));
     const invalidText = await activeApp().inject({ method: "GET", url: `/api/files?path=${encodeURIComponent("invalid.txt")}&cwd=${encodeURIComponent(workspaceRoot)}&text=1` });

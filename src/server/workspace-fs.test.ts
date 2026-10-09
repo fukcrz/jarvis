@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { fileMatchScore, parseByteRange, resolveFileRequestPath, searchWorkspaceFiles } from "./workspace-fs.js";
+import { fileMatchScore, parseByteRange, readTextFile, resolveFileRequestPath, searchWorkspaceFiles } from "./workspace-fs.js";
 
 describe("parseByteRange", () => {
   it("parses closed, open, and suffix ranges", () => {
@@ -17,6 +17,26 @@ describe("parseByteRange", () => {
     expect(parseByteRange(undefined, 8)).toBeUndefined();
     expect(parseByteRange("bytes=-0", 8)).toBe("unsatisfiable");
     expect(parseByteRange("bytes=0-3", 0)).toBe("unsatisfiable");
+  });
+});
+
+describe("readTextFile", () => {
+  it("accepts application text MIME types with charset parameters", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "jarvis-text-file-"));
+    const files = [
+      ["config.json", "{\"enabled\":true}"],
+      ["events.jsonl", "{\"id\":1}\n"],
+      ["document.xml", "<root />"],
+    ] as const;
+    try {
+      for (const [name, content] of files) {
+        const path = join(directory, name);
+        await writeFile(path, content);
+        await expect(readTextFile(path, await stat(path))).resolves.toMatchObject({ name, content, truncated: false });
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

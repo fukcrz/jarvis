@@ -244,7 +244,8 @@ export async function readTextFile(filePath: string, metadata: { size: number },
   if (metadata.size > MAX_TEXT_FILE_BYTES) throw new AppError("FILE_TOO_LARGE", "File is too large to preview", 413);
   const ext = extname(filePath).toLowerCase();
   const mime = FILE_MIME_TYPES[ext];
-  const textLike = mime === undefined || mime.startsWith("text/") || mime === "application/json" || mime === "application/x-ndjson" || mime === "application/xml";
+  const mediaType = mime?.split(";", 1)[0]?.trim();
+  const textLike = mediaType === undefined || mediaType.startsWith("text/") || mediaType === "application/json" || mediaType === "application/x-ndjson" || mediaType === "application/xml";
   if (!textLike) throw new AppError("FILE_NOT_TEXT", "Only text files can be previewed", 415);
 
   const decoder = new TextDecoder("utf-8", { fatal: true });
