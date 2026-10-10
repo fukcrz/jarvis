@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -65,6 +66,26 @@ impl DiagnosticTail {
 pub struct Sidecar {
   child: Child,
   diagnostics: Arc<Mutex<DiagnosticTail>>,
+}
+
+#[derive(Default)]
+pub struct SidecarSlot {
+  pub child: Option<Sidecar>,
+  pub closing: bool,
+}
+
+pub type SharedSidecar = Arc<Mutex<SidecarSlot>>;
+
+/// Windows updater calls cleanup_before_exit, then exits without RunEvent::Exit.
+/// Keep this guard only in the app resource table so that cleanup also stops Node.
+pub struct SidecarCleanup(pub SharedSidecar);
+
+impl tauri::Resource for SidecarCleanup {}
+
+impl Drop for SidecarCleanup {
+  fn drop(&mut self) {
+    stop_managed_sidecar(&self.0, true);
+  }
 }
 
 impl Sidecar {
@@ -154,6 +175,26 @@ pub fn spawn_sidecar(node: &Path, root: &Path, port: u16, on_event: impl Fn(Desk
   Ok(Sidecar { child, diagnostics })
 }
 
+/// Serialize spawn with exit cleanup so no child can appear after the guard runs.
+pub fn spawn_managed_sidecar(slot: &SharedSidecar, node: &Path, root: &Path, port: u16, on_event: impl Fn(DesktopEvent) + Send + 'static) -> Result<bool, String> {
+  let mut slot = slot.lock().unwrap_or_else(|error| error.into_inner());
+  if slot.closing {
+    return Ok(false);
+  }
+  slot.child = Some(spawn_sidecar(node, root, port, on_event)?);
+  Ok(true)
+}
+
+pub fn stop_managed_sidecar(slot: &SharedSidecar, closing: bool) {
+  let mut slot = slot.lock().unwrap_or_else(|error| error.into_inner());
+  slot.closing |= closing;
+  // Hold the lock through termination: updater exit must wait for an in-flight
+  // restart stop too. stop_sidecar never joins the event-reader threads.
+  if let Some(mut child) = slot.child.take() {
+    stop_sidecar(&mut child);
+  }
+}
+
 pub fn stop_sidecar(sidecar: &mut Sidecar) {
   let pid = sidecar.child.id();
   #[cfg(windows)]
@@ -161,13 +202,26 @@ pub fn stop_sidecar(sidecar: &mut Sidecar) {
     let mut killer = Command::new("taskkill");
     killer.args(["/PID", &pid.to_string(), "/T", "/F"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     killer.creation_flags(CREATE_NO_WINDOW);
-    let _ = killer.status();
+    if !killer.status().is_ok_and(|status| status.success()) {
+      let _ = sidecar.child.kill();
+    }
   }
   #[cfg(not(windows))]
   {
     let _ = sidecar.child.kill();
   }
-  let _ = sidecar.child.wait();
+  let deadline = Instant::now() + Duration::from_secs(5);
+  loop {
+    match sidecar.child.try_wait() {
+      Ok(Some(_)) | Err(_) => return,
+      Ok(None) => {}
+    }
+    if Instant::now() >= deadline {
+      eprintln!("Jarvis service {pid} did not exit after termination");
+      return;
+    }
+    thread::sleep(Duration::from_millis(20));
+  }
 }
 
 fn truncate_line(line: &str) -> String {
@@ -179,8 +233,115 @@ fn truncate_line(line: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::{parse_desktop_line, strip_windows_verbatim, DiagnosticTail};
-  use std::path::Path;
+  use super::{parse_desktop_line, spawn_managed_sidecar, stop_managed_sidecar, stop_sidecar, strip_windows_verbatim, DiagnosticTail, SharedSidecar, SidecarCleanup};
+  use std::fs;
+  use std::path::{Path, PathBuf};
+  use std::sync::{mpsc, Arc};
+  use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+  struct ServiceFixture {
+    root: PathBuf,
+    slot: SharedSidecar,
+    resources: Option<tauri::ResourceTable>,
+    port: u16,
+  }
+
+  impl ServiceFixture {
+    fn start() -> Self {
+      let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+      let root = std::env::temp_dir().join(format!("jarvis-sidecar-test-{}-{unique}", std::process::id()));
+      let mut fixture = Self { root, slot: Arc::default(), resources: Some(tauri::ResourceTable::default()), port: 0 };
+      fixture.resources.as_mut().unwrap().add(SidecarCleanup(Arc::clone(&fixture.slot)));
+      let entry = super::server_entry(&fixture.root);
+      fs::create_dir_all(entry.parent().unwrap()).unwrap();
+      fs::write(&entry, r#"
+const http = require('node:http');
+const server = http.createServer((_, response) => response.end('fixture'));
+server.listen(0, '127.0.0.1', () => {
+  process.stdout.write('JARVIS_DESKTOP:' + JSON.stringify({type: 'ready', port: server.address().port}) + '\n');
+});
+"#).unwrap();
+      let (sender, receiver) = mpsc::channel();
+      assert!(spawn_managed_sidecar(&fixture.slot, &which::which("node").expect("Node required for sidecar lifecycle tests"), &fixture.root, 0, move |event| {
+        if let super::DesktopEvent::Ready { port } = event {
+          let _ = sender.send(port);
+        }
+      }).unwrap());
+      fixture.port = receiver.recv_timeout(Duration::from_secs(10)).expect("isolated sidecar ready event");
+      assert_ne!(fixture.port, 9528);
+      fixture
+    }
+
+    fn reachable(&self) -> bool {
+      ureq::get(&format!("http://127.0.0.1:{}/", self.port)).timeout(Duration::from_secs(1)).call().is_ok()
+    }
+  }
+
+  impl Drop for ServiceFixture {
+    fn drop(&mut self) {
+      self.resources.take();
+      let _ = fs::remove_dir_all(&self.root);
+    }
+  }
+
+  #[test]
+  fn updater_resource_cleanup_stops_the_running_service_and_prevents_respawn() {
+    let mut fixture = ServiceFixture::start();
+    assert!(fixture.reachable(), "sidecar must stay alive after spawn returns");
+    // Like cleanup_before_exit's ResourceTable::clear, dropping the table drops
+    // the resource without calling Resource::close or RunEvent::Exit.
+    fixture.resources.take();
+    assert!(!fixture.reachable(), "updater cleanup must release the isolated port");
+    assert!(fixture.slot.lock().unwrap().child.is_none());
+    // Invalid paths prove cleanup is checked before attempting to launch Node.
+    assert!(!spawn_managed_sidecar(&fixture.slot, Path::new("missing-node"), &fixture.root, 0, |_| {}).unwrap());
+  }
+
+  #[test]
+  fn updater_cleanup_is_idempotent_after_normal_service_stop() {
+    let mut fixture = ServiceFixture::start();
+    stop_managed_sidecar(&fixture.slot, false);
+    assert!(!fixture.reachable());
+    fixture.resources.take();
+    assert!(fixture.slot.lock().unwrap().closing);
+    drop(SidecarCleanup(Arc::clone(&fixture.slot)));
+    assert!(fixture.slot.lock().unwrap().child.is_none());
+  }
+
+  #[test]
+  fn updater_cleanup_waits_for_an_inflight_stop() {
+    let mut fixture = ServiceFixture::start();
+    let slot = Arc::clone(&fixture.slot);
+    let (taken_tx, taken_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let stopping = std::thread::spawn(move || {
+      let mut slot = slot.lock().unwrap();
+      let mut child = slot.child.take().unwrap();
+      taken_tx.send(()).unwrap();
+      // Pause after taking the process, the former gap before termination.
+      let released = release_rx.recv_timeout(Duration::from_secs(5));
+      stop_sidecar(&mut child);
+      drop(slot);
+      released.unwrap();
+    });
+    taken_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let resources = fixture.resources.take().unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (cleaned_tx, cleaned_rx) = mpsc::channel();
+    let cleanup = std::thread::spawn(move || {
+      started_tx.send(()).unwrap();
+      drop(resources);
+      cleaned_tx.send(()).unwrap();
+    });
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let waiting = cleaned_rx.recv_timeout(Duration::from_millis(100));
+    release_tx.send(()).unwrap();
+    stopping.join().unwrap();
+    cleanup.join().unwrap();
+    assert!(matches!(waiting, Err(mpsc::RecvTimeoutError::Timeout)), "cleanup must wait for the active stop");
+    assert!(!fixture.reachable());
+    assert!(fixture.slot.lock().unwrap().closing);
+  }
 
   #[test]
   fn parses_ready_event() {

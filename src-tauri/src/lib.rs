@@ -6,7 +6,7 @@ use sidecar::DesktopEvent;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
@@ -20,7 +20,7 @@ const STARTUP_SLOW_AFTER_SECS: u64 = 30;
 const STARTUP_TIMEOUT_SECS: u64 = 60;
 
 struct AppState {
-  sidecar: Mutex<Option<sidecar::Sidecar>>,
+  sidecar: sidecar::SharedSidecar,
   port: Mutex<Option<u16>>,
   notifications_enabled: AtomicBool,
   last_session: Mutex<Option<(String, String)>>,
@@ -48,7 +48,7 @@ pub fn run() {
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
     .manage(AppState {
-      sidecar: Mutex::new(None),
+      sidecar: Arc::default(),
       port: Mutex::new(None),
       notifications_enabled: AtomicBool::new(notifications_enabled),
       last_session: Mutex::new(None),
@@ -57,6 +57,7 @@ pub fn run() {
     })
     .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, take_update_check])
     .setup(|app| {
+      app.resources_table().add(sidecar::SidecarCleanup(Arc::clone(&app.state::<AppState>().sidecar)));
       let handle = app.handle().clone();
       build_tray(&handle)?;
       if let Some(window) = handle.get_webview_window("main") {
@@ -164,12 +165,9 @@ fn start_backend(app: AppHandle) {
   };
   set_splash(&app, "正在启动服务");
   let app_for_events = app.clone();
-  match sidecar::spawn_sidecar(&node, &root, port, move |event| handle_event(&app_for_events, event)) {
-    Ok(child) => {
-      if let Ok(mut slot) = app.state::<AppState>().sidecar.lock() {
-        *slot = Some(child);
-      }
-    }
+  match sidecar::spawn_managed_sidecar(&app.state::<AppState>().sidecar, &node, &root, port, move |event| handle_event(&app_for_events, event)) {
+    Ok(true) => {}
+    Ok(false) => return,
     Err(error) => {
       set_splash(&app, "启动失败");
       let _ = app.dialog_message(&error);
@@ -265,11 +263,7 @@ fn restart_sidecar(app: &AppHandle) {
 }
 
 fn stop_current_sidecar(app: &AppHandle) {
-  if let Ok(mut slot) = app.state::<AppState>().sidecar.lock() {
-    if let Some(mut sidecar) = slot.take() {
-      sidecar::stop_sidecar(&mut sidecar);
-    }
-  }
+  sidecar::stop_managed_sidecar(&app.state::<AppState>().sidecar, false);
 }
 
 fn wait_for_backend(app: &AppHandle, port: u16, timeout: Duration) -> Result<(), String> {
@@ -310,7 +304,7 @@ fn backend_is_ready(port: u16) -> bool {
 fn sidecar_exit_error(app: &AppHandle) -> Option<String> {
   let state = app.state::<AppState>();
   let Ok(mut slot) = state.sidecar.lock() else { return None };
-  let sidecar = slot.as_mut()?;
+  let sidecar = slot.child.as_mut()?;
   let status = match sidecar.try_wait() {
     Ok(Some(status)) => status,
     Ok(None) => return None,
@@ -318,12 +312,12 @@ fn sidecar_exit_error(app: &AppHandle) -> Option<String> {
   };
   thread::sleep(Duration::from_millis(100));
   let diagnostics = sidecar.diagnostics();
-  *slot = None;
+  slot.child = None;
   Some(startup_failure(&format!("Jarvis 服务启动后意外退出（{status}）"), &diagnostics))
 }
 
 fn sidecar_diagnostics(app: &AppHandle) -> String {
-  app.state::<AppState>().sidecar.lock().ok().and_then(|slot| slot.as_ref().map(|sidecar| sidecar.diagnostics())).unwrap_or_default()
+  app.state::<AppState>().sidecar.lock().ok().and_then(|slot| slot.child.as_ref().map(|sidecar| sidecar.diagnostics())).unwrap_or_default()
 }
 
 fn startup_failure(summary: &str, diagnostics: &str) -> String {
