@@ -426,6 +426,7 @@ describe("pi-subagent snapshots", () => {
     expect(running.subagent).toEqual({
       kind: "pi-subagent",
       results: [{
+        callIndex: 0,
         agent: "scout",
         prompt: `${longPrompt.replace(/\s+/g, " ").trim().slice(0, 159)}…`,
         state: "running",

@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { SubagentView, ToolTimelineItem } from "../../shared/protocol";
-import { collapsedToolActivityItems, SubagentCallBody, SubagentCallList, subagentStatusLine, subagentTaskLine, subagentToolLine, summarizeToolActivity, ToolActivity } from "./tool-activity";
+import { collapsedToolActivityItems, SubagentCallBody, SubagentCallList, subagentRowLabel, subagentStatusLine, subagentTaskLine, subagentToolLine, summarizeToolActivity, ToolActivity } from "./tool-activity";
 
 function subagentTool(state: ToolTimelineItem["state"], view: SubagentView): ToolTimelineItem {
   return {
@@ -17,7 +17,7 @@ function subagentTool(state: ToolTimelineItem["state"], view: SubagentView): Too
 }
 
 describe("ToolActivity summaries", () => {
-  it("keeps a live preview only until the group is manually collapsed", () => {
+  it("limits an untouched closed process to current work and failures", () => {
     const completed: ToolTimelineItem = { kind: "tool", id: "done", createdAt: "", name: "read", title: "Read file", state: "completed" };
     const queued: ToolTimelineItem = { ...completed, id: "queued", state: "queued" };
     const running: ToolTimelineItem = { ...completed, id: "running", state: "running" };
@@ -33,17 +33,20 @@ describe("ToolActivity summaries", () => {
     const base: ToolTimelineItem = { kind: "tool", id: "a", createdAt: "", name: "read", title: "Read file", state: "completed", target: "a.ts", output: "retained output" };
     const items = [base, { ...base, id: "b", target: "b.ts" }, { ...base, id: "c", state: "running" as const, target: "current.ts" }, { ...base, id: "d", name: "bash", title: "Run command", state: "failed" as const, inputPreview: "npm test", error: "failed output" }];
     expect(summarizeToolActivity(items)).toBe("读取 3 · 命令 1");
-    const compact = renderToStaticMarkup(createElement(ToolActivity, { items, active: true }));
+    const compact = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, showAll: false }));
     expect(compact).toContain("读取 3 · 命令 1");
-    expect(compact).toContain("current.ts");
+    expect(compact).toContain('<div><article class="tool-item tool-list-item running"');
     expect(compact).toContain("npm test");
-    expect(compact).not.toContain("a.ts");
-    const processCollapsed = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, showActivePreview: false }));
-    expect(processCollapsed).not.toContain("current.ts");
+    expect(compact).toContain('<div hidden=""><article class="tool-item tool-list-item completed"><button class="tool-summary" type="button" aria-expanded="false"><span class="tool-title">读取了 a.ts</span></button></article></div>');
+    const processCollapsed = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, showAll: false, showActivePreview: false }));
+    expect(processCollapsed).toContain('<div hidden=""><article class="tool-item tool-list-item running"');
     expect(processCollapsed).toContain("npm test");
-    const expanded = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, expanded: true }));
+    const expanded = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, showAll: true }));
     expect(expanded).toContain("a.ts");
     expect(expanded).toContain("b.ts");
+    expect(expanded).toContain('class="activity-group-label"');
+    expect(expanded).not.toContain("activity-narration");
+    expect(expanded).not.toContain('<div class="activity-group-label" aria-expanded');
   });
 });
 
@@ -83,6 +86,22 @@ describe("ToolActivity subagent rows", () => {
     expect(markup).toContain("子代理 1/3 · worker、reviewer");
     expect(markup).not.toContain("done");
     expect(markup).not.toContain("Map the auth flow");
+  });
+
+  it("keeps a partial subagent failure visible while another child runs", () => {
+    const item = subagentTool("running", {
+      kind: "pi-subagent",
+      results: [
+        { agent: "scout", prompt: "Find the auth flow", state: "failed", error: "boom" },
+        { agent: "worker", prompt: "Fix the return path", state: "running" },
+      ],
+      total: 2,
+      completed: 0,
+      running: 1,
+      failed: 1,
+    });
+    expect(collapsedToolActivityItems([item], true, false)).toEqual([item]);
+    expect(subagentRowLabel(item.subagent!, true)).toBe("1 失败 · worker · 执行中");
   });
 
   it("puts progress on the group title and the running agent on the row", () => {

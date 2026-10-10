@@ -9,7 +9,7 @@ const MAX_SUBAGENT_TOOL_SUMMARY_CHARS = 80;
 
 export function subagentViewFromArgs(name: string, args: unknown): SubagentView | undefined {
   if (name !== "subagent" || !isRecord(args) || !Array.isArray(args["calls"])) return undefined;
-  const results = args["calls"].flatMap(subagentCallFromArgs);
+  const results = args["calls"].flatMap((value, index) => subagentCallFromArgs(value, index));
   return results.length === 0 ? undefined : viewFromCalls(results);
 }
 
@@ -23,7 +23,7 @@ export function attachSubagentView(tool: ToolTimelineItem, result?: unknown): To
 function subagentViewFromResult(result: unknown): SubagentView | undefined {
   const details = detailsRecord(result);
   if (details === undefined) return undefined;
-  const results = Array.isArray(details["results"]) ? details["results"].flatMap(subagentCallFromResult) : [];
+  const results = Array.isArray(details["results"]) ? details["results"].flatMap((value, index) => subagentCallFromResult(value, index)) : [];
   return viewFromCalls(results);
 }
 
@@ -62,13 +62,14 @@ function viewFromCalls(results: SubagentCallView[]): SubagentView {
   };
 }
 
-function subagentCallFromArgs(value: unknown): SubagentCallView[] {
+function subagentCallFromArgs(value: unknown, callIndex: number): SubagentCallView[] {
   if (!isRecord(value)) return [];
   const agent = stringValue(value["agent"]);
   if (agent === "") return [];
   const handle = sessionHandleFrom(value["session"]);
   const model = stringValue(value["model"]);
   return [{
+    callIndex,
     agent,
     prompt: truncateOneLine(stringValue(value["prompt"]), MAX_SUBAGENT_PROMPT_CHARS),
     state: "running",
@@ -77,10 +78,12 @@ function subagentCallFromArgs(value: unknown): SubagentCallView[] {
   }];
 }
 
-function subagentCallFromResult(value: unknown): SubagentCallView[] {
+function subagentCallFromResult(value: unknown, fallbackCallIndex: number): SubagentCallView[] {
   if (!isRecord(value)) return [];
   const agent = stringValue(value["agent"]);
   if (agent === "") return [];
+  const rawCallIndex = numberValue(value["callIndex"]);
+  const callIndex = rawCallIndex !== undefined && Number.isInteger(rawCallIndex) && rawCallIndex >= 0 ? rawCallIndex : fallbackCallIndex;
   const state = subagentCallState(value);
   const prompt = truncateOneLine(stringValue(value["prompt"]), MAX_SUBAGENT_PROMPT_CHARS);
   const output = truncateText(lastAssistantText(value["messages"]), MAX_SUBAGENT_OUTPUT_CHARS);
@@ -91,6 +94,7 @@ function subagentCallFromResult(value: unknown): SubagentCallView[] {
   const turns = numberValue(isRecord(value["usage"]) ? value["usage"]["turns"] : undefined);
   const toolCalls = recentToolCalls(value["messages"]);
   return [{
+    callIndex,
     agent,
     prompt,
     state,

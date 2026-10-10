@@ -584,7 +584,7 @@ function recordTool(value: unknown): ToolTimelineItem | undefined {
 
 function recordSubagentView(value: unknown): { subagent: SubagentView } | Record<string, never> {
   if (!isRecord(value) || value["kind"] !== "pi-subagent" || !Array.isArray(value["results"])) return {};
-  const results = value["results"].flatMap(recordSubagentCall);
+  const results = value["results"].flatMap((entry, index) => recordSubagentCall(entry, index));
   if (results.length === 0) return {};
   return {
     subagent: {
@@ -598,7 +598,7 @@ function recordSubagentView(value: unknown): { subagent: SubagentView } | Record
   };
 }
 
-function recordSubagentCall(value: unknown): SubagentCallView[] {
+function recordSubagentCall(value: unknown, fallbackCallIndex?: number): SubagentCallView[] {
   if (!isRecord(value) || typeof value["agent"] !== "string" || value["agent"] === "" || typeof value["prompt"] !== "string") return [];
   const state = value["state"];
   if (state !== "running" && state !== "completed" && state !== "failed" && state !== "cancelled") return [];
@@ -609,7 +609,10 @@ function recordSubagentCall(value: unknown): SubagentCallView[] {
       return [{ name: entry["name"], summary: entry["summary"] }];
     }).slice(0, 4)
     : [];
+  const rawCallIndex = value["callIndex"];
+  const callIndex = typeof rawCallIndex === "number" && Number.isInteger(rawCallIndex) && rawCallIndex >= 0 ? rawCallIndex : fallbackCallIndex;
   return [{
+    ...(callIndex === undefined ? {} : { callIndex }),
     agent: value["agent"],
     prompt: value["prompt"],
     state,

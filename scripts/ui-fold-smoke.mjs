@@ -47,7 +47,7 @@ async function inspectLayout(page) {
   return page.evaluate(() => ({
     width: window.innerWidth,
     documentWidth: document.documentElement.scrollWidth,
-    rows: [...document.querySelectorAll(".thinking-summary, .process-commentary-preview, .activity-narration")].map((node) => {
+    rows: [...document.querySelectorAll(".thinking-summary, .process-commentary-preview, .activity-group-label")].map((node) => {
       const box = node.getBoundingClientRect();
       const style = getComputedStyle(node);
       return { text: node.textContent, left: box.left, right: box.right, height: box.height, display: style.display, whiteSpace: style.whiteSpace, overflow: style.overflow, textAlign: style.textAlign };
@@ -208,11 +208,11 @@ async function exercise(baseUrl, workspace, viewport, label) {
     fixture.toolStart(calls[1]);
     fixture.toolEnd(calls[1], "transcript source retained");
     fixture.toolStart(calls[2]);
-    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false" && document.querySelectorAll(".activity-group .tool-item").length === 0);
+    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false" && [...document.querySelectorAll(".activity-group .tool-item")].every((node) => node.getClientRects().length === 0));
     assert.equal(await page.locator(".turn-process-summary").first().getAttribute("aria-expanded"), "false");
-    assert.equal(await page.locator(".activity-narration").textContent(), "读取 2 · 命令 1");
-    assert.equal(await page.locator(".tool-item.completed").count(), 0, `${label}: completed operations should be in the summary`);
-    assert.equal(await page.locator(".message-row.assistant").count(), 0, `${label}: explicit commentary escaped the process`);
+    assert.equal(await page.locator(".activity-group-label-text").textContent(), "读取 2 · 命令 1");
+    assert.equal(await page.locator(".tool-item.completed:visible").count(), 0, `${label}: completed operations should be in the summary`);
+    assert.equal(await page.locator(".message-row.assistant:visible").count(), 0, `${label}: explicit commentary escaped the process`);
     await snapshot(page, `${label}-running`);
     await page.screenshot({ path: join(shotDir, `${label}-running.png`) });
     const runningLayout = await inspectLayout(page);
@@ -222,21 +222,21 @@ async function exercise(baseUrl, workspace, viewport, label) {
     await page.locator(".turn-process-summary").first().click();
     await page.locator(".command-item.running .command-summary").waitFor();
     await page.locator(".command-item.running .command-summary").click();
-    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "true" && document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true");
-    assert.equal(await page.locator(".tool-item.completed").count(), 2, `${label}: opening a running row should reveal completed siblings`);
+    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "true" && document.querySelector(".command-summary")?.getAttribute("aria-expanded") === "true");
+    assert.equal(await page.locator(".tool-item.completed:visible").count(), 2, `${label}: opening the process should reveal completed siblings`);
 
-    // Collapsing the owning process also folds the activity group and its row details.
+    // Collapsing hides details but reopening restores each manually opened row.
     await page.locator(".turn-process-summary").first().click();
-    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false" && document.querySelectorAll(".turn-process .tool-item").length === 0);
-    assert.equal(await page.locator(".tool-item.completed").count(), 0, `${label}: collapsing the process should hide completed siblings`);
-    assert.equal(await page.locator(".tool-details").count(), 0, `${label}: collapsing the process should hide row details`);
+    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false" && [...document.querySelectorAll(".turn-process .tool-item")].every((node) => node.getClientRects().length === 0));
+    assert.equal(await page.locator(".tool-item.completed:visible").count(), 0, `${label}: collapsing the process should hide completed siblings`);
+    assert.equal(await page.locator(".tool-details:visible").count(), 0, `${label}: collapsing the process should hide row details`);
 
-    // Reopening the process restores a consistent expanded activity group.
     await page.locator(".turn-process-summary").first().click();
-    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true");
-    assert.equal(await page.locator(".tool-item.completed").count(), 2, `${label}: reopening the process should reveal completed siblings`);
+    await page.getByText("$ npm test", { exact: true }).waitFor();
+    assert.equal(await page.locator(".command-item.running .command-summary").getAttribute("aria-expanded"), "true", `${label}: reopening lost the open command`);
+    assert.equal(await page.locator(".tool-item.completed:visible").count(), 2, `${label}: reopening the process should reveal completed siblings`);
 
-    // Manual expansion of a group/row expands the owning process and survives updates.
+    // Manual expansion of a row survives updates.
     await page.locator(".tool-summary").filter({ hasText: "projection.ts" }).click();
     await page.getByText("projection source retained", { exact: true }).waitFor();
     fixture.toolEnd(calls[2], "612 passed");
@@ -247,19 +247,19 @@ async function exercise(baseUrl, workspace, viewport, label) {
     const second = fixture.assistant(fixture.at(20), [{ type: "thinking", thinking: laterThought }, fixture.text("Reviewing\n正在验证刷新与重连。", "commentary")]);
     fixture.update(second, { type: "thinking_start", contentIndex: 0 });
     fixture.update(second, { type: "thinking_delta", contentIndex: 0, delta: laterThought });
-    await page.locator(".thinking-item.running").waitFor();
+    await page.locator(".thinking-item.running:visible").last().waitFor();
     await page.reload({ waitUntil: "domcontentloaded" });
     await waitForSocket(page, session.id);
-    await page.locator(".thinking-item.running").waitFor();
+    await page.locator(".thinking-item.running:visible").last().waitFor();
     assert.equal(await page.locator(".turn-process").count(), 1, `${label}: refreshing duplicated the process`);
-    assert.equal(await page.locator(".thinking-preview").textContent(), laterThought.split("\n").at(-1));
+    assert.equal(await page.locator(".thinking-item.running:visible .thinking-preview").last().textContent(), laterThought.split("\n").at(-1));
     const refreshLayout = await inspectLayout(page);
     assert.ok(refreshLayout.documentWidth <= viewport.width + 1, `${label}: thought preview overflows`);
-    const previewStyle = await page.locator(".thinking-preview").evaluate((node) => ({ whiteSpace: getComputedStyle(node).whiteSpace, overflow: getComputedStyle(node).overflow }));
+    const previewStyle = await page.locator(".thinking-item.running:visible .thinking-preview").last().evaluate((node) => ({ whiteSpace: getComputedStyle(node).whiteSpace, overflow: getComputedStyle(node).overflow }));
     assert.deepEqual(previewStyle, { whiteSpace: "nowrap", overflow: "hidden" });
     await snapshot(page, `${label}-refresh-running`);
-    await page.locator(".thinking-summary").click();
-    await page.locator(".thinking-details").waitFor();
+    await page.locator(".thinking-item.running:visible .thinking-summary").last().click();
+    await page.locator(".thinking-item.running:visible .thinking-details").last().waitFor();
 
     const requestCount = runtimeRequests;
     await page.evaluate((id) => window.__jarvisSockets.find((socket) => socket.url.includes(`/sessions/${id}/events`) && socket.readyState === 1)?.close(), session.id);
@@ -285,12 +285,12 @@ async function exercise(baseUrl, workspace, viewport, label) {
     await snapshot(page, `${label}-expanded`);
     await page.screenshot({ path: join(shotDir, `${label}-expanded.png`) });
     await page.locator(".turn-process-summary").first().click();
-    assert.equal(await page.locator(".turn-process-current .tool-item").count(), 0);
+    assert.equal(await page.locator(".turn-process-current .tool-item:visible").count(), 0);
     await page.screenshot({ path: join(shotDir, `${label}-settled.png`) });
     await page.reload({ waitUntil: "domcontentloaded" });
     await waitForSocket(page, session.id);
     await page.locator(".message-row.assistant").last().waitFor();
-    assert.equal(await page.locator(".message-row.assistant").count(), 1, `${label}: history duplicated commentary or final text`);
+    assert.equal(await page.locator(".message-row.assistant:visible").count(), 1, `${label}: history duplicated commentary or final text`);
     await page.locator(".turn-process-summary").first().click();
     const historyOrder = await page.locator(".turn-process-body .thinking-item, .turn-process-body .message-row, .turn-process-body .tool-item").evaluateAll((nodes) => nodes.map((node) => node.className));
     assert.deepEqual(historyOrder, expandedOrder, `${label}: history reordered the source blocks`);
@@ -402,100 +402,76 @@ async function exerciseCommandFolds(baseUrl, workspace, viewport, label, shell) 
     fixture.user(`检查 ${shell} 命令折叠。`, fixture.at(0));
     fixture.end(fixture.assistant(fixture.at(1), [fixture.text("准备执行命令。\n当前进度。", "commentary")]));
     await page.locator(".process-commentary-preview").waitFor();
-    assert.equal(await page.locator(".turn-process-summary").getAttribute("aria-expanded"), "false", `${scenario}: untouched process opened`);
-    assert.equal(await page.locator(".process-commentary-preview").textContent(), "当前进度。");
-    assert.equal(await page.locator(".turn-process-body").count(), 0, `${scenario}: untouched process showed details`);
-
-    const commands = [1, 2, 3, 4].map((number) => ({
+    const commands = [1, 2, 3].map((number) => ({
       type: "toolCall", id: `${scenario}-command-${number}`, name: shell, arguments: { command: `fold-${shell}-${number}` },
     }));
-    fixture.end(fixture.assistant(fixture.at(2), commands.slice(0, 3), { stopReason: "toolUse" }));
+    fixture.end(fixture.assistant(fixture.at(2), commands, { stopReason: "toolUse" }));
     await waitForToolEvent(page, commands[2], "queued");
-    const group = page.locator(".activity-group").first();
-    await group.locator(".activity-narration").waitFor();
-    assert.equal(await page.locator(".turn-process-summary").getAttribute("aria-expanded"), "false", `${scenario}: queued tools opened process`);
-    assert.equal(await group.locator(".activity-narration").getAttribute("aria-expanded"), "false", `${scenario}: group should start collapsed`);
-    assert.equal(await group.locator(".activity-narration-text").textContent(), "命令 3");
-    assert.equal(await group.locator(".tool-item.queued").count(), 3, `${scenario}: untouched group hid queued previews`);
-    assert.equal(await group.locator(".tool-item.completed").count(), 0);
-    assert.equal(await group.locator(".tool-details").count(), 0);
+
+    const process = page.locator(".turn-process").first();
+    const group = process.locator(".activity-group");
+    await group.locator(".activity-group-label").waitFor();
+    assert.equal(await process.locator(".turn-process-summary").getAttribute("aria-expanded"), "false", `${scenario}: queued tools opened process`);
+    assert.equal(await group.locator(".activity-group-label").getAttribute("aria-expanded"), null, `${scenario}: tool group remained interactive`);
+    assert.equal(await group.locator(".activity-group-label-text").textContent(), "命令 3");
+    assert.equal(await group.locator(".tool-item.queued:visible").count(), 3, `${scenario}: default preview hid queued tools`);
     await snapshot(page, `${scenario}-default-preview`);
     await page.screenshot({ path: join(shotDir, `${scenario}-default-preview.png`) });
 
     fixture.toolStart(commands[0]);
     fixture.toolUpdate(commands[0], "first partial");
     await waitForToolEvent(page, commands[0], "running", "first partial");
-    assert.equal(await group.locator(".tool-item.running").count(), 1, `${scenario}: untouched group hid its running preview`);
+    assert.equal(await group.locator(".tool-item.running:visible").count(), 1, `${scenario}: default preview hid current work`);
     fixture.toolEnd(commands[0], "first complete");
     await waitForToolEvent(page, commands[0], "completed", "first complete");
-    assert.equal(await group.locator(".tool-item.completed").count(), 0, `${scenario}: completed work remained in the default preview`);
-    assert.equal(await group.locator(".tool-item.queued").count(), 2, `${scenario}: remaining queued work disappeared from the default preview`);
+    assert.equal(await group.locator(".tool-item.completed:visible").count(), 0, `${scenario}: default preview retained completed work`);
+    assert.equal(await group.locator(".tool-item.queued:visible").count(), 2, `${scenario}: default preview lost queued work`);
 
-    await page.locator(".turn-process-summary").click();
-    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true");
-    assert.equal(await group.locator(".tool-item").count(), 3, `${scenario}: expanded group omitted queued/completed rows`);
-    await group.locator(".tool-item").nth(0).locator(".tool-summary").click();
-    await group.getByText("first complete", { exact: true }).waitFor();
-    await group.locator(".activity-narration").click();
-    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "false" && document.querySelectorAll(".activity-group .tool-item").length === 0);
-    assert.equal(await group.locator(".tool-item.completed, .tool-item.queued, .tool-item.running").count(), 0, `${scenario}: folded group exposed normal rows`);
-    assert.equal(await group.locator(".tool-details").count(), 0, `${scenario}: folded group retained details`);
-    await snapshot(page, `${scenario}-group-collapsed`);
-    await page.screenshot({ path: join(shotDir, `${scenario}-group-collapsed.png`) });
+    // A row opens the only parent fold and its own detail in one action.
+    await group.locator(".tool-item.queued:visible").first().locator(".tool-summary").click();
+    await process.locator(".turn-process-summary").waitFor();
+    assert.equal(await process.locator(".turn-process-summary").getAttribute("aria-expanded"), "true", `${scenario}: tool row did not open process`);
+    assert.equal(await group.locator(".tool-item:visible").count(), 3, `${scenario}: process expansion omitted tools`);
+    assert.equal(await group.locator(".tool-summary[aria-expanded=\"true\"]").count(), 1, `${scenario}: clicked tool detail did not open`);
+
+    // Manual parent folding hides normal work and its detail without resetting it.
+    await process.locator(".turn-process-summary").click();
+    await page.waitForFunction(() => document.querySelector(".turn-process")?.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false" && [...document.querySelectorAll(".turn-process .tool-item")].every((node) => node.getClientRects().length === 0));
+    assert.equal(await group.locator(".tool-details:visible").count(), 0, `${scenario}: parent fold left a detail visible`);
 
     fixture.toolStart(commands[1]);
     fixture.toolUpdate(commands[1], "second partial");
     await waitForToolEvent(page, commands[1], "running", "second partial");
-    assert.equal(await group.locator(".tool-item").count(), 0, `${scenario}: running update reopened folded group`);
+    assert.equal(await group.locator(".tool-item.running:visible").count(), 0, `${scenario}: update reopened a manually closed process`);
     fixture.toolEnd(commands[1], "second failed", true);
     await waitForToolEvent(page, commands[1], "failed");
-    await group.locator(".tool-item.failed").waitFor();
+    await group.locator(".tool-item.failed:visible").waitFor();
+    assert.equal(await group.locator(".tool-item:visible").count(), 1, `${scenario}: closed process showed normal rows with the failure`);
+
+    await group.locator(".tool-item.failed:visible .tool-summary").click();
+    await process.locator(".turn-process-summary").waitFor();
+    assert.equal(await process.locator(".turn-process-summary").getAttribute("aria-expanded"), "true", `${scenario}: failed row did not open process`);
+    await group.getByText("second failed", { exact: true }).waitFor();
+    await process.locator(".turn-process-summary").click();
+    assert.equal(await group.locator(".tool-details:visible").count(), 0, `${scenario}: parent fold retained failure details`);
+    await process.locator(".turn-process-summary").click();
+    assert.equal(await group.locator(".tool-item.failed .tool-summary").getAttribute("aria-expanded"), "true", `${scenario}: parent fold reset failure detail`);
+
     fixture.toolStart(commands[2]);
     fixture.toolUpdate(commands[2], "third partial");
     await waitForToolEvent(page, commands[2], "running", "third partial");
-    assert.equal(await group.locator(".tool-item").count(), 1, `${scenario}: folded group should show only the failure`);
-    assert.equal(await group.locator(".tool-item.failed").count(), 1, `${scenario}: failed row was hidden`);
-    assert.equal(await group.locator(".tool-item.running, .tool-item.queued, .tool-item.completed").count(), 0, `${scenario}: normal row remained visible`);
-    assert.equal(await group.locator(".tool-details").count(), 0);
     fixture.toolEnd(commands[2], "third complete");
     await waitForToolEvent(page, commands[2], "completed", "third complete");
-    assert.equal(await group.locator(".tool-item").count(), 1, `${scenario}: completion reopened group`);
-    await group.locator(".activity-narration").click();
-    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true" && document.querySelectorAll(".activity-group .tool-item").length === 3);
-    await group.locator(".tool-item.failed .tool-summary").click();
-    await group.getByText("second failed", { exact: true }).waitFor();
-    await group.locator(".activity-narration").click();
-    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "false" && document.querySelectorAll(".activity-group .tool-item").length === 1);
-    assert.equal(await group.locator(".tool-details").count(), 0);
-
-    await page.locator(".turn-process-summary").click();
-    await page.waitForFunction(() => document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false");
-    assert.equal(await group.locator(".tool-item.failed").count(), 1, `${scenario}: parent fold hid failure`);
-    assert.equal(await group.locator(".tool-item.completed, .tool-item.queued, .tool-item.running").count(), 0);
-    await snapshot(page, `${scenario}-process-collapsed`);
-    await page.screenshot({ path: join(shotDir, `${scenario}-process-collapsed.png`) });
-
-    fixture.end(fixture.assistant(fixture.at(3), [commands[3]], { stopReason: "toolUse" }));
-    await waitForToolEvent(page, commands[3], "queued");
-    fixture.toolStart(commands[3]);
-    fixture.toolUpdate(commands[3], "fourth partial");
-    await waitForToolEvent(page, commands[3], "running", "fourth partial");
-    assert.equal(await page.locator(".turn-process-summary").getAttribute("aria-expanded"), "false", `${scenario}: new running tool opened parent`);
-    assert.equal(await group.locator(".activity-narration").getAttribute("aria-expanded"), "false", `${scenario}: new running tool opened group`);
-    assert.equal(await group.locator(".tool-item.failed").count(), 1);
-    assert.equal(await group.locator(".tool-item.running, .tool-item.queued, .tool-item.completed").count(), 0);
-    fixture.toolEnd(commands[3], "fourth complete");
-    await waitForToolEvent(page, commands[3], "completed", "fourth complete");
     const runId = fixture.active.state.activeRun?.id;
     assert.ok(runId, `${scenario}: missing active run before settlement`);
     fixture.settle();
     await waitForFoldEvent(page, "run.settled", { runId });
-    assert.equal(await page.locator(".turn-process-summary").getAttribute("aria-expanded"), "false", `${scenario}: settlement reopened process`);
-    assert.equal(await group.locator(".tool-item.failed").count(), 1);
-    assert.equal(await group.locator(".tool-item.completed, .tool-item.queued, .tool-item.running").count(), 0);
-    await page.locator(".turn-process-summary").click();
-    await page.waitForFunction(() => document.querySelector(".activity-narration")?.getAttribute("aria-expanded") === "true" && document.querySelectorAll(".activity-group .tool-item").length === 4);
-    assert.equal(await group.locator(".tool-item.failed").count(), 1);
+    assert.equal(await process.locator(".turn-process-summary").getAttribute("aria-expanded"), "true", `${scenario}: settlement collapsed a manual expansion`);
+    await process.locator(".turn-process-summary").click();
+    assert.equal(await group.locator(".tool-item.failed:visible").count(), 1, `${scenario}: parent fold hid failure`);
+    assert.equal(await group.locator(".tool-item.completed:visible").count(), 0, `${scenario}: parent fold exposed completed work`);
+    await snapshot(page, `${scenario}-process-collapsed`);
+    await page.screenshot({ path: join(shotDir, `${scenario}-process-collapsed.png`) });
 
     fixture.start();
     fixture.user(`检查单条 ${shell} 命令。`);
@@ -503,37 +479,25 @@ async function exerciseCommandFolds(baseUrl, workspace, viewport, label, shell) 
     fixture.end(fixture.assistant(Date.now(), [fixture.text("检查单条命令。", "commentary"), single], { stopReason: "toolUse" }));
     await waitForToolEvent(page, single, "queued");
     const singleProcess = page.locator(".turn-process").last();
-    assert.equal(await singleProcess.locator(".activity-narration").count(), 0, `${scenario}: single command has group toggle`);
     assert.equal(await singleProcess.locator(".turn-process-summary").getAttribute("aria-expanded"), "false");
-    assert.equal(await singleProcess.locator(".tool-item.queued").count(), 1, `${scenario}: untouched parent hid queued single command`);
+    assert.equal(await singleProcess.locator(".tool-item.queued:visible").count(), 1, `${scenario}: untouched parent hid queued single command`);
+    await singleProcess.locator(".tool-summary").click();
+    assert.equal(await singleProcess.locator(".turn-process-summary").getAttribute("aria-expanded"), "true", `${scenario}: single row did not open process`);
+    assert.equal(await singleProcess.locator(".tool-summary").getAttribute("aria-expanded"), "true", `${scenario}: single row detail did not open`);
     await singleProcess.locator(".turn-process-summary").click();
-    await singleProcess.locator(".tool-item.queued").waitFor();
-    await singleProcess.locator(".turn-process-summary").click();
-    await page.waitForFunction(() => {
-      const processes = document.querySelectorAll(".turn-process");
-      const latest = processes[processes.length - 1];
-      return latest?.querySelector(".turn-process-summary")?.getAttribute("aria-expanded") === "false" && latest.querySelectorAll(".tool-item").length === 0;
-    });
     fixture.toolStart(single);
     fixture.toolUpdate(single, "single partial");
     await waitForToolEvent(page, single, "running", "single partial");
-    assert.equal(await singleProcess.locator(".tool-item").count(), 0, `${scenario}: collapsed parent exposed its running single command`);
+    assert.equal(await singleProcess.locator(".tool-item:visible").count(), 0, `${scenario}: manually closed single process exposed work`);
     fixture.toolEnd(single, "single complete");
     await waitForToolEvent(page, single, "completed", "single complete");
     const singleRunId = fixture.active.state.activeRun?.id;
     assert.ok(singleRunId, `${scenario}: missing single-command run before settlement`);
     fixture.settle();
     await waitForFoldEvent(page, "run.settled", { runId: singleRunId });
-    assert.equal(await singleProcess.locator(".turn-process-summary").getAttribute("aria-expanded"), "false");
-    assert.equal(await singleProcess.locator(".tool-item").count(), 0, `${scenario}: collapsed single-tool process exposed completed work`);
     await singleProcess.locator(".turn-process-summary").click();
-    await singleProcess.locator(".tool-item.completed").waitFor();
-    await singleProcess.locator(".tool-summary").click();
-    await singleProcess.getByText("single complete", { exact: true }).waitFor();
-    await singleProcess.locator(".turn-process-summary").click();
-    assert.equal(await singleProcess.locator(".tool-details").count(), 0, `${scenario}: collapsing single-tool process retained details`);
-    await singleProcess.locator(".turn-process-summary").click();
-    await singleProcess.locator(".tool-item.completed").waitFor();
+    await singleProcess.locator(".tool-item.completed:visible").waitFor();
+    assert.equal(await singleProcess.locator(".tool-summary").getAttribute("aria-expanded"), "true", `${scenario}: reopening reset single detail`);
     reports.push({ scenario, viewport, commandFolds: true });
   } finally {
     await context.close();

@@ -1,55 +1,40 @@
-import { useLayoutEffect, useRef, useState } from "react";
-import { ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
+import { CircleAlert, LoaderCircle } from "lucide-react";
 import type { SubagentCallView, SubagentView, ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
 import { ImagePreview } from "./image-lightbox";
+import { collapsedToolActivityItems as collapsedItems, subagentCallDetailId } from "./timeline-fold";
+
+export { collapsedToolActivityItems } from "./timeline-fold";
 
 interface ToolActivityProps {
   items: ToolTimelineItem[];
   active: boolean;
-  /** The enclosing process was expanded by the user. */
-  expanded?: boolean;
-  /** Keep the default live preview while its enclosing process is folded. */
+  /** Whether the enclosing process shows its full content. */
+  showAll?: boolean;
+  /** Keep the default live preview while its enclosing process is untouched. */
   showActivePreview?: boolean;
-  onExpand?: () => void;
+  /** IDs selected by the timeline fold state. */
+  openItems?: ReadonlySet<string>;
+  onToggleItem?: (id: string) => void;
+  openCallIds?: ReadonlySet<string>;
+  onToggleCall?: (toolId: string, callId: string) => void;
+  visibleItemIds?: ReadonlySet<string>;
 }
 
-/** Consecutive operations share one summary; untouched folds preview live work and failures. */
-export function ToolActivity({ items, active, expanded = false, showActivePreview = true, onExpand }: ToolActivityProps) {
-  const [open, setOpen] = useState(expanded);
-  const touched = useRef(false);
-  const [openToolId, setOpenToolId] = useState<string>();
+/** The group heading is a label; only the process and individual rows can be toggled. */
+export function ToolActivity({ items, active, showAll = true, showActivePreview = true, openItems, onToggleItem, openCallIds, onToggleCall, visibleItemIds }: ToolActivityProps) {
   const state = activityState(items, active);
-  const collapsible = items.length > 1 && !items.some((item) => item.id.startsWith("bash:"));
-  const explicitlyHiddenByProcess = !expanded && !showActivePreview;
-  const visible = !explicitlyHiddenByProcess && (open || !collapsible && showActivePreview)
-    ? items
-    : collapsedToolActivityItems(items, active, showActivePreview && !touched.current);
-
-  useLayoutEffect(() => {
-    if (!expanded) {
-      touched.current = false;
-      setOpen(false);
-      setOpenToolId(undefined);
-    } else if (!touched.current) {
-      setOpen(true);
-    }
-  }, [expanded]);
+  const grouped = items.length > 1 && !items.some((item) => item.id.startsWith("bash:"));
+  const visibleIds = visibleItemIds ?? new Set((showAll ? items : collapsedItems(items, active, showActivePreview)).map((item) => item.id));
 
   return (
     <article className={`activity-group ${state}`}>
-      {!collapsible ? null : <button className="activity-narration" type="button" onClick={() => { touched.current = true; if (!open) onExpand?.(); else setOpenToolId(undefined); setOpen((value) => !value); }} aria-expanded={open}>
-        <span className="activity-narration-icon"><ChevronRight size={13} className={open ? "expanded" : ""} /></span>
-        <span className="activity-narration-text">{summarizeToolActivity(items)}</span>
-      </button>}
-      {visible.length === 0 ? null : <div className="activity-items">{visible.map((item) => <ToolRow key={item.id} item={item} pending={active && (item.state === "running" || item.state === "queued")} grouped={collapsible} open={openToolId === item.id} onToggle={() => { if (openToolId !== item.id) { touched.current = true; onExpand?.(); setOpen(true); } setOpenToolId((current) => current === item.id ? undefined : item.id); }} />)}</div>}
+      {!grouped ? null : <div className="activity-group-label"><span className="activity-group-label-text">{summarizeToolActivity(items)}</span></div>}
+      <div className="activity-items" hidden={visibleIds.size === 0}>{items.map((item) => <div key={item.id} hidden={!visibleIds.has(item.id)}>
+        <ToolRow item={item} pending={active && (item.state === "running" || item.state === "queued")} grouped={grouped} open={openItems?.has(item.id) === true} showDetails={showAll} openCallIds={openCallIds} onToggle={() => onToggleItem?.(item.id)} onToggleCall={onToggleCall} />
+      </div>)}</div>
     </article>
   );
-}
-
-export function collapsedToolActivityItems(items: ToolTimelineItem[], active: boolean, showActivePreview: boolean): ToolTimelineItem[] {
-  return items.filter((item) => item.state === "failed"
-    || showActivePreview && active && (item.state === "running" || item.state === "queued"));
 }
 
 const ACTIVITY_KIND_LABELS: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", bash: "命令", powershell: "命令", grep: "搜索", find: "查找", ls: "目录", session_update: "更新会话" };
@@ -75,10 +60,10 @@ function formatActivityChunk(key: string, count: number): string {
   return `${key} ${String(count)}`;
 }
 
-function ToolRow({ item, pending, open, grouped, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; grouped: boolean; onToggle: () => void }) {
-  if (item.name === "bash") return <CommandToolRow item={item} pending={pending} open={open} onToggle={onToggle} />;
-  if (item.subagent !== undefined) return <SubagentToolRow item={item} view={item.subagent} pending={pending} grouped={grouped} open={open} onToggle={onToggle} />;
-  return <GenericToolRow item={item} pending={pending} open={open} onToggle={onToggle} />;
+function ToolRow({ item, pending, open, showDetails, grouped, openCallIds, onToggle, onToggleCall }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; grouped: boolean; openCallIds?: ReadonlySet<string>; onToggle: () => void; onToggleCall?: (toolId: string, callId: string) => void }) {
+  if (item.name === "bash") return <CommandToolRow item={item} pending={pending} open={open} showDetails={showDetails} onToggle={onToggle} />;
+  if (item.subagent !== undefined) return <SubagentToolRow item={item} view={item.subagent} pending={pending} grouped={grouped} open={open} showDetails={showDetails} openCallIds={openCallIds} onToggle={onToggle} onToggleCall={onToggleCall} />;
+  return <GenericToolRow item={item} pending={pending} open={open} showDetails={showDetails} onToggle={onToggle} />;
 }
 
 function activityState(items: ToolTimelineItem[], active: boolean): ToolState {
@@ -107,6 +92,7 @@ export function subagentGroupLabel(view: SubagentView): string {
   if (view.failed === view.total) return `子代理 ${String(view.failed)}/${String(view.total)} 失败`;
   const cancelled = view.results.filter((call) => call.state === "cancelled").length;
   if (cancelled === view.total) return `子代理 ${String(cancelled)} 已停止`;
+  if (view.failed > 0) return `子代理 ${String(view.completed)}/${String(view.total)} · ${String(view.failed)} 失败`;
   return `子代理 ${String(view.completed)}/${String(view.total)}`;
 }
 
@@ -115,12 +101,13 @@ export function subagentRowLabel(view: SubagentView, grouped: boolean): string {
   if (only !== undefined) return `${only.agent} · ${subagentCallStateLabel(only.state)}`;
   if (view.results.length === 0) return "子代理";
   const who = runningAgentLabel(view);
-  if (who !== "" && grouped) return `${who} · 执行中`;
-  if (who !== "") return `子代理 ${String(view.completed)}/${String(view.total)} · ${who}`;
+  const failed = view.failed === 0 ? "" : `${String(view.failed)} 失败`;
+  if (who !== "" && grouped) return [failed, who, "执行中"].filter(Boolean).join(" · ");
+  if (who !== "") return [`子代理 ${String(view.completed)}/${String(view.total)}`, failed, who].filter(Boolean).join(" · ");
   if (view.failed === view.total) return `${String(view.failed)}/${String(view.total)} 失败`;
   const cancelled = view.results.filter((call) => call.state === "cancelled").length;
   if (cancelled === view.total) return `${String(cancelled)} 已停止`;
-  return `子代理 ${String(view.completed)}/${String(view.total)}`;
+  return [`子代理 ${String(view.completed)}/${String(view.total)}`, failed].filter(Boolean).join(" · ");
 }
 
 function runningAgentLabel(view: SubagentView): string {
@@ -149,17 +136,17 @@ function compactCommand(value?: string): string {
   return normalized.length > 72 ? `${normalized.slice(0, 69)}…` : normalized;
 }
 
-function GenericToolRow({ item, pending, open, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; onToggle: () => void }) {
+function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; onToggle: () => void }) {
   const output = item.error ?? item.output;
   const images = item.images ?? [];
   const stateIcon = compactToolStateIcon(item.state, pending);
   return (
     <article className={`tool-item tool-list-item ${item.state}`}>
-      <button className="tool-summary" type="button" onClick={onToggle} aria-expanded={open}>
+      <button className="tool-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
         <span className="tool-title">{toolActivityLabel(item)}</span>
       </button>
-      {open ? <div className="tool-details inline-details">
+      {open ? <div className="tool-details inline-details" hidden={!showDetails}>
         {images.length === 0 ? null : <div className="tool-images" aria-label="读取到的图片">
           {images.map((image, index) => <ImagePreview key={`${image.mimeType}:${index}`} className="message-image-thumb" src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`}><img src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`} loading="lazy" /></ImagePreview>)}
         </div>}
@@ -170,37 +157,38 @@ function GenericToolRow({ item, pending, open, onToggle }: { item: ToolTimelineI
   );
 }
 
-function SubagentToolRow({ item, view, pending, grouped, open, onToggle }: { item: ToolTimelineItem; view: SubagentView; pending: boolean; grouped: boolean; open: boolean; onToggle: () => void }) {
+function SubagentToolRow({ item, view, pending, grouped, open, showDetails, openCallIds, onToggle, onToggleCall }: { item: ToolTimelineItem; view: SubagentView; pending: boolean; grouped: boolean; open: boolean; showDetails: boolean; openCallIds?: ReadonlySet<string>; onToggle: () => void; onToggleCall?: (toolId: string, callId: string) => void }) {
   const stateIcon = compactToolStateIcon(item.state, pending);
-  const preview = open ? "" : subagentLivePreview(view);
+  const preview = open && showDetails ? "" : subagentLivePreview(view);
   const single = view.results.length === 1 ? view.results[0] : undefined;
   return (
     <article className={`tool-item tool-list-item subagent-item ${item.state}`}>
-      <button className="tool-summary subagent-summary" type="button" onClick={onToggle} aria-expanded={open}>
+      <button className="tool-summary subagent-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
         <span className="subagent-summary-copy">
           <span className="tool-title">{subagentRowLabel(view, grouped)}</span>
           {preview === "" ? null : <span className="subagent-preview">{preview}</span>}
         </span>
       </button>
-      {open ? <div className="tool-details inline-details">
-        {single !== undefined ? <SubagentCallBody call={single} /> : <SubagentCallList results={view.results} />}
+      {open ? <div className="tool-details inline-details" hidden={!showDetails}>
+        {single !== undefined ? <SubagentCallBody call={single} /> : <SubagentCallList results={view.results} toolId={item.id} openCallIds={openCallIds} onToggleCall={onToggleCall} />}
         {view.results.length === 0 && item.error !== undefined ? <p className="subagent-error">{item.error}</p> : null}
       </div> : null}
     </article>
   );
 }
 
-export function SubagentCallList({ results }: { results: SubagentCallView[] }) {
-  const [openIndex, setOpenIndex] = useState<number>();
+export function SubagentCallList({ results, toolId = "subagent", openCallIds, onToggleCall }: { results: SubagentCallView[]; toolId?: string; openCallIds?: ReadonlySet<string>; onToggleCall?: (toolId: string, callId: string) => void }) {
   return (
     <div className="subagent-calls">
       {results.map((call, index) => {
-        const callOpen = openIndex === index;
+        const duplicateIndex = results.slice(0, index).filter((prior) => subagentCallDetailId(toolId, prior) === subagentCallDetailId(toolId, call)).length;
+        const callId = subagentCallDetailId(toolId, call, duplicateIndex);
+        const callOpen = openCallIds?.has(callId) === true;
         const preview = callOpen || call.state !== "running" ? "" : subagentStatusLine(call.output ?? "");
         return (
-          <div className={`subagent-call ${call.state}`} key={`${call.agent}:${String(index)}`}>
-            <button className="subagent-call-summary" type="button" aria-expanded={callOpen} onClick={() => setOpenIndex(callOpen ? undefined : index)}>
+          <div className={`subagent-call ${call.state}`} key={callId}>
+            <button className="subagent-call-summary" type="button" aria-expanded={callOpen} onClick={() => onToggleCall?.(toolId, callId)}>
               {call.state === "failed" ? <CircleAlert size={13} aria-label="失败" /> : null}
               <span>{call.agent} · {subagentCallStateLabel(call.state)}</span>
             </button>
@@ -280,18 +268,18 @@ function truncateEnd(value: string, max: number): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
-function CommandToolRow({ item, pending, open, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; onToggle: () => void }) {
+function CommandToolRow({ item, pending, open, showDetails, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; onToggle: () => void }) {
   const command = item.inputPreview ?? item.target ?? "";
   const output = item.error ?? item.output;
   const stateIcon = compactToolStateIcon(item.state, pending);
   return (
     <article className={`tool-item tool-list-item command-item ${item.state}`}>
-      <button className="tool-summary command-summary" type="button" onClick={onToggle} aria-expanded={open}>
+      <button className="tool-summary command-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
         <span className="tool-target">{compactCommand(command)}</span>
         {item.excludeFromContext === true ? <span className="command-excluded" title="输出不会发送给模型">不进上下文</span> : null}
       </button>
-      {open ? <div className="tool-details command-details inline-details">
+      {open ? <div className="tool-details command-details inline-details" hidden={!showDetails}>
         <div className="detail-command-line"><code>$ {command || "(empty)"}</code></div>
         {item.cwd === undefined ? null : <div className="detail-input"><span className="detail-label">工作目录</span><code>{item.cwd}</code></div>}
         {output === undefined ? null : <div><pre className={item.error === undefined ? "command-output" : "tool-error-output command-output"}>{output}</pre></div>}

@@ -453,7 +453,6 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .message-audio-frame { width: min(420px, 100%); background: var(--surface); padding: 8px 10px; }
 .message-audio-frame > audio { display: block; width: 100%; color-scheme: dark; }
 .activity-group { display: grid; gap: 4px; min-width: 0; color: var(--muted); }
-.activity-narration,
 .thinking-summary,
 .turn-process-summary,
 .context-summary-toggle,
@@ -462,7 +461,6 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .extension-widget-heading,
 .extension-select-preview-toggle,
 .extension-result-line button { --fold-color: var(--subtle); color: var(--fold-color); transition: color .14s ease; }
-.activity-narration[aria-expanded="true"],
 .thinking-summary[aria-expanded="true"],
 .turn-process-summary[aria-expanded="true"],
 .context-summary-toggle[aria-expanded="true"],
@@ -471,15 +469,11 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .extension-widget-heading[aria-expanded="true"],
 .extension-select-preview-toggle[aria-expanded="true"],
 .extension-result-line button[aria-expanded="true"] { --fold-color: var(--muted); }
-.activity-narration { display: flex; align-items: flex-start; width: 100%; min-width: 0; gap: 7px; border: 0; background: transparent; padding: 4px 0; text-align: left; }
-.activity-narration:focus-visible { color: var(--ink); outline: none; }
-.activity-narration-icon { display: grid; flex: 0 0 auto; margin-top: 1px; color: inherit; }
-.activity-narration-icon svg { transition: transform .14s ease; }
-.activity-narration-icon svg.expanded { transform: rotate(90deg); }
-.activity-group.running .activity-narration-icon { color: var(--accent); }
-.activity-narration-text { min-width: 0; font-size: 11px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
+.activity-group-label { display: flex; align-items: flex-start; min-width: 0; padding: 4px 0; color: var(--subtle); }
+.activity-group-label-text { min-width: 0; font-size: 11px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
 .activity-items { display: grid; gap: 4px; }
-.activity-narration + .activity-items { padding-left: 20px; }
+.activity-items[hidden], .activity-items [hidden], .turn-process-entry[hidden], .turn-process-entry > [hidden] { display: none !important; }
+.activity-group-label + .activity-items { padding-left: 12px; }
 .activity-items .tool-item { margin: 0; }
 .activity-items .tool-list-item { overflow: visible; border: 0; border-radius: 4px; background: transparent; }
 .activity-items .tool-list-item.running, .activity-items .tool-list-item.failed, .activity-items .tool-list-item.completed { border: 0; background: transparent; }
@@ -817,7 +811,6 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
   .message-content .local-file-preview-trigger:hover { color: var(--accent); text-decoration-color: currentColor; }
   .code-block-copy:hover:not(:disabled) { background: rgb(255 255 255 / .05); color: var(--ink); }
   .message-image-frame:hover { border-color: var(--line-strong); }
-  .activity-narration:hover,
   .thinking-summary:hover,
   .turn-process-summary:hover,
   .context-summary-toggle:hover,
@@ -1035,7 +1028,6 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 /* 触屏设备：可展开的思考/工具卡片不显示 hover 变色（触控点击会把 hover 状态粘住）。focus-visible 保留。 */
 @media (hover: none) {
   .thinking-summary:hover,
-  .activity-narration:hover,
   .turn-process-summary:hover,
   .context-summary-toggle:hover,
   .timeline-event-summary:hover,

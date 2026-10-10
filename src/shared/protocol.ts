@@ -466,6 +466,8 @@ export interface ToolTimelineItem {
 export type SubagentCallState = "running" | "completed" | "failed" | "cancelled";
 
 export interface SubagentCallView {
+  /** Original position in the subagent tool's calls array. */
+  callIndex?: number;
   agent: string;
   prompt: string;
   state: SubagentCallState;
