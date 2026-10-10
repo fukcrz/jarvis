@@ -724,20 +724,60 @@ function settledQuestion(item: ExtensionUiTimelineItem, customText?: string): { 
 }
 
 export function SettledChoices({ question, header, rows }: { question: string; header?: string; rows: SettledChoiceRow[] }) {
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [expandedPreviews, setExpandedPreviews] = useState<ReadonlySet<number>>(EMPTY_PREVIEWS);
+  const historyRows = rows.filter((row) => row.index !== undefined);
+  const selectedRows = rows.filter((row) => row.selected);
+  const selectedChoices = selectedRows.filter((row) => row.index !== undefined).map((row) => row.label);
+  const typedAnswer = selectedRows.find((row) => row.index === undefined)?.label;
+  const result = selectedChoices.length === 0
+    ? typedAnswer ?? "未选择"
+    : typedAnswer === undefined ? selectedChoices.join("、") : `${selectedChoices.join("、")} · ${typedAnswer}`;
+  const togglePreview = (index: number) => {
+    setExpandedPreviews((current) => {
+      const next = new Set(current);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
   return (
     <article className="extension-operation answered settled-choices">
       <p className="extension-operation-title extension-dialog-question">{header === undefined ? null : <span className="extension-dialog-header">{header}</span>}{question}</p>
-      <div className="extension-select-list settled">
-        {rows.map((row) => <div key={row.key} className={`extension-select-option${row.selected ? " checked" : " missed"}`}>
-          <div className="extension-select-choice">
-            <span className="extension-select-index" aria-hidden>{row.selected ? <Check size={11} /> : row.index ?? ""}</span>
-            <span className="extension-select-body">
-              <span className="extension-select-label">{row.label}</span>
-              {row.description === undefined ? null : <span className="extension-select-description">{row.description}</span>}
-            </span>
-          </div>
-        </div>)}
+      <div className={`settled-choice-result${selectedRows.length === 0 ? " empty" : ""}`}>
+        <span className="settled-choice-result-icon" aria-hidden>{selectedRows.length === 0 ? "-" : <Check size={11} />}</span>
+        <span>{result}</span>
       </div>
+      {historyRows.length === 0 ? null : <>
+        <button type="button" className={`settled-history-toggle${historyOpen ? " expanded" : ""}`} aria-expanded={historyOpen} onClick={() => setHistoryOpen((current) => !current)}>
+          <ChevronRight size={12} className="extension-select-chevron" aria-hidden />
+          <span>选项历史（{historyRows.length}）</span>
+        </button>
+        {historyOpen ? <div className="extension-select-list settled">
+          {historyRows.map((row, position) => {
+            const previewIndex = row.index ?? position + 1;
+            const expanded = expandedPreviews.has(previewIndex);
+            return <div key={row.key} className={`extension-select-option${row.selected ? " checked" : " missed"}`}>
+              <div className="extension-select-choice">
+                <span className="extension-select-index" aria-hidden>{row.selected ? <Check size={11} /> : row.index ?? ""}</span>
+                <span className="extension-select-body">
+                  <span className="extension-select-label">{row.label}</span>
+                  {row.description === undefined ? null : <span className="extension-select-description">{row.description}</span>}
+                </span>
+              </div>
+              {row.preview === undefined ? null : <div className="extension-select-preview">
+                <button type="button" className="extension-select-preview-toggle" aria-expanded={expanded} onClick={() => togglePreview(previewIndex)}>
+                  <ChevronRight size={12} className={`extension-select-chevron${expanded ? " expanded" : ""}`} aria-hidden />
+                  <span className="extension-select-preview-label">{expanded ? "收起预览" : "预览"}</span>
+                  {expanded ? null : <span className="extension-select-preview-hint">{previewSummary(row.preview)}</span>}
+                </button>
+                {expanded ? <pre className="extension-select-preview-body">{row.preview}</pre> : null}
+              </div>}
+            </div>;
+          })}
+        </div> : null}
+      </>}
     </article>
   );
 }

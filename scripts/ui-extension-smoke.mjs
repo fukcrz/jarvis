@@ -160,11 +160,31 @@ try {
     else if (submissions[0].id !== requestId || submissions[0].value !== OPTIONS[0]) failures.push(`${viewport.name}: 提交值与扩展原始字符串不一致：${JSON.stringify(submissions[0])}`);
 
     await request(900_000_002, "extension.uiSettled", { id: requestId, outcome: "answered", value: OPTIONS[0] });
-    const answered = page.locator(".extension-operation.answered").filter({ hasText: "已选择" });
+    const answered = page.locator(".extension-operation.answered.settled-choices").filter({ hasText: FIRST_LABEL }).last();
     await answered.waitFor({ state: "visible", timeout: 5_000 });
     const answeredText = await answered.innerText();
     if (answeredText.includes("不发明新规则")) failures.push(`${viewport.name}: 已选择结果行仍然回显整串原文`);
     if (!answeredText.includes(FIRST_LABEL)) failures.push(`${viewport.name}: 已选择结果行没有显示标签`);
+    const historyToggle = answered.locator(".settled-history-toggle");
+    if (await historyToggle.count() !== 1) failures.push(`${viewport.name}: 已回答卡片缺少选项历史入口`);
+    else {
+      if (await historyToggle.getAttribute("aria-expanded") !== "false") failures.push(`${viewport.name}: 选项历史默认没有收起`);
+      if (await answered.locator(".settled-choice-result").count() !== 1) failures.push(`${viewport.name}: 已回答卡片没有紧凑结果行`);
+      if (await answered.locator(".settled-choice-result").innerText() !== FIRST_LABEL) failures.push(`${viewport.name}: 紧凑结果行内容不对`);
+      if (await answered.locator(".extension-select-option").count() !== 0) failures.push(`${viewport.name}: 选项历史默认已展开`);
+      await answered.screenshot({ path: join(shotDir, `select-${viewport.name}-answered-collapsed.png`) });
+      await historyToggle.click();
+      if (await historyToggle.getAttribute("aria-expanded") !== "true") failures.push(`${viewport.name}: 选项历史入口点击后没有展开`);
+      const historyLabels = (await answered.locator(".extension-select-label").allTextContents()).map((label) => label.trim());
+      if (JSON.stringify(historyLabels) !== JSON.stringify([FIRST_LABEL, SECOND_LABEL, THIRD_LABEL])) failures.push(`${viewport.name}: 展开的选项历史不完整：${JSON.stringify(historyLabels)}`);
+      if (await answered.locator(".extension-select-preview-body").count() !== 0) failures.push(`${viewport.name}: 已回答选项预览默认没有收起`);
+      const settledPreviewToggle = answered.locator(".extension-select-preview-toggle").first();
+      await settledPreviewToggle.click();
+      if (await answered.locator(".extension-select-preview-body").count() !== 1) failures.push(`${viewport.name}: 已回答选项预览无法展开`);
+      await answered.screenshot({ path: join(shotDir, `select-${viewport.name}-answered.png`) });
+      await historyToggle.click();
+      if (await answered.locator(".extension-select-option").count() !== 0) failures.push(`${viewport.name}: 选项历史入口点击后没有收起`);
+    }
 
     // 形态不匹配的自定义 select 必须原样回退成扁平行。
     const plainId = `${requestId.slice(0, -1)}9`;
@@ -256,11 +276,11 @@ try {
     const multiSubmission = submissions.at(-1);
     if (multiSubmission?.id !== multiId || multiSubmission?.value !== "搜索, 导出 — 还要权限") failures.push(`${viewport.name}: 多选提交值不对：${JSON.stringify(multiSubmission)}`);
     await request(900_000_011, "extension.uiSettled", { id: multiId, outcome: "answered", value: "搜索, 导出 — 还要权限" });
-    const multiAnswered = page.locator(".extension-operation.answered").filter({ hasText: "已选择" }).last();
+    const multiAnswered = page.locator(".extension-operation.answered.settled-choices").filter({ hasText: "搜索" }).last();
     await multiAnswered.waitFor({ state: "visible", timeout: 5_000 });
     const multiAnsweredText = await multiAnswered.innerText();
     if (multiAnsweredText.includes("Enter the numbers")) failures.push(`${viewport.name}: 多选结果行仍回显说明句`);
-    if (!multiAnsweredText.includes("搜索, 导出 — 还要权限")) failures.push(`${viewport.name}: 多选结果行没有显示勾选+补充`);
+    if (!multiAnsweredText.includes("搜索、导出 · 还要权限")) failures.push(`${viewport.name}: 多选结果行没有显示勾选+补充`);
     pendingInput = undefined;
 
     // 确认卡同样拆出短标签（改动不能只照顾选择/输入两种形态）。

@@ -392,19 +392,51 @@ describe("MarkdownTextPreview", () => {
 });
 
 describe("SettledChoices", () => {
-  it("puts the typed answer on the same row as the other options", () => {
+  it("defaults to the question and selected result, with the offered options collapsed", () => {
     const markup = renderToStaticMarkup(createElement(SettledChoices, {
-      question: "是否按这个方案修改并补回归测试？",
+      header: "发布确认",
+      question: "是否推送？",
       rows: [
-        { key: "a", index: 1, label: "按方案改", description: "补回归测试", selected: false },
-        { key: "typed", label: "啥意思？我听不懂。你要不再给我讲讲吧", selected: true },
+        { key: "a", index: 1, label: "推送并跟进", description: "创建 tag", preview: "变更预览", selected: true },
+        { key: "b", index: 2, label: "暂不推送", description: "保留现状", selected: false },
       ],
     }));
-    expect(markup).toContain("按方案改");
-    expect(markup).toContain("啥意思？我听不懂。你要不再给我讲讲吧");
-    expect(markup).not.toContain("自定义");
-    expect(markup).not.toContain("Type something");
-    expect(markup).not.toContain("已提交");
+    expect(markup).toContain("发布确认");
+    expect(markup).toContain("是否推送？");
+    expect(markup).toContain("推送并跟进");
+    expect(markup).toContain("选项历史（2）");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).not.toContain("暂不推送");
+    expect(markup).not.toContain("创建 tag");
+    expect(markup).not.toContain("变更预览");
+    expect(markup).not.toContain("extension-select-option");
+  });
+
+  it("shows custom answers and selected multi-options in the result without a placeholder row", () => {
+    const custom = renderToStaticMarkup(createElement(SettledChoices, {
+      question: "是否按这个方案修改？",
+      rows: [
+        { key: "a", index: 1, label: "按方案改", selected: false },
+        { key: "typed", label: "还需要说明", selected: true },
+      ],
+    }));
+    expect(custom).toContain("还需要说明");
+    expect(custom).toContain("选项历史（1）");
+    expect(custom).not.toContain("按方案改");
+    expect(custom).not.toContain("Type something");
+
+    const multi = renderToStaticMarkup(createElement(SettledChoices, {
+      question: "选择范围",
+      rows: [
+        { key: "a", index: 1, label: "搜索", selected: true },
+        { key: "b", index: 2, label: "批量", selected: false },
+        { key: "c", index: 3, label: "导出", selected: true },
+        { key: "typed", label: "还要权限", selected: true },
+      ],
+    }));
+    expect(multi).toContain("搜索、导出 · 还要权限");
+    expect(multi).toContain("选项历史（3）");
+    expect(multi).not.toContain("批量");
   });
 });
 

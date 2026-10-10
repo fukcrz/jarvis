@@ -159,6 +159,7 @@ export interface SettledChoiceRow {
   index?: number;
   label: string;
   description?: string;
+  preview?: string;
   selected: boolean;
 }
 
@@ -194,6 +195,7 @@ function offeredChoiceRows(options: ExtensionSelectOption[], selected: ReadonlyS
     ...(option.index === undefined ? {} : { index: option.index }),
     label: option.label,
     ...(option.description === undefined ? {} : { description: option.description }),
+    ...(option.preview === undefined ? {} : { preview: option.preview }),
     selected: option.index !== undefined && selected.has(option.index),
   }));
 }
@@ -205,12 +207,49 @@ function selectedChoiceIndexes(options: ExtensionSelectOption[], head: string): 
     const indexes = tokens.map((token) => Number.parseInt(token, 10));
     return indexes.every((index) => options.some((option) => option.index === index)) ? new Set(indexes) : new Set();
   }
-  const labels = head.split(",").map((part) => part.trim()).filter((part) => part !== "");
-  const matched = labels.flatMap((label) => {
-    const option = options.find((candidate) => candidate.label === label);
-    return option?.index === undefined ? [] : [option.index];
-  });
-  return matched.length === labels.length ? new Set(matched) : new Set();
+  const matched = matchChoiceLabels(options, head);
+  return matched === undefined ? new Set() : new Set(matched);
+}
+
+/**
+ * 从已知候选标签中恢复逗号分隔的选择。标签自身也可能包含 `, `，所以不能直接 split；
+ * 只接受唯一的、按选项顺序排列的匹配，歧义值继续按自定义回答展示，避免错标选项。
+ */
+function matchChoiceLabels(options: ExtensionSelectOption[], head: string): number[] | undefined {
+  const memo = new Map<string, number[][]>();
+  const visit = (position: number, offset: number): number[][] => {
+    const key = `${String(position)}:${String(offset)}`;
+    const cached = memo.get(key);
+    if (cached !== undefined) return cached;
+    if (position >= options.length) {
+      const result = offset === head.length ? [[]] : [];
+      memo.set(key, result);
+      return result;
+    }
+
+    const results: number[][] = [];
+    const add = (candidate: number[]) => {
+      const signature = candidate.join(",");
+      if (results.some((existing) => existing.join(",") === signature)) return;
+      results.push(candidate);
+    };
+    for (const suffix of visit(position + 1, offset)) add(suffix);
+
+    const option = options[position];
+    if (option.index !== undefined && head.startsWith(option.label, offset)) {
+      const end = offset + option.label.length;
+      if (end === head.length) add([option.index]);
+      else if (head.startsWith(", ", end)) {
+        for (const suffix of visit(position + 1, end + 2)) add([option.index, ...suffix]);
+      }
+    }
+    const limited = results.slice(0, 2);
+    memo.set(key, limited);
+    return limited;
+  };
+
+  const matches = visit(0, 0);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /**

@@ -55,6 +55,7 @@ describe("parseSelectDialog", () => {
     expect(dialog!.options[1]!.preview).toContain("同厂相邻");
     expect(dialog!.options[2]!.preview).toContain("熔断（failures=4）");
     expect(dialog!.options[3]!.preview).toBeUndefined();
+    expect(settledSelectRows(dialog!.options, OPTIONS[0])[0]!.preview).toContain("terra : a8pi → anzhiyu");
     expect(dialog!.options.map((option) => option.value)).toEqual(OPTIONS);
   });
 
@@ -154,6 +155,23 @@ describe("selectAnswerLabel", () => {
       ["NULL 历史订单", false],
       ["推广订单", false],
       ["啥意思", true],
+    ]);
+    expect(settledMultiRows(dialog.options, "NULL 历史订单, 推广订单 — 备注").map((row) => [row.label, row.selected])).toEqual([
+      ["NULL 历史订单", true],
+      ["推广订单", true],
+      ["备注", true],
+    ]);
+  });
+
+  it("按已知标签恢复自身带逗号的多选项和补充文字", () => {
+    const options = [
+      { value: "1. 查询, 缓存 — 搜索缓存", index: 1, label: "查询, 缓存", description: "搜索缓存" },
+      { value: "2. 导出 — 下载表格", index: 2, label: "导出", description: "下载表格" },
+    ];
+    expect(settledMultiRows(options, "查询, 缓存, 导出 — 还要权限").map((row) => [row.label, row.selected])).toEqual([
+      ["查询, 缓存", true],
+      ["导出", true],
+      ["还要权限", true],
     ]);
   });
 
