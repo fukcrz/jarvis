@@ -1,20 +1,27 @@
 /**
- * 文本复制。默认走 Clipboard API。
- * 仅 Linux Firefox 先用 execCommand：该环境 writeText 经常不可用。
+ * 文本复制：优先使用 Clipboard API，失败时回退到 execCommand。
+ * 回退文本框保持在视口内但完全透明，兼容 Firefox 对屏外元素的处理差异。
  */
 export function copyText(text: string): Promise<void> {
-  if (isLinuxFirefox() && copyTextWithExecCommand(text)) return Promise.resolve();
-  const writeText = globalThis.navigator?.clipboard?.writeText;
-  if (writeText === undefined) return Promise.reject(new Error("clipboard"));
-  return writeText.call(globalThis.navigator.clipboard, text);
+  const clipboard = globalThis.navigator?.clipboard;
+  const writeText = clipboard?.writeText;
+  if (writeText !== undefined) {
+    try {
+      return Promise.resolve(writeText.call(clipboard, text)).catch((reason: unknown) => {
+        if (copyTextWithExecCommand(text)) return;
+        throw asClipboardError(reason);
+      });
+    } catch (reason: unknown) {
+      if (copyTextWithExecCommand(text)) return Promise.resolve();
+      return Promise.reject(asClipboardError(reason));
+    }
+  }
+  if (copyTextWithExecCommand(text)) return Promise.resolve();
+  return Promise.reject(new Error("clipboard"));
 }
 
-function isLinuxFirefox(): boolean {
-  const nav = globalThis.navigator;
-  if (nav === undefined) return false;
-  const ua = nav.userAgent ?? "";
-  if (!ua.includes("Firefox/") || /Android/i.test(ua)) return false;
-  return /Linux/i.test(nav.platform ?? "") || /Linux/i.test(ua);
+function asClipboardError(reason: unknown): Error {
+  return reason instanceof Error ? reason : new Error("clipboard");
 }
 
 function copyTextWithExecCommand(text: string): boolean {
@@ -22,17 +29,17 @@ function copyTextWithExecCommand(text: string): boolean {
   const textarea = document.createElement("textarea");
   textarea.value = text;
   textarea.setAttribute("readonly", "");
-  textarea.style.cssText = "position:fixed;top:0;left:-9999px;width:1px;height:1px;padding:0;border:0;outline:none;box-shadow:none;background:transparent;";
-  document.body.append(textarea);
-  textarea.focus();
-  textarea.select();
-  textarea.setSelectionRange(0, text.length);
-  let ok = false;
+  textarea.setAttribute("aria-hidden", "true");
+  textarea.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;outline:none;box-shadow:none;background:transparent;color:transparent;opacity:0;pointer-events:none;";
   try {
-    ok = document.execCommand("copy");
+    document.body.append(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    return document.execCommand("copy");
   } catch {
-    // 部分浏览器会直接抛错
+    return false;
+  } finally {
+    textarea.remove();
   }
-  textarea.remove();
-  return ok;
 }

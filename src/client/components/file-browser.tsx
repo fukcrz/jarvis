@@ -38,6 +38,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<FilePreviewState>();
   const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
   const [contextMenu, setContextMenu] = useState<FileContextMenuTarget>();
   const [deleteTarget, setDeleteTarget] = useState<FileContextMenuTarget>();
   const [deletePending, setDeletePending] = useState(false);
@@ -104,6 +105,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
     loadingDirectoryPathsRef.current.clear();
     setPreview(undefined);
     setError(undefined);
+    setNotice(undefined);
     setContextMenu(undefined);
     setDeleteTarget(undefined);
     deleteRequestRef.current += 1;
@@ -155,6 +157,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
     invalidatePreviewRequest();
     setPreview(undefined);
     setError(undefined);
+    setNotice(undefined);
   };
 
   const rememberDirectoryScroll = (path: string) => {
@@ -185,6 +188,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
       setPreview({ path, name, kind, version });
       setFocusedPath(directoryPath(path));
       setError(undefined);
+      setNotice(undefined);
       return;
     }
     if (preview?.path === path && preview.content !== undefined) {
@@ -194,6 +198,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
     previewLoadingPathRef.current = path;
     setLoadingPaths((current) => ({ ...current, [path]: true }));
     setError(undefined);
+    setNotice(undefined);
     try {
       const file = await api.workspaceFile(targetWorkspaceId, path);
       if (workspaceRef.current !== targetWorkspaceId || previewRequestRef.current !== requestId) return;
@@ -231,6 +236,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
     setCurrentPath(path);
     setPreview(undefined);
     setError(undefined);
+    setNotice(undefined);
     setContextMenu(undefined);
     if (entriesByPath[path] === undefined) await loadDirectory(path);
   };
@@ -244,6 +250,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
     setFocusedPath(parent);
     setPreview(undefined);
     setError(undefined);
+    setNotice(undefined);
     setContextMenu(undefined);
     if (entriesByPath[parent] === undefined) await loadDirectory(parent);
   };
@@ -251,9 +258,11 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
   const copy = async (value: string, message: string) => {
     try {
       await copyText(value);
-      setError(message);
-      window.setTimeout(() => setError(undefined), 1_500);
+      setError(undefined);
+      setNotice(message);
+      window.setTimeout(() => setNotice(undefined), 1_500);
     } catch {
+      setNotice(undefined);
       setError("复制失败");
     }
   };
@@ -347,6 +356,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
           </div>
         </header>
         {error === undefined ? null : <div className="file-browser-error" role="alert">{error}</div>}
+        {notice === undefined ? null : <div className="file-browser-notice" role="status">{notice}</div>}
         <div className="file-browser-body">
           {showDirectory ? <aside className="file-browser-sidebar">
             <div className="file-browser-tree" ref={treeRef} aria-label={isMobile ? "文件列表" : "文件树"}>

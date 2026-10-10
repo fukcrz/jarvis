@@ -126,7 +126,7 @@ export function TunnelPanel({ onMessage, refreshKey = 0 }: { onMessage: (message
       setCopied(kind);
       window.setTimeout(() => setCopied(undefined), 1_500);
     } catch {
-      // 剪贴板不可用时忽略
+      onMessageRef.current("复制失败", "error");
     }
   };
 

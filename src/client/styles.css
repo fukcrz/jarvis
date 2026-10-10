@@ -269,6 +269,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .file-browser-sidebar { display: grid; grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
 .file-browser-main { display: grid; grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; }
 .file-browser-error { flex: 0 0 auto; border-bottom: 1px solid var(--line); border-left: 2px solid var(--danger); background: var(--danger-soft); padding: 8px 10px; color: #ffb4b6; font-size: 12px; }
+.file-browser-notice { flex: 0 0 auto; border-bottom: 1px solid var(--line); border-left: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); padding: 8px 10px; color: var(--muted); font-size: 12px; }
 .file-browser-tree { height: 100%; min-height: 0; overflow: auto; background: transparent; padding: 5px 0; }
 .file-browser-tree-node, .file-browser-tree-branch { min-width: 0; }
 .file-browser-entry { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; width: 100%; min-height: 32px; gap: 8px; border: 0; background: transparent; padding-block: 6px; padding-inline-end: 9px; color: var(--ink); text-align: left; }
@@ -361,7 +362,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .timeline-load-earlier:focus-visible { color: var(--ink); outline: none; }
 @media (max-width: 760px) { .timeline-load-earlier { min-height: 36px; } }
 /* 操作行随消息占位（气泡下方固定一行），不悬浮在消息间隙里压住下一条消息 */
-.message-row { position: relative; display: flex; min-width: 0; scroll-margin-top: 112px; }.message-actions { display: flex; align-items: center; justify-content: flex-start; min-height: 18px; gap: 1px; margin-top: 2px; }.message-action-button { display: grid; place-items: center; width: 21px; height: 18px; border: 0; border-radius: 3px; background: transparent; padding: 0; color: #686772; cursor: pointer; }.message-action-button:focus-visible { background: rgb(255 255 255 / .035); color: #9b9aa5; outline: none; }.message-action-button.copied { color: var(--success); }
+.message-row { position: relative; display: flex; min-width: 0; scroll-margin-top: 112px; }.message-actions { display: flex; align-items: center; justify-content: flex-start; min-height: 18px; gap: 1px; margin-top: 2px; }.message-action-button { display: grid; place-items: center; width: 21px; height: 18px; border: 0; border-radius: 3px; background: transparent; padding: 0; color: #686772; cursor: pointer; }.message-action-button:focus-visible { background: rgb(255 255 255 / .035); color: #9b9aa5; outline: none; }.message-action-button.copied { color: var(--success); }.message-action-button.failed { color: var(--danger); }
 .message-body.user .message-actions { justify-content: flex-end; }
 @media (max-width: 760px) { .message-body.user .message-actions { margin-top: 4px; }.message-action-button { width: 30px; height: 28px; } }
 .message-row.assistant { justify-content: flex-start; }

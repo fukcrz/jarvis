@@ -659,19 +659,23 @@ function formatDuration(durationMs: number): string {
 }
 
 function MessageActions({ item, streaming, onEdit, onFork }: { item: MessageTimelineItem; streaming: boolean; onEdit?: () => void; onFork?: (item: MessageTimelineItem) => void }) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   if (streaming || item.role !== "user") return null;
   const canCopy = item.text !== "";
   if (!canCopy && onEdit === undefined && onFork === undefined) return null;
   const handleCopy = () => {
     void copyText(item.text).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    }).catch(() => {});
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1600);
+    }).catch(() => {
+      setCopyState("failed");
+      window.setTimeout(() => setCopyState("idle"), 1600);
+    });
   };
+  const copyLabel = copyState === "copied" ? "已复制消息" : copyState === "failed" ? "复制失败" : "复制消息";
   return <div className="message-actions">
-    {!canCopy ? null : <Tooltip label={copied ? "已复制" : "复制消息"}>
-      <button type="button" className={`message-action-button${copied ? " copied" : ""}`} aria-label={copied ? "已复制消息" : "复制消息"} onClick={handleCopy}>{copied ? <Check size={14} /> : <Copy size={14} />}</button>
+    {!canCopy ? null : <Tooltip label={copyLabel}>
+      <button type="button" className={`message-action-button${copyState === "copied" ? " copied" : copyState === "failed" ? " failed" : ""}`} aria-label={copyLabel} onClick={handleCopy}>{copyState === "copied" ? <Check size={14} /> : copyState === "failed" ? <CircleAlert size={14} /> : <Copy size={14} />}</button>
     </Tooltip>}
     {onEdit === undefined ? null : <Tooltip label="编辑并重新生成">
       <button type="button" className="message-action-button" aria-label="编辑并重新生成" onClick={onEdit}><Pencil size={14} /></button>
