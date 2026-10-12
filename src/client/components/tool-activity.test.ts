@@ -44,26 +44,19 @@ describe("ToolActivity summaries", () => {
     const expanded = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, showAll: true }));
     expect(expanded).toContain("a.ts");
     expect(expanded).toContain("b.ts");
-    expect(expanded).not.toContain('class="activity-group-label"');
+    expect(expanded).toContain('class="activity-group-label"');
     expect(expanded).not.toContain("activity-narration");
+    expect(expanded).not.toContain('<div class="activity-group-label" aria-expanded');
   });
 });
 
 describe("ToolActivity command rows", () => {
-  it("drops the Git Bash env prefix and long path from the visible command", () => {
-    const item: ToolTimelineItem = {
-      kind: "tool",
-      id: "cmd-1",
-      createdAt: "",
-      name: "bash",
-      title: "Run command",
-      state: "completed",
-      inputPreview: 'cd /tmp && export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" node "c:/Users/fszax/.pi/agent/skills/panel1/scripts/client.mjs" api list',
-    };
+  it("keeps the full command, including env prefixes, instead of truncating the row", () => {
+    const command = 'export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" node "c:/Users/fszax/.pi/agent/skills/panel1/scripts/client.mjs" api list';
+    const item: ToolTimelineItem = { kind: "tool", id: "cmd-1", createdAt: "", name: "bash", title: "Run command", state: "completed", inputPreview: command };
     const markup = renderToStaticMarkup(createElement(ToolActivity, { items: [item], active: false }));
-    expect(markup).toContain("node client.mjs api list");
-    expect(markup).not.toContain("MSYS_NO_PATHCONV");
-    expect(markup).not.toContain("c:/Users");
+    expect(markup).toContain("export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL=&quot;*&quot; node &quot;c:/Users/fszax/.pi/agent/skills/panel1/scripts/client.mjs&quot; api list");
+    expect(markup).not.toContain("…");
   });
 });
 
