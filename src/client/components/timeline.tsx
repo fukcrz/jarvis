@@ -1401,14 +1401,14 @@ function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string |
 }
 
 function ThinkingItem({ item, live, baseDir, open, showDetails, onToggle }: { item: ThinkingTimelineItem; live?: LiveGenerationStats; baseDir?: string; open: boolean; showDetails: boolean; onToggle: () => void }) {
-  const preview = processTextPreview(item.text);
+  const preview = processTextPreview(item.text).replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/^#{1,6}\s+/, "");
   const detailsOpen = open && showDetails;
   return (
     <article className={`thinking-item ${item.state}`}>
       <button className="thinking-summary" type="button" onClick={onToggle} aria-expanded={detailsOpen}>
         <span className="thinking-state-icon">{item.state === "running" ? <LoaderCircle size={14} className="spin" /> : <Brain size={14} />}</span>
         <span className="thinking-title">{item.state === "running" ? "思考中" : "思考"}</span>
-        {!detailsOpen && preview !== "" ? <span className="thinking-preview"><MarkdownTextPreview text={preview} /></span> : null}
+        {!detailsOpen && preview !== "" ? <span className="thinking-preview">{preview}</span> : null}
         {live === undefined ? item.state === "running" ? <ElapsedClock startedAt={item.createdAt} /> : null : <LiveGenerationMeta live={live} className="thinking-generation-meta" />}
       </button>
       {item.generation === undefined ? null : <AssistantGenerationMeta generation={item.generation} />}

@@ -356,7 +356,8 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 @media (min-width: 1100px) and (hover: hover) and (pointer: fine) { .timeline-desktop-navigator { display: block; } }
 .timeline { min-width: 0; min-height: 0; height: 100%; overflow-y: auto; overscroll-behavior: contain; }
 .timeline-inner { box-sizing: border-box; width: min(870px, 100%); min-width: 0; max-width: 100%; min-height: 100%; margin: 0 auto; padding: 34px clamp(22px, 5vw, 70px) 42px; }
-.timeline-feed { display: grid; align-content: start; gap: 14px; }
+.timeline-feed { display: grid; align-content: start; gap: 14px; min-width: 0; }
+.timeline-feed > * { min-width: 0; max-width: 100%; }
 .timeline-load-earlier { justify-self: center; min-height: 28px; border: 0; background: transparent; padding: 4px 10px; color: var(--subtle); font-size: 12px; cursor: pointer; }
 .timeline-load-earlier:disabled { cursor: default; opacity: .55; }
 .timeline-load-earlier:focus-visible { color: var(--ink); outline: none; }
@@ -514,27 +515,28 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .activity-items .subagent-error { color: #ffb6b8; white-space: pre-wrap; }
 .activity-items .subagent-steps { display: grid; min-width: 0; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .activity-items .subagent-steps li { min-width: 0; color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
-.turn-process, .turn-process-stack { min-width: 0; color: var(--muted); }
-.turn-process-stack, .turn-process-body { display: grid; gap: 4px; }
+.turn-process, .turn-process-stack { min-width: 0; max-width: 100%; overflow: hidden; color: var(--muted); }
+.turn-process-stack, .turn-process-body { display: grid; min-width: 0; gap: 4px; }
 .turn-process-summary { display: flex; align-items: center; width: 100%; min-width: 0; gap: 7px; border: 0; border-radius: 4px; background: transparent; padding: 4px 0; text-align: left; }
 .turn-process-summary:focus-visible { color: var(--ink); outline: none; }
 .turn-process-chevron { flex: 0 0 auto; transition: transform .14s ease; }
 .turn-process-chevron.expanded { transform: rotate(90deg); }
 .turn-process-label, .turn-process-count, .turn-process-elapsed { flex: 0 0 auto; color: inherit; font-size: 12px; font-weight: 500; }
 .turn-process-body { margin-top: 4px; border-left: 1px solid var(--line); padding-left: 7px; }
+.turn-process-entry { min-width: 0; max-width: 100%; overflow: hidden; }
 .turn-process-current { display: grid; min-width: 0; gap: 4px; padding-top: 3px; }
 .process-commentary-preview { display: block; width: 100%; min-width: 0; overflow: hidden; border: 0; background: transparent; padding: 4px 0; color: var(--muted); text-align: left; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .process-commentary-preview:focus-visible { outline: 1px solid var(--line-strong); outline-offset: 2px; }
 .turn-process-body .message-body.assistant { color: var(--muted); }
 .turn-process-body .message-content { font-size: 12px; }
-.thinking-item { overflow: hidden; }
+.thinking-item { min-width: 0; max-width: 100%; overflow: hidden; }
 .thinking-item.running, .thinking-item.completed { border: 0; background: transparent; }
-.thinking-summary { display: flex; align-items: center; width: 100%; min-width: 0; gap: 7px; border: 0; background: transparent; padding: 4px 0; text-align: left; }
+.thinking-summary { display: flex; align-items: center; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; gap: 7px; border: 0; background: transparent; padding: 4px 0; text-align: left; }
 .thinking-summary:focus-visible { color: var(--ink); }
 .thinking-state-icon { display: grid; flex: 0 0 auto; color: inherit; }
 .thinking-item.running .thinking-state-icon { color: var(--accent); }
 .thinking-title { flex: 0 0 auto; font-size: 11px; font-weight: 600; }
-.thinking-preview { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--subtle); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.thinking-preview { display: block; flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--subtle); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .thinking-generation-meta { flex: 0 0 auto; margin-left: auto; color: var(--accent-strong); font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-variant-numeric: tabular-nums; line-height: 1.35; white-space: nowrap; }
 .run-elapsed { flex: 0 0 auto; color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .thinking-details { border-top: 1px solid rgb(255 255 255 / .07); padding: 7px 2px 8px 0; }
