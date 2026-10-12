@@ -25,12 +25,11 @@ interface ToolActivityProps {
 export function ToolActivity({ items, active, showAll = true, showActivePreview = true, openItems, onToggleItem, openCallIds, onToggleCall, visibleItemIds }: ToolActivityProps) {
   const state = activityState(items, active);
   const grouped = items.length > 1 && !items.some((item) => item.id.startsWith("bash:"));
-  const groupLabel = grouped && (!showAll || items.some((item) => item.subagent !== undefined)) ? summarizeToolActivity(items) : "";
   const visibleIds = visibleItemIds ?? new Set((showAll ? items : collapsedItems(items, active, showActivePreview)).map((item) => item.id));
 
   return (
     <article className={`activity-group ${state}`}>
-      {groupLabel === "" ? null : <div className="activity-group-label"><span className="activity-group-label-text">{groupLabel}</span></div>}
+      {!grouped ? null : <div className="activity-group-label"><span className="activity-group-label-text">{summarizeToolActivity(items)}</span></div>}
       <div className="activity-items" hidden={visibleIds.size === 0}>{items.map((item) => <div key={item.id} hidden={!visibleIds.has(item.id)}>
         <ToolRow item={item} pending={active && (item.state === "running" || item.state === "queued")} grouped={grouped} open={openItems?.has(item.id) === true} showDetails={showAll} openCallIds={openCallIds} onToggle={() => onToggleItem?.(item.id)} onToggleCall={onToggleCall} />
       </div>)}</div>
@@ -133,27 +132,7 @@ function compactTarget(value?: string): string {
 
 function compactCommand(value?: string): string {
   if (value === undefined || value.trim() === "") return "命令";
-  const normalized = shortenCommandPaths(stripShellPrelude(value.trim().replace(/\s+/g, " ")));
-  return normalized.length > 72 ? `${normalized.slice(0, 69)}…` : normalized;
-}
-
-/** 去掉路径切换和环境变量前缀，避免摘要被 `export MSYS_NO_PATHCONV=1` 占满。 */
-function stripShellPrelude(command: string): string {
-  const stripped = command.replace(/^(?:cd\s+[^;&]+\s*&&\s*|(?:export\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:[^\s"']+|"[^"]*"|'[^']*')\s+)+(?:&&\s*)?)+/i, "").trim();
-  return stripped === "" ? command : stripped;
-}
-
-function shortenCommandPaths(command: string): string {
-  return command.replace(/"[^"]+"|'[^']+'|\S+/g, (token) => {
-    const quote = token.startsWith("\"") || token.startsWith("'") ? token[0] : "";
-    const inner = quote === "" ? token : token.slice(1, -1);
-    if (!/[\\/]/.test(inner) || inner.includes("://")) return token;
-    const eq = inner.indexOf("=");
-    const path = eq > 0 && !/[\\/]/.test(inner.slice(0, eq)) ? inner.slice(eq + 1) : inner;
-    const prefix = path === inner ? "" : inner.slice(0, eq + 1);
-    const base = path.split(/[\\/]/).findLast((part) => part !== "") ?? path;
-    return base === "" ? token : `${prefix}${base}`;
-  });
+  return value.trim().replace(/^(?:cd\s+[^;&]+\s*&&\s*)+/i, "").replace(/\s+/g, " ");
 }
 
 function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; onToggle: () => void }) {
@@ -296,7 +275,7 @@ function CommandToolRow({ item, pending, open, showDetails, onToggle }: { item: 
     <article className={`tool-item tool-list-item command-item ${item.state}`}>
       <button className="tool-summary command-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
-        <span className="tool-target">{compactCommand(command)}</span>
+        <span className="tool-target">{command.trim() === "" ? "命令" : command}</span>
         {item.excludeFromContext === true ? <span className="command-excluded" title="输出不会发送给模型">不进上下文</span> : null}
       </button>
       {open ? <div className="tool-details command-details inline-details" hidden={!showDetails}>

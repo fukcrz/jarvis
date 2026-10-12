@@ -481,7 +481,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .activity-items .tool-list-item .tool-summary { grid-template-columns: auto minmax(0, 1fr); gap: 7px; border-radius: 4px; padding: 4px 0; }
 .activity-items .tool-list-item .tool-state-icon { color: inherit; }
 .activity-items .tool-list-item .tool-title { overflow: hidden; color: inherit; font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.activity-items .tool-list-item .tool-target { color: inherit; font-size: 11px; }
+.activity-items .tool-list-item .tool-target { overflow: visible; color: inherit; font-size: 11px; text-overflow: unset; white-space: pre-wrap; overflow-wrap: anywhere; }
 .activity-items .tool-list-item .tool-images { display: flex; flex-wrap: wrap; gap: 7px; padding-bottom: 2px; }
 .activity-items .tool-list-item .tool-images .message-image-thumb { width: 68px; height: 68px; }
 .activity-items .tool-list-item .tool-details { margin: 0; border: 0; border-top: 1px solid rgb(255 255 255 / .07); border-radius: 0; background: transparent; padding: 7px 0 10px; }
@@ -547,9 +547,9 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .command-item.running { border-color: #625337; background: #242018; }
 .command-item.failed { border-color: #663e42; background: #261a1c; }
 .activity-items .command-item, .activity-items .command-item.running, .activity-items .command-item.failed { border-color: transparent; background: transparent; }
-.tool-summary.command-summary { display: flex; flex-wrap: nowrap; min-width: 0; white-space: nowrap; }
+.tool-summary.command-summary { display: flex; align-items: flex-start; flex-wrap: nowrap; min-width: 0; white-space: normal; }
 .command-summary > .tool-state-icon, .command-summary > .command-terminal-icon, .command-summary > .command-duration, .command-summary > .command-exit, .command-summary > .tool-state-label, .command-summary > svg:last-child { flex: 0 0 auto; }
-.command-summary > .tool-target { flex: 1 1 auto; min-width: 0; }
+.command-summary > .tool-target { flex: 1 1 auto; min-width: 0; overflow: visible; text-overflow: unset; white-space: pre-wrap; overflow-wrap: anywhere; }
 .command-terminal-icon { color: var(--muted); }
 .command-duration, .command-exit { color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
 .command-excluded { flex: 0 0 auto; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface-hover); padding: 1px 7px; color: var(--muted); font-size: 10px; line-height: 1.5; white-space: nowrap; }
