@@ -24,12 +24,12 @@ interface ToolActivityProps {
   onToggleGroup?: () => void;
 }
 
-/** The group heading folds its rows only while the enclosing process is open. */
+/** Consecutive tool rows fold under their count heading. */
 export function ToolActivity({ items, active, showAll = true, showActivePreview = true, openItems, onToggleItem, openCallIds, onToggleCall, visibleItemIds, groupCollapsed = false, onToggleGroup }: ToolActivityProps) {
   const state = activityState(items, active);
   const grouped = items.length > 1 && !items.some((item) => item.id.startsWith("bash:"));
   const visibleIds = visibleItemIds ?? new Set((showAll ? items : collapsedItems(items, active, showActivePreview)).map((item) => item.id));
-  const groupToggle = grouped && showAll && onToggleGroup !== undefined;
+  const groupToggle = grouped && onToggleGroup !== undefined;
   const summary = grouped ? summarizeToolActivity(items) : "";
 
   return (

@@ -53,6 +53,8 @@ describe("ToolActivity summaries", () => {
     const folded = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, showAll: true, groupCollapsed: true, onToggleGroup: () => undefined }));
     expect(folded).toContain('aria-expanded="false"');
     expect(folded).toContain('class="activity-items" hidden=""');
+    const preview = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, showAll: false, onToggleGroup: () => undefined }));
+    expect(preview).toContain('<button type="button" class="activity-group-label" aria-expanded="true">');
   });
 });
 
