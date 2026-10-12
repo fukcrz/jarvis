@@ -47,6 +47,12 @@ describe("ToolActivity summaries", () => {
     expect(expanded).toContain('class="activity-group-label"');
     expect(expanded).not.toContain("activity-narration");
     expect(expanded).not.toContain('<div class="activity-group-label" aria-expanded');
+    const foldable = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, showAll: true, onToggleGroup: () => undefined }));
+    expect(foldable).toContain('aria-expanded="true"');
+    expect(foldable).toContain("读取了 a.ts");
+    const folded = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, showAll: true, groupCollapsed: true, onToggleGroup: () => undefined }));
+    expect(folded).toContain('aria-expanded="false"');
+    expect(folded).toContain('class="activity-items" hidden=""');
   });
 });
 

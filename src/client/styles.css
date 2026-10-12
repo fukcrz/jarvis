@@ -470,7 +470,9 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.pic
 .extension-widget-heading[aria-expanded="true"],
 .extension-select-preview-toggle[aria-expanded="true"],
 .extension-result-line button[aria-expanded="true"] { --fold-color: var(--muted); }
-.activity-group-label { display: flex; align-items: flex-start; min-width: 0; padding: 4px 0; color: var(--subtle); }
+.activity-group-label { display: flex; align-items: center; width: 100%; min-width: 0; gap: 7px; border: 0; background: transparent; padding: 4px 0; color: var(--subtle); text-align: left; }
+button.activity-group-label { cursor: pointer; }
+button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .activity-group-label-text { min-width: 0; font-size: 11px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
 .activity-items { display: grid; gap: 4px; }
 .activity-items[hidden], .activity-items [hidden], .turn-process-entry[hidden], .turn-process-entry > [hidden] { display: none !important; }
