@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentCallView, ToolTimelineItem } from "../../shared/protocol";
-import { collapseUntouchedTimelineProcess, collapsedToolActivityItems, emptyTimelineFoldState, subagentCallDetailId, toggleTimelineDetail, toggleTimelineProcess, visibleToolActivityItemIds } from "./timeline-fold";
+import { activityGroupId, collapseUntouchedTimelineProcess, collapsedToolActivityItems, emptyTimelineFoldState, subagentCallDetailId, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, visibleToolActivityItemIds } from "./timeline-fold";
 
 function item(id: string, state: ToolTimelineItem["state"] = "completed"): ToolTimelineItem {
   return { kind: "tool", id, createdAt: "", name: "read", title: "Read file", state };
@@ -28,6 +28,13 @@ describe("timeline fold state", () => {
     const reopened = toggleTimelineDetail(folded, "process-1", "detail-1", false);
     expect(reopened.openProcessIds.has("process-1")).toBe(true);
     expect(reopened.openDetailIds.has("detail-1")).toBe(true);
+  });
+
+  it("toggles a tool group without clearing the open process", () => {
+    const collapsed = toggleTimelineGroup(emptyTimelineFoldState(), "process-1", activityGroupId("tool-1"));
+    expect(collapsed.collapsedGroupIds.has("group:tool-1")).toBe(true);
+    expect(collapsed.openProcessIds.has("process-1")).toBe(true);
+    expect(toggleTimelineGroup(collapsed, "process-1", activityGroupId("tool-1")).collapsedGroupIds.has("group:tool-1")).toBe(false);
   });
 
   it("auto-collapses only an untouched open process", () => {

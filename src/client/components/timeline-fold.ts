@@ -4,6 +4,7 @@ export interface TimelineFoldState {
   sessionKey?: string;
   openProcessIds: ReadonlySet<string>;
   openDetailIds: ReadonlySet<string>;
+  collapsedGroupIds: ReadonlySet<string>;
   touchedProcessIds: ReadonlySet<string>;
 }
 
@@ -12,6 +13,7 @@ export function emptyTimelineFoldState(sessionKey?: string): TimelineFoldState {
     sessionKey,
     openProcessIds: new Set(),
     openDetailIds: new Set(),
+    collapsedGroupIds: new Set(),
     touchedProcessIds: new Set(),
   };
 }
@@ -35,6 +37,21 @@ export function toggleTimelineDetail(state: TimelineFoldState, processId: string
   const touchedProcessIds = new Set(state.touchedProcessIds);
   touchedProcessIds.add(processId);
   return { ...state, openProcessIds, openDetailIds, touchedProcessIds };
+}
+
+export function activityGroupId(itemId: string): string {
+  return `group:${itemId}`;
+}
+
+export function toggleTimelineGroup(state: TimelineFoldState, processId: string, groupId: string): TimelineFoldState {
+  const collapsedGroupIds = new Set(state.collapsedGroupIds);
+  if (collapsedGroupIds.has(groupId)) collapsedGroupIds.delete(groupId);
+  else collapsedGroupIds.add(groupId);
+  const openProcessIds = new Set(state.openProcessIds);
+  openProcessIds.add(processId);
+  const touchedProcessIds = new Set(state.touchedProcessIds);
+  touchedProcessIds.add(processId);
+  return { ...state, collapsedGroupIds, openProcessIds, touchedProcessIds };
 }
 
 export function collapseUntouchedTimelineProcess(state: TimelineFoldState, processId: string): TimelineFoldState {

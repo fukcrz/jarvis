@@ -1,4 +1,4 @@
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import type { SubagentCallView, SubagentView, ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
 import { ImagePreview } from "./image-lightbox";
@@ -19,18 +19,26 @@ interface ToolActivityProps {
   openCallIds?: ReadonlySet<string>;
   onToggleCall?: (toolId: string, callId: string) => void;
   visibleItemIds?: ReadonlySet<string>;
+  /** Hide this group's rows while the enclosing process stays open. */
+  groupCollapsed?: boolean;
+  onToggleGroup?: () => void;
 }
 
-/** The group heading is a label; only the process and individual rows can be toggled. */
-export function ToolActivity({ items, active, showAll = true, showActivePreview = true, openItems, onToggleItem, openCallIds, onToggleCall, visibleItemIds }: ToolActivityProps) {
+/** The group heading folds its rows only while the enclosing process is open. */
+export function ToolActivity({ items, active, showAll = true, showActivePreview = true, openItems, onToggleItem, openCallIds, onToggleCall, visibleItemIds, groupCollapsed = false, onToggleGroup }: ToolActivityProps) {
   const state = activityState(items, active);
   const grouped = items.length > 1 && !items.some((item) => item.id.startsWith("bash:"));
   const visibleIds = visibleItemIds ?? new Set((showAll ? items : collapsedItems(items, active, showActivePreview)).map((item) => item.id));
+  const groupToggle = grouped && showAll && onToggleGroup !== undefined;
+  const summary = grouped ? summarizeToolActivity(items) : "";
 
   return (
     <article className={`activity-group ${state}`}>
-      {!grouped ? null : <div className="activity-group-label"><span className="activity-group-label-text">{summarizeToolActivity(items)}</span></div>}
-      <div className="activity-items" hidden={visibleIds.size === 0}>{items.map((item) => <div key={item.id} hidden={!visibleIds.has(item.id)}>
+      {!grouped ? null : groupToggle ? <button type="button" className="activity-group-label" aria-expanded={!groupCollapsed} onClick={onToggleGroup}>
+        <ChevronRight size={13} className={`turn-process-chevron${groupCollapsed ? "" : " expanded"}`} aria-hidden />
+        <span className="activity-group-label-text">{summary}</span>
+      </button> : <div className="activity-group-label"><span className="activity-group-label-text">{summary}</span></div>}
+      <div className="activity-items" hidden={groupCollapsed || visibleIds.size === 0}>{items.map((item) => <div key={item.id} hidden={!visibleIds.has(item.id)}>
         <ToolRow item={item} pending={active && (item.state === "running" || item.state === "queued")} grouped={grouped} open={openItems?.has(item.id) === true} showDetails={showAll} openCallIds={openCallIds} onToggle={() => onToggleItem?.(item.id)} onToggleCall={onToggleCall} />
       </div>)}</div>
     </article>
