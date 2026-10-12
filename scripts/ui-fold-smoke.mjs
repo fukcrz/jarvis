@@ -412,7 +412,7 @@ async function exerciseCommandFolds(baseUrl, workspace, viewport, label, shell) 
     const group = process.locator(".activity-group");
     await group.locator(".activity-group-label").waitFor();
     assert.equal(await process.locator(".turn-process-summary").getAttribute("aria-expanded"), "false", `${scenario}: queued tools opened process`);
-    assert.equal(await group.locator(".activity-group-label").getAttribute("aria-expanded"), null, `${scenario}: tool group remained interactive`);
+    assert.equal(await group.locator(".activity-group-label").getAttribute("aria-expanded"), "true", `${scenario}: tool group should collapse its rows`);
     assert.equal(await group.locator(".activity-group-label-text").textContent(), "命令 3");
     assert.equal(await group.locator(".tool-item.queued:visible").count(), 3, `${scenario}: default preview hid queued tools`);
     await snapshot(page, `${scenario}-default-preview`);
