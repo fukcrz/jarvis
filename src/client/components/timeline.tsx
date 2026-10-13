@@ -1100,19 +1100,16 @@ export interface TimelineTurn {
   user?: MessageTimelineItem;
   /** 折叠进「过程」的条目：思考、工具组、过程文本、错误、上下文事件。 */
   process: TimelineRenderItem[];
-  /** Explicit final_answer text stays outside the process. */
+  /** 回合最后一条 assistant 文本，留在过程外。 */
   final?: MessageTimelineItem;
-  /** Unphased assistant text remains an ordinary visible reply. */
-  reply?: MessageTimelineItem;
   /** 回合末尾未恢复的错误，留在过程折叠外。 */
   finalError?: ErrorTimelineItem[];
 }
 
-/** Split at user messages and visible replies so folding never reorders assistant content. */
+/** 以用户消息为界组成回合。最终总结之前的内容都进过程；只有最后一条 assistant 文本才提到外面。 */
 export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
   const turns: TimelineTurn[] = [];
   let current: TimelineTurn | undefined;
-  let previousReplyId: string | undefined;
   const openTurn = (key: string): TimelineTurn => {
     const turn: TimelineTurn = { key, process: [] };
     turns.push(turn);
@@ -1122,26 +1119,18 @@ export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
 
   for (const entry of groupTimelineItems(items)) {
     if (entry.kind === "message" && entry.item.role === "user") {
-      previousReplyId = undefined;
       openTurn(`turn:${entry.item.id}`).user = entry.item;
       continue;
     }
     const sourceMessageId = renderItemSourceMessageId(entry);
-    const turn = current ?? openTurn(previousReplyId === undefined
-      ? `turn:${sourceMessageId ?? renderItemKey(entry)}`
-      : `turn:after:${previousReplyId}`);
-    if (entry.kind === "message" && entry.item.role === "assistant" && entry.item.phase !== "commentary") {
-      if (entry.item.phase === "final_answer") turn.final = entry.item;
-      else turn.reply = entry.item;
-      previousReplyId = entry.item.id;
-      current = undefined;
-    } else {
-      turn.process.push(entry);
-    }
+    (current ?? openTurn(`turn:${sourceMessageId ?? renderItemKey(entry)}`)).process.push(entry);
   }
   for (const turn of turns) {
     const last = turn.process.at(-1);
-    if (turn.final === undefined && turn.reply === undefined && last?.kind === "error" && last.items.some((item) => item.state === "failed")) {
+    if (last?.kind === "message" && last.item.role === "assistant") {
+      turn.final = last.item;
+      turn.process.pop();
+    } else if (last?.kind === "error" && last.items.some((item) => item.state === "failed")) {
       turn.finalError = last.items;
       turn.process.pop();
     }
@@ -1398,7 +1387,6 @@ function TimelineTurnBlock({ turn, active, foldState, onToggleProcess, onToggleP
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
     {processBlock}
-    {turn.reply === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.reply }, context)}
     {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, context)}
     {turn.finalError === undefined ? null : renderTimelineEntry({ kind: "error", items: turn.finalError }, context)}
   </>;

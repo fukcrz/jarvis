@@ -239,7 +239,7 @@ describe("groupTimelineTurns", () => {
     ]);
   });
 
-  it("keeps process entries that follow the last text inside the turn", () => {
+  it("keeps text that is followed by later work inside the process", () => {
     const narration = { ...message("m1"), phase: "commentary" as const };
     const [turn] = groupTimelineTurns([user("u1"), narration, tool("a")]);
 
@@ -306,43 +306,43 @@ describe("summarizeTurnProcess", () => {
 });
 
 describe("structured text phases", () => {
-  it.each(["Preparing", "正在检查代码", "字".repeat(250)])("retains unphased text as an ordinary reply: %s", (text) => {
+  it.each(["Preparing", "正在检查代码", "字".repeat(250)])("keeps text before the summary inside one process: %s", (text) => {
     const plain = { ...message("plain"), text, phase: undefined };
     const turns = groupTimelineTurns([user("u"), plain, tool("after"), message("final")]);
-    expect(turns[0]?.reply).toEqual(plain);
-    expect(turns[0]?.final).toBeUndefined();
-    expect(turns[0]?.process).toEqual([]);
-    expect(turns[1]?.process).toEqual([{ kind: "activity", items: [tool("after")] }]);
-    expect(turns[1]?.final).toEqual(message("final"));
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.final).toEqual(message("final"));
+    expect(turns[0]?.process).toEqual([{ kind: "message", item: plain }, { kind: "activity", items: [tool("after")] }]);
   });
 
-  it("keeps commentary in process even at the end and with long text", () => {
+  it("lifts a trailing commentary summary out of the process", () => {
     const commentary = { ...message("commentary"), phase: "commentary" as const, text: "Reviewing\n".repeat(200) };
     const [turn] = groupTimelineTurns([user("u"), thinking("t"), commentary]);
-    expect(turn?.final).toBeUndefined();
-    expect(turn?.reply).toBeUndefined();
-    expect(turn?.process.at(-1)).toEqual({ kind: "message", item: commentary });
+    expect(turn?.final).toEqual(commentary);
+    expect(turn?.process).toEqual([{ kind: "thinking", item: thinking("t") }]);
   });
 
-  it("keeps multiple final blocks and later process in their original order", () => {
+  it("keeps earlier text inside the process and lifts only the last summary", () => {
     const first = message("first");
     const second = message("second");
-    const turns = groupTimelineTurns([user("u"), thinking("t"), first, tool("between"), second]);
-    expect(turns.map((turn) => turn.final?.id)).toEqual(["first", "second"]);
-    expect(turns[1]?.process).toEqual([{ kind: "activity", items: [tool("between")] }]);
+    const [turn] = groupTimelineTurns([user("u"), thinking("t"), first, tool("between"), second]);
+    expect(turn?.final).toEqual(second);
+    expect(turn?.process).toEqual([
+      { kind: "thinking", item: thinking("t") },
+      { kind: "message", item: first },
+      { kind: "activity", items: [tool("between")] },
+    ]);
   });
 
-  it("gives assistant response segments unique stable process identities", () => {
+  it("keeps one process identity for a response that continues after text", () => {
     const first = { ...message("first"), assistantMessageId: "response", contentIndex: 0 };
     const second = { ...message("second"), assistantMessageId: "response", contentIndex: 2 };
     const between = { ...tool("between"), assistantMessageId: "response", contentIndex: 1 };
     const after = { ...tool("after"), assistantMessageId: "response", contentIndex: 3 };
     const turns = groupTimelineTurns([user("u"), first, between, second, after]);
-    expect(turns).toHaveLength(3);
-    expect(new Set(turns.map(timelineProcessId)).size).toBe(3);
-    expect(timelineProcessId(turns[0])).toBeUndefined();
-    expect(timelineProcessId(turns[1])).toBe("process:response:after:first");
-    expect(timelineProcessId(turns[2])).toBe("process:response:after:second");
+    expect(turns).toHaveLength(1);
+    expect(timelineProcessId(turns[0])).toBe("process:response");
+    expect(turns[0]?.final).toBeUndefined();
+    expect(turns[0]?.process.map((entry) => entry.kind === "message" ? entry.item.id : entry.items[0]?.id)).toEqual(["first", "between", "second", "after"]);
   });
 
   it("keeps a leading process identity stable when a user message is paged in", () => {

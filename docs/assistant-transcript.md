@@ -5,9 +5,8 @@ The transcript follows Pi content blocks rather than text heuristics. The same p
 ## Content classification
 
 - Native `thinking` blocks become thinking items.
-- A text block with a valid Pi `TextSignatureV1` and `phase: "commentary"` becomes assistant process text.
-- A valid `phase: "final_answer"` keeps the text visible as a final reply.
-- Missing, invalid, or unknown phase metadata leaves text as an ordinary visible assistant reply. Language, length, headings, and phrases such as `Preparing` or `Reviewing` do not determine phase.
+- Text phase is recorded, but it does not split the timeline. One user message is one turn. Everything before the trailing assistant text is the process; only that last text stays outside as the summary. If tools or thinking follow a text block, the text stays inside the process so later work is not shown before it.
+- Language, length, headings, and phrases such as `Preparing` or `Reviewing` do not decide what is outside the process.
 - Legacy unphased text containing `<thinking>…</thinking>` retains the existing import behavior. Explicitly phased text keeps its original content, including literal thinking markup.
 
 Signatures must be JSON strings containing `v: 1`, a nonempty `id`, and a recognized phase. No provider or model name is required for classification.
