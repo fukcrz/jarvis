@@ -538,7 +538,7 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .thinking-state-icon { display: grid; flex: 0 0 auto; color: inherit; }
 .thinking-item.running .thinking-state-icon { color: var(--accent); }
 .thinking-title { flex: 0 0 auto; font-size: 11px; font-weight: 600; }
-.thinking-preview { display: block; flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--subtle); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.thinking-preview { display: block; flex: 1 1 0; width: 0; min-width: 0; overflow: hidden; color: var(--subtle); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .thinking-generation-meta { flex: 0 0 auto; margin-left: auto; color: var(--accent-strong); font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-variant-numeric: tabular-nums; line-height: 1.35; white-space: nowrap; }
 .run-elapsed { flex: 0 0 auto; color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .thinking-details { border-top: 1px solid rgb(255 255 255 / .07); padding: 7px 2px 8px 0; }
