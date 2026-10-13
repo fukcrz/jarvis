@@ -32,9 +32,9 @@ describe("timeline fold state", () => {
 
   it("toggles a tool group without clearing the open process", () => {
     const collapsed = toggleTimelineGroup(emptyTimelineFoldState(), "process-1", activityGroupId("tool-1"));
-    expect(collapsed.collapsedGroupIds.has("group:tool-1")).toBe(true);
+    expect(collapsed.openGroupIds.has("group:tool-1")).toBe(true);
     expect(collapsed.openProcessIds.has("process-1")).toBe(true);
-    expect(toggleTimelineGroup(collapsed, "process-1", activityGroupId("tool-1")).collapsedGroupIds.has("group:tool-1")).toBe(false);
+    expect(toggleTimelineGroup(collapsed, "process-1", activityGroupId("tool-1")).openGroupIds.has("group:tool-1")).toBe(false);
   });
 
   it("auto-collapses only an untouched open process", () => {
