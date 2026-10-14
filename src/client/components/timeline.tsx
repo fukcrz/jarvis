@@ -1180,17 +1180,38 @@ export function summarizeTurnProcess(turn: TimelineTurn): TurnProcessSummary {
   return { operations, ...(durationMs === undefined ? {} : { durationMs }) };
 }
 
-/** 单条思考/工具组/事件本身就是一行摘要，再套一层折叠没有收益；过程文本可能很长，值得折。 */
+/** 过程里只要还有内容就折叠，单条也收进去。 */
 export function shouldFoldTurnProcess(turn: TimelineTurn): boolean {
-  if (turn.process.length >= 2) return true;
-  return turn.process.at(0)?.kind === "message";
+  return turn.process.length > 0;
 }
 
-/** 等待用户响应的扩展交互，或用户主动执行的 !cmd（`bash:` 前缀）：默认展开，不去藏需要人看的内容。 */
-export function isTurnPinned(turn: TimelineTurn): boolean {
-  return turn.process.some((entry) =>
-    (entry.kind === "extension-ui" && entry.item.outcome === undefined)
-    || (entry.kind === "activity" && entry.items.some((item) => item.id.startsWith("bash:"))));
+function isUserCommand(item: ToolTimelineItem): boolean {
+  return item.id.startsWith("bash:");
+}
+
+function isPendingDialog(entry: TimelineRenderItem): boolean {
+  return entry.kind === "extension-ui" && entry.item.outcome === undefined;
+}
+
+/** 用户 !cmd 和未回答问询留在过程外，其余仍按原顺序收进过程。 */
+export function splitVisibleTurnEntries(entries: TimelineRenderItem[]): { process: TimelineRenderItem[]; visible: TimelineRenderItem[] } {
+  const process: TimelineRenderItem[] = [];
+  const visible: TimelineRenderItem[] = [];
+  for (const entry of entries) {
+    if (isPendingDialog(entry)) {
+      visible.push(entry);
+      continue;
+    }
+    if (entry.kind !== "activity") {
+      process.push(entry);
+      continue;
+    }
+    const commands = entry.items.filter(isUserCommand);
+    const rest = entry.items.filter((item) => !isUserCommand(item));
+    if (rest.length > 0) process.push({ kind: "activity", items: rest });
+    if (commands.length > 0) visible.push({ kind: "activity", items: commands });
+  }
+  return { process, visible };
 }
 
 /** 回合以未恢复的错误收尾。末尾失败卡会提到折叠外，过程里也可能还留着未恢复错误。 */
@@ -1319,11 +1340,11 @@ export function timelineProcessId(turn: TimelineTurn | undefined): string | unde
 
 function TimelineTurnBlock({ turn, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; foldState: TimelineFoldState; onToggleProcess: (id: string) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string) => void }) {
   const presented = useMemo(() => presentTurnProcess(turn.process), [turn.process]);
-  const displayTurn = { ...turn, process: presented.entries };
+  const split = useMemo(() => splitVisibleTurnEntries(presented.entries), [presented.entries]);
+  const displayTurn = { ...turn, process: split.process };
   const foldable = shouldFoldTurnProcess(displayTurn);
   const summary = summarizeTurnProcess(displayTurn);
-  const pinned = isTurnPinned(turn);
-  const collapsible = foldable && !pinned;
+  const collapsible = foldable;
   const processId = timelineProcessId(turn);
   const open = !collapsible || processId !== undefined && foldState.openProcessIds.has(processId);
   const touched = processId !== undefined && foldState.touchedProcessIds.has(processId);
@@ -1354,6 +1375,7 @@ function TimelineTurnBlock({ turn, foldState, onToggleProcess, onToggleProcessDe
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
     {processBlock}
+    {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, true), onToggleCall: (_toolId, callId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, callId, true) }, true, false)}</div>)}
     {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, context)}
     {turn.finalError === undefined ? null : renderTimelineEntry({ kind: "error", items: turn.finalError }, context)}
   </>;
