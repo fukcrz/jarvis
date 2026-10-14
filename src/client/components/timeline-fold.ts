@@ -47,11 +47,7 @@ export function toggleTimelineGroup(state: TimelineFoldState, processId: string,
   const openGroupIds = new Set(state.openGroupIds);
   if (openGroupIds.has(groupId)) openGroupIds.delete(groupId);
   else openGroupIds.add(groupId);
-  const openProcessIds = new Set(state.openProcessIds);
-  openProcessIds.add(processId);
-  const touchedProcessIds = new Set(state.touchedProcessIds);
-  touchedProcessIds.add(processId);
-  return { ...state, openGroupIds, openProcessIds, touchedProcessIds };
+  return { ...state, openGroupIds };
 }
 
 export function collapseUntouchedTimelineProcess(state: TimelineFoldState, processId: string): TimelineFoldState {

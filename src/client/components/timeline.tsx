@@ -1367,6 +1367,7 @@ function TimelineTurnBlock({ turn, active, foldState, onToggleProcess, onToggleP
     || entry.kind === "activity" && entry.items.some((item) => item.state === "failed" || (item.subagent?.failed ?? 0) > 0)
     || entry.kind === "error" && entry.items.some((item) => item.state === "failed"));
   const previewKeys = new Set(liveProcess.map(renderItemKey));
+  const collapsedPreview = displayTurn.process.filter((entry) => entry.kind !== "activity" && previewKeys.has(renderItemKey(entry)));
   const processBlock = displayTurn.process.length === 0 ? null : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
     {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => onToggleProcess(processId)}>
       <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
@@ -1374,15 +1375,15 @@ function TimelineTurnBlock({ turn, active, foldState, onToggleProcess, onToggleP
       {summary.operations === 0 ? null : <span className="turn-process-count">{summary.operations} 项操作</span>}
       {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
     </button>}
-    <div className={!collapsible ? "turn-process-stack" : open ? "turn-process-body" : "turn-process-current"}>
-      {displayTurn.process.map((entry) => {
-        const preview = !showAll && previewKeys.has(renderItemKey(entry));
-        return <div key={renderItemKey(entry)} className="turn-process-entry" hidden={!showAll && !preview}>
-          {entry.kind === "message" && !showAll ? <button type="button" className="process-commentary-preview" onClick={() => processId === undefined ? undefined : onToggleProcess(processId)} aria-label="展开过程文本">{processTextPreview(entry.item.text)}</button> : null}
-          <div hidden={entry.kind === "message" && !showAll}>{renderTimelineEntry(entry, processContext, showAll, !touched)}</div>
-        </div>;
-      })}
-    </div>
+    {showAll ? <div className={!collapsible ? "turn-process-stack" : "turn-process-body"}>
+      {displayTurn.process.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
+        {renderTimelineEntry(entry, processContext, true, !touched)}
+      </div>)}
+    </div> : collapsedPreview.length === 0 ? null : <div className="turn-process-current">
+      {collapsedPreview.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
+        {entry.kind === "message" ? <button type="button" className="process-commentary-preview" onClick={() => processId === undefined ? undefined : onToggleProcess(processId)} aria-label="展开过程文本">{processTextPreview(entry.item.text)}</button> : renderTimelineEntry(entry, processContext, false, !touched)}
+      </div>)}
+    </div>}
   </section>;
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}

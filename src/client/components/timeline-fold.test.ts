@@ -30,10 +30,10 @@ describe("timeline fold state", () => {
     expect(reopened.openDetailIds.has("detail-1")).toBe(true);
   });
 
-  it("toggles a tool group without clearing the open process", () => {
+  it("toggles a tool group without opening the process", () => {
     const collapsed = toggleTimelineGroup(emptyTimelineFoldState(), "process-1", activityGroupId("tool-1"));
     expect(collapsed.openGroupIds.has("group:tool-1")).toBe(true);
-    expect(collapsed.openProcessIds.has("process-1")).toBe(true);
+    expect(collapsed.openProcessIds.has("process-1")).toBe(false);
     expect(toggleTimelineGroup(collapsed, "process-1", activityGroupId("tool-1")).openGroupIds.has("group:tool-1")).toBe(false);
   });
 
