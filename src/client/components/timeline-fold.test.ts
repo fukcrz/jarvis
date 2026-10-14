@@ -7,27 +7,11 @@ function item(id: string, state: ToolTimelineItem["state"] = "completed"): ToolT
 }
 
 describe("timeline fold state", () => {
-  it("opens a detail and its parent, then restores the detail after a parent fold", () => {
-    const opened = toggleTimelineDetail(emptyTimelineFoldState("session"), "process-1", "detail-1", false);
-    expect(opened.openProcessIds.has("process-1")).toBe(true);
+  it("toggles a detail without opening the process", () => {
+    const opened = toggleTimelineDetail(emptyTimelineFoldState("session"), "process-1", "detail-1", true);
+    expect(opened.openProcessIds.has("process-1")).toBe(false);
     expect(opened.openDetailIds.has("detail-1")).toBe(true);
-    expect(opened.touchedProcessIds.has("process-1")).toBe(true);
-
-    const folded = toggleTimelineProcess(opened, "process-1");
-    expect(folded.openProcessIds.has("process-1")).toBe(false);
-    expect(folded.openDetailIds.has("detail-1")).toBe(true);
-
-    const restored = toggleTimelineProcess(folded, "process-1");
-    expect(restored.openProcessIds.has("process-1")).toBe(true);
-    expect(restored.openDetailIds.has("detail-1")).toBe(true);
-  });
-
-  it("does not clear an already selected detail when a collapsed parent is clicked", () => {
-    const selected = toggleTimelineDetail(emptyTimelineFoldState(), "process-1", "detail-1", true);
-    const folded = toggleTimelineProcess(selected, "process-1");
-    const reopened = toggleTimelineDetail(folded, "process-1", "detail-1", false);
-    expect(reopened.openProcessIds.has("process-1")).toBe(true);
-    expect(reopened.openDetailIds.has("detail-1")).toBe(true);
+    expect(toggleTimelineDetail(opened, "process-1", "detail-1", true).openDetailIds.has("detail-1")).toBe(false);
   });
 
   it("toggles a tool group without opening the process", () => {

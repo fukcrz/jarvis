@@ -29,14 +29,9 @@ export function toggleTimelineProcess(state: TimelineFoldState, processId: strin
 
 export function toggleTimelineDetail(state: TimelineFoldState, processId: string, detailId: string, parentShowingAll: boolean): TimelineFoldState {
   const openDetailIds = new Set(state.openDetailIds);
-  if (!parentShowingAll) openDetailIds.add(detailId);
-  else if (openDetailIds.has(detailId)) openDetailIds.delete(detailId);
-  else openDetailIds.add(detailId);
-  const openProcessIds = new Set(state.openProcessIds);
-  openProcessIds.add(processId);
-  const touchedProcessIds = new Set(state.touchedProcessIds);
-  touchedProcessIds.add(processId);
-  return { ...state, openProcessIds, openDetailIds, touchedProcessIds };
+  if (!parentShowingAll || !openDetailIds.has(detailId)) openDetailIds.add(detailId);
+  else openDetailIds.delete(detailId);
+  return { ...state, openDetailIds };
 }
 
 export function activityGroupId(itemId: string): string {

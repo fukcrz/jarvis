@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
+import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -379,7 +379,7 @@ describe("presentTurnProcess", () => {
     ]);
     expect(presented.entries).toEqual([{ kind: "extension-ui", item: select }]);
     expect(presented.customAnswers.get("select")).toBe("啥意思？我听不懂");
-    expect(shouldFoldTurnProcess({ key: "t", process: presented.entries })).toBe(false);
+    expect(shouldFoldTurnProcess({ key: "t", process: presented.entries })).toBe(true);
   });
 });
 
@@ -471,22 +471,30 @@ describe("shouldFoldTurnProcess", () => {
     expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }], finalError: [error("e1")] })).toBe(true);
   });
 
-  it("does not fold a single summary row or an empty process", () => {
-    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }] })).toBe(false);
-    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "activity", items: [tool("a")] }] })).toBe(false);
+  it("folds a single row and leaves an empty process unfolded", () => {
+    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }] })).toBe(true);
+    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "activity", items: [tool("a")] }] })).toBe(true);
     expect(shouldFoldTurnProcess({ key: "t", process: [] })).toBe(false);
   });
 });
 
-describe("isTurnPinned", () => {
-  it("pins turns with a pending interaction or a user !cmd", () => {
-    expect(isTurnPinned({ key: "t", process: [{ kind: "extension-ui", item: dialog("d1") }] })).toBe(true);
-    expect(isTurnPinned({ key: "t", process: [{ kind: "activity", items: [command("c1")] }] })).toBe(true);
-  });
-
-  it("leaves settled interactions unaffected", () => {
-    expect(isTurnPinned({ key: "t", process: [{ kind: "extension-ui", item: dialog("d1", "answered") }] })).toBe(false);
-    expect(isTurnPinned({ key: "t", process: [{ kind: "activity", items: [tool("a", "bash")] }] })).toBe(false);
+describe("splitVisibleTurnEntries", () => {
+  it("lifts a pending dialog and a user command out of the process", () => {
+    const result = splitVisibleTurnEntries([
+      { kind: "thinking", item: thinking("t1") },
+      { kind: "activity", items: [tool("a"), command("c1")] },
+      { kind: "extension-ui", item: dialog("d1") },
+      { kind: "extension-ui", item: dialog("d2", "answered") },
+    ]);
+    expect(result.process).toEqual([
+      { kind: "thinking", item: thinking("t1") },
+      { kind: "activity", items: [tool("a")] },
+      { kind: "extension-ui", item: dialog("d2", "answered") },
+    ]);
+    expect(result.visible).toEqual([
+      { kind: "activity", items: [command("c1")] },
+      { kind: "extension-ui", item: dialog("d1") },
+    ]);
   });
 });
 
