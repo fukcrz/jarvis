@@ -1282,13 +1282,6 @@ function nextCustomInput(entries: TimelineRenderItem[], from: number): Extension
   return undefined;
 }
 
-function isAnsweredQuestionCard(item: ExtensionUiTimelineItem): boolean {
-  if (item.outcome !== "answered") return false;
-  if (item.request.method === "select") return parseSelectDialog(item.request) !== undefined;
-  if (item.request.method === "input") return parseMultiSelectDialog(item.request) !== undefined;
-  return false;
-}
-
 function liveGenerationForBlock(item: MessageTimelineItem | ThinkingTimelineItem, live: LiveGenerationStats | undefined, kind: "thinking" | "text"): LiveGenerationStats | undefined {
   if (live?.activeBlockKind !== kind) return undefined;
   if ((item.assistantMessageId ?? item.id) !== live.assistantMessageId) return undefined;
@@ -1308,29 +1301,12 @@ function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderConte
   return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={active} showAll={showAll} showActivePreview={showActivePreview} visibleItemIds={showAll ? undefined : visibleToolActivityItemIds(entry.items, active, showActivePreview)} openItems={context.openDetailIds} onToggleItem={context.onToggleDetail} openCallIds={context.openDetailIds} onToggleCall={context.onToggleCall} groupCollapsed={grouped && !pending && !context.openGroupIds.has(groupId)} onToggleGroup={context.onToggleGroup === undefined ? undefined : () => context.onToggleGroup?.(groupId)} />;
 }
 
-/** Keep current work and failures visible while the earlier process is collapsed. */
-export function liveTurnProcessEntries(turn: TimelineTurn): TimelineRenderItem[] {
-  const current = turn.process.at(-1);
-  return turn.process.flatMap<TimelineRenderItem>((entry) => {
-    if (entry.kind === "activity") {
-      return entry.items.some((item) => item.state === "running" || item.state === "queued" || item.state === "failed" || (item.subagent?.failed ?? 0) > 0) ? [entry] : [];
-    }
-    if (entry.kind === "error" && entry.items.some((item) => item.state === "failed")) return [entry];
-    if (entry.kind === "extension-ui" && (entry.item.outcome === undefined || isAnsweredQuestionCard(entry.item))) return [entry];
-    return entry === current ? [entry] : [];
-  });
-}
-
 export function processTextPreview(text: string): string {
   return text.split(/\r?\n/).filter((line) => line.trim() !== "").at(-1)?.trim() ?? "";
 }
 
 export function MarkdownTextPreview({ text }: { text: string }) {
   return <ReactMarkdown allowedElements={[]} unwrapDisallowed skipHtml components={{ p: ({ children }) => <>{children}</> }}>{text}</ReactMarkdown>;
-}
-
-function keepsCollapsedQuestion(entry: TimelineRenderItem): boolean {
-  return entry.kind === "extension-ui" && isAnsweredQuestionCard(entry.item);
 }
 
 export function timelineProcessId(turn: TimelineTurn | undefined): string | undefined {
@@ -1341,7 +1317,7 @@ export function timelineProcessId(turn: TimelineTurn | undefined): string | unde
   return `process:${sourceMessageId}`;
 }
 
-function TimelineTurnBlock({ turn, active, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; active: boolean; foldState: TimelineFoldState; onToggleProcess: (id: string) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string) => void }) {
+function TimelineTurnBlock({ turn, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; foldState: TimelineFoldState; onToggleProcess: (id: string) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string) => void }) {
   const presented = useMemo(() => presentTurnProcess(turn.process), [turn.process]);
   const displayTurn = { ...turn, process: presented.entries };
   const foldable = shouldFoldTurnProcess(displayTurn);
@@ -1362,12 +1338,6 @@ function TimelineTurnBlock({ turn, active, foldState, onToggleProcess, onToggleP
     customAnswers: presented.customAnswers,
   };
   const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
-  const liveProcess = active ? liveTurnProcessEntries(displayTurn) : displayTurn.process.filter((entry) =>
-    keepsCollapsedQuestion(entry)
-    || entry.kind === "activity" && entry.items.some((item) => item.state === "failed" || (item.subagent?.failed ?? 0) > 0)
-    || entry.kind === "error" && entry.items.some((item) => item.state === "failed"));
-  const previewKeys = new Set(liveProcess.map(renderItemKey));
-  const collapsedPreview = displayTurn.process.filter((entry) => entry.kind !== "activity" && previewKeys.has(renderItemKey(entry)));
   const processBlock = displayTurn.process.length === 0 ? null : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
     {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => onToggleProcess(processId)}>
       <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
@@ -1379,11 +1349,7 @@ function TimelineTurnBlock({ turn, active, foldState, onToggleProcess, onToggleP
       {displayTurn.process.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
         {renderTimelineEntry(entry, processContext, true, !touched)}
       </div>)}
-    </div> : collapsedPreview.length === 0 ? null : <div className="turn-process-current">
-      {collapsedPreview.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
-        {entry.kind === "message" ? <button type="button" className="process-commentary-preview" onClick={() => processId === undefined ? undefined : onToggleProcess(processId)} aria-label="展开过程文本">{processTextPreview(entry.item.text)}</button> : renderTimelineEntry(entry, processContext, false, !touched)}
-      </div>)}
-    </div>}
+    </div> : null}
   </section>;
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
@@ -1394,9 +1360,8 @@ function TimelineTurnBlock({ turn, active, foldState, onToggleProcess, onToggleP
 }
 
 function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined): ReactNode[] {
-  const activeTurnKey = status.runState === "idle" ? undefined : turns.at(-1)?.key;
   const context: TurnRenderContext = { streamingMessageId, liveGeneration, status, openDetailIds: foldState.openDetailIds, openGroupIds: foldState.openGroupIds, onToggleDetail: () => undefined, onToggleCall: () => undefined, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage };
-  return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} active={turn.key === activeTurnKey} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
+  return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
 }
 
 function ThinkingItem({ item, live, baseDir, open, showDetails, onToggle }: { item: ThinkingTimelineItem; live?: LiveGenerationStats; baseDir?: string; open: boolean; showDetails: boolean; onToggle: () => void }) {
