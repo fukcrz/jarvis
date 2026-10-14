@@ -401,7 +401,7 @@ async function exerciseCommandFolds(baseUrl, workspace, viewport, label, shell) 
     fixture.start();
     fixture.user(`检查 ${shell} 命令折叠。`, fixture.at(0));
     fixture.end(fixture.assistant(fixture.at(1), [fixture.text("准备执行命令。\n当前进度。", "commentary")]));
-    await page.locator(".process-commentary-preview").waitFor();
+    await page.locator(".turn-process-summary").first().waitFor();
     const commands = [1, 2, 3].map((number) => ({
       type: "toolCall", id: `${scenario}-command-${number}`, name: shell, arguments: { command: `fold-${shell}-${number}` },
     }));

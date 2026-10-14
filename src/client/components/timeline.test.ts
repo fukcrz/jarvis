@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, liveTurnProcessEntries, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
+import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, isTurnPinned, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, summarizeTurnProcess, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -351,40 +351,6 @@ describe("structured text phases", () => {
     const withUser = groupTimelineTurns([user("u"), process])[0];
     expect(timelineProcessId(withoutUser)).toBe("process:response");
     expect(timelineProcessId(withUser)).toBe("process:response");
-  });
-});
-
-describe("liveTurnProcessEntries", () => {
-  it("keeps current work, failures and pending dialogs while earlier process is folded", () => {
-    const failed = { ...tool("failed"), state: "failed" as const };
-    const running = { ...tool("running"), state: "running" as const };
-    const partiallyFailedSubagent: ToolTimelineItem = {
-      ...tool("subagent", "subagent"),
-      state: "running",
-      subagent: {
-        kind: "pi-subagent",
-        results: [
-          { agent: "scout", prompt: "Check auth", state: "failed" },
-          { agent: "worker", prompt: "Fix auth", state: "running" },
-        ],
-        total: 2,
-        completed: 0,
-        running: 1,
-        failed: 1,
-      },
-    };
-    const current = { kind: "thinking" as const, item: { ...thinking("current"), state: "running" as const } };
-    const result = liveTurnProcessEntries({ key: "t", process: [
-      { kind: "thinking", item: thinking("old") },
-      { kind: "activity", items: [tool("done"), failed, running, partiallyFailedSubagent] },
-      { kind: "extension-ui", item: dialog("pending") },
-      current,
-    ] });
-    expect(result).toEqual([
-      { kind: "activity", items: [tool("done"), failed, running, partiallyFailedSubagent] },
-      { kind: "extension-ui", item: dialog("pending") },
-      current,
-    ]);
   });
 });
 
