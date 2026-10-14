@@ -1,7 +1,20 @@
 import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const readdirCalls = vi.hoisted(() => ({ count: 0 }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readdir: (...args: unknown[]) => {
+      readdirCalls.count += 1;
+      return Reflect.apply(actual.readdir, actual, args);
+    },
+  };
+});
+
 import { fileMatchScore, parseByteRange, readTextFile, resolveFileRequestPath, searchWorkspaceFiles } from "./workspace-fs.js";
 
 describe("parseByteRange", () => {
@@ -53,6 +66,86 @@ describe("searchWorkspaceFiles", () => {
       expect(paths).toEqual(expect.arrayContaining(["app.ts", ".vscode/settings.json"]));
       expect(paths.some((path) => path.includes(".venv"))).toBe(false);
     } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("applies root and nested gitignore rules including negations", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "jarvis-search-ignore-"));
+    try {
+      await mkdir(join(directory, "deep"), { recursive: true });
+      await mkdir(join(directory, "ignored"), { recursive: true });
+      await mkdir(join(directory, "src", "generated"), { recursive: true });
+      await writeFile(join(directory, ".gitignore"), `*.log
+!important.log
+/root-only.txt
+.tmp-*.png
+ignored/
+src/generated/
+`);
+      await writeFile(join(directory, "src", ".gitignore"), `secret.txt
+!nested.log
+`);
+      await writeFile(join(directory, "drop.log"), "x");
+      await writeFile(join(directory, ".tmp-room-preview.png"), "x");
+      await writeFile(join(directory, "important.log"), "x");
+      await writeFile(join(directory, "root-only.txt"), "x");
+      await writeFile(join(directory, "deep", "root-only.txt"), "x");
+      await writeFile(join(directory, "ignored", "hidden.ts"), "x");
+      await writeFile(join(directory, "src", "generated", "hidden.ts"), "x");
+      await writeFile(join(directory, "src", "secret.txt"), "x");
+      await writeFile(join(directory, "src", "nested.log"), "x");
+      await writeFile(join(directory, "src", "visible.ts"), "x");
+
+      const paths = (await searchWorkspaceFiles(directory, "")).map((file) => file.path.replaceAll("\\", "/"));
+      expect(paths).toEqual(expect.arrayContaining(["important.log", "deep/root-only.txt", "src/nested.log", "src/visible.ts"]));
+      expect(paths).not.toContain("drop.log");
+      expect(paths).not.toContain(".tmp-room-preview.png");
+      expect(paths).not.toContain("root-only.txt");
+      expect(paths).not.toContain("ignored/hidden.ts");
+      expect(paths).not.toContain("src/generated/hidden.ts");
+      expect(paths).not.toContain("src/secret.txt");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("shares one in-flight index across concurrent searches", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "jarvis-search-concurrent-"));
+    try {
+      await writeFile(join(directory, "first.ts"), "x");
+      await writeFile(join(directory, "second.ts"), "x");
+      readdirCalls.count = 0;
+
+      const [first, second] = await Promise.all([
+        searchWorkspaceFiles(directory, "first"),
+        searchWorkspaceFiles(directory, "second"),
+      ]);
+
+      expect(first).toEqual([{ path: "first.ts" }]);
+      expect(second).toEqual([{ path: "second.ts" }]);
+      expect(readdirCalls.count).toBe(1);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses a recent index then refreshes it after the cache TTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    const directory = await mkdtemp(join(tmpdir(), "jarvis-search-cache-"));
+    try {
+      await writeFile(join(directory, "first.ts"), "x");
+      await searchWorkspaceFiles(directory, "first");
+      await writeFile(join(directory, "second.ts"), "x");
+
+      await expect(searchWorkspaceFiles(directory, "second")).resolves.toEqual([]);
+      await expect(searchWorkspaceFiles(directory, "first")).resolves.toEqual([{ path: "first.ts" }]);
+
+      vi.advanceTimersByTime(5_000);
+      await expect(searchWorkspaceFiles(directory, "second")).resolves.toEqual([{ path: "second.ts" }]);
+    } finally {
+      vi.useRealTimers();
       await rm(directory, { recursive: true, force: true });
     }
   });

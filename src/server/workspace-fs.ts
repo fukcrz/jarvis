@@ -1,7 +1,8 @@
 import { createReadStream } from "node:fs";
-import { lstat, readdir, realpath, rm, stat } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
+import ignore from "ignore";
 import { platform } from "node:os";
-import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { canonicalizeLocalPathInput } from "../shared/local-path.js";
 import type { DirectoryListing, WorkspaceDirectoryListing, WorkspaceFile, WorkspaceFileContent } from "../shared/protocol.js";
 import { AppError } from "./errors.js";
@@ -14,6 +15,10 @@ const IGNORED_SEARCH_DIRECTORIES = new Set([
 const MAX_FILE_SEARCH_RESULTS = 80;
 const MAX_FILE_SEARCH_DEPTH = 14;
 const MAX_FILE_SEARCH_VISITS = 4_000;
+const FILE_SEARCH_CACHE_TTL_MS = 5_000;
+const MAX_FILE_SEARCH_CACHE_ENTRIES = 32;
+type IgnoreScope = { base: string; matcher: ReturnType<typeof ignore> };
+const workspaceFileSearchCache = new Map<string, { expiresAt: number; promise: Promise<string[]> }>();
 export const MAX_BROWSER_FILE_BYTES = 512 * 1024;
 const MAX_TEXT_FILE_BYTES = MAX_BROWSER_FILE_BYTES * 8;
 
@@ -303,34 +308,95 @@ export async function readTextFile(filePath: string, metadata: { size: number },
 
 export async function searchWorkspaceFiles(cwd: string, query: string): Promise<WorkspaceFile[]> {
   const normalizedQuery = query.trim().replaceAll("\\", "/").toLocaleLowerCase();
-  const matches: Array<{ path: string; score: number }> = [];
+  const paths = await workspaceFileIndex(cwd);
+  return paths.flatMap((path) => {
+    const score = fileMatchScore(path.toLocaleLowerCase(), normalizedQuery);
+    return score === undefined ? [] : [{ path, score }];
+  }).sort((left, right) => left.score - right.score || left.path.localeCompare(right.path))
+    .slice(0, MAX_FILE_SEARCH_RESULTS)
+    .map(({ path }) => ({ path }));
+}
+
+function workspaceFileIndex(cwd: string): Promise<string[]> {
+  const cached = workspaceFileSearchCache.get(cwd);
+  if (cached !== undefined && cached.expiresAt > Date.now()) {
+    workspaceFileSearchCache.delete(cwd);
+    workspaceFileSearchCache.set(cwd, cached);
+    return cached.promise;
+  }
+
+  const entry: { expiresAt: number; promise: Promise<string[]> } = {
+    expiresAt: Number.POSITIVE_INFINITY,
+    promise: buildWorkspaceFileIndex(cwd).then((paths) => {
+      entry.expiresAt = Date.now() + FILE_SEARCH_CACHE_TTL_MS;
+      return paths;
+    }).catch((error: unknown) => {
+      if (workspaceFileSearchCache.get(cwd) === entry) workspaceFileSearchCache.delete(cwd);
+      throw error;
+    }),
+  };
+  workspaceFileSearchCache.delete(cwd);
+  workspaceFileSearchCache.set(cwd, entry);
+  while (workspaceFileSearchCache.size > MAX_FILE_SEARCH_CACHE_ENTRIES) {
+    const oldest = workspaceFileSearchCache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    workspaceFileSearchCache.delete(oldest);
+  }
+  return entry.promise;
+}
+
+async function buildWorkspaceFileIndex(cwd: string): Promise<string[]> {
+  const paths: string[] = [];
   let visits = 0;
 
-  const visit = async (directory: string, depth: number): Promise<void> => {
-    if (matches.length >= MAX_FILE_SEARCH_RESULTS || depth > MAX_FILE_SEARCH_DEPTH || visits >= MAX_FILE_SEARCH_VISITS) return;
+  const visit = async (directory: string, relativeDirectory: string, parentScopes: IgnoreScope[], depth: number): Promise<void> => {
+    if (depth > MAX_FILE_SEARCH_DEPTH || visits >= MAX_FILE_SEARCH_VISITS) return;
     let entries;
     try {
       entries = await readdir(directory, { withFileTypes: true });
     } catch {
       return;
     }
+
+    const localIgnore = entries.find((entry) => entry.isFile() && entry.name === ".gitignore");
+    let scopes = parentScopes;
+    if (localIgnore !== undefined) {
+      try {
+        const patterns = await readFile(join(directory, localIgnore.name), "utf8");
+        scopes = [...parentScopes, { base: relativeDirectory, matcher: ignore().add(patterns) }];
+      } catch {
+        // An unreadable .gitignore does not hide otherwise searchable files.
+      }
+    }
+
     for (const entry of entries) {
-      if (matches.length >= MAX_FILE_SEARCH_RESULTS || visits >= MAX_FILE_SEARCH_VISITS) return;
+      if (visits >= MAX_FILE_SEARCH_VISITS) return;
       visits += 1;
       const absolutePath = join(directory, entry.name);
+      const path = relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`;
       if (entry.isDirectory()) {
-        if (!IGNORED_SEARCH_DIRECTORIES.has(entry.name)) await visit(absolutePath, depth + 1);
-        continue;
+        if (IGNORED_SEARCH_DIRECTORIES.has(entry.name) || isIgnoredSearchPath(path, true, scopes)) continue;
+        await visit(absolutePath, path, scopes, depth + 1);
+      } else if (entry.isFile() && !isIgnoredSearchPath(path, false, scopes)) {
+        paths.push(path);
       }
-      if (!entry.isFile()) continue;
-      const path = relative(cwd, absolutePath).replaceAll("\\", "/");
-      const score = fileMatchScore(path.toLocaleLowerCase(), normalizedQuery);
-      if (score !== undefined) matches.push({ path, score });
     }
   };
 
-  await visit(cwd, 0);
-  return matches.sort((left, right) => left.score - right.score || left.path.localeCompare(right.path)).map(({ path }) => ({ path }));
+  await visit(cwd, "", [], 0);
+  return paths;
+}
+
+function isIgnoredSearchPath(path: string, directory: boolean, scopes: IgnoreScope[]): boolean {
+  let ignored = false;
+  for (const scope of scopes) {
+    const scopedPath = scope.base === "" ? path : path.startsWith(`${scope.base}/`) ? path.slice(scope.base.length + 1) : "";
+    if (scopedPath === "") continue;
+    const result = scope.matcher.test(directory ? `${scopedPath}/` : scopedPath);
+    if (result.ignored) ignored = true;
+    else if (result.unignored) ignored = false;
+  }
+  return ignored;
 }
 
 export function fileMatchScore(path: string, query: string): number | undefined {
