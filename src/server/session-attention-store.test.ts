@@ -107,6 +107,22 @@ describe("SessionAttentionStore side chats", () => {
 });
 
 describe("SessionAttentionStore list copy", () => {
+  it("keeps the reply end time when attention returns to idle", async () => {
+    const store = new SessionAttentionStore(directory);
+    await store.setLastReplyEndedAt(ref, "2026-01-05T00:00:00.000Z");
+    await store.setLastUserMessageAt(ref, "2026-01-04T00:00:00.000Z");
+    await store.setAttention(ref, "completed_unread", "2026-01-05T00:00:00.000Z");
+    await store.setAttention(ref, "idle", "2026-01-06T00:00:00.000Z");
+    await store.setStarred(ref, true);
+    await store.setStarred(ref, false);
+
+    await expect(store.get(ref)).resolves.toEqual({
+      attentionState: "idle",
+      lastUserMessageAt: "2026-01-04T00:00:00.000Z",
+      lastReplyEndedAt: "2026-01-05T00:00:00.000Z",
+    });
+  });
+
   it("keeps sidebar title and preview when attention returns to idle", async () => {
     const store = new SessionAttentionStore(directory);
     await store.setListCopies([{ ref, copy: { name: "继续导入", preview: "First question", listCopyMtime: 10 } }]);

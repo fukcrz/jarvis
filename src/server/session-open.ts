@@ -141,6 +141,7 @@ export async function createActiveSession(
     attentionState: sortMeta.attentionState,
     ...(sortMeta.attentionAt === undefined ? {} : { attentionAt: sortMeta.attentionAt }),
     ...(sortMeta.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: sortMeta.lastUserMessageAt }),
+    ...(sortMeta.lastReplyEndedAt === undefined ? {} : { lastReplyEndedAt: sortMeta.lastReplyEndedAt }),
     ...(sortMeta.starred === true ? { starred: true } : {}),
     requestRuns: new Map(),
     liveMessages: new Map(),

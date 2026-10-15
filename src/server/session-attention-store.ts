@@ -7,6 +7,7 @@ export interface SessionSortMeta {
   attentionState: SessionAttentionState;
   attentionAt?: string;
   lastUserMessageAt?: string;
+  lastReplyEndedAt?: string;
   starred?: boolean;
   name?: string;
   preview?: string;
@@ -23,6 +24,7 @@ interface PersistedSessionMeta {
   attentionState?: Exclude<SessionAttentionState, "idle">;
   attentionAt?: string;
   lastUserMessageAt?: string;
+  lastReplyEndedAt?: string;
   starred?: true;
   name?: string;
   preview?: string;
@@ -76,7 +78,7 @@ export class SessionAttentionStore {
       if (state !== "completed_unread" && state !== "failed") {
         const next = compactPersistedMeta({
           ...listCopyFields(current),
-          ...(current.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: current.lastUserMessageAt }),
+          ...persistedSortTimes(current),
           ...(current.starred === true ? { starred: true } : {}),
         });
         if (next === undefined) delete data.sessions[entryKey];
@@ -94,6 +96,13 @@ export class SessionAttentionStore {
     });
   }
 
+  async setLastReplyEndedAt(ref: SessionRef, at: string): Promise<void> {
+    await this.update((data) => {
+      const entryKey = key(ref);
+      data.sessions[entryKey] = { ...data.sessions[entryKey], lastReplyEndedAt: at };
+    });
+  }
+
   async setStarred(ref: SessionRef, starred: boolean): Promise<void> {
     await this.update((data) => {
       const entryKey = key(ref);
@@ -106,7 +115,7 @@ export class SessionAttentionStore {
         ...listCopyFields(current),
         ...(current.attentionState === undefined ? {} : { attentionState: current.attentionState }),
         ...(current.attentionAt === undefined ? {} : { attentionAt: current.attentionAt }),
-        ...(current.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: current.lastUserMessageAt }),
+        ...persistedSortTimes(current),
       });
       if (next === undefined) delete data.sessions[entryKey];
       else data.sessions[entryKey] = next;
@@ -122,7 +131,7 @@ export class SessionAttentionStore {
         const next = compactPersistedMeta({
           ...(current.attentionState === undefined ? {} : { attentionState: current.attentionState }),
           ...(current.attentionAt === undefined ? {} : { attentionAt: current.attentionAt }),
-          ...(current.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: current.lastUserMessageAt }),
+          ...persistedSortTimes(current),
           ...(current.starred === true ? { starred: true } : {}),
           ...listCopyFields({
             ...(copy.name === null || copy.name === "" ? {} : { name: copy.name }),
@@ -231,6 +240,13 @@ function key(ref: SessionRef): string {
   return `${ref.workspaceId}:${ref.sessionId}`;
 }
 
+function persistedSortTimes(entry: PersistedSessionMeta): Pick<PersistedSessionMeta, "lastUserMessageAt" | "lastReplyEndedAt"> {
+  return {
+    ...(entry.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: entry.lastUserMessageAt }),
+    ...(entry.lastReplyEndedAt === undefined ? {} : { lastReplyEndedAt: entry.lastReplyEndedAt }),
+  };
+}
+
 function listCopyFields(entry: PersistedSessionMeta): PersistedSessionMeta {
   return {
     ...(typeof entry.name === "string" && entry.name !== "" ? { name: entry.name } : {}),
@@ -244,7 +260,7 @@ function metaFromPersisted(entry: PersistedSessionMeta | undefined): SessionSort
   return {
     attentionState: entry.attentionState ?? "idle",
     ...(entry.attentionAt === undefined ? {} : { attentionAt: entry.attentionAt }),
-    ...(entry.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: entry.lastUserMessageAt }),
+    ...persistedSortTimes(entry),
     ...(entry.starred === true ? { starred: true } : {}),
     ...listCopyFields(entry),
   };
@@ -298,6 +314,8 @@ function migratePersistedEntry(value: unknown): PersistedSessionMeta | undefined
   const next: PersistedSessionMeta = {};
   const lastUserMessageAt = stringTime(item["lastUserMessageAt"]);
   if (lastUserMessageAt !== undefined) next.lastUserMessageAt = lastUserMessageAt;
+  const lastReplyEndedAt = stringTime(item["lastReplyEndedAt"]);
+  if (lastReplyEndedAt !== undefined) next.lastReplyEndedAt = lastReplyEndedAt;
   if (item["starred"] === true) next.starred = true;
   const state = item["attentionState"] ?? item["state"];
   if (state === "completed_unread" || state === "failed") {

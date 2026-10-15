@@ -28,8 +28,12 @@ function sessionAttentionAt(session: SessionSummary): string {
   return session.attentionAt ?? "";
 }
 
-function sessionLastUserMessageAt(session: SessionSummary): string {
-  return session.lastUserMessageAt ?? session.createdAt;
+/** Later of the user send and the LLM reply end. Missing values fall back to createdAt. */
+export function sessionRecencyAt(session: SessionSummary): string {
+  const userAt = session.lastUserMessageAt ?? "";
+  const replyAt = session.lastReplyEndedAt ?? "";
+  const later = userAt.localeCompare(replyAt) >= 0 ? userAt : replyAt;
+  return later === "" ? session.createdAt : later;
 }
 
 function sessionEmptyRank(session: SessionSummary): number {
@@ -40,14 +44,14 @@ function sessionCreatedAt(session: SessionSummary): string {
   return session.createdAt;
 }
 
-/** Attention rank, then empty drafts, then when that state was entered, then created / last user send. */
+/** Attention rank, then empty drafts, then when that state was entered, then created / later of user send and reply end. */
 export function compareSessionSummaries(a: SessionSummary, b: SessionSummary): number {
   const attention = sessionAttentionRank(a) - sessionAttentionRank(b);
   if (attention !== 0) return attention;
   const empty = sessionEmptyRank(a) - sessionEmptyRank(b);
   if (empty !== 0) return empty;
   return sessionAttentionAt(b).localeCompare(sessionAttentionAt(a))
-    || (isEmptySession(a) ? sessionCreatedAt(b).localeCompare(sessionCreatedAt(a)) : sessionLastUserMessageAt(b).localeCompare(sessionLastUserMessageAt(a)));
+    || (isEmptySession(a) ? sessionCreatedAt(b).localeCompare(sessionCreatedAt(a)) : sessionRecencyAt(b).localeCompare(sessionRecencyAt(a)));
 }
 
 export function sortSessionSummaries(sessions: SessionSummary[]): SessionSummary[] {

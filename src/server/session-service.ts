@@ -1359,6 +1359,7 @@ export class SessionService {
 
   private settleRun(active: ActiveSession, runId: string | undefined): void {
     if (runId === undefined || active.state.activeRun?.id !== runId) return;
+    const replyEndedAt = this.stampLlmReplyEnd(active);
     for (const tool of active.activeTools.values()) {
       if (tool.state !== "queued" && tool.state !== "running") continue;
       const cancelled = { ...tool, state: "cancelled" as const };
@@ -1371,7 +1372,7 @@ export class SessionService {
       runState: "idle",
       ...(lastError === undefined ? {} : { lastError }),
     };
-    this.setAttention(active, "completed_unread");
+    this.setAttention(active, "completed_unread", replyEndedAt);
     this.resetLiveStream(active);
     active.activeBash = undefined;
     active.compactionAbortRequested = false;
@@ -1392,12 +1393,13 @@ export class SessionService {
 
   private failRun(active: ActiveSession, runId: string | undefined, code: string, message: string): void {
     if (runId === undefined || active.state.activeRun?.id !== runId) return;
+    const replyEndedAt = this.stampLlmReplyEnd(active);
     active.state = {
       sessionId: active.ref.sessionId,
       runState: "idle",
       lastError: { code, message, occurredAt: new Date().toISOString() },
     };
-    this.setAttention(active, "failed");
+    this.setAttention(active, "failed", replyEndedAt);
     for (const tool of active.activeTools.values()) {
       if (tool.state !== "queued" && tool.state !== "running") continue;
       const cancelled = { ...tool, state: "cancelled" as const };
@@ -1507,6 +1509,15 @@ export class SessionService {
   private markUserMessage(active: ActiveSession, at: string): void {
     active.lastUserMessageAt = at;
     void this.attention.setLastUserMessageAt(active.ref, at).catch((error: unknown) => console.warn("Could not persist last user message time", error));
+  }
+
+  /** 只在 LLM 回复结束时记一次，流式更新和 bash / 压缩不改排序时间。 */
+  private stampLlmReplyEnd(active: ActiveSession): string | undefined {
+    if (active.state.activeRun?.kind !== "llm") return undefined;
+    const at = new Date().toISOString();
+    active.lastReplyEndedAt = at;
+    void this.attention.setLastReplyEndedAt(active.ref, at).catch((error: unknown) => console.warn("Could not persist last reply end time", error));
+    return at;
   }
 
   private persistListCopy(active: ActiveSession, summary: SessionSummary): void {

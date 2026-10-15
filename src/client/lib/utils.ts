@@ -1,9 +1,9 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import type { SessionSummary } from "../../shared/protocol";
-import { isEmptySession, isSessionRunning, sessionAttentionRank, sessionAttentionState, sortSessionSummaries } from "../../shared/session-sort";
+import { isEmptySession, isSessionRunning, sessionAttentionRank, sessionAttentionState, sessionRecencyAt, sortSessionSummaries } from "../../shared/session-sort";
 
-export { isEmptySession, isSessionRunning, sessionAttentionRank, sessionAttentionState, sortSessionSummaries };
+export { isEmptySession, isSessionRunning, sessionAttentionRank, sessionAttentionState, sessionRecencyAt, sortSessionSummaries };
 
 export function cn(...values: ClassValue[]): string {
   return twMerge(clsx(values));
