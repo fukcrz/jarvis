@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { canCopyDiagramImage, copyMermaidDiagram, downloadDiagramPng, downloadMermaidDiagram, flattenMermaidForeignObjects, mermaidFitScale, normalizeMermaidSvg, prepareMermaidSvgForExport, renderMermaidDiagram, saveBlobFile, svgPixelSize, writeDiagramClipboard } from "./mermaid";
+import { canCopyDiagramImage, clearMermaidDiagramCache, copyMermaidDiagram, downloadDiagramPng, downloadMermaidDiagram, flattenMermaidForeignObjects, mermaidFitScale, normalizeMermaidSvg, prepareMermaidSvgForExport, renderMermaidDiagram, saveBlobFile, svgPixelSize, writeDiagramClipboard } from "./mermaid";
 
 const mermaid = vi.hoisted(() => ({
   startOnLoad: true,
@@ -289,6 +289,7 @@ describe("copyMermaidDiagram", () => {
 
 describe("renderMermaidDiagram", () => {
   beforeEach(() => {
+    clearMermaidDiagramCache();
     mermaid.startOnLoad = true;
     mermaid.initialize.mockClear();
     mermaid.parse.mockReset();
@@ -340,19 +341,29 @@ describe("renderMermaidDiagram", () => {
     expect(mermaid.render).toHaveBeenCalledTimes(3);
   });
 
-  it("passes a viewport host to mermaid.render and clears it afterwards", async () => {
+  it("passes a viewport host to mermaid.render and clears only that host", async () => {
     const host = {
       id: "",
       setAttribute: vi.fn(),
       style: { cssText: "" },
       replaceChildren: vi.fn(),
     };
-    const leftover = { id: "djarvis-mermaid-old", remove: vi.fn() };
+    const rendered = {
+      id: "jarvis-mermaid-displayed",
+      closest: (selector: string) => selector.includes("data-mermaid-rendered") ? rendered : null,
+      remove: vi.fn(),
+    };
+    const querySelectorAll = vi.fn(() => {
+      throw new Error("must not sweep rendered diagrams");
+    });
     vi.stubGlobal("document", {
       body: { append: vi.fn() },
       createElement: vi.fn(() => host),
-      getElementById: vi.fn(() => null),
-      querySelectorAll: vi.fn(() => [leftover]),
+      getElementById: vi.fn((id: string) => {
+        if (id === "jarvis-mermaid-host") return null;
+        return id.startsWith("jarvis-mermaid-") ? rendered : null;
+      }),
+      querySelectorAll,
     });
     mermaid.render.mockResolvedValueOnce({ svg: "<svg id=\"ok\" />" });
     await expect(renderMermaidDiagram("flowchart TD\n  A --> B")).resolves.toBe("<svg id=\"ok\" />");
@@ -366,7 +377,17 @@ describe("renderMermaidDiagram", () => {
       host,
     );
     expect(host.replaceChildren).toHaveBeenCalled();
-    expect(leftover.remove).toHaveBeenCalled();
+    expect(rendered.remove).not.toHaveBeenCalled();
+    expect(querySelectorAll).not.toHaveBeenCalled();
+  });
+
+  it("returns a cached diagram without rendering or cleaning again", async () => {
+    mermaid.render.mockResolvedValueOnce({ svg: "<svg id=\"ok\" />" });
+    await expect(renderMermaidDiagram("mindmap\n  root")).resolves.toBe("<svg id=\"ok\" />");
+    mermaid.render.mockClear();
+    await expect(renderMermaidDiagram("mindmap\n  root")).resolves.toBe("<svg id=\"ok\" />");
+    expect(mermaid.render).not.toHaveBeenCalled();
+    expect(mermaid.parse).toHaveBeenCalledTimes(1);
   });
 
   it("normalizes percentage-width mermaid svg for shrink-to-fit preview", async () => {

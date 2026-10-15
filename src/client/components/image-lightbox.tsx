@@ -285,7 +285,7 @@ export function lightboxDiagramBox(viewportWidth: number, viewportHeight: number
 
 /** 用 transform 缩放，避免 CSS 宽高直接压 SVG 时 foreignObject 文字被裁。 */
 export function MermaidScaledSvg({ svg, scale, width, height }: { svg: string; scale: number; width: number; height: number }) {
-  return <div className="mermaid-svg-scaled" style={{ width: width * scale, height: height * scale }}>
+  return <div className="mermaid-svg-scaled" data-mermaid-rendered="" style={{ width: width * scale, height: height * scale }}>
     <div className="mermaid-svg-native" style={{ width, height, transform: `scale(${String(scale)})` }} dangerouslySetInnerHTML={{ __html: svg }} />
   </div>;
 }

@@ -49,16 +49,36 @@ function mermaidRenderHost(): HTMLElement | undefined {
   return host;
 }
 
+const renderedDiagrams = new Map<string, string>();
+
+/** 已成功渲染的图按源码留着。重挂或再次进入视口时直接用，不再清 DOM。 */
+export function cachedMermaidDiagram(code: string): string | undefined {
+  return renderedDiagrams.get(code);
+}
+
+export function clearMermaidDiagramCache(): void {
+  renderedDiagrams.clear();
+}
+
+function isRenderedDiagramNode(node: Element): boolean {
+  return typeof node.closest === "function" && node.closest("[data-mermaid-rendered]") !== null;
+}
+
+function removeTempNode(node: Element | null): void {
+  if (node === null || node.id === MERMAID_HOST_ID || isRenderedDiagramNode(node)) return;
+  node.remove();
+}
+
+/**
+ * 只清测量宿主和这次渲染漏在宿主外的临时节点。
+ * 已经插入消息或灯箱的图一律留着，不按 id 前缀扫全页。
+ */
 function cleanupMermaidDom(id: string, host: HTMLElement | undefined): void {
   host?.replaceChildren();
   if (typeof document === "undefined") return;
-  document.getElementById(id)?.remove();
-  document.getElementById(`d${id}`)?.remove();
-  document.getElementById(`i${id}`)?.remove();
-  for (const node of document.querySelectorAll('[id^="jarvis-mermaid-"], [id^="djarvis-mermaid-"], [id^="ijarvis-mermaid-"]')) {
-    if (node.id === MERMAID_HOST_ID) continue;
-    node.remove();
-  }
+  removeTempNode(document.getElementById(id));
+  removeTempNode(document.getElementById(`d${id}`));
+  removeTempNode(document.getElementById(`i${id}`));
 }
 
 /** 按需加载并初始化 mermaid：安全级别维持 strict（内置 DOMPurify，图形源码不能注入脚本）。 */
@@ -112,9 +132,13 @@ const XLINK_NS = "http://www.w3.org/1999/xlink";
 const EXPORT_BACKGROUND = "#0b0d14";
 const MAX_EXPORT_EDGE = 4096;
 
-/** 把 mermaid 源码渲染成 SVG 字符串。语法错误不重试；瞬时失败会换 id 排队重试并清残留。 */
+/** 把 mermaid 源码渲染成 SVG 字符串。语法错误不重试；瞬时失败会换 id 排队重试并清临时节点。成功结果按源码缓存。 */
 export async function renderMermaidDiagram(code: string): Promise<string> {
+  const cached = renderedDiagrams.get(code);
+  if (cached !== undefined) return cached;
   return enqueueRender(async () => {
+    const again = renderedDiagrams.get(code);
+    if (again !== undefined) return again;
     const mermaid = await loadMermaid();
     await mermaid.parse(code);
     const host = mermaidRenderHost();
@@ -125,7 +149,9 @@ export async function renderMermaidDiagram(code: string): Promise<string> {
       const id = `jarvis-mermaid-${String(diagramCounter)}`;
       try {
         const { svg } = await mermaid.render(id, code, host);
-        return normalizeMermaidSvg(svg);
+        const normalized = normalizeMermaidSvg(svg);
+        renderedDiagrams.set(code, normalized);
+        return normalized;
       } catch (error) {
         lastError = error;
       } finally {

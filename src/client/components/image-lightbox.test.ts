@@ -77,6 +77,7 @@ describe("DiagramLightboxContent", () => {
     }));
     expect(markup).toContain("image-lightbox-diagram");
     expect(markup).toContain("mermaid-svg-scaled");
+    expect(markup).toContain("data-mermaid-rendered");
     expect(markup).toContain('id="chart"');
   });
 });
