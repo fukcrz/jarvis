@@ -38,6 +38,7 @@ function manifestPath(): string {
 export class SkillService {
   private prefs: SkillPrefs = { version: 1, disabledBundled: [] };
   private knownHashes: Record<string, string[]> = {};
+  private retiredHashes: Record<string, string[]> = {};
 
   constructor(
     private readonly agentDir = getAgentDir(),
@@ -47,7 +48,9 @@ export class SkillService {
   ) {}
 
   async initialize(): Promise<void> {
-    this.knownHashes = await readManifest();
+    const manifest = await readManifest();
+    this.knownHashes = manifest.skills;
+    this.retiredHashes = manifest.retired;
     await this.loadPrefs();
     await this.reconcile();
   }
@@ -149,6 +152,7 @@ export class SkillService {
       bundledDir: bundledSkillRoot(),
       holdDir: join(dirname(this.prefsPath), "skill-hold"),
       knownHashes: this.knownHashes,
+      retiredHashes: this.retiredHashes,
       disabled: new Set(this.prefs.disabledBundled),
       ...(forceIds === undefined ? {} : { forceIds }),
     });
@@ -377,13 +381,19 @@ function createPackageManager(agentDir: string): DefaultPackageManager {
   return new DefaultPackageManager({ cwd: agentDir, agentDir, settingsManager: SettingsManager.create(agentDir, agentDir) });
 }
 
-async function readManifest(): Promise<Record<string, string[]>> {
-  const parsed: unknown = JSON.parse(await readFile(manifestPath(), "utf8"));
-  if (!isRecord(parsed) || !isRecord(parsed["skills"])) throw new Error("Unsupported skill manifest");
+function readHashMap(value: unknown, label: string): Record<string, string[]> {
+  if (value === undefined) return {};
+  if (!isRecord(value)) throw new Error(`Unsupported skill manifest ${label}`);
   const hashes: Record<string, string[]> = {};
-  for (const [id, value] of Object.entries(parsed["skills"])) {
-    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error(`Invalid skill hash list: ${id}`);
-    hashes[id] = value;
+  for (const [id, entry] of Object.entries(value)) {
+    if (!Array.isArray(entry) || entry.some((item) => typeof item !== "string")) throw new Error(`Invalid skill hash list: ${id}`);
+    hashes[id] = entry;
   }
   return hashes;
+}
+
+async function readManifest(): Promise<{ skills: Record<string, string[]>; retired: Record<string, string[]> }> {
+  const parsed: unknown = JSON.parse(await readFile(manifestPath(), "utf8"));
+  if (!isRecord(parsed)) throw new Error("Unsupported skill manifest");
+  return { skills: readHashMap(parsed["skills"], "skills"), retired: readHashMap(parsed["retired"], "retired") };
 }
