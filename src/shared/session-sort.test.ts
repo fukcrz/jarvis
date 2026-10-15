@@ -37,6 +37,22 @@ describe("session summary order", () => {
     expect(ids(ordered)).toEqual(["new-failed", "old-failed"]);
   });
 
+  it("ranks a later reply end ahead of an earlier send", () => {
+    const ordered = sortSessionSummaries([
+      { ...base, id: "later-send", preview: "hello", lastUserMessageAt: "2026-01-04T00:00:00.000Z", lastReplyEndedAt: "2026-01-04T00:01:00.000Z" },
+      { ...base, id: "later-end", preview: "hello", lastUserMessageAt: "2026-01-02T00:00:00.000Z", lastReplyEndedAt: "2026-01-05T00:00:00.000Z" },
+    ]);
+    expect(ids(ordered)).toEqual(["later-end", "later-send"]);
+  });
+
+  it("keeps a newer user send ahead of an older reply end", () => {
+    const ordered = sortSessionSummaries([
+      { ...base, id: "new-send", preview: "hello", lastUserMessageAt: "2026-01-06T00:00:00.000Z", lastReplyEndedAt: "2026-01-01T00:00:00.000Z" },
+      { ...base, id: "old-end", preview: "hello", lastUserMessageAt: "2026-01-02T00:00:00.000Z", lastReplyEndedAt: "2026-01-03T00:00:00.000Z" },
+    ]);
+    expect(ids(ordered)).toEqual(["new-send", "old-end"]);
+  });
+
   it("ignores live updatedAt and uses last user send within a rank", () => {
     const ordered = sortSessionSummaries([
       { ...base, id: "older-send", preview: "hello", lastUserMessageAt: "2026-01-02T00:00:00.000Z", updatedAt: "2026-01-09T00:00:00.000Z" },

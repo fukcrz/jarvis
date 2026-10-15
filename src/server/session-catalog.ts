@@ -156,6 +156,7 @@ export function summaryFromList(
   const attentionState = active?.attentionState ?? persisted?.attentionState ?? "idle";
   const attentionAt = active?.attentionAt ?? persisted?.attentionAt;
   const lastUserMessageAt = active?.lastUserMessageAt ?? persisted?.lastUserMessageAt;
+  const lastReplyEndedAt = active?.lastReplyEndedAt ?? persisted?.lastReplyEndedAt;
   const starred = active?.starred === true || persisted?.starred === true;
   return {
     id: entry.id,
@@ -168,6 +169,7 @@ export function summaryFromList(
     attentionState,
     ...(attentionState === "idle" || attentionAt === undefined ? {} : { attentionAt }),
     ...(lastUserMessageAt === undefined ? {} : { lastUserMessageAt }),
+    ...(lastReplyEndedAt === undefined ? {} : { lastReplyEndedAt }),
     ...(starred ? { starred: true } : {}),
   };
 }
@@ -192,6 +194,7 @@ export async function summaryFromStored(deps: SessionCatalogDeps, workspace: Wor
     attentionState,
     ...(attentionState === "idle" || persisted.attentionAt === undefined ? {} : { attentionAt: persisted.attentionAt }),
     ...(persisted.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: persisted.lastUserMessageAt }),
+    ...(persisted.lastReplyEndedAt === undefined ? {} : { lastReplyEndedAt: persisted.lastReplyEndedAt }),
     ...(persisted.starred === true ? { starred: true } : {}),
   };
 }
@@ -208,6 +211,7 @@ export function summaryFromActive(active: ActiveSession, previewOverride?: strin
     attentionState: active.attentionState,
     ...(active.attentionState === "idle" || active.attentionAt === undefined ? {} : { attentionAt: active.attentionAt }),
     ...(active.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: active.lastUserMessageAt }),
+    ...(active.lastReplyEndedAt === undefined ? {} : { lastReplyEndedAt: active.lastReplyEndedAt }),
     ...(active.starred === true ? { starred: true } : {}),
   };
 }

@@ -389,6 +389,8 @@ export interface SessionSummary {
   attentionAt?: string;
   /** Last time the user sent a prompt, queued a prompt, ran bash, or edited-and-resent. */
   lastUserMessageAt?: string;
+  /** Last time an LLM reply finished. Streaming updates do not touch it. */
+  lastReplyEndedAt?: string;
   /** User bookmark. Does not change list order. */
   starred?: boolean;
   /** 全文搜索命中片段（仅搜索响应附带），用于展示命中上下文。 */
@@ -763,6 +765,9 @@ const sessionSummarySchema = z.object({
   updatedAt: z.string(),
   runState: z.enum(["idle", "running", "stopping"]),
   attentionState: z.enum(["idle", "running", "completed_unread", "failed", "waiting_interaction"]).default("idle"),
+  attentionAt: z.string().optional(),
+  lastUserMessageAt: z.string().optional(),
+  lastReplyEndedAt: z.string().optional(),
   starred: z.boolean().optional(),
 });
 

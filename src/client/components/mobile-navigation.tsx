@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type PointerEvent } from "react";
 import { CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleAlert, CircleDot, Focus, Folder, LoaderCircle, MoreVertical, Plus, Search, Settings2, Star } from "lucide-react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionAttentionState, sessionLabel, sessionListWindow, sortSessionSummaries } from "../lib/utils";
+import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionAttentionState, sessionLabel, sessionListWindow, sessionRecencyAt, sortSessionSummaries } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 
@@ -38,21 +38,21 @@ function projectLatestAttentionAt(sessions: SessionSummary[]): string {
   }, "");
 }
 
-function projectLatestUserMessageAt(sessions: SessionSummary[]): string {
+function projectLatestRecencyAt(sessions: SessionSummary[]): string {
   return sessions.reduce((latest, session) => {
-    const at = session.lastUserMessageAt ?? session.createdAt;
+    const at = sessionRecencyAt(session);
     return at.localeCompare(latest) > 0 ? at : latest;
   }, "");
 }
 
-/** 项目芯片顺序：关注状态优先，同档按进入该档的时间，再按用户上次发送。 */
+/** 项目芯片顺序：关注状态优先，同档按进入该档的时间，再按用户发送与回复结束中较晚的时间。 */
 export function sortWorkspacesByAttention(workspaces: Workspace[], sessionsByWorkspace: Record<string, SessionSummary[]>): Workspace[] {
   return [...workspaces].sort((a, b) => {
     const aSessions = sessionsByWorkspace[a.id] ?? [];
     const bSessions = sessionsByWorkspace[b.id] ?? [];
     return projectAttentionRank(aSessions) - projectAttentionRank(bSessions)
       || projectLatestAttentionAt(bSessions).localeCompare(projectLatestAttentionAt(aSessions))
-      || projectLatestUserMessageAt(bSessions).localeCompare(projectLatestUserMessageAt(aSessions))
+      || projectLatestRecencyAt(bSessions).localeCompare(projectLatestRecencyAt(aSessions))
       || a.sortOrder - b.sortOrder;
   });
 }

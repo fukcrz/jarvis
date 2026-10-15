@@ -37,6 +37,7 @@ export interface ActiveSession {
   attentionState: SessionAttentionState;
   attentionAt?: string;
   lastUserMessageAt?: string;
+  lastReplyEndedAt?: string;
   starred?: boolean;
   /** Side chat: read-only tools, hidden from the session list, tied to a parent session. */
   readOnly?: boolean;
