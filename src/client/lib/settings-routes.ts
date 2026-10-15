@@ -9,7 +9,9 @@ export type SettingsRoute =
   | { page: "model-scope" }
   | { page: "workspaces" }
   | { page: "tunnel" }
-  | { page: "security" };
+  | { page: "security" }
+  | { page: "skills" }
+  | { page: "skill-files"; skillId: string };
 
 const SETTINGS_ROOT = "/settings";
 
@@ -30,6 +32,8 @@ export function settingsPath(route: SettingsRoute): string {
     case "workspaces": return `${SETTINGS_ROOT}/workspaces`;
     case "tunnel": return `${SETTINGS_ROOT}/tunnel`;
     case "security": return `${SETTINGS_ROOT}/security`;
+    case "skills": return `${SETTINGS_ROOT}/skills`;
+    case "skill-files": return `${SETTINGS_ROOT}/skills/${encodeURIComponent(route.skillId)}`;
   }
 }
 
@@ -45,9 +49,11 @@ export function parseSettingsPath(pathname: string): SettingsRoute | undefined {
       case "workspaces": return { page: "workspaces" };
       case "tunnel": return { page: "tunnel" };
       case "security": return { page: "security" };
+      case "skills": return { page: "skills" };
       default: return undefined;
     }
   }
+  if (segments[0] === "skills" && segments.length === 2 && segments[1] !== undefined) return { page: "skill-files", skillId: segments[1] };
   if (segments[0] !== "providers" || segments[1] === undefined) return undefined;
   if (segments.length === 2) return segments[1] === "new" ? { page: "provider-new" } : { page: "provider", providerId: segments[1] };
   if (segments.length === 3 && segments[1] !== "new") {
@@ -65,7 +71,10 @@ export function parentSettingsRoute(route: SettingsRoute, options?: { hasProvide
     case "workspaces":
     case "tunnel":
     case "security":
+    case "skills":
       return { page: "home" };
+    case "skill-files":
+      return { page: "skills" };
     case "provider":
     case "provider-new":
     case "model-scope":

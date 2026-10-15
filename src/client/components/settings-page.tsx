@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, Library, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
 import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderOverride, ProviderStatus, Workspace } from "../../shared/protocol";
 import { api } from "../api";
 import { isSettingsPath, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsPath, type SettingsRoute } from "../lib/settings-routes";
@@ -10,6 +10,7 @@ import { isNotificationEnabled, requestNotificationPermission, setNotificationEn
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 import { WorkspaceDialog } from "./workspace-dialog";
+import { SkillsPanel } from "./settings-skills";
 import { TunnelPanel } from "./tunnel-panel";
 import { SecurityPanel } from "./settings-security";
 import {
@@ -379,6 +380,7 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
     page = <><SettingsTopBar title="设置" home onBack={onBack} /><SettingsShell><div className="settings-stack">
       <SettingsGroup title="常规">
         <SettingsRow icon={Bot} label="助手名称" value={name} chevron onClick={() => push({ page: "assistant-name" })} />
+        <SettingsRow icon={Library} label="技能" chevron onClick={() => push({ page: "skills" })} />
         <SettingsRow icon={Bell} label="运行结束通知" control={<SettingsSwitch checked={notificationsEnabled} onChange={(enabled) => { void toggleNotifications(enabled); }} label="运行结束通知" />} />
       </SettingsGroup>
       <SettingsGroup title="连接">
@@ -416,6 +418,9 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
     page = <WorkspacesPage workspaces={workspaces} busy={workspaceBusy} onMove={moveWorkspace} onRemove={setWorkspaceRemoveTarget} onAdd={() => setWorkspaceDialogOpen(true)} onBack={goBack} />;
   } else if (route.page === "tunnel") {
     page = <SettingsSubpage title="内网穿透" onBack={goBack}><TunnelPanel refreshKey={refreshKeys.tunnel} onMessage={showMessage} /></SettingsSubpage>;
+  } else if (route.page === "skills" || route.page === "skill-files") {
+    const skillTitle = route.page === "skill-files" ? route.skillId : "技能";
+    page = <SettingsSubpage title={skillTitle} onBack={goBack}><SkillsPanel page={route.page} skillId={route.page === "skill-files" ? route.skillId : undefined} onOpenFiles={(id) => push({ page: "skill-files", skillId: id })} onMessage={showMessage} /></SettingsSubpage>;
   } else {
     page = <SettingsSubpage title="安全" onBack={goBack}><SecurityPanel refreshKey={refreshKeys.security} onMessage={showMessage} /></SettingsSubpage>;
   }

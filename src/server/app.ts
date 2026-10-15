@@ -19,6 +19,7 @@ import { SessionService } from "./session-service.js";
 import { desktopEnabled } from "./desktop-bridge.js";
 import { registerSelfRestart } from "./self-restart.js";
 import { WorkspaceStore } from "./workspace-store.js";
+import { SkillService } from "./skill-service.js";
 import { SettingsService } from "./settings-service.js";
 import { TunnelService } from "./tunnel-service.js";
 import { resolveDroppedReferences } from "./drop-references.js";
@@ -120,6 +121,7 @@ export interface JarvisServices {
   events: EventHub;
   tunnel: TunnelService;
   auth: AuthService;
+  skills: SkillService;
 }
 
 export async function buildApp(options: {
@@ -138,7 +140,9 @@ export async function buildApp(options: {
   const auth = new AuthService();
   await auth.initialize();
   const tunnel = new TunnelService((message) => app.log.info({ tunnel: message }), () => events.publishGlobal({ version: 1, type: "tunnel.changed" }));
-  const services: JarvisServices = { workspaces, sessions, backgroundTasks, events, tunnel, auth };
+  const skills = new SkillService(getAgentDir(), undefined, () => workspaces.list().map((workspace) => ({ id: workspace.id, label: workspace.label, cwd: workspace.cwd })), (message) => app.log.warn(message));
+  await skills.initialize();
+  const services: JarvisServices = { workspaces, sessions, backgroundTasks, events, tunnel, auth, skills };
   await app.register(cors, { origin: production ? [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] : true });
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
@@ -251,6 +255,34 @@ export async function buildApp(options: {
     const { tunnelId } = z.object({ tunnelId: z.string().uuid() }).parse(request.params);
     await services.tunnel.removeTunnel(tunnelId);
     return { removed: true };
+  });
+  app.get("/api/skills", async () => ({ skills: await skills.snapshot() }));
+  app.put("/api/skills/bundled/:id", async (request) => {
+    const params = z.object({ id: z.string().min(1).max(80) }).parse(request.params);
+    const body = z.object({ enabled: z.boolean() }).strict().parse(request.body);
+    return { skills: await skills.setBundledEnabled(params.id, body.enabled) };
+  });
+  app.post("/api/skills/bundled/:id/overwrite", async (request) => {
+    const params = z.object({ id: z.string().min(1).max(80) }).parse(request.params);
+    return { skills: await skills.overwriteBundled(params.id) };
+  });
+  app.post("/api/skills/import", async (request) => {
+    const body = z.object({ path: z.string().min(1).max(2000) }).strict().parse(request.body);
+    return { skills: await skills.importDirectory(body.path) };
+  });
+  app.delete("/api/skills/:id", async (request) => {
+    const params = z.object({ id: z.string().min(1).max(120) }).parse(request.params);
+    return { skills: await skills.remove(params.id) };
+  });
+  app.get("/api/skills/:id/files", async (request) => {
+    const params = z.object({ id: z.string().min(1).max(120) }).parse(request.params);
+    const query = z.object({ path: z.string().max(2000).optional() }).parse(request.query);
+    return { files: await skills.listFiles(params.id, query.path ?? "") };
+  });
+  app.get("/api/skills/:id/file", async (request) => {
+    const params = z.object({ id: z.string().min(1).max(120) }).parse(request.params);
+    const query = z.object({ path: z.string().min(1).max(2000) }).parse(request.query);
+    return { file: await skills.readFile(params.id, query.path) };
   });
   app.get("/api/settings", async () => ({ settings: settings.getSettings() }));
   app.patch("/api/settings", async (request) => ({ settings: await settings.updateSettings(settingsInput.parse(request.body)) }));
