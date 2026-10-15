@@ -21,6 +21,8 @@ import type {
   UserMessageOutline,
   TunnelInput,
   TunnelSnapshot,
+  DroppedPathEntry,
+  DroppedPathResolution,
   WorkspaceFile,
   Workspace,
   AppSettings,
@@ -213,6 +215,7 @@ export const api = {
     const suffix = params.size === 0 ? "" : `?${params.toString()}`;
     return (await request<{ sessions: SessionSummary[] }>(`/api/workspaces/${workspaceId}/sessions${suffix}`)).sessions;
   },
+  resolveDroppedReferences: async (workspaceId: string, input: { paths?: string[]; entries?: DroppedPathEntry[]; attachImages?: boolean }): Promise<DroppedPathResolution> => request(`/api/workspaces/${workspaceId}/dropped-references`, { method: "POST", body: JSON.stringify(input) }),
   searchFiles: async (workspaceId: string, query?: string): Promise<WorkspaceFile[]> => {
     const params = new URLSearchParams();
     if (query?.trim()) params.set("query", query.trim());

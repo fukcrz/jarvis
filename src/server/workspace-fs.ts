@@ -3,8 +3,9 @@ import { lstat, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import ignore from "ignore";
 import { platform } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import { formatWorkspaceDropReference } from "../shared/drop-reference.js";
 import { canonicalizeLocalPathInput } from "../shared/local-path.js";
-import type { DirectoryListing, WorkspaceDirectoryListing, WorkspaceFile, WorkspaceFileContent } from "../shared/protocol.js";
+import type { DirectoryListing, DroppedPathEntry, WorkspaceDirectoryListing, WorkspaceFile, WorkspaceFileContent } from "../shared/protocol.js";
 import { AppError } from "./errors.js";
 import { isMissingFile } from "./fs.js";
 
@@ -427,6 +428,110 @@ async function resolveExistingPath(root: string, requestedPath: string, errorCod
   } catch {
     throw new AppError(errorCode, "Path not found", 404);
   }
+}
+
+const DROP_MTIME_TOLERANCE_MS = 2_000;
+
+export async function matchDroppedEntries(cwd: string, entries: DroppedPathEntry[]): Promise<{ references: string[]; unmatched: string[] }> {
+  const references: string[] = [];
+  const unmatched: string[] = [];
+  const ordered: DroppedPathEntry[] = [];
+  const fileWants = new Map<string, true>();
+  const directoryWants = new Map<string, true>();
+  for (const entry of entries) {
+    const name = normalizeDropName(entry.name);
+    if (name === undefined) {
+      unmatched.push(entry.name);
+      continue;
+    }
+    const normalized = { ...entry, name };
+    ordered.push(normalized);
+    (entry.kind === "directory" ? directoryWants : fileWants).set(dropNameKey(name), true);
+  }
+  if (ordered.length === 0) return { references, unmatched };
+
+  const cwdReal = await realpath(cwd).catch(() => resolve(cwd));
+  const fileCandidates = new Map<string, { path: string; size: number; mtimeMs: number }[]>();
+  const directoryCandidates = new Map<string, string[]>();
+  const rootKey = dropNameKey(basename(cwdReal));
+  if (directoryWants.has(rootKey)) pushDropCandidate(directoryCandidates, rootKey, "");
+
+  let visits = 0;
+  const visit = async (directory: string, relativeDirectory: string, parentScopes: IgnoreScope[], depth: number): Promise<void> => {
+    if (depth > MAX_FILE_SEARCH_DEPTH || visits >= MAX_FILE_SEARCH_VISITS) return;
+    let children;
+    try {
+      children = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    const localIgnore = children.find((entry) => entry.isFile() && entry.name === ".gitignore");
+    let scopes = parentScopes;
+    if (localIgnore !== undefined) {
+      try {
+        const patterns = await readFile(join(directory, localIgnore.name), "utf8");
+        scopes = [...parentScopes, { base: relativeDirectory, matcher: ignore().add(patterns) }];
+      } catch {
+        // An unreadable .gitignore does not hide otherwise searchable files.
+      }
+    }
+    for (const child of children) {
+      if (visits >= MAX_FILE_SEARCH_VISITS) return;
+      visits += 1;
+      const absolutePath = join(directory, child.name);
+      const path = relativeDirectory === "" ? child.name : `${relativeDirectory}/${child.name}`;
+      const key = dropNameKey(child.name);
+      if (child.isDirectory()) {
+        if (IGNORED_SEARCH_DIRECTORIES.has(child.name) || isIgnoredSearchPath(path, true, scopes)) continue;
+        if (directoryWants.has(key)) pushDropCandidate(directoryCandidates, key, path);
+        await visit(absolutePath, path, scopes, depth + 1);
+      } else if (child.isFile() && fileWants.has(key) && !isIgnoredSearchPath(path, false, scopes)) {
+        const metadata = await stat(absolutePath).catch(() => undefined);
+        if (metadata?.isFile() === true) pushDropCandidate(fileCandidates, key, { path, size: metadata.size, mtimeMs: metadata.mtimeMs });
+      }
+    }
+  };
+  await visit(cwdReal, "", [], 0);
+
+  for (const entry of ordered) {
+    const key = dropNameKey(entry.name);
+    const relativePath = entry.kind === "directory"
+      ? uniqueDirectoryCandidate(directoryCandidates.get(key) ?? [])
+      : uniqueFileCandidate(fileCandidates.get(key) ?? [], entry);
+    if (relativePath === undefined) unmatched.push(entry.name);
+    else references.push(formatWorkspaceDropReference(relativePath, entry.kind === "directory"));
+  }
+  return { references, unmatched };
+}
+
+function normalizeDropName(name: string): string | undefined {
+  const trimmed = name.trim();
+  if (trimmed === "" || trimmed === "." || trimmed === ".." || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) return undefined;
+  return trimmed;
+}
+
+function dropNameKey(name: string): string {
+  return platform() === "win32" ? name.toLocaleLowerCase() : name;
+}
+
+function pushDropCandidate<T>(bucket: Map<string, T[]>, key: string, value: T): void {
+  const current = bucket.get(key);
+  if (current === undefined) bucket.set(key, [value]);
+  else current.push(value);
+}
+
+function uniqueDirectoryCandidate(candidates: string[]): string | undefined {
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+function uniqueFileCandidate(candidates: { path: string; size: number; mtimeMs: number }[], entry: DroppedPathEntry): string | undefined {
+  let pool = candidates;
+  if (entry.size !== undefined) pool = pool.filter((candidate) => candidate.size === entry.size);
+  if (pool.length === 1) return pool[0]?.path;
+  const mtimeMs = entry.mtimeMs;
+  if (mtimeMs === undefined) return undefined;
+  const timed = pool.filter((candidate) => Math.abs(candidate.mtimeMs - mtimeMs) <= DROP_MTIME_TOLERANCE_MS);
+  return timed.length === 1 ? timed[0]?.path : undefined;
 }
 
 async function pathExists(path: string): Promise<boolean> {
