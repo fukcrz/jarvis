@@ -21,6 +21,7 @@ import { registerSelfRestart } from "./self-restart.js";
 import { WorkspaceStore } from "./workspace-store.js";
 import { SettingsService } from "./settings-service.js";
 import { TunnelService } from "./tunnel-service.js";
+import { resolveDroppedReferences } from "./drop-references.js";
 import {
   fileResponseMimeType,
   listDirectory,
@@ -41,6 +42,16 @@ const directoryQuery = z.object({ path: z.string().min(1).optional(), roots: z.e
 const fileSearchQuery = z.object({ query: z.string().max(160).optional() }).strict();
 const workspacePathQuery = z.object({ path: z.string().max(2000).optional() }).strict();
 const workspaceEntryQuery = z.object({ path: z.string().min(1).max(2000) }).strict();
+const droppedReferencesInput = z.object({
+  paths: z.array(z.string().max(2000)).max(40).optional(),
+  entries: z.array(z.object({
+    name: z.string().min(1).max(255),
+    kind: z.enum(["file", "directory"]),
+    size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    mtimeMs: z.number().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  }).strict()).max(40).optional(),
+  attachImages: z.boolean().optional(),
+}).strict();
 const sessionPatchInput = z.object({
   name: z.string().min(1).max(120).optional(),
   starred: z.boolean().optional(),
@@ -414,6 +425,11 @@ export async function buildApp(options: {
     const query = fileSearchQuery.parse(request.query);
     const workspace = workspaces.get(params.workspaceId);
     return { files: await searchWorkspaceFiles(workspace.cwd, query.query ?? "") };
+  });
+  app.post("/api/workspaces/:workspaceId/dropped-references", async (request) => {
+    const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
+    const workspace = workspaces.get(params.workspaceId);
+    return resolveDroppedReferences(workspace.cwd, droppedReferencesInput.parse(request.body));
   });
   app.get("/api/workspaces/:workspaceId/directory", async (request) => {
     const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);

@@ -234,6 +234,20 @@ export interface WorkspaceFile {
   path: string;
 }
 
+/** A file or folder dropped on the composer when the browser cannot see its path. */
+export interface DroppedPathEntry {
+  name: string;
+  kind: "file" | "directory";
+  size?: number;
+  mtimeMs?: number;
+}
+
+export interface DroppedPathResolution {
+  references: string[];
+  imagePaths: string[];
+  unmatched: string[];
+}
+
 export interface WorkspaceBrowserEntry {
   name: string;
   path: string;

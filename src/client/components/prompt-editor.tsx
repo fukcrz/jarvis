@@ -2,9 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type
 import { type BasicSetupOptions, type EditorView, type Extension, type ViewUpdate, useCodeMirror } from "@uiw/react-codemirror";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
 import { ArrowUp, Command, FileCode2, History, LoaderCircle, Plus, RotateCcw, Square, X, Zap } from "lucide-react";
-import type { ComposerCommand, ImageAttachment, QueuedMessage, SessionFileReference, SessionQueue, WorkspaceFile } from "../../shared/protocol";
+import type { ComposerCommand, DroppedPathEntry, ImageAttachment, QueuedMessage, SessionFileReference, SessionQueue, WorkspaceFile } from "../../shared/protocol";
+import { api, workspaceFileUrl } from "../api";
 import { completionContextFor, completionReplacement, matchingComposerCommands, MAX_COMPOSER_SUGGESTIONS } from "../composer-completion";
+import { browserDropFromTransfer, collectBrowserDrop, insertionForDropReferences, isFileDrag } from "../lib/composer-drop";
+import { registerComposerDropTarget } from "../lib/composer-drop-desktop";
 import { composerDraftSyncAction, isComposerCompositionPending, mergeDeferredComposerDraft } from "../lib/composer-draft";
+import { isDesktopShell } from "../lib/desktop-shell";
 import { imageDataUrl, prepareImage, sameImageAttachments } from "../lib/image";
 import { lockVisualViewportKeyboardInset, unlockVisualViewportKeyboardInset } from "../lib/visual-viewport";
 import { useIsMobile } from "../hooks/use-is-mobile";
@@ -43,6 +47,7 @@ interface PromptEditorProps {
   attachments: ImageAttachment[];
   onAttachmentsChange: (attachments: ImageAttachment[]) => void;
   onAttachmentError: (message: string) => void;
+  workspaceId: string;
   /** Current model cannot see images; disables the attach affordances. */
   attachDisabled: boolean;
   /** 扩展 setEditorText 注入的草稿（nonce 变化时替换编辑器内容）。 */
@@ -70,7 +75,7 @@ interface PromptEditorProps {
   onAutoFocusConsumed?: () => void;
 }
 
-export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, searchFiles, searchSessionFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, attachDisabled, injectedText, draftInjection, onCancelEdit, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, focusRequestRef, autoFocus = false, onAutoFocusConsumed }: PromptEditorProps) {
+export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, searchFiles, searchSessionFiles, onDraftChange, onSubmit, onStop, attachments, onAttachmentsChange, onAttachmentError, workspaceId, attachDisabled, injectedText, draftInjection, onCancelEdit, controls, queue, onDequeueAll, onRemoveQueued, onToggleKind, collapsed = false, focusRequestRef, autoFocus = false, onAutoFocusConsumed }: PromptEditorProps) {
   const isMobile = useIsMobile();
   // 挂载时捕获 autoFocus：视图创建可能比挂载晚一个提交（容器 ref 回调触发
   // 的二次渲染），而 App 可能在被动效果里已清除标记；用 ref 保存挂载快照。
@@ -324,6 +329,107 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
 
   const handleFilesRef = useRef(handleFiles);
   useEffect(() => { handleFilesRef.current = handleFiles; }, [handleFiles]);
+  const onAttachmentErrorRef = useRef(onAttachmentError);
+  onAttachmentErrorRef.current = onAttachmentError;
+  const workspaceIdRef = useRef(workspaceId);
+  workspaceIdRef.current = workspaceId;
+  const attachDisabledRef = useRef(attachDisabled);
+  attachDisabledRef.current = attachDisabled;
+  const dropRootRef = useRef<HTMLDivElement | null>(null);
+  const [fileDropActive, setFileDropActive] = useState(false);
+  const fileDropDepthRef = useRef(0);
+
+  const insertReferences = useCallback((references: string[]) => {
+    const view = viewRef.current;
+    if (view === undefined) return;
+    const edit = insertionForDropReferences(view.state.doc.toString(), view.state.selection.main.head, references);
+    if (edit === undefined) return;
+    view.dispatch({ changes: { from: edit.from, to: edit.from, insert: edit.insert }, selection: { anchor: edit.cursor } });
+    view.focus();
+  }, []);
+  const insertReferencesRef = useRef(insertReferences);
+  insertReferencesRef.current = insertReferences;
+
+  const resolveDropped = useCallback(async (input: { paths?: string[]; entries?: DroppedPathEntry[]; attachImages?: boolean }) => {
+    try {
+      const result = await api.resolveDroppedReferences(workspaceIdRef.current, input);
+      insertReferencesRef.current(result.references);
+      if (result.imagePaths.length > 0) {
+        const files = (await Promise.all(result.imagePaths.map(async (path) => {
+          try {
+            return await fileFromLocalPath(path);
+          } catch {
+            return undefined;
+          }
+        }))).filter((file): file is File => file !== undefined);
+        if (files.length > 0) handleFilesRef.current(files);
+        if (files.length !== result.imagePaths.length) onAttachmentErrorRef.current("无法取得路径");
+      }
+      if (result.unmatched.length > 0) onAttachmentErrorRef.current("无法取得路径");
+      if (result.references.length === 0 && result.imagePaths.length === 0 && result.unmatched.length === 0 && (input.paths?.length ?? 0) + (input.entries?.length ?? 0) > 0) {
+        onAttachmentErrorRef.current("无法取得路径");
+      }
+    } catch {
+      onAttachmentErrorRef.current("无法取得路径");
+    }
+  }, []);
+  const resolveDroppedRef = useRef(resolveDropped);
+  resolveDroppedRef.current = resolveDropped;
+
+  useEffect(() => {
+    const element = dropRootRef.current;
+    if (element === null) return;
+    const onDragEnter = (event: DragEvent) => {
+      if (isDesktopShell() || !isFileDrag(Array.from(event.dataTransfer?.types ?? []))) return;
+      event.preventDefault();
+      fileDropDepthRef.current += 1;
+      setFileDropActive(true);
+    };
+    const onDragOver = (event: DragEvent) => {
+      if (isDesktopShell() || !isFileDrag(Array.from(event.dataTransfer?.types ?? []))) return;
+      event.preventDefault();
+      if (event.dataTransfer !== null) event.dataTransfer.dropEffect = "copy";
+    };
+    const onDragLeave = () => {
+      if (isDesktopShell()) return;
+      fileDropDepthRef.current = Math.max(0, fileDropDepthRef.current - 1);
+      if (fileDropDepthRef.current === 0) setFileDropActive(false);
+    };
+    const onDrop = (event: DragEvent) => {
+      fileDropDepthRef.current = 0;
+      setFileDropActive(false);
+      if (isDesktopShell() || event.dataTransfer === null || !isFileDrag(Array.from(event.dataTransfer.types))) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const attachImages = !attachDisabledRef.current;
+      const collected = collectBrowserDrop(browserDropFromTransfer(event.dataTransfer), attachImages);
+      const images = collected.images.flatMap((image) => image.source === undefined ? [] : [image.source]);
+      if (images.length > 0) handleFilesRef.current(images);
+      if (collected.paths.length === 0 && collected.entries.length === 0) {
+        if (images.length === 0) onAttachmentErrorRef.current("无法取得路径");
+        return;
+      }
+      void resolveDroppedRef.current({
+        ...(collected.paths.length > 0 ? { paths: collected.paths, attachImages } : {}),
+        ...(collected.entries.length > 0 ? { entries: collected.entries } : {}),
+      });
+    };
+    element.addEventListener("dragenter", onDragEnter, true);
+    element.addEventListener("dragover", onDragOver, true);
+    element.addEventListener("dragleave", onDragLeave, true);
+    element.addEventListener("drop", onDrop, true);
+    const unregister = registerComposerDropTarget(element, {
+      acceptPaths: (paths) => { void resolveDroppedRef.current({ paths, attachImages: !attachDisabledRef.current }); },
+      setDropHighlight: (active) => setFileDropActive((current) => current === active ? current : active),
+    });
+    return () => {
+      element.removeEventListener("dragenter", onDragEnter, true);
+      element.removeEventListener("dragover", onDragOver, true);
+      element.removeEventListener("dragleave", onDragLeave, true);
+      element.removeEventListener("drop", onDrop, true);
+      unregister();
+    };
+  }, []);
   const syncDraftFromAppRef = useRef(syncDraftFromApp);
   useEffect(() => { syncDraftFromAppRef.current = syncDraftFromApp; }, [syncDraftFromApp]);
   const flushComposerDraftFromView = useCallback((syncApp: boolean) => {
@@ -463,7 +569,7 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
 
   return (
     <section className={`composer${collapsed ? " composer-collapsed" : ""}`} aria-label="消息输入框">
-      <div className="composer-editor">
+      <div className={`composer-editor${fileDropActive ? " composer-file-drop" : ""}`} ref={dropRootRef}>
         {attachments.length === 0 && preparingCount === 0 ? null : <div className="composer-attachments">
           {attachments.map((attachment, index) => (
             <div className="composer-attachment" key={`${attachment.mimeType}:${index}`}>
@@ -565,6 +671,14 @@ export function PromptEditor({ initialValue, draftNonce = 0, busy, commands, sea
       </div>
     </section>
   );
+}
+
+async function fileFromLocalPath(path: string): Promise<File> {
+  const response = await fetch(workspaceFileUrl("", path));
+  if (!response.ok) throw new Error("无法取得路径");
+  const blob = await response.blob();
+  const name = path.split(/[\\/]/).pop() || "image";
+  return new File([blob], name, { type: blob.type });
 }
 
 function blurAfterAttach(input: HTMLInputElement, view: EditorView | undefined) {
