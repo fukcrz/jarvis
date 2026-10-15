@@ -39,7 +39,7 @@ The client keeps a cursor for every open text block and retains `streamingMessag
 
 ## Process presentation
 
-Thinking starts with a single-line preview and opens to its full content. A folded active process exposes the current entry, queued/running tools, and failed operations. Consecutive tools share a category/count label; expanding the process reveals their original ordered rows and results. Completed work stays available inside the process.
+Thinking starts with a single-line preview and opens to its full content. While a run is active, the current turn is not wrapped in 过程: thinking, commentary, and tools render directly. When the run becomes idle, that turn collapses into 过程 and the final answer stays outside. Consecutive tools share a category/count label; expanding a settled process reveals their original ordered rows and results. Completed work stays available inside the process.
 
 The process is the only parent fold. Tool groups are labels rather than a second toggle; each tool row keeps its own detail state. Opening a row opens the process, and folding the process hides details without resetting them. Manual expansion of a thought, tool result, or process is preserved across later events and completion. Pending extension input pins its process open. Failed tools and error diagnostics stay accessible. User `!cmd` entries remain outside the process fold.
 
