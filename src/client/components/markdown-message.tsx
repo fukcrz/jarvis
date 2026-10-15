@@ -1,7 +1,7 @@
 import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
 import { copyText } from "../lib/clipboard";
-import { canCopyDiagramImage, copyMermaidDiagram, downloadMermaidDiagram, mermaidFitScale, pngBlobFromSvg, renderMermaidDiagram, saveBlobFile, svgPixelSize } from "../lib/mermaid";
+import { cachedMermaidDiagram, canCopyDiagramImage, copyMermaidDiagram, downloadMermaidDiagram, mermaidFitScale, pngBlobFromSvg, renderMermaidDiagram, saveBlobFile, svgPixelSize } from "../lib/mermaid";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { defaultSchema, type Schema } from "hast-util-sanitize";
 import rehypeHighlight from "rehype-highlight";
@@ -344,20 +344,31 @@ function MermaidFittedSvg({ svg, onOpen }: { svg: string; onOpen: () => void }) 
 }
 
 /**
- * ```mermaid 代码块：靠近视口才画成 SVG，画成功后不随滚动卸载。
- * 流式输出期间只显示源码；渲染失败时回退成源码并说明状态；可以手动在图形与源码之间切换。
+ * ```mermaid 代码块：靠近视口才画成 SVG。画成功的图留着，不随滚动、流式或后续渲染清掉。
+ * 还没画成时显示源码；渲染失败且没有旧图时回退成源码并说明状态；可以手动在图形与源码之间切换。
  */
 function MermaidBlock({ code }: { code: string }) {
   const streaming = useContext(MarkdownStreamingContext);
   const blockRef = useRef<HTMLDivElement>(null);
-  const [svg, setSvg] = useState<string>();
-  const [failed, setFailed] = useState(false);
+  const [local, setLocal] = useState<{ code: string; svg?: string; failed: boolean }>(() => ({
+    code,
+    svg: cachedMermaidDiagram(code),
+    failed: false,
+  }));
   const [showSource, setShowSource] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [diagramCopy, setDiagramCopy] = useState<"idle" | "copied" | "failed">("idle");
+  const cached = cachedMermaidDiagram(code);
+  const svg = local.code === code ? (local.svg ?? cached) : cached;
+  const failed = local.code === code && local.failed && svg === undefined;
 
   useEffect(() => {
+    const hit = cachedMermaidDiagram(code);
+    if (hit !== undefined) {
+      setLocal({ code, svg: hit, failed: false });
+      return;
+    }
     if (streaming || code.trim() === "") return;
     const node = blockRef.current;
     let cancelled = false;
@@ -366,10 +377,16 @@ function MermaidBlock({ code }: { code: string }) {
       if (started) return;
       started = true;
       observer?.disconnect();
-      setFailed(false);
+      setLocal((prev) => ({ code, svg: prev.code === code ? prev.svg : undefined, failed: false }));
       void renderMermaidDiagram(code)
-        .then((result) => { if (!cancelled) { setSvg(result); setFailed(false); } })
-        .catch(() => { if (!cancelled) { setSvg(undefined); setFailed(true); } });
+        .then((result) => { if (!cancelled) setLocal({ code, svg: result, failed: false }); })
+        .catch(() => {
+          if (cancelled) return;
+          setLocal((prev) => {
+            const kept = prev.code === code ? prev.svg : undefined;
+            return { code, svg: kept, failed: kept === undefined };
+          });
+        });
     };
     if (node === null || typeof IntersectionObserver !== "function" || mermaidBlockIsNearViewport(node)) {
       start();
@@ -421,7 +438,7 @@ function MermaidBlock({ code }: { code: string }) {
       window.setTimeout(() => setDiagramCopy("idle"), 1600);
     });
   };
-  const diagram = svg !== undefined && !failed && !streaming;
+  const diagram = svg !== undefined && !failed;
   const diagramActionLabel = copyDiagramImage
     ? (diagramCopy === "copied" ? "已复制" : diagramCopy === "failed" ? "复制失败" : "复制图")
     : (diagramCopy === "copied" ? "已下载" : diagramCopy === "failed" ? "下载失败" : "下载图");
