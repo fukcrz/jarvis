@@ -25,6 +25,12 @@ export function decideBundledSkillSync(existingHash: string | undefined, current
   return knownHashes.includes(existingHash) ? "write" : "modified";
 }
 
+/** 副本哈希还在已发布清单里，就是我们复制出去的，删。对不上则是用户改过的，留。 */
+export function decideRetiredSkill(existingHash: string | undefined, knownHashes: readonly string[]): "delete" | "keep" {
+  if (existingHash === undefined) return "keep";
+  return knownHashes.includes(existingHash) ? "delete" : "keep";
+}
+
 export interface BundledSkillSpec {
   id: string;
   label: string;
@@ -125,6 +131,7 @@ export async function reconcileBundledSkills(input: {
   bundledDir: string;
   holdDir: string;
   knownHashes: Readonly<Record<string, readonly string[]>>;
+  retiredHashes?: Readonly<Record<string, readonly string[]>>;
   disabled: ReadonlySet<string>;
   forceIds?: ReadonlySet<string>;
 }): Promise<BundledSkillStatus[]> {
@@ -167,7 +174,18 @@ export async function reconcileBundledSkills(input: {
     if (action === "write") await writeSkillTree(bundledRoot, destination);
     statuses.push({ id: skill.id, label: skill.label, enabled: true, modified: action === "modified", path: destination });
   }
+  await removeRetiredSkillCopies(input.skillsDir, input.retiredHashes ?? {});
   return statuses;
+}
+
+async function removeRetiredSkillCopies(skillsDir: string, retiredHashes: Readonly<Record<string, readonly string[]>>): Promise<void> {
+  const currentIds = new Set(BUNDLED_SKILLS.map((skill) => skill.id));
+  for (const [id, known] of Object.entries(retiredHashes)) {
+    if (currentIds.has(id) || !isSkillName(id)) continue;
+    const destination = join(skillsDir, id);
+    if (decideRetiredSkill(await hashSkillTree(destination), known) !== "delete") continue;
+    await rm(destination, { recursive: true, force: true });
+  }
 }
 
 export function isDirectChild(parent: string, child: string): boolean {

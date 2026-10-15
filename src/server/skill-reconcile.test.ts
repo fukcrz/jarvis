@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BUNDLED_SKILLS, decideBundledSkillSync, hashSkillTree, reconcileBundledSkills, skillContentHash } from "./skill-reconcile.js";
+import { BUNDLED_SKILLS, decideBundledSkillSync, decideRetiredSkill, hashSkillTree, reconcileBundledSkills, skillContentHash } from "./skill-reconcile.js";
 import { bundledSkillRoot } from "./skill-service.js";
 
 describe("bundled skill sync", () => {
@@ -11,6 +11,9 @@ describe("bundled skill sync", () => {
     expect(decideBundledSkillSync("now", "now", ["old", "now"])).toBe("skip");
     expect(decideBundledSkillSync("old", "now", ["old", "now"])).toBe("write");
     expect(decideBundledSkillSync("edited", "now", ["old", "now"])).toBe("modified");
+    expect(decideRetiredSkill(undefined, ["old"])).toBe("keep");
+    expect(decideRetiredSkill("old", ["old", "now"])).toBe("delete");
+    expect(decideRetiredSkill("edited", ["old", "now"])).toBe("keep");
   });
 
   it("ignores carriage returns when comparing skill content", () => {
@@ -43,5 +46,29 @@ describe("bundled skill sync", () => {
     const restored = await reconcileBundledSkills({ skillsDir, bundledDir, holdDir, knownHashes: known, disabled: new Set() });
     expect(restored.find((item) => item.id === "browser-qa")?.modified).toBe(true);
     expect(await readFile(target, "utf8")).toContain("edited");
+  });
+
+  it("removes an unmodified retired copy and keeps a local edit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jarvis-retired-skills-"));
+    const skillsDir = join(root, "skills");
+    const holdDir = join(root, "hold");
+    await mkdir(join(skillsDir, "old-skill"), { recursive: true });
+    await mkdir(join(skillsDir, "edited-skill"), { recursive: true });
+    await mkdir(join(holdDir, "old-skill"), { recursive: true });
+    await writeFile(join(skillsDir, "old-skill", "SKILL.md"), "---\nname: old-skill\ndescription: shipped\n---\n\n# shipped\n", "utf8");
+    await writeFile(join(skillsDir, "edited-skill", "SKILL.md"), "---\nname: edited-skill\ndescription: edited\n---\n\n# edited\n", "utf8");
+    await writeFile(join(holdDir, "old-skill", "SKILL.md"), "---\nname: old-skill\ndescription: held\n---\n\n# held\n", "utf8");
+    const shipped = await hashSkillTree(join(skillsDir, "old-skill"));
+    await reconcileBundledSkills({
+      skillsDir,
+      bundledDir: bundledSkillRoot(),
+      holdDir,
+      knownHashes: {},
+      retiredHashes: { "old-skill": [shipped ?? ""], "edited-skill": ["not-this-hash"], "../escape": [shipped ?? ""] },
+      disabled: new Set(),
+    });
+    await expect(access(join(skillsDir, "old-skill"))).rejects.toThrow();
+    expect(await readFile(join(skillsDir, "edited-skill", "SKILL.md"), "utf8")).toContain("edited");
+    expect(await readFile(join(holdDir, "old-skill", "SKILL.md"), "utf8")).toContain("held");
   });
 });
