@@ -198,14 +198,21 @@ describe("session focus window", () => {
     expect(isSessionInFocusWindow({ ...session, attentionState: "waiting_interaction", updatedAt: old }, now)).toBe(true);
   });
 
-  it("keeps ordinary sessions updated within the ten-minute boundary", () => {
+  it("keeps new drafts and the session currently being viewed", () => {
+    const old = "2020-01-01T00:00:00.000Z";
+    expect(isSessionInFocusWindow({ ...session, preview: null, updatedAt: old }, now)).toBe(true);
+    expect(isSessionInFocusWindow({ ...session, updatedAt: old }, now, session.id)).toBe(true);
+    expect(isSessionInFocusWindow({ ...session, updatedAt: old }, now, "other-session")).toBe(false);
+  });
+
+  it("keeps ordinary sessions updated within the one-hour boundary", () => {
     expect(isSessionInFocusWindow({ ...session, updatedAt: new Date(now - SESSION_FOCUS_WINDOW_MS).toISOString() }, now)).toBe(true);
     expect(isSessionInFocusWindow({ ...session, updatedAt: new Date(now - SESSION_FOCUS_WINDOW_MS - 1).toISOString() }, now)).toBe(false);
   });
 
   it("filters ordinary sessions with invalid, stale, or future activity times", () => {
     expect(isSessionInFocusWindow({ ...session, updatedAt: "not-a-date" }, now)).toBe(false);
-    expect(isSessionInFocusWindow({ ...session, updatedAt: "2026-02-03T11:00:00.000Z" }, now)).toBe(false);
+    expect(isSessionInFocusWindow({ ...session, updatedAt: "2026-02-03T10:59:59.000Z" }, now)).toBe(false);
     expect(isSessionInFocusWindow({ ...session, updatedAt: "2026-02-03T12:01:00.000Z" }, now)).toBe(false);
   });
 });
