@@ -84,7 +84,7 @@ export const SESSIONS_COLLAPSED_LIMIT = 5;
 export const SESSIONS_PAGE_SIZE = 5;
 
 /** 聚焦模式中，普通会话保持可见的最近活动时间窗口。 */
-export const SESSION_FOCUS_WINDOW_MS = 10 * 60_000;
+export const SESSION_FOCUS_WINDOW_MS = 60 * 60_000;
 
 /** 项目清理只删除没有状态标记的闲置会话。 */
 export function sessionCleanupTargets(sessions: SessionSummary[], keepSessionId?: string): SessionSummary[] {
@@ -103,9 +103,9 @@ export function sessionAttentionLabel(session: SessionSummary): string | undefin
   return undefined;
 }
 
-/** 聚焦模式保留需要处理的会话，以及最近十分钟内有活动的普通会话。 */
-export function isSessionInFocusWindow(session: SessionSummary, now = Date.now()): boolean {
-  if (sessionAttentionRank(session) < 4) return true;
+/** 聚焦模式保留非空闲会话、新对话、当前正在查看的会话，以及最近一小时内有活动的普通会话。 */
+export function isSessionInFocusWindow(session: SessionSummary, now = Date.now(), selectedSessionId?: string): boolean {
+  if (session.id === selectedSessionId || sessionAttentionRank(session) < 4 || isEmptySession(session)) return true;
   const updatedAt = Date.parse(session.updatedAt);
   const age = now - updatedAt;
   return Number.isFinite(updatedAt) && age >= 0 && age <= SESSION_FOCUS_WINDOW_MS;

@@ -177,8 +177,8 @@ export function App() {
   const selectedRefKey = selectedRef === undefined ? undefined : `${selectedRef.workspaceId}:${selectedRef.sessionId}`;
   const visibleSessionsByWorkspace = useMemo<Record<string, SessionSummary[]>>(() => {
     if (!focusMode) return sessionsByWorkspace;
-    return Object.fromEntries(Object.entries(sessionsByWorkspace).map(([id, sessions]) => [id, sessions.filter((session) => isSessionInFocusWindow(session, focusNow))]));
-  }, [focusMode, focusNow, sessionsByWorkspace]);
+    return Object.fromEntries(Object.entries(sessionsByWorkspace).map(([id, sessions]) => [id, sessions.filter((session) => isSessionInFocusWindow(session, focusNow, selectedSessionId))]));
+  }, [focusMode, focusNow, selectedSessionId, sessionsByWorkspace]);
   const visibleWorkspaces = useMemo(() => {
     if (!focusMode) return workspaces;
     return workspaces.filter((workspace) => {
