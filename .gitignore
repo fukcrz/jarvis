@@ -20,6 +20,8 @@ tmp-*.html
 tmp-*.png
 .tmp-*.png
 tmp/
+tmp-skill-home/
+tmp-skill-shots/
 logs/prod-*.log
 logs/watch-flash.ps1
 src-tauri/target/

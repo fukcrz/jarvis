@@ -1087,3 +1087,7 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .update-progress-label { margin: 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .update-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 .update-status.error { color: #ffb4b6; }
+.settings-row-main-button small { overflow: hidden; color: var(--subtle); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.skill-file-preview { max-height: min(70vh, 720px); overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 12px; }
+.skill-file-code { margin: 0; overflow: auto; color: var(--ink); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
+.skill-file-line { display: block; }

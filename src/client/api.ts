@@ -36,6 +36,7 @@ import type {
   ProviderOverride,
   ProviderStatus,
 } from "../shared/protocol";
+import type { SkillFileContent, SkillFileListing, SkillSnapshot } from "../shared/skills";
 
 /** 会话失效（HTTP 401 / WebSocket 4401）时广播，由 AuthGate 切回登录页。 */
 export const UNAUTHORIZED_EVENT = "jarvis:unauthorized";
@@ -186,6 +187,13 @@ export const api = {
   restartBackgroundTask: async (workspaceId: string, taskId: string): Promise<BackgroundTaskSnapshot> => (await request<{ task: BackgroundTaskSnapshot }>(`/api/workspaces/${workspaceId}/background-tasks/${taskId}/restart`, { method: "POST", body: "{}" })).task,
   settings: async (): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings")).settings,
   updateSettings: async (patch: Partial<Pick<AppSettings, "assistantName">>): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) })).settings,
+  skills: async (): Promise<SkillSnapshot> => (await request<{ skills: SkillSnapshot }>("/api/skills")).skills,
+  setBundledSkill: async (id: string, enabled: boolean): Promise<SkillSnapshot> => (await request<{ skills: SkillSnapshot }>(`/api/skills/bundled/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ enabled }) })).skills,
+  overwriteBundledSkill: async (id: string): Promise<SkillSnapshot> => (await request<{ skills: SkillSnapshot }>(`/api/skills/bundled/${encodeURIComponent(id)}/overwrite`, { method: "POST", body: "{}" })).skills,
+  importSkill: async (path: string): Promise<SkillSnapshot> => (await request<{ skills: SkillSnapshot }>("/api/skills/import", { method: "POST", body: JSON.stringify({ path }) })).skills,
+  removeSkill: async (id: string): Promise<SkillSnapshot> => (await request<{ skills: SkillSnapshot }>(`/api/skills/${encodeURIComponent(id)}`, { method: "DELETE" })).skills,
+  skillFiles: async (id: string, path = ""): Promise<SkillFileListing> => (await request<{ files: SkillFileListing }>(`/api/skills/${encodeURIComponent(id)}/files?path=${encodeURIComponent(path)}`)).files,
+  skillFile: async (id: string, path: string): Promise<SkillFileContent> => (await request<{ file: SkillFileContent }>(`/api/skills/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`)).file,
   providers: async (): Promise<ProviderStatus[]> => (await request<{ providers: ProviderStatus[] }>("/api/settings/providers")).providers,
   enabledModels: async (): Promise<EnabledModelsStatus> => (await request<{ enabledModels: EnabledModelsStatus }>("/api/settings/enabled-models")).enabledModels,
   updateEnabledModels: async (models: EnabledModelRef[]): Promise<EnabledModelsStatus> => (await request<{ enabledModels: EnabledModelsStatus }>("/api/settings/enabled-models", { method: "PUT", body: JSON.stringify({ models }) })).enabledModels,
