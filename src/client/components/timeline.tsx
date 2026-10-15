@@ -1180,9 +1180,14 @@ export function summarizeTurnProcess(turn: TimelineTurn): TurnProcessSummary {
   return { operations, ...(durationMs === undefined ? {} : { durationMs }) };
 }
 
-/** 过程里只要还有内容就折叠，单条也收进去。 */
+/** 过程里只要还有内容就值得折进「过程」，单条也算。 */
 export function shouldFoldTurnProcess(turn: TimelineTurn): boolean {
   return turn.process.length > 0;
+}
+
+/** 回合还在跑时不套「过程」，直接展开；结束后再收起。 */
+export function shouldPresentCollapsedProcess(turn: TimelineTurn, live: boolean): boolean {
+  return !live && shouldFoldTurnProcess(turn);
 }
 
 function isUserCommand(item: ToolTimelineItem): boolean {
@@ -1338,13 +1343,12 @@ export function timelineProcessId(turn: TimelineTurn | undefined): string | unde
   return `process:${sourceMessageId}`;
 }
 
-function TimelineTurnBlock({ turn, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; foldState: TimelineFoldState; onToggleProcess: (id: string) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string) => void }) {
+function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; live: boolean; foldState: TimelineFoldState; onToggleProcess: (id: string) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string) => void }) {
   const presented = useMemo(() => presentTurnProcess(turn.process), [turn.process]);
   const split = useMemo(() => splitVisibleTurnEntries(presented.entries), [presented.entries]);
   const displayTurn = { ...turn, process: split.process };
-  const foldable = shouldFoldTurnProcess(displayTurn);
   const summary = summarizeTurnProcess(displayTurn);
-  const collapsible = foldable;
+  const collapsible = shouldPresentCollapsedProcess(displayTurn, live);
   const processId = timelineProcessId(turn);
   const open = !collapsible || processId !== undefined && foldState.openProcessIds.has(processId);
   const touched = processId !== undefined && foldState.touchedProcessIds.has(processId);
@@ -1383,7 +1387,8 @@ function TimelineTurnBlock({ turn, foldState, onToggleProcess, onToggleProcessDe
 
 function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined): ReactNode[] {
   const context: TurnRenderContext = { streamingMessageId, liveGeneration, status, openDetailIds: foldState.openDetailIds, openGroupIds: foldState.openGroupIds, onToggleDetail: () => undefined, onToggleCall: () => undefined, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage };
-  return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
+  const liveTurnKey = status.runState === "idle" ? undefined : turns.at(-1)?.key;
+  return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} live={turn.key === liveTurnKey} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
 }
 
 function ThinkingItem({ item, live, baseDir, open, showDetails, onToggle }: { item: ThinkingTimelineItem; live?: LiveGenerationStats; baseDir?: string; open: boolean; showDetails: boolean; onToggle: () => void }) {
