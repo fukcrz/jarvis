@@ -1213,6 +1213,7 @@ export function App() {
 
   const sidebar = <Sidebar
     workspaces={visibleWorkspaces}
+    allWorkspaces={workspaces}
     sessionsByWorkspace={visibleSessionsByWorkspace}
     workspaceId={workspaceId}
     selectedSessionId={sessionId}
