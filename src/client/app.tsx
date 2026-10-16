@@ -7,6 +7,8 @@ import { listenDesktopOpenSession } from "./desktop";
 import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
 import { ThinkingSelector } from "./components/thinking-selector";
+import { DetailLevelSelector } from "./components/detail-level-selector";
+import { readDetailLevel, writeDetailLevel, type DetailLevel } from "./lib/detail-level";
 import { Sidebar } from "./components/sidebar";
 import { SessionContextMenu, type SessionContextMenuTarget } from "./components/session-context-menu";
 import { ProjectContextMenu, type ProjectContextMenuTarget } from "./components/project-context-menu";
@@ -152,6 +154,7 @@ export function App() {
   const [composerCommands, setComposerCommands] = useState<{ sessionKey: string; items: ComposerCommand[] } | undefined>();
   // 移动端：非底部输入框聚焦时收起输入栏（见 PromptEditor）。
   const [composerCollapsed, setComposerCollapsed] = useState(false);
+  const [detailLevel, setDetailLevel] = useState<DetailLevel>(readDetailLevel);
   const composerFocusRef = useRef<(() => void) | undefined>(undefined);
   // 桌面端：新建会话（含复用空会话、创建分支）后自动聚焦输入框，PromptEditor 挂载时消费。
   const [newSessionFocusId, setNewSessionFocusId] = useState<string | undefined>();
@@ -1236,12 +1239,13 @@ export function App() {
   const renderChatContent = () => <>
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <div className="chat-stage">
-      <Timeline sessionKey={selectedRefKey} localMediaVersion={stream.localMediaVersion} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} liveGeneration={stream.transcript.liveGeneration} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onRetryTurn={(user) => { void retryTurn(user); }} onContinue={() => { void continueTurn(); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} />
+      <Timeline sessionKey={selectedRefKey} localMediaVersion={stream.localMediaVersion} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} liveGeneration={stream.transcript.liveGeneration} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onRetryTurn={(user) => { void retryTurn(user); }} onContinue={() => { void continueTurn(); }} detailLevel={detailLevel} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} />
       <div className="chat-dock">
         <ExtensionPanels panels={stream.extensionPanels} />
         <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} workspaceId={selectedRef.workspaceId} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage?.sessionId === selectedRef.sessionId ? cancelMessageEdit : undefined} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
+        <DetailLevelSelector value={detailLevel} onChange={(level) => { setDetailLevel(level); writeDetailLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} sessionUsage={stream.transcript.sessionUsage} latestGeneration={stream.transcript.latestGeneration} liveGeneration={stream.transcript.liveGeneration} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />
       </>} />
       </div>
