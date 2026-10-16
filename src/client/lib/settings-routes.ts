@@ -1,21 +1,40 @@
+/** 设置页一级分类；电脑端左侧导航、手机端首页列表、搜索结果共用。 */
+export type SettingsCategoryId =
+  | "general"
+  | "appearance"
+  | "notifications"
+  | "models"
+  | "model-groups"
+  | "extensions"
+  | "workspaces"
+  | "remote"
+  | "data"
+  | "about";
+
 export type SettingsRoute =
   | { page: "home" }
-  | { page: "assistant-name" }
-  | { page: "providers" }
-  | { page: "provider"; providerId: string }
+  | { page: "general" }
+  | { page: "appearance" }
+  | { page: "notifications" }
+  | { page: "models" }
   | { page: "provider-new" }
-  | { page: "provider-edit"; providerId: string }
-  | { page: "provider-override"; providerId: string }
-  | { page: "model-scope" }
-  | { page: "workspaces" }
-  | { page: "tunnel" }
-  | { page: "security" }
-  | { page: "data" }
-  | { page: "plugins" }
-  | { page: "plugins-install" }
+  | { page: "provider"; providerId: string }
   | { page: "model-groups" }
+  | { page: "plugins" }
   | { page: "skills" }
-  | { page: "skill-files"; skillId: string };
+  | { page: "skill-files"; skillId: string }
+  | { page: "workspaces" }
+  | { page: "remote" }
+  | { page: "data" }
+  | { page: "about" };
+
+/** 旧地址跳到新页面时附带的定位信息：跳过去后滚动并高亮对应项。 */
+export interface SettingsRedirect {
+  route: SettingsRoute;
+  focus?: string;
+  /** 旧「浏览插件」页并进了安装对话框。 */
+  openInstall?: boolean;
+}
 
 const SETTINGS_ROOT = "/settings";
 
@@ -26,80 +45,110 @@ export function isSettingsPath(pathname: string): boolean {
 export function settingsPath(route: SettingsRoute): string {
   switch (route.page) {
     case "home": return SETTINGS_ROOT;
-    case "assistant-name": return `${SETTINGS_ROOT}/assistant-name`;
-    case "providers": return `${SETTINGS_ROOT}/providers`;
-    case "provider-new": return `${SETTINGS_ROOT}/providers/new`;
-    case "provider": return `${SETTINGS_ROOT}/providers/${encodeURIComponent(route.providerId)}`;
-    case "provider-edit": return `${SETTINGS_ROOT}/providers/${encodeURIComponent(route.providerId)}/edit`;
-    case "provider-override": return `${SETTINGS_ROOT}/providers/${encodeURIComponent(route.providerId)}/override`;
-    case "model-scope": return `${SETTINGS_ROOT}/model-scope`;
+    case "general": return `${SETTINGS_ROOT}/general`;
+    case "appearance": return `${SETTINGS_ROOT}/appearance`;
+    case "notifications": return `${SETTINGS_ROOT}/notifications`;
+    case "models": return `${SETTINGS_ROOT}/models`;
+    case "provider-new": return `${SETTINGS_ROOT}/models/new`;
+    case "provider": return `${SETTINGS_ROOT}/models/${encodeURIComponent(route.providerId)}`;
+    case "model-groups": return `${SETTINGS_ROOT}/model-groups`;
+    case "plugins": return `${SETTINGS_ROOT}/extensions`;
+    case "skills": return `${SETTINGS_ROOT}/extensions/skills`;
+    case "skill-files": return `${SETTINGS_ROOT}/extensions/skills/${encodeURIComponent(route.skillId)}`;
     case "workspaces": return `${SETTINGS_ROOT}/workspaces`;
-    case "tunnel": return `${SETTINGS_ROOT}/tunnel`;
-    case "security": return `${SETTINGS_ROOT}/security`;
+    case "remote": return `${SETTINGS_ROOT}/remote`;
     case "data": return `${SETTINGS_ROOT}/data`;
-    case "plugins": return `${SETTINGS_ROOT}/plugins`;
-    case "plugins-install": return `${SETTINGS_ROOT}/plugins/install`;
-    case "model-groups": return `${SETTINGS_ROOT}/plugins/model-groups`;
-    case "skills": return `${SETTINGS_ROOT}/skills`;
-    case "skill-files": return `${SETTINGS_ROOT}/skills/${encodeURIComponent(route.skillId)}`;
+    case "about": return `${SETTINGS_ROOT}/about`;
   }
 }
+
+const SIMPLE_PAGES: Record<string, SettingsRoute> = {
+  general: { page: "general" },
+  appearance: { page: "appearance" },
+  notifications: { page: "notifications" },
+  models: { page: "models" },
+  "model-groups": { page: "model-groups" },
+  extensions: { page: "plugins" },
+  workspaces: { page: "workspaces" },
+  remote: { page: "remote" },
+  data: { page: "data" },
+  about: { page: "about" },
+};
 
 export function parseSettingsPath(pathname: string): SettingsRoute | undefined {
   if (pathname === SETTINGS_ROOT || pathname === `${SETTINGS_ROOT}/`) return { page: "home" };
   if (!pathname.startsWith(`${SETTINGS_ROOT}/`)) return undefined;
-  const segments = pathname.slice(SETTINGS_ROOT.length + 1).split("/").filter(Boolean).map(decodeSegment);
-  if (segments.length === 1) {
-    switch (segments[0]) {
-      case "assistant-name": return { page: "assistant-name" };
-      case "providers": return { page: "providers" };
-      case "model-scope": return { page: "model-scope" };
-      case "workspaces": return { page: "workspaces" };
-      case "tunnel": return { page: "tunnel" };
-      case "security": return { page: "security" };
-      case "data": return { page: "data" };
-      case "plugins": return { page: "plugins" };
-      case "skills": return { page: "skills" };
-      default: return undefined;
-    }
-  }
-  if (segments[0] === "plugins" && segments.length === 2 && segments[1] === "install") return { page: "plugins-install" };
-  if (segments[0] === "plugins" && segments.length === 2 && segments[1] === "model-groups") return { page: "model-groups" };
-  if (segments[0] === "skills" && segments.length === 2 && segments[1] !== undefined) return { page: "skill-files", skillId: segments[1] };
-  if (segments[0] !== "providers" || segments[1] === undefined) return undefined;
-  if (segments.length === 2) return segments[1] === "new" ? { page: "provider-new" } : { page: "provider", providerId: segments[1] };
-  if (segments.length === 3 && segments[1] !== "new") {
-    if (segments[2] === "edit") return { page: "provider-edit", providerId: segments[1] };
-    if (segments[2] === "override") return { page: "provider-override", providerId: segments[1] };
+  const segments = splitSegments(pathname);
+  const [first, second, third] = segments;
+  if (segments.length === 1 && first !== undefined) return SIMPLE_PAGES[first];
+  if (first === "models" && segments.length === 2 && second !== undefined) return second === "new" ? { page: "provider-new" } : { page: "provider", providerId: second };
+  if (first === "extensions" && second === "skills") {
+    if (segments.length === 2) return { page: "skills" };
+    if (segments.length === 3 && third !== undefined) return { page: "skill-files", skillId: third };
   }
   return undefined;
 }
 
-export function parentSettingsRoute(route: SettingsRoute, options?: { hasProvider?: boolean }): SettingsRoute | undefined {
+/** 改版前的设置地址（书签、旧版本里的链接）映射到新页面。 */
+export function legacySettingsRedirect(pathname: string): SettingsRedirect | undefined {
+  if (!pathname.startsWith(`${SETTINGS_ROOT}/`) || parseSettingsPath(pathname) !== undefined) return undefined;
+  const segments = splitSegments(pathname);
+  const [first, second, third] = segments;
+  switch (first) {
+    case "assistant-name": return segments.length === 1 ? { route: { page: "general" }, focus: "assistant-name" } : undefined;
+    case "model-scope": return segments.length === 1 ? { route: { page: "models" }, focus: "enabled-models" } : undefined;
+    case "tunnel": return segments.length === 1 ? { route: { page: "remote" }, focus: "tunnels" } : undefined;
+    case "security": return segments.length === 1 ? { route: { page: "remote" }, focus: "password" } : undefined;
+    case "skills":
+      if (segments.length === 1) return { route: { page: "skills" } };
+      return segments.length === 2 && second !== undefined ? { route: { page: "skill-files", skillId: second } } : undefined;
+    case "plugins":
+      if (segments.length === 1) return { route: { page: "plugins" } };
+      if (segments.length === 2 && second === "install") return { route: { page: "plugins" }, openInstall: true };
+      if (segments.length === 2 && second === "model-groups") return { route: { page: "model-groups" } };
+      return undefined;
+    case "providers":
+      if (segments.length === 1) return { route: { page: "models" } };
+      if (second === undefined) return undefined;
+      if (segments.length === 2) return second === "new" ? { route: { page: "provider-new" } } : { route: { page: "provider", providerId: second } };
+      if (segments.length === 3 && second !== "new" && (third === "edit" || third === "override")) return { route: { page: "provider", providerId: second }, focus: "connection" };
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** 页面所属的一级分类（导航高亮、手机端返回目标）。 */
+export function settingsCategoryOf(route: SettingsRoute): SettingsCategoryId | undefined {
   switch (route.page) {
     case "home": return undefined;
-    case "assistant-name":
-    case "providers":
-    case "workspaces":
-    case "tunnel":
-    case "security":
-    case "data":
-    case "plugins":
-    case "skills":
-      return { page: "home" };
-    case "plugins-install":
-    case "model-groups":
-      return { page: "plugins" };
-    case "skill-files":
-      return { page: "skills" };
     case "provider":
     case "provider-new":
-    case "model-scope":
-      return { page: "providers" };
-    case "provider-edit":
-      return options?.hasProvider === false ? { page: "providers" } : { page: "provider", providerId: route.providerId };
-    case "provider-override":
-      return { page: "provider", providerId: route.providerId };
+      return "models";
+    case "plugins":
+    case "skills":
+    case "skill-files":
+      return "extensions";
+    default:
+      return route.page;
+  }
+}
+
+export function categoryRoute(category: SettingsCategoryId): SettingsRoute {
+  return category === "extensions" ? { page: "plugins" } : { page: category };
+}
+
+/** 没有应用内历史可退时的上一级：详情页回到分类页，分类页回到首页（手机）。 */
+export function parentSettingsRoute(route: SettingsRoute): SettingsRoute | undefined {
+  switch (route.page) {
+    case "home": return undefined;
+    case "provider":
+    case "provider-new":
+      return { page: "models" };
+    case "skill-files":
+      return { page: "skills" };
+    default:
+      return { page: "home" };
   }
 }
 
@@ -114,6 +163,10 @@ export function canPopHistory(state: unknown): boolean {
 export function navigateBackOr(navigate: (delta: number) => void, fallback: () => void, state: unknown = typeof window === "undefined" ? null : window.history.state): void {
   if (canPopHistory(state)) navigate(-1);
   else fallback();
+}
+
+function splitSegments(pathname: string): string[] {
+  return pathname.slice(SETTINGS_ROOT.length + 1).split("/").filter(Boolean).map(decodeSegment);
 }
 
 function decodeSegment(segment: string): string {

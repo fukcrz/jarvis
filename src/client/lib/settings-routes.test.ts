@@ -1,23 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import { canPopHistory, isSettingsPath, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsPath, type SettingsRoute } from "./settings-routes";
+import { canPopHistory, categoryRoute, isSettingsPath, legacySettingsRedirect, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsCategoryOf, settingsPath, type SettingsRoute } from "./settings-routes";
 
 const routes: SettingsRoute[] = [
   { page: "home" },
-  { page: "assistant-name" },
-  { page: "providers" },
+  { page: "general" },
+  { page: "appearance" },
+  { page: "notifications" },
+  { page: "models" },
   { page: "provider-new" },
   { page: "provider", providerId: "openai" },
-  { page: "provider-edit", providerId: "local/custom" },
-  { page: "provider-override", providerId: "anthropic" },
-  { page: "model-scope" },
-  { page: "workspaces" },
-  { page: "tunnel" },
-  { page: "security" },
-  { page: "plugins" },
-  { page: "plugins-install" },
+  { page: "provider", providerId: "local/custom" },
   { page: "model-groups" },
+  { page: "plugins" },
   { page: "skills" },
   { page: "skill-files", skillId: "browser-qa" },
+  { page: "workspaces" },
+  { page: "remote" },
+  { page: "data" },
+  { page: "about" },
 ];
 
 describe("settings routes", () => {
@@ -28,28 +28,51 @@ describe("settings routes", () => {
   });
 
   it("encodes provider ids that contain reserved characters", () => {
-    expect(settingsPath({ page: "provider", providerId: "local/custom" })).toBe("/settings/providers/local%2Fcustom");
-    expect(parseSettingsPath("/settings/providers/local%2Fcustom/edit")).toEqual({ page: "provider-edit", providerId: "local/custom" });
+    expect(settingsPath({ page: "provider", providerId: "local/custom" })).toBe("/settings/models/local%2Fcustom");
+    expect(parseSettingsPath("/settings/models/local%2Fcustom")).toEqual({ page: "provider", providerId: "local/custom" });
   });
 
   it("rejects unknown or non-settings paths", () => {
     expect(parseSettingsPath("/projects")).toBeUndefined();
     expect(parseSettingsPath("/settings/unknown")).toBeUndefined();
-    expect(parseSettingsPath("/settings/providers/new/edit")).toBeUndefined();
+    expect(parseSettingsPath("/settings/models/new/edit")).toBeUndefined();
     expect(isSettingsPath("/settings")).toBe(true);
     expect(isSettingsPath("/settings/workspaces")).toBe(true);
     expect(isSettingsPath("/sessions/abc")).toBe(false);
   });
 
+  it("redirects every pre-redesign settings address to its new home", () => {
+    expect(legacySettingsRedirect("/settings/assistant-name")).toEqual({ route: { page: "general" }, focus: "assistant-name" });
+    expect(legacySettingsRedirect("/settings/providers")).toEqual({ route: { page: "models" } });
+    expect(legacySettingsRedirect("/settings/providers/new")).toEqual({ route: { page: "provider-new" } });
+    expect(legacySettingsRedirect("/settings/providers/openai")).toEqual({ route: { page: "provider", providerId: "openai" } });
+    expect(legacySettingsRedirect("/settings/providers/local%2Fcustom/edit")).toEqual({ route: { page: "provider", providerId: "local/custom" }, focus: "connection" });
+    expect(legacySettingsRedirect("/settings/providers/anthropic/override")).toEqual({ route: { page: "provider", providerId: "anthropic" }, focus: "connection" });
+    expect(legacySettingsRedirect("/settings/model-scope")).toEqual({ route: { page: "models" }, focus: "enabled-models" });
+    expect(legacySettingsRedirect("/settings/tunnel")).toEqual({ route: { page: "remote" }, focus: "tunnels" });
+    expect(legacySettingsRedirect("/settings/security")).toEqual({ route: { page: "remote" }, focus: "password" });
+    expect(legacySettingsRedirect("/settings/plugins")).toEqual({ route: { page: "plugins" } });
+    expect(legacySettingsRedirect("/settings/plugins/install")).toEqual({ route: { page: "plugins" }, openInstall: true });
+    expect(legacySettingsRedirect("/settings/plugins/model-groups")).toEqual({ route: { page: "model-groups" } });
+    expect(legacySettingsRedirect("/settings/skills")).toEqual({ route: { page: "skills" } });
+    expect(legacySettingsRedirect("/settings/skills/browser-qa")).toEqual({ route: { page: "skill-files", skillId: "browser-qa" } });
+    expect(legacySettingsRedirect("/settings/workspaces")).toBeUndefined();
+    expect(legacySettingsRedirect("/settings/nope")).toBeUndefined();
+  });
+
+  it("maps pages to their category and back", () => {
+    expect(settingsCategoryOf({ page: "provider", providerId: "x" })).toBe("models");
+    expect(settingsCategoryOf({ page: "skill-files", skillId: "x" })).toBe("extensions");
+    expect(settingsCategoryOf({ page: "home" })).toBeUndefined();
+    expect(categoryRoute("extensions")).toEqual({ page: "plugins" });
+    expect(categoryRoute("remote")).toEqual({ page: "remote" });
+  });
+
   it("walks back to the parent page when history cannot pop", () => {
     expect(parentSettingsRoute({ page: "home" })).toBeUndefined();
     expect(parentSettingsRoute({ page: "workspaces" })).toEqual({ page: "home" });
-    expect(parentSettingsRoute({ page: "plugins-install" })).toEqual({ page: "plugins" });
-    expect(parentSettingsRoute({ page: "model-groups" })).toEqual({ page: "plugins" });
     expect(parentSettingsRoute({ page: "skill-files", skillId: "browser-qa" })).toEqual({ page: "skills" });
-    expect(parentSettingsRoute({ page: "provider", providerId: "openai" })).toEqual({ page: "providers" });
-    expect(parentSettingsRoute({ page: "provider-edit", providerId: "openai" })).toEqual({ page: "provider", providerId: "openai" });
-    expect(parentSettingsRoute({ page: "provider-edit", providerId: "gone" }, { hasProvider: false })).toEqual({ page: "providers" });
+    expect(parentSettingsRoute({ page: "provider", providerId: "openai" })).toEqual({ page: "models" });
   });
 
   it("only pops when React Router has a previous index", () => {
