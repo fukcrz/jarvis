@@ -1,36 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowDown, ArrowUp, Bell, Bot, CloudDownload, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, Library, LifeBuoy, Puzzle, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
-import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderOverride, ProviderStatus, Workspace } from "../../shared/protocol";
-import { ApiError, api } from "../api";
-import { isSettingsPath, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsPath, type SettingsRoute } from "../lib/settings-routes";
-import { getDesktopUpdateChannel, isDesktopUpdateChannel, setDesktopNotificationEnabled, setDesktopUpdateChannel, type DesktopUpdateChannel } from "../desktop";
-import { isDesktopShell } from "../lib/desktop-shell";
-import { isNotificationEnabled, requestNotificationPermission, setNotificationEnabled } from "../notifications";
-import { Button } from "./ui/button";
-import { Dialog, DialogContent } from "./ui/dialog";
-import { WorkspaceDialog } from "./workspace-dialog";
-import { PluginsPanel } from "./settings-plugins";
-import { ModelGroupsPanel } from "./settings-model-groups";
-import { SkillsPanel } from "./settings-skills";
-import { TunnelPanel } from "./tunnel-panel";
-import { SecurityPanel } from "./settings-security";
-import { DataPanel } from "./settings-data";
-import {
-  AuthOperation,
-  initializeDraft,
-  isProviderUsable,
-  modelKey,
-  ModelScopePage,
-  BuiltinOverridePage,
-  ProviderDetailPage,
-  ProvidersListPage,
-  ProviderWizardPage,
-  splitModelKey,
-} from "./settings-providers";
-import { SettingsEmpty, SettingsFormSection, SettingsGroup, SettingsRow, SettingsShell, SettingsSubpage, SettingsSwitch, SettingsTopBar } from "./settings-ui";
+import { ArrowLeft, ChevronRight } from "lucide-react";
+import type { PluginSnapshot } from "../../shared/plugins";
+import type { Workspace } from "../../shared/protocol";
+import type { SkillSnapshot } from "../../shared/skills";
+import { api } from "../api";
+import { useIsMobile } from "../hooks/use-is-mobile";
+import { DETAIL_LEVELS, type DetailLevel } from "../lib/detail-level";
+import { SETTINGS_CATEGORIES, SETTINGS_GROUPS, settingsCategory } from "../lib/settings-registry";
+import { categoryRoute, isSettingsPath, legacySettingsRedirect, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsCategoryOf, settingsPath, type SettingsCategoryId, type SettingsRoute } from "../lib/settings-routes";
+import { AboutPage, AppearancePage, GeneralPage, NotificationsPage, WorkspacesPage, initialNotificationsEnabled } from "./settings-app-pages";
+import { DataPage } from "./settings-data";
+import { ExtensionsPage, SkillFilesPage, extensionsSummary } from "./settings-extensions";
+import { LeaveGuardProvider, SaveStatusProvider, SettingsToastProvider, useLeaveGuard, useSettingsToast } from "./settings-feedback";
+import { ModelGroupsPage } from "./settings-model-groups";
+import { ModelsPage, ProviderNewPage, ProviderPage, useProviderSettings } from "./settings-providers";
+import { RemotePage, type RemoteSummary } from "./settings-remote";
+import { SettingsBanner, SettingsTopBar, StButton, settingAnchorId } from "./settings-ui";
 
-interface SettingsPageProps {
+export interface SettingsPageProps {
   assistantName: string;
   refreshKeys: { models: number; tunnel: number; security: number };
   onAssistantNameChange: (name: string) => void;
@@ -39,508 +27,222 @@ interface SettingsPageProps {
   onAddWorkspace: (path: string, label?: string) => Promise<void>;
   onRemoveWorkspace: (workspace: Workspace) => Promise<void>;
   onSessionRestored?: (workspaceId: string) => void;
+  detailLevel: DetailLevel;
+  onDetailLevelChange: (level: DetailLevel) => void;
   onBack: () => void;
 }
 
-type SettingsMessageTone = "success" | "error";
+interface SettingsLocationState {
+  focus?: string;
+  openInstall?: boolean;
+}
 
-/** 设置入口：分组首页 + 内部子页栈，PC/移动端使用同一信息架构。 */
-export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onSessionRestored, onAssistantNameChange, onBack }: SettingsPageProps) {
+/**
+ * 设置入口。电脑端：左侧分类导航 + 右侧整页；手机端：分类列表 → 点进子页。
+ * 两端共用 settings-registry 里的同一份分类清单。
+ */
+export function SettingsPage(props: SettingsPageProps) {
+  return <SaveStatusProvider>
+    <SettingsToastProvider>
+      <LeaveGuardProvider>
+        <SettingsShell {...props} />
+      </LeaveGuardProvider>
+    </SettingsToastProvider>
+  </SaveStatusProvider>;
+}
+
+function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onSessionRestored, detailLevel, onDetailLevelChange, onBack }: SettingsPageProps) {
   const location = useLocation();
   const navigate = useNavigate();
-  const route = parseSettingsPath(location.pathname) ?? { page: "home" };
-  const [name, setName] = useState(assistantName);
-  const [notificationsEnabled, setNotificationsEnabledState] = useState(() => isNotificationEnabled());
-  const [updateChannel, setUpdateChannelState] = useState<DesktopUpdateChannel>();
-  const [providers, setProviders] = useState<ProviderStatus[]>([]);
-  const [customProviders, setCustomProviders] = useState<ManagedProvider[]>([]);
-  const [enabledDraft, setEnabledDraft] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<string | undefined>();
-  const [message, setMessage] = useState<string | undefined>();
-  const [messageTone, setMessageTone] = useState<SettingsMessageTone>("success");
-  const [operation, setOperation] = useState<AuthLoginOperation | undefined>();
-  const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
-  const [workspaceBusy, setWorkspaceBusy] = useState<string | undefined>();
-  const [workspaceRemoveTarget, setWorkspaceRemoveTarget] = useState<Workspace | undefined>();
-  const [providerRemoveTarget, setProviderRemoveTarget] = useState<ManagedProvider | undefined>();
-  const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
-  const [restarting, setRestarting] = useState(false);
-  const [tunnelSummary, setTunnelSummary] = useState<string>();
-  const [securitySummary, setSecuritySummary] = useState<string>();
+  const isMobile = useIsMobile();
+  const leave = useLeaveGuard();
+  const toast = useSettingsToast();
+  const parsed = parseSettingsPath(location.pathname);
+  const route: SettingsRoute = parsed ?? { page: "home" };
+  const state = (location.state ?? {}) as SettingsLocationState;
+  const ps = useProviderSettings(refreshKeys.models);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(initialNotificationsEnabled);
+  const [plugins, setPlugins] = useState<PluginSnapshot>();
+  const [skills, setSkills] = useState<SkillSnapshot>();
+  const [groupCount, setGroupCount] = useState<{ count: number; enabled: boolean }>();
+  const [remote, setRemote] = useState<RemoteSummary>();
 
-  const [skillLabels, setSkillLabels] = useState<Map<string, string>>(new Map());
-  const reloadGeneration = useRef(0);
-  const showMessage = useCallback((nextMessage: string, tone: SettingsMessageTone = "success") => { setMessageTone(tone); setMessage(nextMessage); }, []);
-  useEffect(() => { setName(assistantName); }, [assistantName]);
+  // 旧地址 → 新地址；未知地址回到首页；电脑端没有「首页」，落到第一个分类。
   useEffect(() => {
-    let cancelled = false;
-    void getDesktopUpdateChannel().then((channel) => { if (!cancelled) setUpdateChannelState(channel); }, () => undefined);
-    return () => { cancelled = true; };
+    const redirect = legacySettingsRedirect(location.pathname);
+    if (redirect !== undefined) {
+      navigate(settingsPath(redirect.route), { replace: true, state: { focus: redirect.focus, openInstall: redirect.openInstall } satisfies SettingsLocationState });
+      return;
+    }
+    if (parsed === undefined && isSettingsPath(location.pathname)) navigate(settingsPath({ page: "home" }), { replace: true });
+    else if (parsed?.page === "home" && !isMobile) navigate(settingsPath({ page: "general" }), { replace: true, state: location.state });
+  }, [isMobile, location.pathname, location.state, navigate, parsed]);
+
+  // 导航摘要需要的数据：插件、技能、模型组、远程状态。
+  const loadExtensions = useCallback(() => {
+    void api.plugins().then(setPlugins).catch(() => undefined);
+    void api.skills().then(setSkills).catch(() => undefined);
   }, []);
-  const changeUpdateChannel = async (channel: DesktopUpdateChannel) => {
-    const previous = updateChannel;
-    setUpdateChannelState(channel);
-    try {
-      await setDesktopUpdateChannel(channel);
-      showMessage(channel === "beta" ? "已切换到测试版，检查更新时会收到测试版和正式版中较新的一个" : "已切换到正式版，之后只接收正式版更新");
-    } catch (error) {
-      setUpdateChannelState(previous);
-      showMessage(`切换更新通道失败：${error instanceof Error ? error.message : String(error)}`, "error");
-    }
-  };
-  const push = (nextRoute: SettingsRoute) => { navigate(settingsPath(nextRoute)); };
-  const replaceTop = (nextRoute: SettingsRoute) => { navigate(settingsPath(nextRoute), { replace: true }); };
-  const goBack = () => {
-    const parent = parentSettingsRoute(route, {
-      hasProvider: route.page === "provider-edit" ? customProviders.some((provider) => provider.id === route.providerId) : undefined,
-    });
-    navigateBackOr(navigate, () => {
-      if (parent !== undefined) navigate(settingsPath(parent), { replace: true });
-      else onBack();
-    });
-  };
-
+  useEffect(() => { loadExtensions(); }, [loadExtensions]);
   useEffect(() => {
-    if (message === undefined) return;
-    const timer = window.setTimeout(() => setMessage(undefined), 4_000);
-    return () => window.clearTimeout(timer);
-  }, [message]);
-
-  const reload = useCallback(async (background = false) => {
-    const generation = ++reloadGeneration.current;
-    if (!background) setLoading(true);
-    try {
-      const [available, custom, enabled] = await Promise.all([api.providers(), api.customProviders(), api.enabledModels()]);
-      if (generation !== reloadGeneration.current) return;
-      setProviders(available);
-      setCustomProviders(custom);
-      setEnabledDraft(initializeDraft(available, enabled));
-    } catch (error) {
-      if (generation === reloadGeneration.current) showMessage(error instanceof Error ? error.message : "无法加载设置", "error");
-    } finally {
-      if (generation === reloadGeneration.current) setLoading(false);
-    }
-  }, [showMessage]);
-  useEffect(() => {
-    void reload(refreshKeys.models > 0);
-    return () => { ++reloadGeneration.current; };
-  }, [reload, refreshKeys.models]);
-
-  // 全局事件仅刷新对应摘要，具体子页按同一刷新序号读取。
+    void api.modelGroups().then((snapshot) => setGroupCount({ count: Object.keys(snapshot.config.groups).length, enabled: snapshot.enabled })).catch(() => undefined);
+  }, [plugins?.bundled]);
   useEffect(() => {
     let disposed = false;
-    void api.tunnelList().then((tunnels) => {
+    void Promise.all([api.tunnelList().catch(() => undefined), api.authStatus().catch(() => undefined)]).then(([tunnels, auth]) => {
       if (disposed) return;
-      const running = tunnels.filter((tunnel) => tunnel.state === "running").length;
-      setTunnelSummary(tunnels.length === 0 ? "未设置" : running > 0 ? `${String(running)} 运行中` : "已停止");
-    }).catch(() => { if (!disposed) setTunnelSummary(""); });
+      setRemote((current) => ({
+        running: tunnels?.filter((tunnel) => tunnel.state === "running").length ?? current?.running ?? 0,
+        total: tunnels?.length ?? current?.total ?? 0,
+        authRequired: auth?.auth.required ?? current?.authRequired,
+      }));
+    });
     return () => { disposed = true; };
-  }, [refreshKeys.tunnel]);
-  useEffect(() => {
-    let disposed = false;
-    void api.authStatus().then(({ auth }) => { if (!disposed) setSecuritySummary(auth.required ? "已启用" : "未启用"); })
-      .catch(() => { if (!disposed) setSecuritySummary(""); });
-    return () => { disposed = true; };
-  }, [refreshKeys.security]);
+  }, [refreshKeys.tunnel, refreshKeys.security]);
 
-  // 技能文件页标题用技能名，不露内部 id。
-  const skillFilesId = route.page === "skill-files" ? route.skillId : undefined;
+  // 跳转后定位：滚到对应设置项并闪一下（搜索、旧地址重定向都用它）。
+  const focusId = state.focus;
   useEffect(() => {
-    if (skillFilesId === undefined || skillLabels.has(skillFilesId)) return;
-    let disposed = false;
-    void api.skills().then((snapshot) => {
-      if (disposed) return;
-      setSkillLabels(new Map([...snapshot.bundled.map((skill) => [skill.id, skill.label] as const), ...snapshot.installed.map((skill) => [skill.id, skill.label || skill.name] as const)]));
-    }).catch(() => undefined);
-    return () => { disposed = true; };
-  }, [skillFilesId, skillLabels]);
-  useEffect(() => {
-    setWorkspaceRemoveTarget((current) => current !== undefined && !workspaces.some((workspace) => workspace.id === current.id) ? undefined : current);
-  }, [workspaces]);
-
-  useEffect(() => {
-    if (operation === undefined || operation.state !== "running") return;
-    const timer = window.setInterval(() => {
-      void api.loginStatus(operation.id).then((next) => {
-        setOperation(next);
-        if (next.state === "completed") void reload();
-      }).catch((error: unknown) => showMessage(error instanceof Error ? error.message : "登录状态读取失败", "error"));
-    }, 700);
-    return () => window.clearInterval(timer);
-  }, [operation?.id, operation?.state]);
-
-  // 未知设置路径、或已删除供应商的详情/编辑页，回落到还存在的父页。
-  useEffect(() => {
-    const parsed = parseSettingsPath(location.pathname);
-    if (parsed === undefined) {
-      if (isSettingsPath(location.pathname)) navigate(settingsPath({ page: "home" }), { replace: true });
-      return;
-    }
-    if (parsed.page === "provider" || parsed.page === "provider-override") {
-      if (loading) return;
-      if (!providers.some((provider) => provider.id === parsed.providerId)) navigate(settingsPath({ page: "providers" }), { replace: true });
-      return;
-    }
-    if (parsed.page === "provider-edit") {
-      if (loading) return;
-      if (!customProviders.some((provider) => provider.id === parsed.providerId)) navigate(settingsPath({ page: "providers" }), { replace: true });
-    }
-  }, [customProviders, loading, location.pathname, navigate, providers]);
-
-  const saveName = async (nextName: string): Promise<boolean> => {
-    setBusy("name");
-    try {
-      const settings: AppSettings = await api.updateSettings({ assistantName: nextName });
-      onAssistantNameChange(settings.assistantName);
-      setName(settings.assistantName);
-      showMessage("已保存");
-      return true;
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "名称保存失败", "error");
-      return false;
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const restart = async () => {
-    setRestartConfirmOpen(false);
-    setRestarting(true);
-    try {
-      await api.selfRestart();
-      showMessage("正在重启，连接将短暂中断…");
-    } catch (error) {
-      setRestarting(false);
-      showMessage(error instanceof Error ? error.message : "重启请求失败", "error");
-    }
-  };
-  const startLogin = async (target: ProviderStatus, type: "api_key" | "oauth") => {
-    setBusy(target.id);
-    try {
-      setOperation(await api.startLogin(target.id, type));
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "登录启动失败", "error");
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const logout = async (target: ProviderStatus) => {
-    setBusy(target.id);
-    try {
-      await api.logoutProvider(target.id);
-      await reload();
-      showMessage(target.credentialType === "oauth" ? `已退出 ${target.name} 的账号` : `已清除 ${target.name} 的密钥`);
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "操作失败", "error");
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const saveApiKey = async (providerId: string, apiKey: string) => {
-    try {
-      await api.setProviderApiKey(providerId, apiKey);
-    } catch (error) {
-      if (error instanceof ApiError && error.code === "AUTH_LOGIN_INTERACTIVE") {
-        const target = providers.find((item) => item.id === providerId);
-        if (target !== undefined) await startLogin(target, "api_key");
+    if (focusId === undefined) return;
+    let cancelled = false;
+    let attempts = 0;
+    const find = () => {
+      if (cancelled) return;
+      const element = document.getElementById(settingAnchorId(focusId));
+      if (element === null) {
+        if (++attempts < 40) window.setTimeout(find, 80);
         return;
       }
-      throw error;
-    }
-  };
-  const saveOverride = async (providerId: string, override: ProviderOverride, apiKey?: string) => {
-    setBusy("provider");
-    try {
-      await api.saveProviderOverride(providerId, override);
-      if (apiKey !== undefined) await saveApiKey(providerId, apiKey);
-      showMessage("连接已保存");
-      await reload();
-      goBack();
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "连接保存失败", "error");
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const clearOverride = async (providerId: string) => {
-    setBusy("provider");
-    try {
-      await api.removeProviderOverride(providerId);
-      showMessage("已恢复官方连接");
-      await reload();
-      goBack();
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "连接恢复失败", "error");
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const saveProvider = async (provider: ManagedProvider, openModelsAfterSave: boolean, apiKey: string) => {
-    setBusy("provider");
-    try {
-      const saved = await api.saveCustomProvider(provider);
-      setCustomProviders((current) => [...current.filter((item) => item.id !== saved.id), saved].sort((left, right) => left.id.localeCompare(right.id)));
-      await saveApiKey(saved.id, apiKey);
-      showMessage(saved.models.length === 0 ? "供应商已保存" : "供应商和模型配置已保存");
-      await reload();
-      if (openModelsAfterSave) replaceTop({ page: "provider", providerId: saved.id });
-      else goBack();
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "供应商保存失败", "error");
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const saveKnownApiKey = async (providerId: string, apiKey: string) => {
-    setBusy("provider");
-    try {
-      await saveApiKey(providerId, apiKey);
-      showMessage("API Key 已保存");
-      await reload();
-      goBack();
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "API Key 保存失败", "error");
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const removeProvider = async () => {
-    const target = providerRemoveTarget;
-    if (target === undefined || busy !== undefined) return;
-    setBusy(target.id);
-    try {
-      await api.removeCustomProvider(target.id);
-      setCustomProviders((current) => current.filter((item) => item.id !== target.id));
-      setProviderRemoveTarget(undefined);
-      showMessage("供应商已删除");
-      await reload();
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "供应商删除失败", "error");
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const persistEnabled = async (next: Set<string>): Promise<boolean> => {
-    const allKeys = new Set(providers.filter(isProviderUsable).flatMap((provider) => provider.models.map((model) => modelKey(provider.id, model.id))));
-    const scoped = new Set([...next].filter((key) => allKeys.has(key)));
-    if (scoped.size === 0 && allKeys.size > 0) {
-      // Pi 的 enabledModels 为空表示「不限制」，全关会变成全开，所以这里是唯一保留的拦截。
-      showMessage("至少保留一个模型：全部关掉会被当成「不限制」，反而全部启用", "error");
-      await reload(true);
-      return false;
-    }
-    setBusy("model-manager");
-    try {
-      const unrestricted = allKeys.size > 0 && scoped.size === allKeys.size;
-      const status = await api.updateEnabledModels(unrestricted ? [] : [...scoped].map((key) => splitModelKey(key)));
-      setEnabledDraft(initializeDraft(providers, status));
-      return true;
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "模型保存失败", "error");
-      await reload();
-      return false;
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const persistCustomModels = async (providerId: string, models: ManagedModel[]): Promise<boolean> => {
-    const current = customProviders.find((provider) => provider.id === providerId);
-    if (current === undefined) return false;
-    setBusy("model-manager");
-    try {
-      const saved = await api.saveCustomProvider({ ...current, models });
-      setCustomProviders((items) => items.map((item) => item.id === saved.id ? saved : item));
-      const removedKeys = new Set(current.models.filter((model) => !models.some((candidate) => candidate.id === model.id)).map((model) => modelKey(providerId, model.id)));
-      if (removedKeys.size > 0) {
-        const next = new Set([...enabledDraft].filter((key) => !removedKeys.has(key)));
-        setEnabledDraft(next);
-        await persistEnabled(next);
-      }
-      return true;
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "模型保存失败", "error");
-      return false;
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  const toggleModelInstant = (providerId: string, modelId: string) => {
-    const key = modelKey(providerId, modelId);
-    const next = new Set(enabledDraft);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    setEnabledDraft(next);
-    void persistEnabled(next);
-  };
-  const enableModelsInstant = (providerId: string, modelIds: string[]) => {
-    if (modelIds.length === 0) return;
-    const next = new Set(enabledDraft);
-    for (const id of modelIds) next.add(modelKey(providerId, id));
-    setEnabledDraft(next);
-    void persistEnabled(next);
-  };
-  const moveWorkspace = async (index: number, direction: -1 | 1) => {
-    const targetIndex = index + direction;
-    if (targetIndex < 0 || targetIndex >= workspaces.length || workspaceBusy !== undefined) return;
-    const next = [...workspaces];
-    const [item] = next.splice(index, 1);
-    if (item === undefined) return;
-    next.splice(targetIndex, 0, item);
-    setWorkspaceBusy("order");
-    try {
-      onWorkspacesChange(await api.reorderWorkspaces(next.map((workspace) => workspace.id)));
-      showMessage("工作区顺序已保存");
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "工作区排序失败", "error");
-    } finally {
-      setWorkspaceBusy(undefined);
-    }
-  };
-  const removeWorkspace = async () => {
-    const workspace = workspaceRemoveTarget;
-    if (workspace === undefined || workspaceBusy !== undefined) return;
-    setWorkspaceBusy(workspace.id);
-    try {
-      await onRemoveWorkspace(workspace);
-      setWorkspaceRemoveTarget(undefined);
-      showMessage("工作区已删除");
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : "工作区删除失败", "error");
-    } finally {
-      setWorkspaceBusy(undefined);
-    }
-  };
-  const toggleNotifications = async (enabled: boolean) => {
-    if (isDesktopShell()) {
-      await setDesktopNotificationEnabled(enabled);
-      setNotificationEnabled(enabled);
-      setNotificationsEnabledState(enabled);
-      return;
-    }
-    if (enabled) {
-      const permission = await requestNotificationPermission();
-      if (permission !== "granted") return;
-      setNotificationEnabled(true);
-      setNotificationsEnabledState(true);
-      return;
-    }
-    setNotificationEnabled(false);
-    setNotificationsEnabledState(false);
+      for (let node: HTMLElement | null = element; node !== null; node = node.parentElement) if (node instanceof HTMLDetailsElement) node.open = true;
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+      element.classList.remove("st-flash");
+      void element.offsetWidth;
+      element.classList.add("st-flash");
+      window.setTimeout(() => element.classList.remove("st-flash"), 2_400);
+    };
+    find();
+    return () => { cancelled = true; };
+  }, [focusId, location.key]);
+
+  const go = useCallback((next: SettingsRoute, options: { focus?: string; replace?: boolean } = {}) => {
+    leave.guard(() => navigate(settingsPath(next), { replace: options.replace, state: options.focus === undefined ? undefined : { focus: options.focus } satisfies SettingsLocationState }));
+  }, [leave, navigate]);
+  const goBack = useCallback(() => {
+    leave.guard(() => {
+      const parent = parentSettingsRoute(route);
+      const fallback = () => {
+        if (parent === undefined || (parent.page === "home" && !isMobile)) onBack();
+        else navigate(settingsPath(parent), { replace: true });
+      };
+      // 手机端分类页的上一级固定是设置首页；电脑端用历史记录返回。
+      if (isMobile && parent !== undefined) navigate(settingsPath(parent), { replace: true });
+      else navigateBackOr(navigate, fallback);
+    });
+  }, [isMobile, leave, navigate, onBack, route]);
+  const exitSettings = useCallback(() => leave.guard(onBack), [leave, onBack]);
+
+  const enabledModelCount = [...ps.enabled].filter((key) => ps.allModelKeys.has(key)).length;
+  const remoteWarn = remote !== undefined && remote.running > 0 && remote.authRequired === false;
+  const meta = useMemo<Record<SettingsCategoryId, string | undefined>>(() => ({
+    general: assistantName,
+    appearance: DETAIL_LEVELS.find((item) => item.value === detailLevel)?.label,
+    notifications: notificationsEnabled ? "开" : "关",
+    models: ps.loading ? undefined : ps.connectedCount === 0 ? "未配置" : `${String(ps.connectedCount)} 已连接 · ${String(enabledModelCount)} 模型`,
+    "model-groups": groupCount === undefined ? undefined : groupCount.enabled ? `${String(groupCount.count)} 个` : "插件未启用",
+    extensions: extensionsSummary(plugins, skills),
+    workspaces: `${String(workspaces.length)} 个`,
+    remote: remote === undefined ? undefined : remote.running > 0 ? `${String(remote.running)} 运行中` : remote.total > 0 ? "已停止" : "未设置",
+    data: undefined,
+    about: undefined,
+  }), [assistantName, detailLevel, enabledModelCount, groupCount, notificationsEnabled, plugins, ps.connectedCount, ps.loading, remote, skills, workspaces.length]);
+
+  const activeCategory = settingsCategoryOf(route);
+  const changeDetailLevel = (level: DetailLevel) => {
+    onDetailLevelChange(level);
+    toast.notify(`默认详细程度：${DETAIL_LEVELS.find((item) => item.value === level)?.label ?? level}`);
   };
 
-  const customById = useMemo(() => new Map(customProviders.map((provider) => [provider.id, provider])), [customProviders]);
-  const allModelKeys = useMemo(() => new Set(providers.filter(isProviderUsable).flatMap((provider) => provider.models.map((model) => modelKey(provider.id, model.id)))), [providers]);
-  const unrestricted = allModelKeys.size > 0 && [...allModelKeys].every((key) => enabledDraft.has(key));
-  const providerSummary = useMemo(() => {
-    if (loading) return "…";
-    const connected = providers.filter(isProviderUsable).length;
-    return connected === 0 ? "未配置" : `${String(connected)} 已连接 · ${String(enabledDraft.size)} 模型`;
-  }, [providers, enabledDraft, loading]);
-
-  let page: React.ReactNode;
-  if (route.page === "home") {
-    page = <><SettingsTopBar title="设置" home onBack={onBack} /><SettingsShell><div className="settings-stack">
-      <SettingsGroup title="常规">
-        <SettingsRow icon={Bot} label="助手名称" value={name} chevron onClick={() => push({ page: "assistant-name" })} />
-        <SettingsRow icon={Puzzle} label="插件" chevron onClick={() => push({ page: "plugins" })} />
-        <SettingsRow icon={Library} label="技能" chevron onClick={() => push({ page: "skills" })} />
-        <SettingsRow icon={Bell} label="运行结束通知" control={<SettingsSwitch checked={notificationsEnabled} onChange={(enabled) => { void toggleNotifications(enabled); }} label="运行结束通知" />} />
-        {updateChannel === undefined ? null : <SettingsRow icon={CloudDownload} label="更新通道" control={<select className="settings-row-select" aria-label="更新通道" value={updateChannel}
-          onChange={(event) => { if (isDesktopUpdateChannel(event.target.value)) void changeUpdateChannel(event.target.value); }}>
-          <option value="stable">正式版</option>
-          <option value="beta">测试版</option>
-        </select>} />}
-      </SettingsGroup>
-      <SettingsGroup title="连接">
-        <SettingsRow icon={KeyRound} label="供应商与账号" value={providerSummary} chevron onClick={() => push({ page: "providers" })} />
-        <SettingsRow icon={FolderGit2} label="工作区" value={workspaces.length === 0 ? "未添加" : `${String(workspaces.length)} 个`} chevron onClick={() => push({ page: "workspaces" })} />
-        <SettingsRow icon={Globe} label="内网穿透" value={tunnelSummary} chevron onClick={() => push({ page: "tunnel" })} />
-      </SettingsGroup>
-      <SettingsGroup title="服务">
-        <SettingsRow icon={ShieldCheck} label="安全" value={securitySummary} chevron onClick={() => push({ page: "security" })} />
-        <SettingsRow icon={LifeBuoy} label="数据与恢复" chevron onClick={() => push({ page: "data" })} />
-        <SettingsRow icon={RotateCw} label={restarting ? "正在重启…" : "重启服务"} danger disabled={restarting} onClick={() => setRestartConfirmOpen(true)} />
-      </SettingsGroup>
-    </div></SettingsShell></>;
-  } else if (route.page === "assistant-name") {
-    page = <AssistantNamePage initialName={name} busy={busy === "name"} onSave={saveName} onBack={goBack} />;
-  } else if (route.page === "providers") {
-    page = <ProvidersListPage providers={providers} customProviders={customProviders} customById={customById} enabledDraft={enabledDraft} loading={loading} unrestricted={unrestricted}
-      onOpenScope={() => push({ page: "model-scope" })} onOpenProvider={(providerId) => push({ page: "provider", providerId })}
-      onEditCustom={(provider) => push({ page: "provider-edit", providerId: provider.id })} onAddProvider={() => push({ page: "provider-new" })} onBack={goBack} />;
-  } else if (route.page === "provider") {
-    const provider = providers.find((item) => item.id === route.providerId);
-    page = provider === undefined ? <SettingsSubpage title="供应商" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <ProviderDetailPage key={provider.id} provider={provider} custom={customById.get(provider.id)} draft={enabledDraft} busy={busy}
-      onToggleModel={toggleModelInstant} onEnableModels={enableModelsInstant} onCustomModels={persistCustomModels} onLogin={startLogin} onLogout={logout}
-      onEdit={() => push(customById.has(provider.id) ? { page: "provider-edit", providerId: provider.id } : { page: "provider-override", providerId: provider.id })} onFetch={api.fetchProviderModels} onBack={goBack} />;
-  } else if (route.page === "provider-new") {
-    page = <ProviderWizardPage providers={providers} busy={busy === "provider"} onSave={saveProvider} onSaveApiKey={saveKnownApiKey} onLogin={startLogin} onBack={goBack} />;
-  } else if (route.page === "provider-edit") {
-    const custom = customProviders.find((item) => item.id === route.providerId);
-    const editingKey = providers.find((item) => item.id === custom?.id)?.apiKey ?? "";
-    page = custom === undefined ? <SettingsSubpage title="供应商" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <ProviderWizardPage key={`${editingKey}:${JSON.stringify(custom)}`} providers={providers} editing={custom} initialApiKey={editingKey} busy={busy === "provider"} onSave={saveProvider} onSaveApiKey={saveKnownApiKey} onDelete={setProviderRemoveTarget} onLogin={startLogin} onFetch={api.fetchProviderModels} onBack={goBack} />;
-  } else if (route.page === "provider-override") {
-    const provider = providers.find((item) => item.id === route.providerId);
-    page = provider === undefined ? <SettingsSubpage title="编辑连接" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <BuiltinOverridePage key={`${provider.id}:${provider.apiKey ?? ""}:${JSON.stringify(provider.override ?? {})}`} provider={provider} busy={busy === "provider"} onSave={(override, apiKey) => saveOverride(provider.id, override, provider.apiKeyLogin === "login" ? undefined : apiKey)} onLogin={() => { void startLogin(provider, "api_key"); }} onClear={() => clearOverride(provider.id)} onFetch={api.fetchProviderModels} onBack={goBack} />;
-  } else if (route.page === "model-scope") {
-    page = <ModelScopePage providers={providers} customById={customById} draft={enabledDraft} busy={busy === "model-manager"} onToggleModel={toggleModelInstant} onBack={goBack} />;
-  } else if (route.page === "workspaces") {
-    page = <WorkspacesPage workspaces={workspaces} busy={workspaceBusy} onMove={moveWorkspace} onRemove={setWorkspaceRemoveTarget} onAdd={() => setWorkspaceDialogOpen(true)} onBack={goBack} />;
-  } else if (route.page === "tunnel") {
-    page = <SettingsSubpage title="内网穿透" onBack={goBack}><TunnelPanel refreshKey={refreshKeys.tunnel} onMessage={showMessage} /></SettingsSubpage>;
-  } else if (route.page === "plugins" || route.page === "plugins-install") {
-    page = <SettingsSubpage title={route.page === "plugins" ? "插件" : "浏览"} onBack={goBack}><PluginsPanel page={route.page} onOpenBrowse={() => push({ page: "plugins-install" })} onOpenModelGroups={() => push({ page: "model-groups" })} onMessage={showMessage} /></SettingsSubpage>;
-  } else if (route.page === "model-groups") {
-    page = <ModelGroupsPanel onBack={goBack} onMessage={showMessage} />;
-  } else if (route.page === "skills" || route.page === "skill-files") {
-    const skillTitle = route.page === "skill-files" ? skillLabels.get(route.skillId) ?? route.skillId : "技能";
-    page = <SettingsSubpage title={skillTitle} onBack={goBack}><SkillsPanel page={route.page} skillId={route.page === "skill-files" ? route.skillId : undefined} onOpenFiles={(id) => push({ page: "skill-files", skillId: id })} onMessage={showMessage} /></SettingsSubpage>;
-  } else if (route.page === "data") {
-    page = <SettingsSubpage title="数据与恢复" onBack={goBack}><DataPanel onMessage={showMessage} onSessionRestored={onSessionRestored} /></SettingsSubpage>;
-  } else {
-    page = <SettingsSubpage title="安全" onBack={goBack}><SecurityPanel refreshKey={refreshKeys.security} onMessage={showMessage} /></SettingsSubpage>;
+  let page: ReactNode = null;
+  switch (route.page) {
+    case "home":
+      page = null;
+      break;
+    case "general":
+      page = <GeneralPage assistantName={assistantName} onAssistantNameChange={onAssistantNameChange} />;
+      break;
+    case "appearance":
+      page = <AppearancePage detailLevel={detailLevel} onDetailLevelChange={changeDetailLevel} />;
+      break;
+    case "notifications":
+      page = <NotificationsPage enabled={notificationsEnabled} onEnabledChange={setNotificationsEnabled} />;
+      break;
+    case "models":
+      page = <ModelsPage ps={ps} onOpenProvider={(providerId) => go({ page: "provider", providerId })} onAddProvider={() => go({ page: "provider-new" })} />;
+      break;
+    case "provider-new":
+      page = <ProviderNewPage ps={ps} onBack={() => go({ page: "models" })} onCreated={(providerId) => go({ page: "provider", providerId }, { replace: true, focus: "provider-models" })} />;
+      break;
+    case "provider":
+      page = <ProviderPage key={route.providerId} ps={ps} providerId={route.providerId} onBack={() => go({ page: "models" })} />;
+      break;
+    case "model-groups":
+      page = <ModelGroupsPage ps={ps} refreshKey={0} onOpenPlugins={() => go({ page: "plugins" }, { focus: "plugin-model-groups-router" })} onSnapshot={(snapshot) => setGroupCount({ count: Object.keys(snapshot.config.groups).length, enabled: snapshot.enabled })} />;
+      break;
+    case "plugins":
+    case "skills":
+      page = <ExtensionsPage tab={route.page === "skills" ? "skills" : "plugins"} onTab={(tab) => go({ page: tab === "skills" ? "skills" : "plugins" }, { replace: true })}
+        plugins={plugins} onPlugins={setPlugins} skills={skills} onSkills={setSkills} openInstall={state.openInstall}
+        onOpenModelGroups={() => go({ page: "model-groups" })} onOpenSkillFiles={(skillId) => go({ page: "skill-files", skillId })} />;
+      break;
+    case "skill-files": {
+      const skill = [...(skills?.bundled ?? []), ...(skills?.installed ?? [])].find((item) => item.id === route.skillId);
+      page = <SkillFilesPage skillId={route.skillId} label={skill === undefined ? undefined : skill.label || skill.name} onBack={() => go({ page: "skills" })} />;
+      break;
+    }
+    case "workspaces":
+      page = <WorkspacesPage workspaces={workspaces} onWorkspacesChange={onWorkspacesChange} onAddWorkspace={onAddWorkspace} onRemoveWorkspace={onRemoveWorkspace} />;
+      break;
+    case "remote":
+      page = <RemotePage refreshKeys={refreshKeys} onSummary={setRemote} />;
+      break;
+    case "data":
+      page = <DataPage onSessionRestored={onSessionRestored} />;
+      break;
+    case "about":
+      page = <AboutPage />;
+      break;
   }
 
-  return <section className="settings-page">
-    {page}
-    {message === undefined ? null : <div className={`toast-surface settings-toast ${messageTone}`} role={messageTone === "error" ? "alert" : "status"}><span className="toast-surface-icon">{messageTone === "error" ? <CircleAlert size={14} /> : <CheckCircle2 size={14} />}</span><span>{message}</span><button type="button" aria-label="关闭提示" onClick={() => setMessage(undefined)}><X size={14} /></button></div>}
-    {operation === undefined ? null : <AuthOperation operation={operation} prompt={operation.prompt} event={operation.event} onRespond={(value) => { void api.respondLogin(operation.id, value).then(setOperation); }} onCancel={() => { void api.cancelLogin(operation.id).then(setOperation); }} onClose={() => setOperation(undefined)} />}
-    <WorkspaceDialog open={workspaceDialogOpen} onOpenChange={setWorkspaceDialogOpen} onAdd={onAddWorkspace} />
-    <Dialog open={providerRemoveTarget !== undefined} onOpenChange={(open) => { if (!open && busy === undefined) setProviderRemoveTarget(undefined); }}><DialogContent title="删除供应商"><p className="delete-session-message"><strong>{providerRemoveTarget?.name ?? providerRemoveTarget?.id ?? ""}</strong>的接口配置与 {String(providerRemoveTarget?.models.length ?? 0)} 个模型将被删除，此操作不可撤销。</p><div className="dialog-actions"><Button variant="secondary" onClick={() => setProviderRemoveTarget(undefined)} disabled={busy !== undefined}>取消</Button><Button variant="danger" onClick={() => { void removeProvider(); }} disabled={busy !== undefined}>删除</Button></div></DialogContent></Dialog>
-    <Dialog open={workspaceRemoveTarget !== undefined} onOpenChange={(open) => { if (!open && workspaceBusy === undefined) setWorkspaceRemoveTarget(undefined); }}><DialogContent title="删除工作区"><p className="delete-session-message"><strong>{workspaceRemoveTarget?.label ?? ""}</strong>及其会话历史将保留在磁盘上。</p><div className="dialog-actions"><Button variant="secondary" onClick={() => setWorkspaceRemoveTarget(undefined)} disabled={workspaceBusy !== undefined}>取消</Button><Button variant="danger" onClick={() => { void removeWorkspace(); }} disabled={workspaceBusy !== undefined}>删除</Button></div></DialogContent></Dialog>
-    <Dialog open={restartConfirmOpen} onOpenChange={(open) => { if (!open && !restarting) setRestartConfirmOpen(false); }}><DialogContent title="重启服务"><p className="delete-session-message">所有会话将断开数秒，随后自动重连恢复。</p><div className="dialog-actions"><Button variant="secondary" onClick={() => setRestartConfirmOpen(false)} disabled={restarting}>取消</Button><Button variant="danger" onClick={() => { void restart(); }} disabled={restarting}>重启</Button></div></DialogContent></Dialog>
+  const showNav = !isMobile || route.page === "home";
+  const showMain = !isMobile || route.page !== "home";
+  const parent = parentSettingsRoute(route);
+  const mobileTitle = route.page === "provider" ? "供应商" : route.page === "provider-new" ? "添加供应商" : route.page === "skill-files" ? "技能文件" : activeCategory === undefined ? "设置" : settingsCategory(activeCategory).title;
+  const mobileBackLabel = parent === undefined || parent.page === "home" ? "设置" : activeCategory === undefined ? "设置" : settingsCategory(activeCategory).title;
+
+  return <section className={`st-app${isMobile ? " mobile" : ""}`}>
+    {showNav ? <aside className="st-nav" aria-label="设置分类">
+      <button type="button" className="st-nav-back" onClick={exitSettings}><ArrowLeft size={15} /><span className="st-desk">返回会话</span><span className="st-mob">设置</span></button>
+      {isMobile && remoteWarn ? <SettingsBanner action={<StButton onClick={() => go({ page: "remote" }, { focus: "password" })}>去设置</StButton>}>公网穿透正在运行，但还没设置访问密码</SettingsBanner> : null}
+      {SETTINGS_GROUPS.map((group) => <div key={group} className="st-nav-section">
+        <div className="st-nav-group">{group}</div>
+        <div className="st-nav-list">
+          {SETTINGS_CATEGORIES.filter((category) => category.group === group).map((category) => {
+            const Icon = category.icon;
+            const on = activeCategory === category.id;
+            const warn = category.id === "remote" && remoteWarn;
+            return <button type="button" key={category.id} className={`st-nav-item${on ? " on" : ""}`} aria-current={on ? "page" : undefined} onClick={() => { if (!on || route.page !== categoryRoute(category.id).page) go(categoryRoute(category.id)); }}>
+              <Icon size={16} />
+              <span>{category.title}</span>
+              {warn ? <span className="st-dot" title="需要处理：公网地址没有访问密码" /> : meta[category.id] === undefined ? null : <span className="st-meta">{meta[category.id]}</span>}
+              <ChevronRight size={15} className="st-nav-chev" />
+            </button>;
+          })}
+        </div>
+      </div>)}
+    </aside> : null}
+    {showMain ? <main className="st-main">
+      {isMobile ? <SettingsTopBar title={mobileTitle} backLabel={mobileBackLabel} onBack={goBack} /> : null}
+      <div className="st-page" key={isMobile ? undefined : activeCategory}>{page}</div>
+    </main> : null}
   </section>;
-}
-
-function AssistantNamePage({ initialName, busy, onSave, onBack }: { initialName: string; busy: boolean; onSave: (name: string) => Promise<boolean>; onBack: () => void }) {
-  const [draft, setDraft] = useState(initialName);
-  useEffect(() => setDraft(initialName), [initialName]);
-  const save = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    void onSave(draft).then((saved) => { if (saved) onBack(); });
-  };
-  return <SettingsSubpage title="助手名称" onBack={onBack} action={<button type="button" className="settings-topbar-action" disabled={busy || draft.trim() === ""} onClick={() => { void onSave(draft).then((saved) => { if (saved) onBack(); }); }}>{busy ? "保存中…" : "保存"}</button>}>
-    <form className="settings-form" onSubmit={save}>
-      <SettingsFormSection>
-        <label className="settings-form-field"><span>名称</span><input autoFocus value={draft} maxLength={64} onChange={(event) => setDraft(event.target.value)} /></label>
-      </SettingsFormSection>
-    </form>
-  </SettingsSubpage>;
-}
-
-function WorkspacesPage({ workspaces, busy, onMove, onRemove, onAdd, onBack }: { workspaces: Workspace[]; busy?: string; onMove: (index: number, direction: -1 | 1) => void; onRemove: (workspace: Workspace) => void; onAdd: () => void; onBack: () => void }) {
-  return <SettingsSubpage title="工作区" onBack={onBack}>
-    <div className="settings-stack">
-      {workspaces.length === 0 ? <SettingsEmpty icon={FolderPlus} title="还没有工作区" actionLabel="添加工作区" onAction={onAdd} /> : <SettingsGroup>
-        {workspaces.map((workspace, index) => <div className="settings-row settings-workspace-row" key={workspace.id}>
-          <span className="settings-row-main"><strong>{workspace.label}</strong><small>{workspace.cwd}</small></span>
-          <span className="settings-row-actions">
-            <Button variant="ghost" size="icon" aria-label="上移工作区" title="上移" disabled={index === 0 || busy !== undefined} onClick={() => onMove(index, -1)}><ArrowUp size={15} /></Button>
-            <Button variant="ghost" size="icon" aria-label="下移工作区" title="下移" disabled={index === workspaces.length - 1 || busy !== undefined} onClick={() => onMove(index, 1)}><ArrowDown size={15} /></Button>
-            <Button variant="ghost" size="icon" aria-label={`删除工作区 ${workspace.label}`} title="删除工作区" disabled={busy !== undefined} onClick={() => onRemove(workspace)}><Trash2 size={15} /></Button>
-          </span>
-        </div>)}
-        <SettingsRow icon={FolderPlus} label="添加工作区" accent onClick={onAdd} />
-      </SettingsGroup>}
-    </div>
-  </SettingsSubpage>;
 }

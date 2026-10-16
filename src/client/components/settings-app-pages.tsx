@@ -1,0 +1,252 @@
+import { useEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, FolderPlus, GripVertical, RotateCw, Trash2 } from "lucide-react";
+import type { AppSettings, Workspace } from "../../shared/protocol";
+import { api } from "../api";
+import { getDesktopUpdateChannel, setDesktopNotificationEnabled, setDesktopUpdateChannel, type DesktopUpdateChannel } from "../desktop";
+import { DETAIL_LEVELS, type DetailLevel } from "../lib/detail-level";
+import { isDesktopShell } from "../lib/desktop-shell";
+import { isNotificationEnabled, notificationPermission, requestNotificationPermission, setNotificationEnabled } from "../notifications";
+import { SaveState, SettingsConfirm, useDebouncedSave, useSaveStatus, useSettingsToast } from "./settings-feedback";
+import { SectionAction, Segmented, SettingRow, SettingsCard, SettingsEmptyLine, SettingsPageHead, SettingsSection, SettingsSwitch, SettingsTag, StButton } from "./settings-ui";
+import { WorkspaceDialog } from "./workspace-dialog";
+
+/* ------------------------------ 通用 ------------------------------ */
+
+export function GeneralPage({ assistantName, onAssistantNameChange, extra }: { assistantName: string; onAssistantNameChange: (name: string) => void; extra?: React.ReactNode }) {
+  const saveStatus = useSaveStatus();
+  const [name, setName] = useState(assistantName);
+  const committed = useRef(assistantName);
+  const debounced = useDebouncedSave(name, (value) => {
+    const trimmed = value.trim();
+    if (trimmed === "" || trimmed === committed.current) return;
+    const previous = committed.current;
+    committed.current = trimmed;
+    void saveStatus.run("assistant-name", async () => {
+      const settings: AppSettings = await api.updateSettings({ assistantName: trimmed });
+      committed.current = settings.assistantName;
+      onAssistantNameChange(settings.assistantName);
+    }, { rollback: () => { committed.current = previous; } });
+  });
+  useEffect(() => {
+    // 别处改了名字（另一台设备、服务器推送）：没在输入时跟着更新。
+    if (assistantName === committed.current) return;
+    committed.current = assistantName;
+    debounced.reset(assistantName);
+    setName(assistantName);
+  }, [assistantName, debounced]);
+  return <>
+    <SettingsPageHead title="通用" description="基础信息与快捷键。改动立即生效。" />
+    <SettingsSection id="basics" title="基本">
+      <SettingsCard>
+        <SettingRow id="assistant-name" title="助手名称" description={name.trim() === "" ? "名称留空不会保存，继续使用原来的名字" : "显示在欢迎页、通知和登录页上"}
+          control={<><SaveState k="assistant-name" /><input className="st-inline-input" aria-label="助手名称" value={name} maxLength={64}
+            onChange={(event) => { setName(event.target.value); debounced.schedule(); }} onBlur={debounced.flush}
+            onKeyDown={(event) => { if (event.key === "Enter") debounced.flush(); }} /></>} />
+      </SettingsCard>
+    </SettingsSection>
+    {extra}
+  </>;
+}
+
+/* ------------------------------ 外观 ------------------------------ */
+
+export function AppearancePage({ detailLevel, onDetailLevelChange }: { detailLevel: DetailLevel; onDetailLevelChange: (level: DetailLevel) => void }) {
+  const hint = DETAIL_LEVELS.find((item) => item.value === detailLevel)?.hint;
+  return <>
+    <SettingsPageHead title="外观与显示" description="时间线的显示方式，只保存在这台设备上。" />
+    <SettingsSection id="timeline" title="时间线">
+      <SettingsCard>
+        <SettingRow id="detail-level" title="默认详细程度" description={`${hint ?? ""}。会话顶栏也能临时切换`}
+          control={<><SaveState k="detail-level" /><Segmented label="默认详细程度" value={detailLevel} options={DETAIL_LEVELS.map((item) => ({ value: item.value, label: item.label }))} onChange={onDetailLevelChange} /></>} />
+      </SettingsCard>
+    </SettingsSection>
+  </>;
+}
+
+/* ------------------------------ 通知 ------------------------------ */
+
+export function NotificationsPage({ enabled, onEnabledChange }: { enabled: boolean; onEnabledChange: (enabled: boolean) => void }) {
+  const saveStatus = useSaveStatus();
+  const toast = useSettingsToast();
+  const desktop = isDesktopShell();
+  const permission = desktop ? "granted" : notificationPermission();
+  const toggle = (next: boolean) => {
+    onEnabledChange(next);
+    void saveStatus.run("notifications", async () => {
+      if (desktop) {
+        await setDesktopNotificationEnabled(next);
+        setNotificationEnabled(next);
+        return;
+      }
+      if (next) {
+        const result = await requestNotificationPermission();
+        if (result !== "granted") throw new Error(result === "unsupported" ? "这个浏览器不支持通知" : "浏览器没有授权通知，请在地址栏左侧的网站设置里允许");
+      }
+      setNotificationEnabled(next);
+    }, { rollback: () => onEnabledChange(!next) }).then((ok) => { if (!ok && !desktop) toast.notify("通知没有打开：浏览器未授权", "error"); });
+  };
+  return <>
+    <SettingsPageHead title="通知" description="运行结束时提醒你。桌面端用系统通知，浏览器里需要先授权。" />
+    <SettingsSection id="run-notifications" title="运行结束">
+      <SettingsCard>
+        <SettingRow id="notify-run-finished" title="运行结束时通知" description={desktop ? "AI 回复完成、出错或需要你确认时，弹出系统通知" : "AI 回复完成、出错或需要你确认时，弹出浏览器通知（页面在后台时）"}
+          control={<><SaveState k="notifications" /><SettingsSwitch checked={enabled} onChange={toggle} label="运行结束时通知" /></>} />
+        {desktop ? null : <SettingRow title="浏览器授权" description={permission === "granted" ? "已允许这个网站发通知" : permission === "denied" ? "已被拒绝：需要在浏览器的网站设置里改回允许" : permission === "unsupported" ? "这个浏览器不支持通知" : "打开开关时会询问"}
+          control={<SettingsTag tone={permission === "granted" ? "ok" : permission === "denied" ? "warn" : undefined}>{permission === "granted" ? "已允许" : permission === "denied" ? "已拒绝" : permission === "unsupported" ? "不支持" : "未询问"}</SettingsTag>} />}
+      </SettingsCard>
+    </SettingsSection>
+  </>;
+}
+
+export function initialNotificationsEnabled(): boolean {
+  return isNotificationEnabled();
+}
+
+/* ------------------------------ 关于与更新 ------------------------------ */
+
+export function AboutPage({ children }: { children?: React.ReactNode }) {
+  const saveStatus = useSaveStatus();
+  const toast = useSettingsToast();
+  const [channel, setChannel] = useState<DesktopUpdateChannel>();
+  const [restartOpen, setRestartOpen] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void getDesktopUpdateChannel().then((value) => { if (!cancelled) setChannel(value); }, () => undefined);
+    return () => { cancelled = true; };
+  }, []);
+  const changeChannel = (next: DesktopUpdateChannel) => {
+    const previous = channel;
+    setChannel(next);
+    void saveStatus.run("update-channel", () => setDesktopUpdateChannel(next), { rollback: () => setChannel(previous) });
+  };
+  const restart = async () => {
+    setRestarting(true);
+    try {
+      await api.selfRestart();
+      setRestartOpen(false);
+      toast.notify("正在重启，连接会短暂中断…");
+    } catch (error) {
+      setRestarting(false);
+      toast.notify(error instanceof Error ? error.message : "重启请求失败", "error");
+    }
+  };
+  return <>
+    <SettingsPageHead title="关于与更新" description="Jarvis 版本、更新与服务维护。" />
+    {children}
+    {channel === undefined ? null : <SettingsSection id="updates" title="更新">
+      <SettingsCard>
+        <SettingRow id="update-channel" title="更新通道" description={channel === "beta" ? "测试版：检查更新时会收到测试版和正式版中较新的一个" : "正式版：只接收正式版更新"}
+          control={<><SaveState k="update-channel" /><Segmented label="更新通道" value={channel} options={[{ value: "stable", label: "正式版" }, { value: "beta", label: "测试版" }]} onChange={changeChannel} /></>} />
+      </SettingsCard>
+    </SettingsSection>}
+    <SettingsSection id="service" title="服务">
+      <SettingsCard>
+        <SettingRow id="restart-service" title="重启服务" description="所有会话会断开几秒，随后自动重连" control={<StButton disabled={restarting} onClick={() => setRestartOpen(true)}><RotateCw size={13} className={restarting ? "spin" : undefined} />{restarting ? "正在重启…" : "重启"}</StButton>} />
+      </SettingsCard>
+    </SettingsSection>
+    <SettingsConfirm open={restartOpen} busy={restarting} danger title="重启服务？" confirmLabel="重启" onCancel={() => setRestartOpen(false)} onConfirm={() => { void restart(); }}>
+      <p>所有会话会断开几秒，正在运行的回复会中断，随后自动重连恢复。</p>
+    </SettingsConfirm>
+  </>;
+}
+
+/* ------------------------------ 工作区 ------------------------------ */
+
+export function WorkspacesPage({ workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace }: {
+  workspaces: Workspace[];
+  onWorkspacesChange: (workspaces: Workspace[]) => void;
+  onAddWorkspace: (path: string, label?: string) => Promise<void>;
+  onRemoveWorkspace: (workspace: Workspace) => Promise<void>;
+}) {
+  const saveStatus = useSaveStatus();
+  const toast = useSettingsToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [dragId, setDragId] = useState<string>();
+  const [overId, setOverId] = useState<string>();
+  const visible = workspaces.filter((workspace) => !hidden.has(workspace.id));
+  const latest = useRef(workspaces);
+  latest.current = workspaces;
+
+  const reorder = (next: Workspace[]) => {
+    const previous = latest.current;
+    onWorkspacesChange(next);
+    void saveStatus.run("workspace-order", async () => { onWorkspacesChange(await api.reorderWorkspaces(next.map((workspace) => workspace.id))); }, { rollback: () => onWorkspacesChange(previous) });
+  };
+  const move = (id: string, targetId: string) => {
+    if (id === targetId) return;
+    const next = [...latest.current];
+    const from = next.findIndex((workspace) => workspace.id === id);
+    const to = next.findIndex((workspace) => workspace.id === targetId);
+    if (from < 0 || to < 0) return;
+    const [item] = next.splice(from, 1);
+    if (item !== undefined) next.splice(to, 0, item);
+    reorder(next);
+  };
+  const shift = (index: number, direction: -1 | 1) => {
+    const target = visible[index + direction];
+    const current = visible[index];
+    if (target !== undefined && current !== undefined) move(current.id, target.id);
+  };
+  const remove = (workspace: Workspace) => {
+    const setHide = (value: boolean) => setHidden((current) => { const next = new Set(current); if (value) next.add(workspace.id); else next.delete(workspace.id); return next; });
+    setHide(true);
+    toast.showUndo({
+      message: `已移除工作区 ${workspace.label}（文件和会话记录仍留在磁盘上）`,
+      undo: () => setHide(false),
+      commit: async () => { await onRemoveWorkspace(workspace); setHide(false); },
+      onCommitError: (error) => { setHide(false); toast.notify(error instanceof Error ? error.message : "工作区删除失败", "error"); },
+    });
+  };
+  const rename = (workspace: Workspace, label: string) => {
+    void saveStatus.run(`workspace:${workspace.id}`, async () => {
+      const saved = await api.renameWorkspace(workspace.id, label);
+      onWorkspacesChange(latest.current.map((item) => item.id === saved.id ? saved : item));
+    });
+  };
+
+  return <>
+    <SettingsPageHead title="工作区" description="会话按工作区分组。拖动调整侧栏顺序，名称可以直接改。" />
+    <SettingsSection id="workspace-list" title="工作区" hint={`${String(visible.length)} 个`} action={<span className="st-inline"><SaveState k="workspace-order" /><SectionAction label="添加工作区" icon={FolderPlus} onClick={() => setDialogOpen(true)} /></span>}>
+      <SettingsCard>
+        {visible.length === 0 ? <SettingsEmptyLine>还没有工作区。添加一个项目文件夹，就能在里面开会话。</SettingsEmptyLine> : visible.map((workspace, index) => <div key={workspace.id}
+          className={`st-row st-ws-row${dragId === workspace.id ? " dragging" : ""}${overId === workspace.id && dragId !== workspace.id ? " drop" : ""}`} id={`setting-workspace-${workspace.id}`}
+          draggable={dragId === workspace.id}
+          onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", workspace.id); }}
+          onDragOver={(event) => { if (dragId === undefined) return; event.preventDefault(); setOverId(workspace.id); }}
+          onDrop={(event) => { event.preventDefault(); if (dragId !== undefined) move(dragId, workspace.id); setDragId(undefined); setOverId(undefined); }}
+          onDragEnd={() => { setDragId(undefined); setOverId(undefined); }}>
+          <span className="st-grip" title="拖动排序" aria-hidden onPointerDown={() => setDragId(workspace.id)} onPointerUp={() => { if (overId === undefined) setDragId(undefined); }}><GripVertical size={15} /></span>
+          <WorkspaceName workspace={workspace} onRename={rename} />
+          <span className="st-ctl">
+            <SaveState k={`workspace:${workspace.id}`} />
+            <StButton variant="ghost" icon aria-label={`上移 ${workspace.label}`} title="上移" disabled={index === 0} onClick={() => shift(index, -1)}><ArrowUp size={14} /></StButton>
+            <StButton variant="ghost" icon aria-label={`下移 ${workspace.label}`} title="下移" disabled={index === visible.length - 1} onClick={() => shift(index, 1)}><ArrowDown size={14} /></StButton>
+            <StButton variant="ghost" icon aria-label={`移除 ${workspace.label}`} title="移除（不删文件）" onClick={() => remove(workspace)}><Trash2 size={14} /></StButton>
+          </span>
+        </div>)}
+      </SettingsCard>
+    </SettingsSection>
+    <WorkspaceDialog open={dialogOpen} onOpenChange={setDialogOpen} onAdd={onAddWorkspace} />
+  </>;
+}
+
+function WorkspaceName({ workspace, onRename }: { workspace: Workspace; onRename: (workspace: Workspace, label: string) => void }) {
+  const [label, setLabel] = useState(workspace.label);
+  const debounced = useDebouncedSave(label, (value) => { if (value.trim() !== "" && value.trim() !== workspace.label) onRename(workspace, value.trim()); });
+  const focused = useRef(false);
+  useEffect(() => {
+    if (focused.current) return;
+    setLabel(workspace.label);
+    debounced.reset(workspace.label);
+  }, [workspace.label, debounced]);
+  return <span className="st-row-text">
+    <input className="st-name-input" aria-label={`${workspace.label} 的名称`} value={label} placeholder={workspace.label}
+      onFocus={() => { focused.current = true; }}
+      onBlur={() => { focused.current = false; debounced.flush(); if (label.trim() === "") setLabel(workspace.label); }}
+      onChange={(event) => { setLabel(event.target.value); debounced.schedule(); }}
+      onKeyDown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); }} />
+    <small className="mono" title={workspace.cwd}>{workspace.cwd}</small>
+  </span>;
+}
