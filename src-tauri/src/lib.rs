@@ -702,7 +702,17 @@ fn write_setting(path: &std::path::Path, key: &str, value: serde_json::Value) {
     let _ = fs::create_dir_all(parent);
   }
   if let Ok(text) = serde_json::to_string_pretty(&serde_json::Value::Object(settings)) {
-    let _ = fs::write(path, text);
+    // 先写临时文件再改名，断电或崩溃时不会留下半截 desktop.json。
+    let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    let written = fs::File::create(&temp).and_then(|mut file| {
+      use std::io::Write;
+      file.write_all(text.as_bytes())?;
+      file.sync_all()
+    });
+    if written.is_err() || fs::rename(&temp, path).is_err() {
+      let _ = fs::remove_file(&temp);
+      let _ = fs::write(path, text);
+    }
   }
 }
 

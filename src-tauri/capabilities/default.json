@@ -18,6 +18,7 @@
     "allow-set-notifications-enabled",
     "allow-take-update-check",
     "allow-check-desktop-update",
-    "allow-update-channel"
+    "allow-update-channel",
+    "allow-open-logs-folder"
   ]
 }
