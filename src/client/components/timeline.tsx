@@ -5,7 +5,7 @@ import { Archive, ArrowDown, Bell, Brain, Check, ChevronRight, CircleAlert, Cloc
 import type { AssistantGenerationStats, ContextSummaryTimelineItem, FileChange, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
 import { userMessageOutline as outlineFromItems } from "../../shared/user-message";
 import { plainErrorReason } from "../lib/error-reason";
-import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
+import { formatRunElapsed, getRunFeedback, getRunStatusActivity, type RunFeedback, type RunStatusActivity } from "../run-feedback";
 import { copyText } from "../lib/clipboard";
 import { imageDataUrl } from "../lib/image";
 import { LocalMediaVersionContext } from "../lib/local-media";
@@ -196,6 +196,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   }, [outline, outlineLoading, items]);
   const userMessageKey = userMessages.map((item) => item.id).join(":");
   const feedback = getRunFeedback(status, items, streamingMessageId);
+  const runActivity = getRunStatusActivity(status, items, streamingMessageId);
   const hasMatchingTimelineFailure = status.lastError !== undefined && (turns.at(-1)?.finalError !== undefined || items.some((item) => item.kind === "error" && item.state === "failed" && item.code === status.lastError!.code && item.message === status.lastError!.message));
   const statusIndicatorKey = `${status.runState}:${status.compacting?.reason ?? ""}:${status.compacting?.retrying?.retryAt ?? ""}:${status.retrying?.retryAt ?? ""}:${status.lastError?.occurredAt ?? ""}:${error ?? ""}:${notice ?? ""}`;
 
@@ -429,7 +430,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   };
 
   return (
-    <section className="timeline-shell">
+    <section className={`timeline-shell${runActivity === undefined ? "" : " has-run-status"}`}>
       <TurnNavigator mobile={isMobile} anchors={userMessages} activeId={activeUserMessageId} markerPositions={markerPositions} loadingAll={(outlineLoading && userMessages.length === 0) || pendingJumpId !== undefined} open={navigatorOpen} onOpenChange={(open) => { if (open) onNavigatorOpenChange?.(true); else closeNavigator(); }} onJump={jumpToUserMessage} />
       <div className="timeline" ref={scrollRef} onScroll={(event) => {
         const element = event.currentTarget;
@@ -467,7 +468,15 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
           </div>
         </div>
       </div>
-      {showJumpLatest && !hideJumpLatestForComposer ? <Button variant="ghost" size="icon" className="jump-latest" style={jumpLatestBottom === undefined ? undefined : { bottom: `${String(jumpLatestBottom)}px` }} aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setShowJumpLatest(false); setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
+      {runActivity !== undefined && !hideJumpLatestForComposer ? <RunStatusBar activity={runActivity} startedAt={status.activeRun?.startedAt} bottom={jumpLatestBottom} onJump={() => {
+        const element = scrollRef.current;
+        if (element === null) return;
+        const target = runActivityElement(element, runActivity);
+        if (target === undefined) element.scrollTop = element.scrollHeight;
+        else target.scrollIntoView({ block: "center", behavior: "smooth" });
+        if (target === undefined || runActivity.target === "message") { setShowJumpLatest(false); setFollowing(true); }
+      }} /> : null}
+      {showJumpLatest && runActivity === undefined && !hideJumpLatestForComposer ? <Button variant="ghost" size="icon" className="jump-latest" style={jumpLatestBottom === undefined ? undefined : { bottom: `${String(jumpLatestBottom)}px` }} aria-label="跳转到最新消息" title="跳转到最新消息" onClick={() => { const element = scrollRef.current; if (element !== null) element.scrollTop = element.scrollHeight; setShowJumpLatest(false); setFollowing(true); }}><ArrowDown size={16} /></Button> : null}
     </section>
   );
 }
@@ -515,6 +524,21 @@ function ElapsedClock({ startedAt }: { startedAt?: string }) {
   const elapsed = formatRunElapsed(startedAt, now);
   if (elapsed === undefined) return null;
   return <time className="run-elapsed">{elapsed}</time>;
+}
+
+function runActivityElement(root: HTMLElement, activity: RunStatusActivity): HTMLElement | undefined {
+  const selector = activity.target === "tool" ? ".tool-item.running, .tool-item.queued" : activity.target === "thinking" ? ".thinking-item.running" : activity.target === "message" ? ".message-row.streaming" : undefined;
+  if (selector === undefined) return undefined;
+  const found = root.querySelectorAll<HTMLElement>(selector);
+  return found.length === 0 ? undefined : found[found.length - 1];
+}
+
+function RunStatusBar({ activity, startedAt, bottom, onJump }: { activity: RunStatusActivity; startedAt?: string; bottom?: number; onJump: () => void }) {
+  return <button type="button" className="run-status-bar" style={bottom === undefined ? undefined : { bottom: `${String(bottom)}px` }} onClick={onJump} title="跳到当前步骤">
+    <LoaderCircle className="spin" size={13} aria-hidden="true" />
+    <span className="run-status-label">{activity.label}</span>
+    <ElapsedClock startedAt={startedAt} />
+  </button>;
 }
 
 function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
