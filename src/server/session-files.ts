@@ -311,3 +311,26 @@ function sessionInfoName(entry: Record<string, unknown>): string | null {
   const trimmed = name.trim();
   return trimmed === "" ? null : trimmed;
 }
+
+/** 数非空行数（流式读，不把整个文件读进内存）。按换行符跳着找，只看每行开头是否有内容，大文件也很快。 */
+export async function countJsonlLines(path: string): Promise<number> {
+  let lines = 0;
+  let lineHasContent = false;
+  for await (const chunk of createReadStream(path)) {
+    const buffer = chunk as Buffer;
+    let start = 0;
+    for (;;) {
+      const newline = buffer.indexOf(10, start);
+      const end = newline === -1 ? buffer.length : newline;
+      for (let index = start; !lineHasContent && index < end; index += 1) {
+        const byte = buffer[index];
+        if (byte !== 13 && byte !== 32) lineHasContent = true;
+      }
+      if (newline === -1) break;
+      if (lineHasContent) lines += 1;
+      lineHasContent = false;
+      start = newline + 1;
+    }
+  }
+  return lineHasContent ? lines + 1 : lines;
+}

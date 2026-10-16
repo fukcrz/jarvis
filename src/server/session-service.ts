@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -66,6 +65,7 @@ import {
 } from "./session-active.js";
 import { SessionAttentionStore, type SessionSortMeta, type SideChatSource } from "./session-attention-store.js";
 import {
+  countJsonlLines,
   createManagedSession,
   findSessionFile,
   listSessionFiles,
@@ -1122,6 +1122,9 @@ export class SessionService {
   }
 
   async dispose(): Promise<void> {
+    // 关闭会中止正在跑的回合；别让中止后的"完成/空闲"覆盖掉运行标记和排队消息，
+    // 否则退出、更新、重启服务后就认不出被打断的回合，也放不回排队的消息。
+    this.attention.freezeRunState();
     const refs = [...this.active.values()].map((active) => active.ref);
     for (const ref of refs) {
       await this.withSessionTransition(ref, async () => {
@@ -1703,22 +1706,4 @@ export class SessionService {
   private catalogDeps() {
     return { workspaces: this.workspaces, attention: this.attention, active: this.active };
   }
-}
-
-/** 数非空行数（流式读，不把整个文件读进内存）。 */
-async function countJsonlLines(path: string): Promise<number> {
-  let lines = 0;
-  let lineHasContent = false;
-  for await (const chunk of createReadStream(path)) {
-    const buffer = chunk as Buffer;
-    for (const byte of buffer) {
-      if (byte === 10) {
-        if (lineHasContent) lines += 1;
-        lineHasContent = false;
-      } else if (byte !== 13 && byte !== 32) {
-        lineHasContent = true;
-      }
-    }
-  }
-  return lineHasContent ? lines + 1 : lines;
 }

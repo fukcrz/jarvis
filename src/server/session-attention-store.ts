@@ -61,6 +61,8 @@ export class SessionAttentionStore {
   private readonly path: string;
   private data: PersistedAttentionFile | undefined;
   private operationChain = Promise.resolve();
+  /** 服务关闭中：不再改写运行标记和排队消息，保留关闭前的样子，下次启动才能认出被中断的回合。 */
+  private runStateFrozen = false;
 
   constructor(agentDir: string) {
     this.path = join(agentDir, "jarvis-session-attention.json");
@@ -78,7 +80,16 @@ export class SessionAttentionStore {
       .map(([entryKey, entry]) => [entryKey.slice(prefix.length), metaFromPersisted(entry)]));
   }
 
+  /**
+   * 优雅关闭时调用：关闭会先中止正在跑的回合，中止又会把状态改成"已完成/空闲"并清空排队，
+   * 冻结后这些改动不再落盘，`runningSince` 和排队消息得以留到下次启动。
+   */
+  freezeRunState(): void {
+    this.runStateFrozen = true;
+  }
+
   async setAttention(ref: SessionRef, state: SessionAttentionState, at: string): Promise<void> {
+    if (this.runStateFrozen) return;
     await this.update((data) => {
       const entryKey = key(ref);
       const current = data.sessions[entryKey] ?? {};
@@ -106,6 +117,7 @@ export class SessionAttentionStore {
   }
 
   async setPendingQueue(ref: SessionRef, texts: string[]): Promise<void> {
+    if (this.runStateFrozen) return;
     const entryKey = key(ref);
     const current = (await this.load()).sessions[entryKey];
     if (texts.length === 0 && current?.pendingQueue === undefined) return;
