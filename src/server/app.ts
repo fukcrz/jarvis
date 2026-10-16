@@ -19,7 +19,7 @@ import { EventHub } from "./event-hub.js";
 import { TrashService } from "./trash.js";
 import { registerSystemRoutes } from "./system-routes.js";
 import { teeLogStream, type DailyLogFile } from "./log-files.js";
-import { takeUndeliveredRecoveryMessage } from "./fs.js";
+import { takeUndeliveredStartupMessages } from "./fs.js";
 import { applyAuthCookie, authorizeSocket, clearAuthCookie, readAuthCookie } from "./http-auth.js";
 import { SessionService } from "./session-service.js";
 import { desktopEnabled } from "./desktop-bridge.js";
@@ -644,9 +644,8 @@ export async function buildApp(options: {
     const params = z.object({ workspaceId: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return socket.close(1008, "Invalid workspace id");
     events.addWorkspace(params.data.workspaceId, socket, authorized.token);
-    const recoveryMessage = takeUndeliveredRecoveryMessage();
-    if (recoveryMessage !== undefined) {
-      socket.send(JSON.stringify({ version: 1, type: "extension.notify", workspaceId: params.data.workspaceId, notification: { id: randomUUID(), message: recoveryMessage, notifyType: "warning" } }));
+    for (const message of takeUndeliveredStartupMessages()) {
+      socket.send(JSON.stringify({ version: 1, type: "extension.notify", workspaceId: params.data.workspaceId, notification: { id: randomUUID(), message, notifyType: "warning" } }));
     }
   });
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/events", { websocket: true }, (socket, request) => {

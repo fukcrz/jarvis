@@ -93,9 +93,31 @@ export function listRecoveryNotices(): RecoveryNotice[] {
 export function clearRecoveryNoticesForTest(): void {
   recoveryNotices.length = 0;
   deliveredNotices = 0;
+  startupWarnings.length = 0;
+  deliveredWarnings = 0;
 }
 
 let deliveredNotices = 0;
+const startupWarnings: string[] = [];
+let deliveredWarnings = 0;
+
+/** 启动时发现的其他问题（比如另一个实例在用同一个数据目录），推给界面提示一次。 */
+export function addStartupWarning(message: string): void {
+  console.warn(`[jarvis] ${message}`);
+  startupWarnings.push(message);
+}
+
+export function listStartupWarnings(): string[] {
+  return [...startupWarnings];
+}
+
+/** 取出还没推送给界面的启动提示（配置恢复 + 其他警告），每条只提示一次。 */
+export function takeUndeliveredStartupMessages(): string[] {
+  const warnings = startupWarnings.slice(deliveredWarnings);
+  deliveredWarnings = startupWarnings.length;
+  const recovery = takeUndeliveredRecoveryMessage();
+  return [...(recovery === undefined ? [] : [recovery]), ...warnings];
+}
 
 /** 取出还没推送给界面的恢复记录（每条只提示一次），合成一句中文提示。 */
 export function takeUndeliveredRecoveryMessage(): string | undefined {
