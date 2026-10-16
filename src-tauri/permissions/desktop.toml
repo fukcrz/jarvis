@@ -12,3 +12,8 @@ commands.allow = ["set_notifications_enabled"]
 identifier = "allow-take-update-check"
 description = "取走托盘发起的检查更新"
 commands.allow = ["take_update_check"]
+
+[[permission]]
+identifier = "allow-check-desktop-update"
+description = "服务未启动时由桌面程序检查并安装更新"
+commands.allow = ["check_desktop_update"]

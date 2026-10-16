@@ -16,6 +16,7 @@
     "dialog:default",
     "allow-open-external-url",
     "allow-set-notifications-enabled",
-    "allow-take-update-check"
+    "allow-take-update-check",
+    "allow-check-desktop-update"
   ]
 }
