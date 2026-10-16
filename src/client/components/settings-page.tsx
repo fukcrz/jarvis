@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, ChevronRight, Search } from "lucide-react";
 import type { PluginSnapshot } from "../../shared/plugins";
 import type { Workspace } from "../../shared/protocol";
 import type { SkillSnapshot } from "../../shared/skills";
@@ -8,15 +8,18 @@ import { api } from "../api";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { DETAIL_LEVELS, type DetailLevel } from "../lib/detail-level";
 import { SETTINGS_CATEGORIES, SETTINGS_GROUPS, settingsCategory } from "../lib/settings-registry";
+import { STATIC_SETTINGS_ENTRIES, type SettingsSearchEntry } from "../lib/settings-search";
 import { categoryRoute, isSettingsPath, legacySettingsRedirect, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsCategoryOf, settingsPath, type SettingsCategoryId, type SettingsRoute } from "../lib/settings-routes";
 import { AboutPage, AppearancePage, GeneralPage, NotificationsPage, WorkspacesPage, initialNotificationsEnabled } from "./settings-app-pages";
 import { DataPage } from "./settings-data";
 import { ExtensionsPage, SkillFilesPage, extensionsSummary } from "./settings-extensions";
 import { LeaveGuardProvider, SaveStatusProvider, SettingsToastProvider, useLeaveGuard, useSettingsToast } from "./settings-feedback";
 import { ModelGroupsPage } from "./settings-model-groups";
-import { ModelsPage, ProviderNewPage, ProviderPage, useProviderSettings } from "./settings-providers";
+import { ModelsPage, ProviderNewPage, ProviderPage, providerDisplayName, useProviderSettings } from "./settings-providers";
 import { RemotePage, type RemoteSummary } from "./settings-remote";
-import { SettingsBanner, SettingsTopBar, StButton, settingAnchorId } from "./settings-ui";
+import { SettingsSearchPalette, modKeyLabel } from "./settings-search";
+import { displayModelName } from "../model-display";
+import { Kbd, SettingsBanner, SettingsTopBar, StButton, settingAnchorId } from "./settings-ui";
 
 export interface SettingsPageProps {
   assistantName: string;
@@ -64,7 +67,8 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
   const [notificationsEnabled, setNotificationsEnabled] = useState(initialNotificationsEnabled);
   const [plugins, setPlugins] = useState<PluginSnapshot>();
   const [skills, setSkills] = useState<SkillSnapshot>();
-  const [groupCount, setGroupCount] = useState<{ count: number; enabled: boolean }>();
+  const [groupCount, setGroupCount] = useState<{ count: number; enabled: boolean; ids: string[] }>();
+  const [searchOpen, setSearchOpen] = useState(false);
   const [remote, setRemote] = useState<RemoteSummary>();
 
   // 旧地址 → 新地址；未知地址回到首页；电脑端没有「首页」，落到第一个分类。
@@ -85,7 +89,7 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
   }, []);
   useEffect(() => { loadExtensions(); }, [loadExtensions]);
   useEffect(() => {
-    void api.modelGroups().then((snapshot) => setGroupCount({ count: Object.keys(snapshot.config.groups).length, enabled: snapshot.enabled })).catch(() => undefined);
+    void api.modelGroups().then((snapshot) => setGroupCount({ count: Object.keys(snapshot.config.groups).length, enabled: snapshot.enabled, ids: Object.keys(snapshot.config.groups) })).catch(() => undefined);
   }, [plugins?.bundled]);
   useEffect(() => {
     let disposed = false;
@@ -141,6 +145,47 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
   }, [isMobile, leave, navigate, onBack, route]);
   const exitSettings = useCallback(() => leave.guard(onBack), [leave, onBack]);
 
+  // Ctrl+K / ⌘K：在设置里搜索。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.altKey || event.shiftKey || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      setSearchOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // 搜索索引：固定的设置项 + 供应商、模型、模型组、插件、技能、工作区。
+  const searchEntries = useMemo<SettingsSearchEntry[]>(() => {
+    const entries: SettingsSearchEntry[] = STATIC_SETTINGS_ENTRIES.filter((entry) => !isMobile || entry.key !== "shortcuts");
+    for (const provider of ps.visibleProviders) {
+      const name = providerDisplayName(provider, ps.customById.get(provider.id));
+      entries.push({ key: `provider:${provider.id}`, title: name, description: `供应商 · ${provider.id}`, keywords: "供应商 provider 连接 api key 密钥 base url", category: "models", route: { page: "provider", providerId: provider.id } });
+      if (provider.supportsApiKey || provider.custom) entries.push({ key: `provider-key:${provider.id}`, title: `${name} 的 API Key`, description: "供应商 · 连接", keywords: "密钥 key token", category: "models", route: { page: "provider", providerId: provider.id }, focus: "api-key" });
+      for (const model of provider.models) entries.push({ key: `model:${provider.id}/${model.id}`, title: displayModelName(model.name ?? model.id), description: `模型 · ${name} · ${model.id}`, keywords: "模型 model", category: "models", route: { page: "provider", providerId: provider.id }, focus: `model-${provider.id}-${model.id}` });
+    }
+    for (const id of groupCount?.ids ?? []) entries.push({ key: `group:${id}`, title: id, description: "模型组", keywords: "模型组 路由 group", category: "model-groups", route: { page: "model-groups" }, focus: `model-group-${id}` });
+    for (const plugin of plugins?.bundled ?? []) entries.push({ key: `plugin:${plugin.id}`, title: plugin.label, description: "自带插件", keywords: `插件 plugin ${plugin.id}`, category: "extensions", route: { page: "plugins" }, focus: `plugin-${plugin.id}` });
+    const seenPlugins = new Set<string>();
+    for (const plugin of [...(plugins?.recommended ?? []), ...(plugins?.installed ?? [])]) {
+      if (seenPlugins.has(plugin.name)) continue;
+      seenPlugins.add(plugin.name);
+      const recommended = plugins?.recommended.some((item) => item.name === plugin.name) ?? false;
+      entries.push({ key: `plugin:${plugin.name}`, title: plugin.name, description: recommended ? "推荐插件" : "已安装插件", keywords: "插件 plugin npm", category: "extensions", route: { page: "plugins" }, focus: `plugin-${plugin.name}` });
+    }
+    for (const skill of [...(skills?.bundled ?? []), ...(skills?.installed ?? [])]) {
+      entries.push({ key: `skill:${skill.id}`, title: skill.label || skill.name, description: `技能 · ${skill.id}`, keywords: `技能 skill ${skill.name} ${skill.description ?? ""}`, category: "extensions", route: { page: "skills" }, focus: `skill-${skill.id}` });
+    }
+    for (const workspace of workspaces) entries.push({ key: `workspace:${workspace.id}`, title: workspace.label, description: `工作区 · ${workspace.cwd}`, keywords: "工作区 项目 文件夹 workspace", category: "workspaces", route: { page: "workspaces" }, focus: `workspace-${workspace.id}` });
+    return entries;
+  }, [groupCount?.ids, isMobile, plugins, ps.customById, ps.visibleProviders, skills, workspaces]);
+  const pickSearch = (entry: SettingsSearchEntry) => {
+    setSearchOpen(false);
+    const samePath = settingsPath(entry.route) === location.pathname;
+    go(entry.route, { focus: entry.focus, replace: samePath });
+  };
+
   const enabledModelCount = [...ps.enabled].filter((key) => ps.allModelKeys.has(key)).length;
   const remoteWarn = remote !== undefined && remote.running > 0 && remote.authRequired === false;
   const meta = useMemo<Record<SettingsCategoryId, string | undefined>>(() => ({
@@ -186,7 +231,8 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
       page = <ProviderPage key={route.providerId} ps={ps} providerId={route.providerId} onBack={() => go({ page: "models" })} />;
       break;
     case "model-groups":
-      page = <ModelGroupsPage ps={ps} refreshKey={0} onOpenPlugins={() => go({ page: "plugins" }, { focus: "plugin-model-groups-router" })} onSnapshot={(snapshot) => setGroupCount({ count: Object.keys(snapshot.config.groups).length, enabled: snapshot.enabled })} />;
+      page = <ModelGroupsPage ps={ps} refreshKey={0} onOpenPlugins={() => go({ page: "plugins" }, { focus: "plugin-model-groups-router" })} onSnapshot={(snapshot) => setGroupCount({ count: Object.keys(snapshot.config.groups).length, enabled: snapshot.enabled, ids: Object.keys(snapshot.config.groups) })}
+        focusGroupId={state.focus?.startsWith("model-group-") === true && state.focus !== "model-group-list" && state.focus !== "model-group-globals" ? state.focus.slice("model-group-".length) : undefined} focusToken={location.key} />;
       break;
     case "plugins":
     case "skills":
@@ -222,6 +268,7 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
   return <section className={`st-app${isMobile ? " mobile" : ""}`}>
     {showNav ? <aside className="st-nav" aria-label="设置分类">
       <button type="button" className="st-nav-back" onClick={exitSettings}><ArrowLeft size={15} /><span className="st-desk">返回会话</span><span className="st-mob">设置</span></button>
+      <button type="button" className="st-nav-search" onClick={() => setSearchOpen(true)}><Search size={14} /><span>搜索设置</span><Kbd>{modKeyLabel()} K</Kbd></button>
       {isMobile && remoteWarn ? <SettingsBanner action={<StButton onClick={() => go({ page: "remote" }, { focus: "password" })}>去设置</StButton>}>公网穿透正在运行，但还没设置访问密码</SettingsBanner> : null}
       {SETTINGS_GROUPS.map((group) => <div key={group} className="st-nav-section">
         <div className="st-nav-group">{group}</div>
@@ -244,5 +291,6 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
       {isMobile ? <SettingsTopBar title={mobileTitle} backLabel={mobileBackLabel} onBack={goBack} /> : null}
       <div className="st-page" key={isMobile ? undefined : activeCategory}>{page}</div>
     </main> : null}
+    <SettingsSearchPalette open={searchOpen} entries={searchEntries} onClose={() => setSearchOpen(false)} onPick={pickSearch} />
   </section>;
 }

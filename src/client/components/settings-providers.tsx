@@ -215,7 +215,7 @@ export function providerModelSummary(available: number, enabled: number): string
   return `可用 ${String(available)} · 已启用 ${String(enabled)}`;
 }
 
-function providerDisplayName(provider: ProviderStatus, custom?: ManagedProvider): string {
+export function providerDisplayName(provider: ProviderStatus, custom?: ManagedProvider): string {
   return custom?.name ?? provider.name;
 }
 

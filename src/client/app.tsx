@@ -1153,6 +1153,17 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDownCapture, true);
   }, [selectedRefKey]);
 
+  // Ctrl+, / ⌘, 打开设置（输入法组字时不拦）。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.altKey || event.shiftKey || !(event.ctrlKey || event.metaKey) || event.key !== ",") return;
+      event.preventDefault();
+      if (!isSettingsPage) navigate("/settings");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isSettingsPage, navigate]);
+
   const compact = async () => {
     if (selectedRef === undefined || compactionPending) return;
     const baselineSeq = stream.transcript.seq;
