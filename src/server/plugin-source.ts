@@ -1,6 +1,6 @@
 import { AppError } from "./errors.js";
 
-const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i;
+export const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i;
 
 /** npm 包名，去掉版本。scoped 包的版本在第二个 @。 */
 export function packageNameFromSource(source: string): string | undefined {

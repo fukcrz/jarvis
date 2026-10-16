@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PackageManager } from "@earendil-works/pi-coding-agent";
@@ -81,6 +81,32 @@ describe("plugin service isolation", () => {
     expect(harness.packages.calls.some((call) => call.startsWith("update:npm:@mjakl/pi-subagent"))).toBe(false);
     const snapshot = await harness.service.snapshot();
     expect(snapshot.recommended.find((item) => item.name === "@mjakl/pi-subagent")).toMatchObject({ enabled: false, installed: false });
+  });
+
+  it("treats a local package with the same name as the recommended install and drops the npm duplicate", async () => {
+    const harness = await createHarness();
+    const local = join(harness.agentDir, "vendor", "pi-subagent");
+    await mkdir(local, { recursive: true });
+    await writeFile(join(local, "package.json"), JSON.stringify({ name: "@mjakl/pi-subagent", version: "3.1.0" }), "utf8");
+    harness.packages.sources.push(
+      { source: "./vendor/pi-subagent", installedPath: local },
+      { source: "npm:@mjakl/pi-subagent", installedPath: join(harness.agentDir, "npm", "pi-subagent") },
+    );
+    await harness.service.ensureRecommended();
+    expect(harness.packages.calls).toContain("remove:npm:@mjakl/pi-subagent");
+    expect(harness.packages.calls).not.toContain("install:npm:@mjakl/pi-subagent");
+    expect(harness.packages.calls.some((call) => call.startsWith("update:"))).toBe(false);
+    expect(harness.packages.sources.map((item) => item.source)).not.toContain("npm:@mjakl/pi-subagent");
+    expect(harness.packages.sources.map((item) => item.source)).toContain("./vendor/pi-subagent");
+    const snapshot = await harness.service.snapshot();
+    expect(snapshot.recommended.find((item) => item.name === "@mjakl/pi-subagent")).toMatchObject({
+      enabled: true,
+      installed: true,
+      source: "./vendor/pi-subagent",
+    });
+    harness.packages.calls.length = 0;
+    await harness.service.setRecommendedEnabled("@mjakl/pi-subagent", true);
+    expect(harness.packages.calls).toEqual([]);
   });
 
   it("installs a missing recommended package when turned on, and skips install when it is already present", async () => {
