@@ -151,3 +151,16 @@ describe("SessionAttentionStore list copy", () => {
     });
   });
 });
+
+describe("SessionAttentionStore corruption recovery", () => {
+  it("restores stars from the backup instead of silently wiping them", async () => {
+    const { readdir } = await import("node:fs/promises");
+    const store = new SessionAttentionStore(directory);
+    await store.setStarred(ref, true);
+    await writeFile(join(directory, "jarvis-session-attention.json"), "\0\0\0\0");
+
+    const reopened = new SessionAttentionStore(directory);
+    await expect(reopened.get(ref)).resolves.toMatchObject({ starred: true });
+    expect((await readdir(directory)).some((name) => name.startsWith("jarvis-session-attention.json.corrupt-"))).toBe(true);
+  });
+});

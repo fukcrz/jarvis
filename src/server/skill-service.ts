@@ -6,7 +6,7 @@ import { DefaultPackageManager, getAgentDir, loadSkillsFromDir, SettingsManager,
 import type { SkillDiagnostic, SkillEntry, SkillFileContent, SkillFileListing, SkillOrigin, SkillSnapshot } from "../shared/skills.js";
 import { isRecord } from "../shared/protocol.js";
 import { AppError } from "./errors.js";
-import { atomicWrite, isMissingFile } from "./fs.js";
+import { isMissingFile, readJsonRecovering, writeWithBackup } from "./fs.js";
 import { BUNDLED_SKILLS, isDirectChild, isSkillName, reconcileBundledSkills, type BundledSkillStatus } from "./skill-reconcile.js";
 import { readWorkspaceFile } from "./workspace-fs.js";
 
@@ -236,20 +236,18 @@ export class SkillService {
   }
 
   private async loadPrefs(): Promise<void> {
-    try {
-      const parsed: unknown = JSON.parse(await readFile(this.prefsPath, "utf8"));
+    const loaded = await readJsonRecovering(this.prefsPath, (parsed) => {
       if (!isRecord(parsed)) throw new Error("Unsupported skill prefs");
       const disabled = Array.isArray(parsed["disabledBundled"]) ? parsed["disabledBundled"].filter((item): item is string => typeof item === "string") : [];
-      this.prefs = { version: 1, disabledBundled: disabled.filter((id) => BUNDLED_SKILLS.some((skill) => skill.id === id)) };
-    } catch (error) {
-      if (!isMissingFile(error)) throw error;
-      await this.persistPrefs();
-    }
+      return { version: 1 as const, disabledBundled: disabled.filter((id) => BUNDLED_SKILLS.some((skill) => skill.id === id)) };
+    });
+    if (loaded.value !== undefined) this.prefs = loaded.value;
+    else await this.persistPrefs();
   }
 
   private async persistPrefs(): Promise<void> {
     await mkdir(dirname(this.prefsPath), { recursive: true });
-    await atomicWrite(this.prefsPath, `${JSON.stringify(this.prefs, null, 2)}\n`);
+    await writeWithBackup(this.prefsPath, `${JSON.stringify(this.prefs, null, 2)}\n`);
   }
 }
 

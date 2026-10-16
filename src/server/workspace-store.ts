@@ -1,10 +1,10 @@
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Workspace } from "../shared/protocol.js";
 import { AppError } from "./errors.js";
-import { atomicWrite, isMissingFile } from "./fs.js";
+import { readJsonRecovering, writeWithBackup } from "./fs.js";
 
 interface PersistedWorkspaces {
   version: 1;
@@ -26,17 +26,20 @@ export class WorkspaceStore {
 
   async initialize(defaultCwd: string, label?: string): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
-    try {
-      const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as PersistedWorkspaces;
-      if (parsed.version !== 1 || !Array.isArray(parsed.workspaces)) throw new Error("Unsupported workspace registry format");
+    const loaded = await readJsonRecovering(this.filePath, (value) => {
+      const parsed = value as PersistedWorkspaces;
+      if (typeof parsed !== "object" || parsed === null || parsed.version !== 1 || !Array.isArray(parsed.workspaces)) throw new Error("Unsupported workspace registry format");
+      return parsed;
+    });
+    const parsed = loaded.value;
+    if (parsed !== undefined) {
       const hadMissingOrder = parsed.workspaces.some((workspace) => typeof workspace.sortOrder !== "number");
       this.workspaces = parsed.workspaces.map((workspace, index) => ({ ...workspace, sortOrder: workspace.sortOrder ?? index, lastOpenedAt: workspace.lastOpenedAt ?? workspace.updatedAt ?? workspace.createdAt }));
       if (hadMissingOrder || this.workspaces.some((workspace, index) => workspace.sortOrder !== index)) {
         this.normalizeSortOrder();
         await this.persist();
       }
-    } catch (error) {
-      if (!isMissingFile(error)) throw error;
+    } else {
       await mkdir(defaultCwd, { recursive: true });
       const cwd = await resolveDirectory(defaultCwd);
       const now = new Date().toISOString();
@@ -118,7 +121,7 @@ export class WorkspaceStore {
   private async persist(): Promise<void> {
     this.normalizeSortOrder();
     const payload: PersistedWorkspaces = { version: 1, workspaces: this.workspaces };
-    await atomicWrite(this.filePath, `${JSON.stringify(payload, null, 2)}\n`);
+    await writeWithBackup(this.filePath, `${JSON.stringify(payload, null, 2)}\n`);
   }
 
   private normalizeSortOrder(): void {

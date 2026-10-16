@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
@@ -15,6 +16,7 @@ import { AuthService } from "./auth-service.js";
 import { BackgroundTaskService } from "./background-task-service.js";
 import { AppError, asMessage, errorStatusCode } from "./errors.js";
 import { EventHub } from "./event-hub.js";
+import { takeUndeliveredRecoveryMessage } from "./fs.js";
 import { applyAuthCookie, authorizeSocket, clearAuthCookie, readAuthCookie } from "./http-auth.js";
 import { SessionService } from "./session-service.js";
 import { desktopEnabled } from "./desktop-bridge.js";
@@ -631,6 +633,10 @@ export async function buildApp(options: {
     const params = z.object({ workspaceId: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return socket.close(1008, "Invalid workspace id");
     events.addWorkspace(params.data.workspaceId, socket, authorized.token);
+    const recoveryMessage = takeUndeliveredRecoveryMessage();
+    if (recoveryMessage !== undefined) {
+      socket.send(JSON.stringify({ version: 1, type: "extension.notify", workspaceId: params.data.workspaceId, notification: { id: randomUUID(), message: recoveryMessage, notifyType: "warning" } }));
+    }
   });
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/events", { websocket: true }, (socket, request) => {
     const authorized = authorizeSocket(auth, request, socket);

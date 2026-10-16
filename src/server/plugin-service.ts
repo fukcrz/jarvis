@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 import { DefaultPackageManager, getAgentDir, SettingsManager, type PackageManager } from "@earendil-works/pi-coding-agent";
 import type { BundledPluginLifecycle, InstalledPluginStatus, PluginCatalogItem, PluginSnapshot, RecommendedPluginStatus } from "../shared/plugins.js";
 import { AppError, asMessage } from "./errors.js";
-import { atomicWrite, isMissingFile } from "./fs.js";
+import { atomicWrite, isMissingFile, readJsonRecovering, writeWithBackup } from "./fs.js";
 import { BUNDLED_PLUGINS, readPluginText, reconcileBundledPlugins } from "./plugin-reconcile.js";
 import { catalogUrl, normalizeInstallSource, packageNameFromSource } from "./plugin-source.js";
 import { isRecord } from "../shared/protocol.js";
@@ -280,22 +280,20 @@ export class PluginService {
   }
 
   private async loadPrefs(): Promise<void> {
-    try {
-      const parsed: unknown = JSON.parse(await readFile(this.prefsPath, "utf8"));
+    const loaded = await readJsonRecovering(this.prefsPath, (parsed) => {
       if (!isRecord(parsed) || parsed["version"] !== 1) throw new Error("Unsupported plugin prefs");
-      this.prefs = {
-        version: 1,
+      return {
+        version: 1 as const,
         disabledBundled: stringList(parsed["disabledBundled"]).filter((id) => BUNDLED_PLUGINS.some((plugin) => plugin.id === id)),
         disabledRecommended: stringList(parsed["disabledRecommended"]),
       };
-    } catch (error) {
-      if (!isMissingFile(error)) throw error;
-      await this.persistPrefs();
-    }
+    });
+    if (loaded.value !== undefined) this.prefs = loaded.value;
+    else await this.persistPrefs();
   }
 
   private async persistPrefs(): Promise<void> {
-    await atomicWrite(this.prefsPath, `${JSON.stringify(this.prefs, null, 2)}\n`);
+    await writeWithBackup(this.prefsPath, `${JSON.stringify(this.prefs, null, 2)}\n`);
   }
 }
 

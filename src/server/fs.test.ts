@@ -77,11 +77,11 @@ describe("withFsRetry", () => {
 });
 
 describe("writeWithBackup + readJsonRecovering", () => {
-  it("keeps the previous content as .bak", async () => {
+  it("mirrors the last saved content into .bak", async () => {
     const path = join(directory, "settings.json");
     await writeWithBackup(path, JSON.stringify({ version: 1, name: "first" }));
     await writeWithBackup(path, JSON.stringify({ version: 1, name: "second" }));
-    expect(JSON.parse(await readFile(backupPath(path), "utf8"))).toEqual({ version: 1, name: "first" });
+    expect(JSON.parse(await readFile(backupPath(path), "utf8"))).toEqual({ version: 1, name: "second" });
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ version: 1, name: "second" });
   });
 
@@ -97,8 +97,8 @@ describe("writeWithBackup + readJsonRecovering", () => {
     await writeFile(path, "\0\0\0\0");
 
     const result = await readJsonRecovering(path, parseVersioned);
-    expect(result).toEqual({ value: { version: 1, name: "good" }, source: "backup" });
-    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ version: 1, name: "good" });
+    expect(result).toEqual({ value: { version: 1, name: "newer" }, source: "backup" });
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ version: 1, name: "newer" });
     const names = await readdir(directory);
     const corrupt = names.find((name) => name.startsWith("workspaces.json.corrupt-"));
     expect(corrupt).toBeDefined();

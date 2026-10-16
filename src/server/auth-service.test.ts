@@ -136,9 +136,21 @@ describe("AuthService", () => {
     expect(auth.status(undefined)).toEqual({ required: false, authenticated: true });
   });
 
-  it("reports an unsupported config instead of silently disabling authentication", async () => {
+  it("restores a corrupt config from its backup instead of failing startup", async () => {
+    const { readdir, writeFile } = await import("node:fs/promises");
+    const { dirname } = await import("node:path");
+    const first = await createService();
+    await first.setPassword("correct horse");
+    await writeFile(authPath, "\0\0\0", "utf8");
+    const restored = await createService();
+    expect(restored.enabled()).toBe(true);
+    expect((await readdir(dirname(authPath))).some((name) => name.includes(".corrupt-"))).toBe(true);
+  });
+
+  it("keeps serving with a fresh config when the file and backup are unusable", async () => {
     const { writeFile } = await import("node:fs/promises");
     await writeFile(authPath, JSON.stringify({ version: 99 }), "utf8");
-    await expect(createService()).rejects.toMatchObject({ code: "AUTH_CONFIG_INVALID" });
+    const service = await createService();
+    expect(service.enabled()).toBe(false);
   });
 });

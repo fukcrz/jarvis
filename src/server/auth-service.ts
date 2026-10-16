@@ -1,10 +1,10 @@
 import { createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AuthStatus } from "../shared/protocol.js";
 import { AppError } from "./errors.js";
-import { atomicWrite, isMissingFile } from "./fs.js";
+import { readJsonRecovering, writeWithBackup } from "./fs.js";
 
 /** 浏览器会话 Cookie 名。 */
 export const AUTH_COOKIE_NAME = "jarvis_auth";
@@ -84,22 +84,14 @@ export class AuthService {
 
   async initialize(): Promise<void> {
     await mkdir(dirname(this.authPath), { recursive: true });
-    let raw: string;
-    try {
-      raw = await readFile(this.authPath, "utf8");
-    } catch (error) {
-      if (!isMissingFile(error)) throw error;
-      this.stored = createEmptyAuth();
-      await this.persist();
+    // 读坏时先用 .bak 恢复；没有可用备份才回到"未设置密码"，坏文件改名留存，不再让服务起不来。
+    const loaded = await readJsonRecovering(this.authPath, (value) => parseStoredAuth(value, this.authPath));
+    if (loaded.value !== undefined) {
+      this.stored = loaded.value;
       return;
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw) as unknown;
-    } catch {
-      throw new AppError("AUTH_CONFIG_INVALID", `认证配置不是合法 JSON：${this.authPath}`, 500);
-    }
-    this.stored = parseStoredAuth(parsed, this.authPath);
+    this.stored = createEmptyAuth();
+    await this.persist();
   }
 
   /** 是否已启用认证（设置了密码）。 */
@@ -250,7 +242,7 @@ export class AuthService {
   }
 
   private async persist(): Promise<void> {
-    await atomicWrite(this.authPath, `${JSON.stringify(this.state(), undefined, 2)}\n`);
+    await writeWithBackup(this.authPath, `${JSON.stringify(this.state(), undefined, 2)}\n`);
   }
 }
 

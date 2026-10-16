@@ -6,7 +6,7 @@ import { basename, dirname, join, relative } from "node:path";
 import type { TunnelEntryConfig, TunnelFrpConfig, TunnelLogEntry, TunnelMethod, TunnelSnapshot, TunnelState } from "../shared/protocol.js";
 import { TUNNEL_METHODS } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
-import { atomicWrite } from "./fs.js";
+import { readJsonRecovering, writeWithBackup } from "./fs.js";
 
 const CONFIG_VERSION = 2;
 const MAX_LOG_LINES = 300;
@@ -226,7 +226,14 @@ export class TunnelService {
   }
 
   private async loadConfig(): Promise<void> {
-    const parsed = JSON.parse(await readFile(this.configPath, "utf8")) as Partial<{ version: number; tunnels?: unknown[]; enabled?: boolean; method?: unknown }>;
+    const loaded = await readJsonRecovering(this.configPath, (value) => {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Unsupported tunnel config");
+      const candidate = value as Partial<{ version: number; tunnels?: unknown[]; enabled?: boolean; method?: unknown }>;
+      if (!(candidate.version === 1 && isTunnelMethod(candidate.method)) && (candidate.version !== CONFIG_VERSION || !Array.isArray(candidate.tunnels))) throw new Error("Unsupported tunnel config");
+      return candidate;
+    });
+    const parsed = loaded.value;
+    if (parsed === undefined) return;
     if (parsed.version === 1 && isTunnelMethod(parsed.method)) {
       // 迁移：旧单例配置 → 单条目，自动启动统一改为手动。
       this.tunnels = [{
@@ -249,7 +256,7 @@ export class TunnelService {
 
   private async persist(): Promise<void> {
     await mkdir(dirname(this.configPath), { recursive: true });
-    await atomicWrite(this.configPath, JSON.stringify({ version: CONFIG_VERSION, tunnels: this.tunnels }, null, 2));
+    await writeWithBackup(this.configPath, JSON.stringify({ version: CONFIG_VERSION, tunnels: this.tunnels }, null, 2));
   }
 
   private async spawnTunnel(instance: TunnelInstance): Promise<void> {
