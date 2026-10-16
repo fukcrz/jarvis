@@ -7,13 +7,16 @@ import { DETAIL_LEVELS, type DetailLevel } from "../lib/detail-level";
 import { isDesktopShell } from "../lib/desktop-shell";
 import { isNotificationEnabled, notificationPermission, requestNotificationPermission, setNotificationEnabled } from "../notifications";
 import { SaveState, SettingsConfirm, useDebouncedSave, useSaveStatus, useSettingsToast } from "./settings-feedback";
-import { SectionAction, Segmented, SettingRow, SettingsCard, SettingsEmptyLine, SettingsPageHead, SettingsSection, SettingsSwitch, SettingsTag, StButton } from "./settings-ui";
+import { Kbd, SectionAction, Segmented, SettingRow, SettingsCard, SettingsEmptyLine, SettingsPageHead, SettingsSection, SettingsSwitch, SettingsTag, StButton } from "./settings-ui";
 import { WorkspaceDialog } from "./workspace-dialog";
+import { modKeyLabel } from "./settings-search";
+import { useIsMobile } from "../hooks/use-is-mobile";
 
 /* ------------------------------ 通用 ------------------------------ */
 
 export function GeneralPage({ assistantName, onAssistantNameChange, extra }: { assistantName: string; onAssistantNameChange: (name: string) => void; extra?: React.ReactNode }) {
   const saveStatus = useSaveStatus();
+  const isMobile = useIsMobile();
   const [name, setName] = useState(assistantName);
   const committed = useRef(assistantName);
   const debounced = useDebouncedSave(name, (value) => {
@@ -44,6 +47,12 @@ export function GeneralPage({ assistantName, onAssistantNameChange, extra }: { a
             onKeyDown={(event) => { if (event.key === "Enter") debounced.flush(); }} /></>} />
       </SettingsCard>
     </SettingsSection>
+    {isMobile ? null : <SettingsSection id="shortcuts" title="快捷键">
+      <SettingsCard>
+        <SettingRow id="shortcut-open-settings" title="打开设置" description="在任意页面按下即可打开设置" control={<Kbd>{modKeyLabel()} ,</Kbd>} />
+        <SettingRow id="shortcut-search-settings" title="搜索设置" description="在设置里按下，搜索并跳到对应项" control={<Kbd>{modKeyLabel()} K</Kbd>} />
+      </SettingsCard>
+    </SettingsSection>}
     {extra}
   </>;
 }

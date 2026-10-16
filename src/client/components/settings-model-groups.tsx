@@ -62,7 +62,7 @@ function idProblem(draft: Draft, entry: GroupEntry): string | undefined {
   return undefined;
 }
 
-export function ModelGroupsPage({ ps, refreshKey, onOpenPlugins, onSnapshot }: { ps: ProviderSettings; refreshKey: number; onOpenPlugins: () => void; onSnapshot?: (snapshot: ModelGroupsSnapshot) => void }) {
+export function ModelGroupsPage({ ps, refreshKey, onOpenPlugins, onSnapshot, focusGroupId, focusToken }: { ps: ProviderSettings; refreshKey: number; onOpenPlugins: () => void; onSnapshot?: (snapshot: ModelGroupsSnapshot) => void; focusGroupId?: string; focusToken?: string }) {
   const toast = useSettingsToast();
   const [snapshot, setSnapshot] = useState<ModelGroupsSnapshot>();
   const [saved, setSaved] = useState<Draft>();
@@ -77,6 +77,16 @@ export function ModelGroupsPage({ ps, refreshKey, onOpenPlugins, onSnapshot }: {
   const selectedIdRef = useRef<string | undefined>(undefined);
   selectedIdRef.current = draft?.entries.find((item) => item.key === selectedKey)?.id.trim();
   useDirtyRegistration("model-groups", dirty);
+
+  // 从搜索跳过来：选中对应的模型组。
+  // 每次跳转（focusToken 变化）只选中一次，之后用户自己点别的不再被拉回来。
+  const appliedFocusRef = useRef<string | undefined>(undefined);
+  const focusTargetKey = focusGroupId === undefined ? undefined : draft?.entries.find((item) => item.id === focusGroupId)?.key;
+  useEffect(() => {
+    if (focusTargetKey === undefined || appliedFocusRef.current === focusToken) return;
+    appliedFocusRef.current = focusToken;
+    setSelectedKey(focusTargetKey);
+  }, [focusTargetKey, focusToken]);
 
   const onSnapshotRef = useRef(onSnapshot);
   onSnapshotRef.current = onSnapshot;
