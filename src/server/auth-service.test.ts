@@ -125,7 +125,7 @@ describe("AuthService", () => {
 
     await expect(auth.setPassword("next-password-value")).rejects.toMatchObject({ code: "AUTH_INVALID_PASSWORD" });
     await expect(auth.setPassword("next-password-value", "wrong-password")).rejects.toMatchObject({ code: "AUTH_INVALID_PASSWORD" });
-    await expect(auth.setPassword("short", PASSWORD)).rejects.toMatchObject({ code: "AUTH_PASSWORD_TOO_SHORT" });
+    await expect(auth.setPassword("", PASSWORD)).rejects.toMatchObject({ code: "AUTH_PASSWORD_TOO_SHORT" });
 
     const rotated = await auth.setPassword("next-password-value", PASSWORD);
     expect(rotated.token).toBeDefined();

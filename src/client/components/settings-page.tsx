@@ -69,6 +69,7 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
   const [tunnelSummary, setTunnelSummary] = useState<string>();
   const [securitySummary, setSecuritySummary] = useState<string>();
 
+  const [skillLabels, setSkillLabels] = useState<Map<string, string>>(new Map());
   const reloadGeneration = useRef(0);
   const showMessage = useCallback((nextMessage: string, tone: SettingsMessageTone = "success") => { setMessageTone(tone); setMessage(nextMessage); }, []);
   useEffect(() => { setName(assistantName); }, [assistantName]);
@@ -143,6 +144,17 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
     return () => { disposed = true; };
   }, [refreshKeys.security]);
 
+  // 技能文件页标题用技能名，不露内部 id。
+  const skillFilesId = route.page === "skill-files" ? route.skillId : undefined;
+  useEffect(() => {
+    if (skillFilesId === undefined || skillLabels.has(skillFilesId)) return;
+    let disposed = false;
+    void api.skills().then((snapshot) => {
+      if (disposed) return;
+      setSkillLabels(new Map([...snapshot.bundled.map((skill) => [skill.id, skill.label] as const), ...snapshot.installed.map((skill) => [skill.id, skill.label || skill.name] as const)]));
+    }).catch(() => undefined);
+    return () => { disposed = true; };
+  }, [skillFilesId, skillLabels]);
   useEffect(() => {
     setWorkspaceRemoveTarget((current) => current !== undefined && !workspaces.some((workspace) => workspace.id === current.id) ? undefined : current);
   }, [workspaces]);
@@ -217,9 +229,9 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
     try {
       await api.logoutProvider(target.id);
       await reload();
-      showMessage(`已退出 ${target.name}`);
+      showMessage(target.credentialType === "oauth" ? `已退出 ${target.name} 的账号` : `已清除 ${target.name} 的密钥`);
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : "退出登录失败", "error");
+      showMessage(error instanceof Error ? error.message : "操作失败", "error");
     } finally {
       setBusy(undefined);
     }
@@ -312,7 +324,9 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
     const allKeys = new Set(providers.filter(isProviderUsable).flatMap((provider) => provider.models.map((model) => modelKey(provider.id, model.id))));
     const scoped = new Set([...next].filter((key) => allKeys.has(key)));
     if (scoped.size === 0 && allKeys.size > 0) {
-      showMessage("请至少启用一个模型", "error");
+      // Pi 的 enabledModels 为空表示「不限制」，全关会变成全开，所以这里是唯一保留的拦截。
+      showMessage("至少保留一个模型：全部关掉会被当成「不限制」，反而全部启用", "error");
+      await reload(true);
       return false;
     }
     setBusy("model-manager");
@@ -478,7 +492,7 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
   } else if (route.page === "model-groups") {
     page = <ModelGroupsPanel onBack={goBack} onMessage={showMessage} />;
   } else if (route.page === "skills" || route.page === "skill-files") {
-    const skillTitle = route.page === "skill-files" ? route.skillId : "技能";
+    const skillTitle = route.page === "skill-files" ? skillLabels.get(route.skillId) ?? route.skillId : "技能";
     page = <SettingsSubpage title={skillTitle} onBack={goBack}><SkillsPanel page={route.page} skillId={route.page === "skill-files" ? route.skillId : undefined} onOpenFiles={(id) => push({ page: "skill-files", skillId: id })} onMessage={showMessage} /></SettingsSubpage>;
   } else if (route.page === "data") {
     page = <SettingsSubpage title="数据与恢复" onBack={goBack}><DataPanel onMessage={showMessage} onSessionRestored={onSessionRestored} /></SettingsSubpage>;

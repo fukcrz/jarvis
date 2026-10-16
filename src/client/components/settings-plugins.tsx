@@ -83,8 +83,8 @@ export function PluginsPanel({ page, onOpenBrowse, onOpenModelGroups, onMessage 
 
   return <div className="settings-stack">
     <SettingsGroup>
-      <SettingsRow label="安装" onClick={() => { setSource(""); setInstallOpen(true); }} />
-      <SettingsRow label="浏览" chevron onClick={onOpenBrowse} />
+      <SettingsRow label="按地址安装插件" value="npm 包名或 GitHub 地址" onClick={() => { setSource(""); setInstallOpen(true); }} />
+      <SettingsRow label="浏览插件市场" chevron onClick={onOpenBrowse} />
     </SettingsGroup>
     <SettingsGroup title="自带">
       {snapshot === undefined ? <SettingsRow label="读取中…" /> : snapshot.bundled.map((plugin) => <div key={plugin.id} className="settings-row">
@@ -103,13 +103,16 @@ export function PluginsPanel({ page, onOpenBrowse, onOpenModelGroups, onMessage 
       </div>)}
     </SettingsGroup>
     <SettingsGroup title="推荐">
-      {snapshot?.recommended.map((plugin) => <SettingsRow key={plugin.name} label={plugin.name} value={plugin.installed ? snapshot.installed.find((item) => item.name === plugin.name)?.version : "未安装"} control={<SettingsSwitch checked={plugin.enabled} disabled={busy !== undefined} label={plugin.name} onChange={(enabled) => {
-        if (!enabled && plugin.installed) setConfirm({ kind: "remove", source: plugin.source, label: plugin.name });
-        else void run(plugin.name, () => api.setRecommendedPlugin(plugin.name, enabled));
-      }} />} />)}
+      {snapshot?.recommended.map((plugin) => {
+        const version = snapshot.installed.find((item) => item.name === plugin.name)?.version;
+        // 未安装时只给「安装」按钮；装好后才出现开关，避免「开关开着却写着未安装」。
+        return <SettingsRow key={plugin.name} label={plugin.name} value={plugin.installed ? version : undefined} control={plugin.installed
+          ? <SettingsSwitch checked label={plugin.name} disabled={busy !== undefined} onChange={() => setConfirm({ kind: "remove", source: plugin.source, label: plugin.name })} />
+          : <Button size="sm" variant="secondary" disabled={busy !== undefined} onClick={() => { void run(plugin.name, () => api.setRecommendedPlugin(plugin.name, true)); }}>{busy === plugin.name ? "安装中…" : "安装"}</Button>} />;
+      })}
     </SettingsGroup>
     <SettingsGroup title="已安装">
-      {snapshot !== undefined && snapshot.installed.length === 0 ? <SettingsEmpty icon={Puzzle} title="未安装" /> : null}
+      {snapshot !== undefined && snapshot.installed.length === 0 ? <p className="settings-model-empty">还没有手动安装的插件</p> : null}
       {snapshot?.installed.map((plugin) => <SettingsRow key={plugin.source} label={plugin.name} value={plugin.version} control={<span className="settings-row-actions"><Button size="sm" variant="secondary" disabled={busy !== undefined} onClick={() => { void run(`update:${plugin.source}`, () => api.updatePlugin(plugin.source)); }}>更新</Button><Button size="sm" variant="danger" disabled={busy !== undefined} onClick={() => setConfirm({ kind: "remove", source: plugin.source, label: plugin.name })}>卸载</Button></span>} />)}
     </SettingsGroup>
     <Dialog open={installOpen} onOpenChange={setInstallOpen}>

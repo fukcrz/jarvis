@@ -113,12 +113,10 @@ function rowValue(skill: SkillEntry): string | undefined {
 
 function SkillFiles({ skillId, onMessage }: { skillId: string; onMessage: (message: string, tone?: "success" | "error") => void }) {
   const [listing, setListing] = useState<SkillFileListing | undefined>();
-  const [relative, setRelative] = useState("");
   const [preview, setPreview] = useState<SkillFileContent | undefined>();
   const [previewKind, setPreviewKind] = useState<string | undefined>();
 
   const open = (path: string) => {
-    setRelative(path);
     setPreview(undefined);
     setPreviewKind(undefined);
     void api.skillFiles(skillId, path).then(setListing).catch((error: unknown) => onMessage(error instanceof Error ? error.message : "操作失败", "error"));

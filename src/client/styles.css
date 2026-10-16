@@ -220,10 +220,9 @@ button.settings-row:disabled { opacity: .5; cursor: default; }
 .settings-form-field input[aria-invalid="true"] { border-bottom-color: var(--danger); color: var(--danger); }
 .settings-form-field textarea { width: 100%; min-height: 92px; resize: vertical; border: 1px solid var(--line-strong); border-radius: 5px; background: rgb(12 14 16 / .55); padding: 8px; color: var(--ink); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .settings-form-field textarea:focus, .settings-form-field textarea:focus-visible { outline: none; border-color: var(--accent); }
-.settings-shell:has(.model-groups-page) { width: min(960px, 100%); }
 .model-groups-globals, .model-groups-fields, .model-groups-levels { display: grid; gap: 10px 16px; }
 .model-groups-globals { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 8px 12px 10px; }
-.model-groups-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
+.model-groups-layout { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 16px; align-items: start; }
 .model-groups-layout > .settings-block { position: sticky; top: 56px; }
 .model-groups-layout .settings-row.accent { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .model-groups-fields { grid-template-columns: 1fr 1fr; }
@@ -1099,7 +1098,7 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .login-submit { width: 100%; min-height: var(--ui-control); }
 .security-status { display: grid; justify-items: start; gap: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 10px; }
 .security-status small { color: var(--muted); font-size: 11px; line-height: 1.5; }
-.security-form { display: grid; max-width: 420px; gap: 12px; }
+.security-form { display: grid; gap: 12px; }
 .security-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .text-file-preview-dialog { width: min(900px, calc(100vw - 32px)); max-height: min(820px, calc(100vh - 32px)); gap: 8px; overflow: hidden; padding: 10px; }
 .text-file-preview-dialog .dialog-header { align-items: center; gap: 12px; padding: 0 2px; }
@@ -1211,3 +1210,16 @@ html.text-selecting .run-status-bar { pointer-events: none !important; }
 .settings-row-link { color: inherit; text-decoration: none; }
 .settings-row-link::after { content: ""; position: absolute; inset: 0; }
 .settings-row:has(.settings-row-link) { position: relative; cursor: pointer; }
+
+/* P0：密钥打码、只读信息列表、提示文字 */
+.api-key-input { position: relative; display: block; }
+.api-key-input input { padding-right: 64px !important; }
+.api-key-toggle { position: absolute; top: 50%; right: 0; display: inline-flex; align-items: center; gap: 4px; transform: translateY(-50%); border: 0; border-radius: 5px; background: transparent; padding: 3px 6px; color: var(--accent-strong); font-size: 11px; cursor: pointer; }
+.api-key-toggle:hover { background: var(--accent-soft); }
+.settings-field-hint { color: var(--subtle); font-size: 11px; font-weight: 400; }
+.settings-field-hint.warn, .settings-warn-text { color: var(--warm); }
+.settings-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; font-size: 12px; }
+.settings-kv dt { color: var(--muted); }
+.settings-kv dd { margin: 0; overflow-wrap: anywhere; color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.tunnel-auto-start-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; }
+.tunnel-auto-start-row small { display: block; color: var(--subtle); font-size: 11px; }

@@ -31,10 +31,6 @@ export function SecurityPanel({ onMessage, refreshKey = 0 }: { onMessage: (messa
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (busy) return;
-    if (newPassword.length < 8) {
-      onMessage("密码至少 8 位", "error");
-      return;
-    }
     if (newPassword !== confirmPassword) {
       onMessage("两次输入的密码不一致", "error");
       return;
@@ -89,7 +85,7 @@ export function SecurityPanel({ onMessage, refreshKey = 0 }: { onMessage: (messa
       </div>
       <form className="security-form" onSubmit={(event) => { void save(event); }}>
         {enabled ? <label className="settings-field"><span>当前密码</span><input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label> : null}
-        <label className="settings-field"><span>新密码</span><input type="password" autoComplete="new-password" minLength={8} placeholder="至少 8 位" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+        <label className="settings-field"><span>新密码</span><input type="password" autoComplete="new-password" placeholder="建议至少 8 位" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />{newPassword !== "" && newPassword.length < 8 ? <small className="settings-field-hint warn">只有 {String(newPassword.length)} 位，建议至少 8 位（仍然可以使用）</small> : null}</label>
         <label className="settings-field"><span>确认新密码</span><input type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
         <div className="security-actions">
           <Button type="submit" disabled={busy || newPassword === ""}><ShieldCheck size={15} />{enabled ? "修改密码" : "启用登录认证"}</Button>
