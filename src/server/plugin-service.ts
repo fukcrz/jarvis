@@ -5,7 +5,7 @@ import type { BundledPluginLifecycle, InstalledPluginStatus, PluginCatalogItem, 
 import { AppError, asMessage } from "./errors.js";
 import { atomicWrite, isMissingFile, readJsonRecovering, writeWithBackup } from "./fs.js";
 import { BUNDLED_PLUGINS, readPluginText, reconcileBundledPlugins } from "./plugin-reconcile.js";
-import { catalogUrl, normalizeInstallSource, packageNameFromSource } from "./plugin-source.js";
+import { catalogUrl, normalizeInstallSource, packageNameFromSource, PACKAGE_NAME } from "./plugin-source.js";
 import { isRecord } from "../shared/protocol.js";
 import { jarvisHome } from "./jarvis-home.js";
 
@@ -55,11 +55,11 @@ export class PluginService {
 
   async snapshot(): Promise<PluginSnapshot> {
     const installed = await this.listInstalled();
-    const installedNames = new Set(installed.flatMap((item) => packageNameFromSource(item.source) === undefined ? [] : [packageNameFromSource(item.source) as string]));
+    const installedNames = new Set(installed.map((item) => item.name));
     const bundled = await this.reconcileBundled();
     const recommended: RecommendedPluginStatus[] = RECOMMENDED_PACKAGES.map((item) => ({
       name: item.name,
-      source: installed.find((entry) => packageNameFromSource(entry.source) === item.name)?.source ?? item.source,
+      source: installed.find((entry) => entry.name === item.name)?.source ?? item.source,
       enabled: !this.prefs.disabledRecommended.includes(item.name),
       installed: installedNames.has(item.name),
     }));
@@ -96,7 +96,7 @@ export class PluginService {
       this.prefs.disabledRecommended = this.prefs.disabledRecommended.filter((item) => item !== name);
       await this.persistPrefs();
       const installed = await this.listInstalled();
-      if (!installed.some((item) => packageNameFromSource(item.source) === name)) await this.packages.installAndPersist(recommended.source);
+      if (!installed.some((item) => item.name === name)) await this.packages.installAndPersist(recommended.source);
     } else {
       this.prefs.disabledRecommended = [...new Set([...this.prefs.disabledRecommended, name])];
       await this.persistPrefs();
@@ -114,10 +114,7 @@ export class PluginService {
     if (!response.ok) throw new AppError("PLUGIN_SEARCH_FAILED", "插件搜索失败", 502);
     const body: unknown = await response.json();
     const objects = isRecord(body) && Array.isArray(body["objects"]) ? body["objects"] : [];
-    const installed = new Set((await this.listInstalled()).flatMap((item) => {
-      const name = packageNameFromSource(item.source);
-      return name === undefined ? [] : [name];
-    }));
+    const installed = new Set((await this.listInstalled()).map((item) => item.name));
     return objects.flatMap((entry) => {
       if (!isRecord(entry) || !isRecord(entry["package"])) return [];
       const item = entry["package"];
@@ -163,15 +160,21 @@ export class PluginService {
     return this.snapshot();
   }
 
-  /** 推荐包缺了就装，已有则更新。失败只记日志，不挡启动。 */
+  /** 推荐包缺了就装，已有的 npm 包则更新。本地路径的 package.json 名对上时视为已安装，不另装 npm 副本，也不覆盖该路径。失败只记日志，不挡启动。 */
   async ensureRecommended(): Promise<void> {
     const installed = await this.listInstalled();
     for (const item of RECOMMENDED_PACKAGES) {
       if (this.prefs.disabledRecommended.includes(item.name)) continue;
-      const existing = installed.find((entry) => packageNameFromSource(entry.source) === item.name);
+      const matches = installed.filter((entry) => entry.name === item.name);
+      const local = matches.find((entry) => packageNameFromSource(entry.source) === undefined);
+      const npm = matches.find((entry) => packageNameFromSource(entry.source) === item.name);
       try {
-        if (existing === undefined) await this.packages.installAndPersist(item.source);
-        else await this.packages.update(existing.source);
+        if (local !== undefined) {
+          if (npm !== undefined) await this.packages.removeAndPersist(npm.source);
+          continue;
+        }
+        if (npm === undefined) await this.packages.installAndPersist(item.source);
+        else await this.packages.update(npm.source);
       } catch (error) {
         this.log(`Recommended plugin sync failed for ${item.name}: ${asMessage(error)}`);
       }
@@ -257,7 +260,8 @@ export class PluginService {
     const configured = this.packages.listConfiguredPackages().filter((item) => item.scope === "user");
     const installed: InstalledPluginStatus[] = [];
     for (const item of configured) {
-      const name = packageNameFromSource(item.source) ?? item.source;
+      const manifestName = await readInstalledName(item.installedPath);
+      const name = packageNameFromSource(item.source) ?? manifestName ?? item.source;
       const version = await readInstalledVersion(item.installedPath);
       installed.push({ source: item.source, name, ...(version === undefined ? {} : { version }) });
     }
@@ -316,15 +320,27 @@ function hashMap(record: Record<string, unknown>): Record<string, string[]> {
   return hashes;
 }
 
-async function readInstalledVersion(path: string | undefined): Promise<string | undefined> {
+async function readInstalledManifest(path: string | undefined): Promise<Record<string, unknown> | undefined> {
   if (path === undefined) return undefined;
   try {
     const parsed: unknown = JSON.parse(await readFile(join(path, "package.json"), "utf8"));
-    return isRecord(parsed) && typeof parsed["version"] === "string" ? parsed["version"] : undefined;
+    return isRecord(parsed) ? parsed : undefined;
   } catch (error) {
     if (isMissingFile(error)) return undefined;
     throw error;
   }
+}
+
+async function readInstalledName(path: string | undefined): Promise<string | undefined> {
+  const manifest = await readInstalledManifest(path);
+  const name = manifest?.["name"];
+  return typeof name === "string" && PACKAGE_NAME.test(name) ? name : undefined;
+}
+
+async function readInstalledVersion(path: string | undefined): Promise<string | undefined> {
+  const manifest = await readInstalledManifest(path);
+  const version = manifest?.["version"];
+  return typeof version === "string" ? version : undefined;
 }
 
 function stringList(value: unknown): string[] {
