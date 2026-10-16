@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { homedir, platform } from "node:os";
+import { platform } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import type { TunnelEntryConfig, TunnelFrpConfig, TunnelLogEntry, TunnelMethod, TunnelSnapshot, TunnelState } from "../shared/protocol.js";
 import { TUNNEL_METHODS } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { readJsonRecovering, writeWithBackup } from "./fs.js";
+import { jarvisHome } from "./jarvis-home.js";
 
 const CONFIG_VERSION = 2;
 const MAX_LOG_LINES = 300;
@@ -72,7 +73,7 @@ export class TunnelService {
     private readonly logInfo: (message: string) => void = () => undefined,
     private readonly onChanged: () => void = () => undefined,
   ) {
-    const home = process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis");
+    const home = jarvisHome();
     this.configPath = join(home, "tunnel.json");
     this.binDir = join(home, "bin");
   }

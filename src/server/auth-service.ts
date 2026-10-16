@@ -1,10 +1,10 @@
 import { createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AuthStatus } from "../shared/protocol.js";
 import { AppError } from "./errors.js";
 import { readJsonRecovering, writeWithBackup } from "./fs.js";
+import { jarvisHome } from "./jarvis-home.js";
 
 /** 浏览器会话 Cookie 名。 */
 export const AUTH_COOKIE_NAME = "jarvis_auth";
@@ -79,7 +79,7 @@ export class AuthService {
   /** scrypt 串行队列：并发登录不占满 libuv 线程池（一次哈希约 100ms）。 */
   private scryptQueue: Promise<unknown> = Promise.resolve();
 
-  constructor(authPath = join(process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis"), "auth.json")) {
+  constructor(authPath = join(jarvisHome(), "auth.json")) {
     this.authPath = authPath;
   }
 

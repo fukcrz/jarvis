@@ -1,12 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { arch, homedir, platform, release, totalmem, freemem } from "node:os";
+import { arch, platform, release, totalmem, freemem } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { listRecoveryNotices } from "./fs.js";
 import { defaultLogDirectory, LOG_RETENTION_DAYS } from "./log-files.js";
 import { createZip, type ZipInput } from "./zip.js";
+import { jarvisHome as defaultJarvisHome } from "./jarvis-home.js";
 
 const MAX_LOG_BYTES = 40 * 1024 * 1024;
 const SECRET_KEY = /(key|token|secret|password|passwd|authorization|cookie|credential)/i;
@@ -20,7 +21,7 @@ export interface DiagnosticsContext {
 
 /** 导出诊断包：最近 7 天日志、版本信息、去掉密码和 token 的配置。 */
 export async function buildDiagnosticsZip(context: DiagnosticsContext = {}): Promise<{ fileName: string; data: Buffer }> {
-  const jarvisHome = context.jarvisHome ?? process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis");
+  const jarvisHome = context.jarvisHome ?? defaultJarvisHome();
   const logDirectory = context.logDirectory ?? defaultLogDirectory();
   const agentDir = context.agentDir ?? getAgentDir();
   const now = new Date();

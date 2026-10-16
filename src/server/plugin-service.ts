@@ -1,5 +1,4 @@
 import { readFile, rm } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { DefaultPackageManager, getAgentDir, SettingsManager, type PackageManager } from "@earendil-works/pi-coding-agent";
 import type { BundledPluginLifecycle, InstalledPluginStatus, PluginCatalogItem, PluginSnapshot, RecommendedPluginStatus } from "../shared/plugins.js";
@@ -8,6 +7,7 @@ import { atomicWrite, isMissingFile, readJsonRecovering, writeWithBackup } from 
 import { BUNDLED_PLUGINS, readPluginText, reconcileBundledPlugins } from "./plugin-reconcile.js";
 import { catalogUrl, normalizeInstallSource, packageNameFromSource } from "./plugin-source.js";
 import { isRecord } from "../shared/protocol.js";
+import { jarvisHome } from "./jarvis-home.js";
 
 export const RECOMMENDED_PACKAGES: readonly { name: string; source: string }[] = [
   { name: "pi-web-access", source: "npm:pi-web-access" },
@@ -37,7 +37,7 @@ export class PluginService {
 
   constructor(
     private readonly agentDir = getAgentDir(),
-    prefsPath = join(process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis"), "plugin-prefs.json"),
+    prefsPath = join(jarvisHome(), "plugin-prefs.json"),
     private readonly packages: PackageManager = createPackageManager(agentDir),
     private readonly log: (message: string) => void = (message) => console.warn(message),
     private readonly lifecycle: BundledPluginLifecycle = {},

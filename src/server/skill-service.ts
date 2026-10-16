@@ -10,6 +10,7 @@ import { isMissingFile, readJsonRecovering, writeWithBackup } from "./fs.js";
 import { BUNDLED_SKILLS, isDirectChild, isSkillName, reconcileBundledSkills, type BundledSkillStatus } from "./skill-reconcile.js";
 import { readWorkspaceFile } from "./workspace-fs.js";
 import type { TrashService } from "./trash.js";
+import { jarvisHome } from "./jarvis-home.js";
 
 interface SkillPrefs { version: 1; disabledBundled: string[] }
 
@@ -43,7 +44,7 @@ export class SkillService {
 
   constructor(
     private readonly agentDir = getAgentDir(),
-    private readonly prefsPath = join(process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis"), "skill-prefs.json"),
+    private readonly prefsPath = join(jarvisHome(), "skill-prefs.json"),
     private readonly workspaces: () => SkillWorkspaceRef[] = () => [],
     private readonly log: (message: string) => void = (message) => console.warn(message),
   ) {}
