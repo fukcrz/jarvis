@@ -733,8 +733,13 @@ const MessageItem = memo(function MessageItem({ item, streaming, live, highlight
         {item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
           <MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} interactiveFiles={item.role === "assistant" && !streaming} />
         </div>}
-        {showMeta && item.role === "assistant" && (live !== undefined || item.generation !== undefined) ? <AssistantGenerationMeta live={live} generation={item.generation} /> : null}
-        <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : () => onEdit(item)} onFork={onFork} />
+        {item.role === "assistant" && showMeta && !streaming && item.text !== "" ? <div className="assistant-message-footer">
+          <MessageActions item={item} streaming={false} copyable />
+          {item.generation === undefined ? null : <AssistantGenerationMeta generation={item.generation} />}
+        </div> : <>
+          {showMeta && item.role === "assistant" && (live !== undefined || item.generation !== undefined) ? <AssistantGenerationMeta live={live} generation={item.generation} /> : null}
+          <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : () => onEdit(item)} onFork={onFork} />
+        </>}
       </div>
     </article>
   );
@@ -773,9 +778,9 @@ function formatDuration(durationMs: number): string {
   return `${String(Math.floor(seconds / 60))}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function MessageActions({ item, streaming, onEdit, onFork }: { item: MessageTimelineItem; streaming: boolean; onEdit?: () => void; onFork?: (item: MessageTimelineItem) => void }) {
+function MessageActions({ item, streaming, onEdit, onFork, copyable = false }: { item: MessageTimelineItem; streaming: boolean; onEdit?: () => void; onFork?: (item: MessageTimelineItem) => void; copyable?: boolean }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  if (streaming || item.role !== "user") return null;
+  if (streaming || (item.role !== "user" && !copyable)) return null;
   const canCopy = item.text !== "";
   if (!canCopy && onEdit === undefined && onFork === undefined) return null;
   const handleCopy = () => {
@@ -787,7 +792,8 @@ function MessageActions({ item, streaming, onEdit, onFork }: { item: MessageTime
       window.setTimeout(() => setCopyState("idle"), 1600);
     });
   };
-  const copyLabel = copyState === "copied" ? "已复制消息" : copyState === "failed" ? "复制失败" : "复制消息";
+  const noun = item.role === "user" ? "消息" : "整段回答";
+  const copyLabel = copyState === "copied" ? `已复制${noun}` : copyState === "failed" ? "复制失败" : `复制${noun}`;
   return <div className="message-actions">
     {!canCopy ? null : <Tooltip label={copyLabel}>
       <button type="button" className={`message-action-button${copyState === "copied" ? " copied" : copyState === "failed" ? " failed" : ""}`} aria-label={copyLabel} onClick={handleCopy}>{copyState === "copied" ? <Check size={14} /> : copyState === "failed" ? <CircleAlert size={14} /> : <Copy size={14} />}</button>

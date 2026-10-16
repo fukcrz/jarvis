@@ -43,6 +43,10 @@ Thinking is one muted line: `思考中 · 0:03` with the latest line as a previe
 
 The process is the only parent fold. Tool groups are labels rather than a second toggle; each tool row keeps its own detail state. Opening a row opens the process, and folding the process hides details without resetting them. Manual expansion of a thought, tool result, or process is preserved across later events and completion. Pending extension input pins its process open. Failed tools and error diagnostics stay accessible. A turn that ends in failure shows one card instead of separate attempt and run-failure cards: which step failed (the last failed tool, if any), a plain-language reason for common errors (401/403/429/5xx, network, context length), how many automatic retries happened, 重试 (re-sends that turn's user message through edit-and-resend) and 继续 (sends 「继续」) while idle, and the raw errors folded under 原始错误. The status-level run failure card is suppressed when the last turn already ends with that card; on its own it also gets the plain reason and the same buttons. User `!cmd` entries remain outside the process fold.
 
+## Long answers
+
+A final answer has a copy button (复制整段回答) at the start of its footer line, next to the stats. Markdown tables sit in a horizontal scroller instead of squeezing into narrow columns (on phones the table may grow up to 620px wide and scroll). h1–h4 headings get an id and a hover `#` button that scrolls that section to the top; it is a button rather than an `href` anchor because the app uses hash routing.
+
 ## Detail level
 
 A 简洁/普通/详细 switch sits in the composer controls (next to the thinking level) and is remembered in this browser (`localStorage` key `jarvis.timeline.detailLevel`). 普通 is the behaviour described above. 简洁 keeps every process collapsed to its header, even while running (failed or running tool previews still show under the header); the user can still open one. 详细 opens every process by default after it settles, opens thinking blocks and tool groups; clicking still closes them individually. Manual open/close choices are kept per session as before.
