@@ -11,7 +11,7 @@ import { LocalMediaVersionContext } from "../lib/local-media";
 import { encodeMultiSelectValue, multiSelectAnswerLabel, parseMultiSelectDialog, parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, settledMultiRows, settledSelectRows, splitDialogHeading, type ExtensionSelectOption, type SettledChoiceRow } from "../lib/extension-dialog";
 import { MarkdownMessage } from "./markdown-message";
 import { ImagePreview } from "./image-lightbox";
-import { ToolActivity } from "./tool-activity";
+import { summarizeToolActivity, ToolActivity } from "./tool-activity";
 import { DiffStat, DiffView } from "./diff-view";
 import { LocalTextFileLink } from "./text-file-preview";
 import { mergeFileChanges } from "../../shared/file-change";
@@ -1160,6 +1160,8 @@ export interface TurnProcessSummary {
   /** 工具调用总数。 */
   operations: number;
   durationMs?: number;
+  /** 失败的工具和未恢复的错误数，没有失败时省略。 */
+  failures?: number;
 }
 
 function processStartAt(turn: TimelineTurn): string | undefined {
@@ -1174,13 +1176,22 @@ function processEndAt(turn: TimelineTurn): string | undefined {
 
 export function summarizeTurnProcess(turn: TimelineTurn): TurnProcessSummary {
   let operations = 0;
+  let failures = turn.finalError?.some((item) => item.state === "failed") === true ? 1 : 0;
   for (const entry of turn.process) {
-    if (entry.kind === "activity") operations += entry.items.length;
+    if (entry.kind === "activity") {
+      operations += entry.items.length;
+      failures += entry.items.filter((item) => item.state === "failed").length;
+    } else if (entry.kind === "error" && entry.items.some((item) => item.state === "failed")) failures += 1;
   }
   const start = Date.parse(processStartAt(turn) ?? "");
   const end = Date.parse(processEndAt(turn) ?? "");
   const durationMs = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : undefined;
-  return { operations, ...(durationMs === undefined ? {} : { durationMs }) };
+  return { operations, ...(durationMs === undefined ? {} : { durationMs }), ...(failures === 0 ? {} : { failures }) };
+}
+
+/** 过程标题里的分类计数，例如「读取 2 · 命令 1」。 */
+export function turnProcessCategories(entries: TimelineRenderItem[]): string {
+  return summarizeToolActivity(entries.flatMap((entry) => entry.kind === "activity" ? entry.items : []));
 }
 
 /** 过程里只要还有内容就值得折进「过程」，单条也算。 */
@@ -1238,13 +1249,15 @@ function formatProcessElapsed(durationMs: number): string | undefined {
 }
 
 /** 计时器单独成一个小组件：每秒钟只重渲染这一个节点。 */
-function turnProcessLabel(summary: TurnProcessSummary): string {
+function turnProcessLabel(summary: TurnProcessSummary, categories = "", changedFiles = 0): string {
   const seconds = summary.durationMs === undefined ? 0 : Math.round(summary.durationMs / 1_000);
   const minutes = Math.floor(seconds / 60);
   return [
     "过程",
-    ...(summary.operations === 0 ? [] : [`${String(summary.operations)} 项操作`]),
     ...(summary.durationMs === undefined ? [] : [`用时 ${minutes === 0 ? `${String(seconds)} 秒` : `${String(minutes)} 分 ${String(seconds % 60)} 秒`}`]),
+    ...(categories !== "" ? [categories] : summary.operations === 0 ? [] : [`${String(summary.operations)} 项操作`]),
+    ...(changedFiles === 0 ? [] : [`改了 ${String(changedFiles)} 个文件`]),
+    ...(summary.failures === undefined ? [] : [`${String(summary.failures)} 项失败`]),
   ].join("，");
 }
 
@@ -1407,12 +1420,15 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   };
   const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
   const changes = useMemo(() => turnFileChanges(split.process), [split.process]);
+  const categories = useMemo(() => turnProcessCategories(split.process), [split.process]);
   const processBlock = displayTurn.process.length === 0 ? null : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
-    {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => onToggleProcess(processId, open)}>
+    {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary, categories, changes.length)} onClick={() => onToggleProcess(processId, open)}>
       <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
       <span className="turn-process-label">过程</span>
-      {summary.operations === 0 ? null : <span className="turn-process-count">{summary.operations} 项操作</span>}
       {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
+      {categories === "" ? null : <span className="turn-process-count">{categories}</span>}
+      {changes.length === 0 ? null : <span className="turn-process-changes">改了 {changes.length} 个文件</span>}
+      {summary.failures === undefined ? null : <span className="turn-process-failed"><span className="turn-process-failed-dot" aria-hidden />{summary.failures} 项失败</span>}
     </button>}
     {showAll ? <div className={!collapsible ? "turn-process-stack" : "turn-process-body"}>
       {displayTurn.process.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
