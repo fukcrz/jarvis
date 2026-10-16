@@ -137,7 +137,7 @@ function sessionJsonlDirectories(workspace: Workspace): string[] {
   return [...directories];
 }
 
-export async function removeSessionJsonl(workspace: Workspace, sessionId: string): Promise<void> {
+export async function removeSessionJsonl(workspace: Workspace, sessionId: string, remove: (path: string) => Promise<unknown> = (path) => rm(path, { force: true })): Promise<void> {
   for (const directory of sessionJsonlDirectories(workspace)) {
     let names: string[];
     try {
@@ -148,7 +148,7 @@ export async function removeSessionJsonl(workspace: Workspace, sessionId: string
     }
     for (const name of names) {
       if (!name.endsWith(`_${sessionId}.jsonl`)) continue;
-      await rm(join(directory, name), { force: true });
+      await remove(join(directory, name));
     }
   }
 }

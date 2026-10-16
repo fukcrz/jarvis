@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowDown, ArrowUp, Bell, Bot, CloudDownload, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, Library, Puzzle, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, Bot, CloudDownload, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, Library, LifeBuoy, Puzzle, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
 import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderOverride, ProviderStatus, Workspace } from "../../shared/protocol";
 import { ApiError, api } from "../api";
 import { isSettingsPath, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsPath, type SettingsRoute } from "../lib/settings-routes";
@@ -15,6 +15,7 @@ import { ModelGroupsPanel } from "./settings-model-groups";
 import { SkillsPanel } from "./settings-skills";
 import { TunnelPanel } from "./tunnel-panel";
 import { SecurityPanel } from "./settings-security";
+import { DataPanel } from "./settings-data";
 import {
   AuthOperation,
   initializeDraft,
@@ -37,13 +38,14 @@ interface SettingsPageProps {
   onWorkspacesChange: (workspaces: Workspace[]) => void;
   onAddWorkspace: (path: string, label?: string) => Promise<void>;
   onRemoveWorkspace: (workspace: Workspace) => Promise<void>;
+  onSessionRestored?: (workspaceId: string) => void;
   onBack: () => void;
 }
 
 type SettingsMessageTone = "success" | "error";
 
 /** 设置入口：分组首页 + 内部子页栈，PC/移动端使用同一信息架构。 */
-export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onAssistantNameChange, onBack }: SettingsPageProps) {
+export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onSessionRestored, onAssistantNameChange, onBack }: SettingsPageProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const route = parseSettingsPath(location.pathname) ?? { page: "home" };
@@ -441,6 +443,7 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
       </SettingsGroup>
       <SettingsGroup title="服务">
         <SettingsRow icon={ShieldCheck} label="安全" value={securitySummary} chevron onClick={() => push({ page: "security" })} />
+        <SettingsRow icon={LifeBuoy} label="数据与恢复" chevron onClick={() => push({ page: "data" })} />
         <SettingsRow icon={RotateCw} label={restarting ? "正在重启…" : "重启服务"} danger disabled={restarting} onClick={() => setRestartConfirmOpen(true)} />
       </SettingsGroup>
     </div></SettingsShell></>;
@@ -477,6 +480,8 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
   } else if (route.page === "skills" || route.page === "skill-files") {
     const skillTitle = route.page === "skill-files" ? route.skillId : "技能";
     page = <SettingsSubpage title={skillTitle} onBack={goBack}><SkillsPanel page={route.page} skillId={route.page === "skill-files" ? route.skillId : undefined} onOpenFiles={(id) => push({ page: "skill-files", skillId: id })} onMessage={showMessage} /></SettingsSubpage>;
+  } else if (route.page === "data") {
+    page = <SettingsSubpage title="数据与恢复" onBack={goBack}><DataPanel onMessage={showMessage} onSessionRestored={onSessionRestored} /></SettingsSubpage>;
   } else {
     page = <SettingsSubpage title="安全" onBack={goBack}><SecurityPanel refreshKey={refreshKeys.security} onMessage={showMessage} /></SettingsSubpage>;
   }

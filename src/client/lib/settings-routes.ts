@@ -10,6 +10,7 @@ export type SettingsRoute =
   | { page: "workspaces" }
   | { page: "tunnel" }
   | { page: "security" }
+  | { page: "data" }
   | { page: "plugins" }
   | { page: "plugins-install" }
   | { page: "model-groups" }
@@ -35,6 +36,7 @@ export function settingsPath(route: SettingsRoute): string {
     case "workspaces": return `${SETTINGS_ROOT}/workspaces`;
     case "tunnel": return `${SETTINGS_ROOT}/tunnel`;
     case "security": return `${SETTINGS_ROOT}/security`;
+    case "data": return `${SETTINGS_ROOT}/data`;
     case "plugins": return `${SETTINGS_ROOT}/plugins`;
     case "plugins-install": return `${SETTINGS_ROOT}/plugins/install`;
     case "model-groups": return `${SETTINGS_ROOT}/plugins/model-groups`;
@@ -55,6 +57,7 @@ export function parseSettingsPath(pathname: string): SettingsRoute | undefined {
       case "workspaces": return { page: "workspaces" };
       case "tunnel": return { page: "tunnel" };
       case "security": return { page: "security" };
+      case "data": return { page: "data" };
       case "plugins": return { page: "plugins" };
       case "skills": return { page: "skills" };
       default: return undefined;
@@ -80,6 +83,7 @@ export function parentSettingsRoute(route: SettingsRoute, options?: { hasProvide
     case "workspaces":
     case "tunnel":
     case "security":
+    case "data":
     case "plugins":
     case "skills":
       return { page: "home" };

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { open, readFile, rename, rm } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import { isRecord } from "../shared/protocol.js";
+import type { RecoveryNotice } from "../shared/system.js";
 
 /** Windows 上杀毒、索引、同步盘短暂占用文件时 rename/copy 会报这些错误码，重试即可。 */
 const RETRYABLE_CODES = new Set(["EPERM", "EBUSY", "EACCES", "EAGAIN", "ENOTEMPTY"]);
@@ -80,15 +81,7 @@ export function isMissingFile(error: unknown): boolean {
   return errorCode(error) === "ENOENT";
 }
 
-export interface RecoveryNotice {
-  file: string;
-  /** backup：已用 .bak 恢复；default：没有可用备份，已改用默认值。 */
-  outcome: "backup" | "default";
-  /** 坏文件被改名留存的位置。 */
-  corruptPath?: string;
-  reason: string;
-  at: string;
-}
+export type { RecoveryNotice };
 
 const recoveryNotices: RecoveryNotice[] = [];
 

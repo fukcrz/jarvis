@@ -16,6 +16,8 @@ import { AuthService } from "./auth-service.js";
 import { BackgroundTaskService } from "./background-task-service.js";
 import { AppError, asMessage, errorStatusCode } from "./errors.js";
 import { EventHub } from "./event-hub.js";
+import { TrashService } from "./trash.js";
+import { registerSystemRoutes } from "./system-routes.js";
 import { takeUndeliveredRecoveryMessage } from "./fs.js";
 import { applyAuthCookie, authorizeSocket, clearAuthCookie, readAuthCookie } from "./http-auth.js";
 import { SessionService } from "./session-service.js";
@@ -141,7 +143,8 @@ export async function buildApp(options: {
   const workspaces = new WorkspaceStore(undefined, () => events.publishGlobal({ version: 1, type: "workspaces.changed" }));
   await workspaces.initialize(getAgentDir(), "pi agent");
   const backgroundTasks = new BackgroundTaskService(workspaces);
-  const sessions = new SessionService(workspaces, events, backgroundTasks);
+  const trash = new TrashService();
+  const sessions = new SessionService(workspaces, events, backgroundTasks, trash);
   const settings = new SettingsService(() => sessions.globalModelRuntime(), () => sessions.refreshModelConfiguration(), (type) => events.publishGlobal({ version: 1, type }));
   await settings.initialize();
   const auth = new AuthService();
@@ -240,6 +243,9 @@ export async function buildApp(options: {
   });
 
   registerSelfRestart(app, events);
+  registerSystemRoutes(app, { trash });
+  const stopTrashPurge = trash.startAutoPurge((message) => app.log.info(message));
+  app.addHook("onClose", async () => { stopTrashPurge(); });
 
   const tunnelMethodInput = z.enum(TUNNEL_METHODS);
   const tunnelSishInput = z.object({ server: z.string().min(1).max(500), subdomain: z.string().max(200).optional(), sshPort: z.number().int().min(1).max(65535).optional() }).strict();
@@ -534,7 +540,7 @@ export async function buildApp(options: {
     const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
     const query = workspaceEntryQuery.parse(request.query);
     const workspace = workspaces.get(params.workspaceId);
-    await removeWorkspaceEntry(workspace.cwd, query.path);
+    await removeWorkspaceEntry(workspace.cwd, query.path, trash);
     return { removed: true };
   });
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/commands", async (request) => ({ commands: await sessions.commands(sessionRef(request.params)) }));
