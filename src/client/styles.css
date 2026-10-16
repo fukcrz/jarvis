@@ -1447,7 +1447,8 @@ html.text-selecting .run-status-bar { pointer-events: none !important; }
   .st-nav-item + .st-nav-item { border-top: 1px solid var(--line); }
   .st-nav-item.on { background: transparent; }
   .st-nav-item.on > svg:first-child { color: inherit; }
-  .st-nav-chev { display: inline-flex; margin-left: 4px; }
+  .st-nav-chev { display: inline-flex; margin-left: auto; }
+  .st-meta + .st-nav-chev, .st-dot + .st-nav-chev { margin-left: 4px; }
   .st-nav-item .st-meta { max-width: 46%; }
   .st-main { overflow: visible; }
   .st-page { padding: 14px 14px 150px; }
