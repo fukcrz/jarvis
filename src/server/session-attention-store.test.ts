@@ -181,6 +181,22 @@ describe("SessionAttentionStore interrupted runs", () => {
     await expect(restarted.get(ref)).resolves.not.toHaveProperty("interruptedAt");
   });
 
+  it("clears the interrupted marker when the card is dismissed, and it stays cleared", async () => {
+    const store = new SessionAttentionStore(directory);
+    await store.setStarred(ref, true);
+    await store.setAttention(ref, "running", "2026-01-02T00:00:00.000Z");
+
+    const restarted = new SessionAttentionStore(directory);
+    await expect(restarted.get(ref)).resolves.toMatchObject({ interruptedAt: "2026-01-02T00:00:00.000Z" });
+    await restarted.clearInterrupted(ref);
+    await expect(restarted.get(ref)).resolves.not.toHaveProperty("interruptedAt");
+
+    const reopened = new SessionAttentionStore(directory);
+    await expect(reopened.get(ref)).resolves.not.toHaveProperty("interruptedAt");
+    await expect(reopened.get(ref)).resolves.toMatchObject({ starred: true });
+    await reopened.clearInterrupted(ref);
+  });
+
   it("keeps the running marker and queue when shutdown aborts the run", async () => {
     const store = new SessionAttentionStore(directory);
     await store.setAttention(ref, "running", "2026-01-02T00:00:00.000Z");

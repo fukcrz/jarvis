@@ -1263,6 +1263,17 @@ describe("Jarvis HTTP and WebSocket API", () => {
     socket.close();
   });
 
+  it("dismisses the interrupted marker leniently", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "dismiss-interrupted-workspace");
+    await mkdir(workspacePath);
+    const created = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath, label: "Dismiss" } });
+    const workspace = created.json() as { workspace: { id: string } };
+    const dismissed = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.workspace.id}/sessions/${randomUUID()}/interrupted/dismiss`, payload: {} });
+    expect(dismissed.statusCode).toBe(200);
+    expect(dismissed.json()).toEqual({ dismissed: true });
+  });
+
   it("searches the full session text, not only the title or first message", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "fulltext-search-workspace");

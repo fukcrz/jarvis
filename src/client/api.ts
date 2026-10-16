@@ -324,6 +324,7 @@ export const api = {
     method: "POST",
     body: JSON.stringify({ command, excludeFromContext, clientRequestId }),
   }),
+  dismissInterrupted: async (ref: SessionRef): Promise<void> => { await request(`${sessionPath(ref)}/interrupted/dismiss`, { method: "POST", body: "{}" }); },
   abort: async (ref: SessionRef, runId?: string): Promise<{ aborted: true; dequeued?: { steering: QueuedMessage[]; followUp: QueuedMessage[] } }> => request(`${sessionPath(ref)}/abort`, { method: "POST", body: JSON.stringify(runId === undefined ? {} : { runId }) }),
   respondExtensionUi: async (ref: SessionRef, id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> => {
     await request(`${sessionPath(ref)}/extension-ui`, { method: "POST", body: JSON.stringify({ id, ...response }) });

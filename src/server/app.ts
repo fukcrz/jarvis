@@ -621,6 +621,10 @@ export async function buildApp(options: {
     return sessions.bash(ref, body.command, body.excludeFromContext === true, body.clientRequestId);
   });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/restored-queue", async (request) => ({ texts: await sessions.takeRestoredQueue(sessionRef(request.params)) }));
+  app.post("/api/workspaces/:workspaceId/sessions/:sessionId/interrupted/dismiss", async (request) => {
+    await sessions.dismissInterrupted(sessionRef(request.params));
+    return { dismissed: true };
+  });
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/abort", async (request) => {
     const ref = sessionRef(request.params);
     const body = abortInput.parse(request.body);

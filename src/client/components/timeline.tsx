@@ -43,6 +43,8 @@ interface TimelineProps {
   onRetryTurn?: (user: MessageTimelineItem) => void;
   /** 失败后发一句「继续」。 */
   onContinue?: () => void;
+  /** 「被中断」卡片点「知道了」：服务端清掉标记，下次打开不再显示。 */
+  onDismissInterrupted?: () => void;
   /** 过程显示详略：简洁只留标题，详细默认全部展开。 */
   detailLevel?: DetailLevel;
   onEditUserMessage?: (item: MessageTimelineItem) => void;
@@ -135,7 +137,7 @@ export function formatUserMessageIndex(index: number): string {
   return String(index).padStart(2, "0");
 }
 
-export function Timeline({ sessionKey, localMediaVersion, items, streamingMessageId, liveGeneration, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onRetryTurn, onContinue, detailLevel = "normal", onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage }: TimelineProps) {
+export function Timeline({ sessionKey, localMediaVersion, items, streamingMessageId, liveGeneration, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onRetryTurn, onContinue, onDismissInterrupted, detailLevel = "normal", onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage }: TimelineProps) {
   const [foldState, setFoldState] = useState<TimelineFoldState>(() => emptyTimelineFoldState(sessionKey));
   const foldStateForRender = foldState.sessionKey === sessionKey ? foldState : emptyTimelineFoldState(sessionKey);
   const turns = useMemo(() => groupTimelineTurns(items), [items]);
@@ -200,6 +202,10 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   const userMessageKey = userMessages.map((item) => item.id).join(":");
   const feedback = getRunFeedback(status, items, streamingMessageId);
   const runActivity = getRunStatusActivity(status, items, streamingMessageId);
+  // 点过「知道了」的被中断卡片先在本地藏起来；服务端清标记失败也不再打扰。
+  const [dismissedFailureKey, setDismissedFailureKey] = useState<string>();
+  const failureKey = status.lastError === undefined ? undefined : `${sessionKey}:${status.lastError.code}:${status.lastError.occurredAt}`;
+  const failureDismissed = failureKey !== undefined && failureKey === dismissedFailureKey;
   const hasMatchingTimelineFailure = status.lastError !== undefined && (turns.at(-1)?.finalError !== undefined || items.some((item) => item.kind === "error" && item.state === "failed" && item.code === status.lastError!.code && item.message === status.lastError!.message));
   const statusIndicatorKey = `${status.runState}:${status.compacting?.reason ?? ""}:${status.compacting?.retrying?.retryAt ?? ""}:${status.retrying?.retryAt ?? ""}:${status.lastError?.occurredAt ?? ""}:${error ?? ""}:${notice ?? ""}`;
 
@@ -466,7 +472,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
             {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
             {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
             {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
-            {status.lastError === undefined || hasMatchingTimelineFailure ? null : <RunFailureCard failure={status.lastError} onRetryCompaction={onRetryCompaction} onRetry={status.runState !== "idle" || onRetryTurn === undefined || turns.at(-1)?.user === undefined ? undefined : () => onRetryTurn(turns.at(-1)!.user!)} onContinue={status.runState === "idle" ? onContinue : undefined} />}
+            {status.lastError === undefined || hasMatchingTimelineFailure || failureDismissed ? null : <RunFailureCard failure={status.lastError} onRetryCompaction={onRetryCompaction} onDismiss={status.lastError.code !== "RUN_INTERRUPTED" ? undefined : () => { setDismissedFailureKey(failureKey); onDismissInterrupted?.(); }} onRetry={status.runState !== "idle" || onRetryTurn === undefined || turns.at(-1)?.user === undefined ? undefined : () => onRetryTurn(turns.at(-1)!.user!)} onContinue={status.runState === "idle" ? onContinue : undefined} />}
             {feedback === undefined || hasActiveActivity(items, status) ? null : <WorkingIndicator feedback={feedback} />}
           </div>
         </div>
@@ -591,7 +597,7 @@ function RetryCountdown({ retrying }: { retrying: NonNullable<SessionStatus["ret
   return <time aria-live="off" aria-hidden="true">{secondsLeft}s</time>;
 }
 
-function RunFailureCard({ failure, onRetryCompaction, onRetry, onContinue }: { failure: NonNullable<SessionStatus["lastError"]>; onRetryCompaction: TimelineProps["onRetryCompaction"]; onRetry?: () => void; onContinue?: () => void }) {
+function RunFailureCard({ failure, onRetryCompaction, onRetry, onContinue, onDismiss }: { failure: NonNullable<SessionStatus["lastError"]>; onRetryCompaction: TimelineProps["onRetryCompaction"]; onRetry?: () => void; onContinue?: () => void; onDismiss?: () => void }) {
   const [open, setOpen] = useState(false);
   const compactionFailed = failure.code === "PI_COMPACTION_FAILED";
   const occurredAt = formatFailureTime(failure.occurredAt);
@@ -615,15 +621,16 @@ function RunFailureCard({ failure, onRetryCompaction, onRetry, onContinue }: { f
     {!compactionFailed || onRetryCompaction === undefined ? null : <footer className="run-failure-actions">
       <Button variant="secondary" size="sm" onClick={onRetryCompaction}><RefreshCw size={13} />重试压缩</Button>
     </footer>}
-    {compactionFailed ? null : <FailureActions className="run-failure-actions" onRetry={onRetry} onContinue={onContinue} />}
+    {compactionFailed ? null : <FailureActions className="run-failure-actions" onRetry={onRetry} onContinue={onContinue} onDismiss={onDismiss} />}
   </article>;
 }
 
-function FailureActions({ className, onRetry, onContinue }: { className: string; onRetry?: () => void; onContinue?: () => void }) {
-  if (onRetry === undefined && onContinue === undefined) return null;
+function FailureActions({ className, onRetry, onContinue, onDismiss }: { className: string; onRetry?: () => void; onContinue?: () => void; onDismiss?: () => void }) {
+  if (onRetry === undefined && onContinue === undefined && onDismiss === undefined) return null;
   return <footer className={className}>
     {onRetry === undefined ? null : <Button variant="secondary" size="sm" onClick={onRetry} title="用同样的内容重新发送这一轮"><RefreshCw size={13} />重试</Button>}
     {onContinue === undefined ? null : <Button variant="secondary" size="sm" onClick={onContinue} title="发送「继续」，让模型接着做"><ChevronRight size={13} />继续</Button>}
+    {onDismiss === undefined ? null : <Button variant="ghost" size="sm" onClick={onDismiss} title="不再显示这张卡片">知道了</Button>}
   </footer>;
 }
 

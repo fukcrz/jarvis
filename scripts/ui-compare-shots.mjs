@@ -460,6 +460,60 @@ async function scenarioManyFiles(baseUrl, workspace, viewport, label) {
   }
 }
 
+/** 设置页：关于与更新（以及改版前的 数据与恢复，旧地址会跳到新页面）。 */
+async function scenarioSettings(baseUrl) {
+  const view = await newPage(WIDE, "desktop");
+  try {
+    for (const [name, path] of [["about", "/settings/about"], ["data", "/settings/data"]]) {
+      await view.page.goto(`${baseUrl}/#${path}`, { waitUntil: "domcontentloaded" });
+      await view.page.locator(".st-app").waitFor({ timeout: 20_000 });
+      await sleep(800);
+      await shot(view.page, `desktop-settings-${name}`);
+    }
+  } finally {
+    await view.context.close();
+  }
+}
+
+/** 服务重启时还在跑的一轮：重新打开会话，底部出现“被中断”卡片；点「知道了」后刷新也不再出现。 */
+async function scenarioInterrupted(baseUrl, workspace) {
+  const { session, fixture } = await newSession(baseUrl, workspace);
+  fixture.start();
+  fixture.user("把登录页的错误提示改成中文，并补一个测试。");
+  fixture.end(fixture.assistant([fixture.text("先看一下现有的错误提示和测试结构。", "commentary")], { output: 60 }));
+  fixture.settle();
+  const sessions = app.jarvis.sessions;
+  const ref = { workspaceId: workspace.id, sessionId: session.id };
+  // 模拟进程在这一轮中途退出：落一个 runningSince，丢掉内存里的会话和状态缓存，重新读盘。
+  await sessions.attention.setAttention(ref, "running", new Date(Date.now() - 60_000).toISOString());
+  sessions.attention.data = undefined;
+  await sessions.disposeActive(fixture.active, "quit");
+  const view = await newPage(WIDE, "desktop");
+  try {
+    await openChat(view.page, baseUrl, workspace.id, session.id);
+    await view.page.locator(".run-failure").waitFor({ timeout: 10_000 });
+    await sleep(400);
+    await shot(view.page, "desktop-interrupted");
+    const dismiss = view.page.locator(".run-failure").getByRole("button", { name: "知道了" });
+    if (await dismiss.count() > 0) {
+      await dismiss.click();
+      await view.page.locator(".run-failure").waitFor({ state: "detached", timeout: 5_000 });
+      await sleep(300);
+      await shot(view.page, "desktop-interrupted-dismissed");
+      // 再模拟一次重启：丢掉内存里的会话和状态缓存，标记应已从磁盘上清掉。
+      const reloaded = sessions.active.get(`${ref.workspaceId}:${ref.sessionId}`);
+      if (reloaded !== undefined) await sessions.disposeActive(reloaded, "quit");
+      sessions.attention.data = undefined;
+      await openChat(view.page, baseUrl, workspace.id, session.id);
+      await sleep(1_000);
+      assert.equal(await view.page.locator(".run-failure").count(), 0, "interrupted card came back after reopening");
+      console.log("interrupted: dismissed card stays hidden after reopening");
+    }
+  } finally {
+    await view.context.close();
+  }
+}
+
 const extraDirs = [];
 try {
   process.env.JARVIS_HOME = home;
@@ -480,10 +534,11 @@ try {
   const { workspace } = await api(baseUrl, "/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: workspacePath, label: "登录页" }) });
   browser = await chromium.launch({ headless: true });
   const only = process.env["JARVIS_COMPARE_ONLY"]?.split(",");
-  const scenarios = { coding: scenarioCoding, long: scenarioLongAnswer, failure: scenarioFailure, running: scenarioRunning, sidebar: scenarioSidebar, manyfiles: scenarioManyFiles };
+  const scenarios = { coding: scenarioCoding, long: scenarioLongAnswer, failure: scenarioFailure, running: scenarioRunning, sidebar: scenarioSidebar, manyfiles: scenarioManyFiles, settings: scenarioSettings, interrupted: scenarioInterrupted };
   for (const [label, viewport] of [["desktop", { width: 1280, height: 860 }], ["mobile", { width: 390, height: 844 }]]) {
     for (const [name, run] of Object.entries(scenarios)) {
-      if (only !== undefined ? !only.includes(name) : ["sidebar", "manyfiles"].includes(name)) continue;
+      if (only !== undefined ? !only.includes(name) : ["sidebar", "manyfiles", "settings", "interrupted"].includes(name)) continue;
+      if (label === "mobile" && ["settings", "interrupted"].includes(name)) continue;
       await run(baseUrl, workspace, viewport, label);
     }
   }
