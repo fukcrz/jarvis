@@ -8,6 +8,7 @@ const MAX_TOOL_OUTPUT_CHARS = 12_000;
 export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
   const items: TimelineItem[] = [];
   const generations = generationEntries(entries);
+  const thinkingDurations = thinkingDurationEntries(entries);
   const toolIndex = new Map<string, number>();
   // A new user message starts a new operation. Until then, later successful
   // assistant output means the retained error attempts were recovered by Pi.
@@ -40,7 +41,10 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
 
     if (role === "assistant") {
       const assistantId = messageFromPi(message, "assistant", "", createdAt, entryId).id;
-      for (const item of assistantTimelineItemsFromPi(message, createdAt, entryId, undefined, generations.get(assistantId))) {
+      const durations = thinkingDurations.get(assistantId);
+      for (const projected of assistantTimelineItemsFromPi(message, createdAt, entryId, undefined, generations.get(assistantId))) {
+        const durationMs = projected.kind === "thinking" && projected.contentIndex !== undefined ? durations?.[String(projected.contentIndex)] : undefined;
+        const item = durationMs === undefined ? projected : { ...projected, durationMs };
         if (item.kind === "tool") toolIndex.set(item.id, items.length);
         items.push(item);
       }
@@ -330,6 +334,18 @@ function generationEntries(entries: readonly unknown[]): Map<string, AssistantGe
     if (!isRecord(data) || typeof data["assistantMessageId"] !== "string") continue;
     const generation = recordGeneration(data["generation"]);
     if (generation !== undefined) result.set(data["assistantMessageId"], generation);
+  }
+  return result;
+}
+
+function thinkingDurationEntries(entries: readonly unknown[]): Map<string, Record<string, number>> {
+  const result = new Map<string, Record<string, number>>();
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry["type"] !== "custom" || entry["customType"] !== "jarvis.generation") continue;
+    const data = entry["data"];
+    if (!isRecord(data) || typeof data["assistantMessageId"] !== "string" || !isRecord(data["thinking"])) continue;
+    const durations = Object.fromEntries(Object.entries(data["thinking"]).filter((pair): pair is [string, number] => typeof pair[1] === "number" && Number.isFinite(pair[1]) && pair[1] >= 0));
+    if (Object.keys(durations).length > 0) result.set(data["assistantMessageId"], durations);
   }
   return result;
 }

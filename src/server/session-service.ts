@@ -1406,6 +1406,8 @@ export class SessionService {
     active.streamingMessageIds.clear();
     active.assistantGenerationStartedAt = undefined;
     active.liveGeneration = undefined;
+    active.thinkingStartedAt = undefined;
+    active.thinkingDurations = undefined;
     active.toolStartedAt.clear();
     active.partial = undefined;
     active.partialThinking = undefined;

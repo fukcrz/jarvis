@@ -201,7 +201,8 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const createdAt = typeof payload?.["createdAt"] === "string" ? payload["createdAt"] : event.emittedAt;
     const existing = next.items.find((item): item is ThinkingTimelineItem => item.kind === "thinking" && item.id === id);
     const text = typeof payload?.["text"] === "string" ? payload["text"] : (existing?.text ?? "");
-    const item: ThinkingTimelineItem = { ...existing, kind: "thinking", id, createdAt: existing?.createdAt ?? createdAt, state: "completed", text, ...recordBlockMetadata(payload) };
+    const durationMs = typeof payload?.["durationMs"] === "number" && Number.isFinite(payload["durationMs"]) ? payload["durationMs"] : undefined;
+    const item: ThinkingTimelineItem = { ...existing, kind: "thinking", id, createdAt: existing?.createdAt ?? createdAt, state: "completed", text, ...recordBlockMetadata(payload), ...(durationMs === undefined ? {} : { durationMs }) };
     const liveGeneration = recordLiveGeneration(payload?.["liveGeneration"]);
     return { ...next, items: sortTimelineByCreatedAt(mergeTimeline(next.items, [item])), ...(liveGeneration === undefined ? {} : { liveGeneration }) };
   }

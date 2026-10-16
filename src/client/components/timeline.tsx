@@ -634,7 +634,7 @@ function errorSummary(message: string): string {
   return `${firstLine.slice(0, 177)}…`;
 }
 
-const MessageItem = memo(function MessageItem({ item, streaming, live, highlighted, onEdit, onFork, baseDir }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; live?: LiveGenerationStats; highlighted: boolean; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string }) {
+const MessageItem = memo(function MessageItem({ item, streaming, live, highlighted, onEdit, onFork, baseDir, showMeta = false }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; live?: LiveGenerationStats; highlighted: boolean; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string; showMeta?: boolean }) {
   const images = item.images ?? [];
   return (
     <article data-user-message-id={item.role === "user" ? item.id : undefined} className={`message-row ${item.role} ${streaming ? "streaming" : ""} ${highlighted ? "navigator-highlight" : ""}`}>
@@ -648,7 +648,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, live, highlight
         {item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
           <MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} interactiveFiles={item.role === "assistant" && !streaming} />
         </div>}
-        {item.role === "assistant" && (live !== undefined || item.generation !== undefined) ? <AssistantGenerationMeta live={live} generation={item.generation} /> : null}
+        {showMeta && item.role === "assistant" && (live !== undefined || item.generation !== undefined) ? <AssistantGenerationMeta live={live} generation={item.generation} /> : null}
         <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : () => onEdit(item)} onFork={onFork} />
       </div>
     </article>
@@ -664,15 +664,18 @@ function LiveGenerationMeta({ live, className = "message-generation-meta streami
   }, [live.startedAt]);
   const started = Date.parse(live.startedAt);
   const durationMs = Number.isFinite(started) ? Math.max(0, now - started) : 0;
-  const speed = durationMs > 0 && (live.estimatedOutputTokens ?? 0) > 0 ? (live.estimatedOutputTokens ?? 0) / (durationMs / 1_000) : undefined;
-  return <span className={className} aria-live="polite">{live.estimatedOutputTokens === undefined ? "生成中" : `≈${formatTokenCount(live.estimatedOutputTokens)} tokens`}{speed === undefined ? " · 计算中" : ` · ≈${formatTokenRate(speed)}`}{` · ${formatDuration(durationMs)}`}</span>;
+  const tokens = live.estimatedOutputTokens ?? 0;
+  if (tokens <= 0) return null;
+  const speed = durationMs > 0 ? tokens / (durationMs / 1_000) : undefined;
+  return <span className={className} aria-live="polite">{`≈${formatTokenCount(tokens)} tokens`}{speed === undefined ? "" : ` · ≈${formatTokenRate(speed)}`}{durationMs < 1_000 ? "" : ` · ${formatDuration(durationMs)}`}</span>;
 }
 
 function AssistantGenerationMeta({ live, generation }: { live?: LiveGenerationStats; generation?: AssistantGenerationStats }) {
   if (live !== undefined) return <LiveGenerationMeta live={live} />;
-  if (generation === undefined) return null;
-  const speed = generation.durationMs === undefined || generation.durationMs <= 0 ? undefined : generation.usage.output / (generation.durationMs / 1_000);
-  return <div className="message-generation-meta">{formatTokenCount(generation.usage.output)} tokens{speed === undefined ? "" : ` · ${formatTokenRate(speed)}`}{generation.durationMs === undefined ? "" : ` · ${formatDuration(generation.durationMs)}`}</div>;
+  if (generation === undefined || !(generation.usage.output > 0)) return null;
+  const durationMs = generation.durationMs !== undefined && generation.durationMs >= 1_000 ? generation.durationMs : undefined;
+  const speed = durationMs === undefined ? undefined : generation.usage.output / (durationMs / 1_000);
+  return <div className="message-generation-meta">{formatTokenCount(generation.usage.output)} tokens{speed === undefined ? "" : ` · ${formatTokenRate(speed)}`}{durationMs === undefined ? "" : ` · ${formatDuration(durationMs)}`}</div>;
 }
 
 function formatTokenRate(value: number): string {
@@ -1276,6 +1279,8 @@ interface TurnRenderContext {
   onEditUserMessage?: TimelineProps["onEditUserMessage"];
   onForkMessage?: TimelineProps["onForkMessage"];
   customAnswers?: ReadonlyMap<string, string>;
+  /** 只有回合的最终回答显示 token/速度/用时。 */
+  showGenerationMeta?: boolean;
 }
 
 export interface PresentedTurnProcess {
@@ -1333,7 +1338,7 @@ function liveGenerationForBlock(item: MessageTimelineItem | ThinkingTimelineItem
 }
 
 function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, showAll = true, showActivePreview = true): ReactNode {
-  if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} live={liveGenerationForBlock(entry.item, context.liveGeneration, "text")} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} />;
+  if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} live={liveGenerationForBlock(entry.item, context.liveGeneration, "text")} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={entry.item.role === "user" ? context.onForkMessage : undefined} baseDir={context.workspaceCwd} showMeta={context.showGenerationMeta === true} />;
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} customText={context.customAnswers?.get(entry.item.id)} />;
@@ -1440,7 +1445,7 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
     {processBlock}
     {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, true), onToggleCall: (_toolId, callId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, callId, true) }, true, false)}</div>)}
-    {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, context)}
+    {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: true })}
     {live || changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />}
     {turn.finalError === undefined ? null : renderTimelineEntry({ kind: "error", items: turn.finalError }, context)}
   </>;
@@ -1452,19 +1457,28 @@ function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string |
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} live={turn.key === liveTurnKey} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
 }
 
-function ThinkingItem({ item, live, baseDir, open, showDetails, onToggle }: { item: ThinkingTimelineItem; live?: LiveGenerationStats; baseDir?: string; open: boolean; showDetails: boolean; onToggle: () => void }) {
-  const preview = processTextPreview(item.text).replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/^#{1,6}\s+/, "");
+/** 思考耗时：不足 1 秒按 1 秒算，超过 1 分钟显示「1分5秒」。 */
+export function formatThinkingDuration(durationMs: number | undefined): string | undefined {
+  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) return undefined;
+  const seconds = Math.max(1, Math.round(durationMs / 1_000));
+  return seconds < 60 ? `${String(seconds)}s` : `${String(Math.floor(seconds / 60))}分${String(seconds % 60)}秒`;
+}
+
+/** 思考是一行弱化的小字：进行中「思考中 · 0:03」带最新一行预览，结束后「思考 · 3s」，点开看全文。 */
+function ThinkingItem({ item, baseDir, open, showDetails, onToggle }: { item: ThinkingTimelineItem; live?: LiveGenerationStats; baseDir?: string; open: boolean; showDetails: boolean; onToggle: () => void }) {
+  const running = item.state === "running";
+  const preview = running ? processTextPreview(item.text).replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/^#{1,6}\s+/, "") : "";
   const detailsOpen = open && showDetails;
+  const duration = running ? undefined : formatThinkingDuration(item.durationMs);
   return (
     <article className={`thinking-item ${item.state}`}>
       <button className="thinking-summary" type="button" onClick={onToggle} aria-expanded={detailsOpen}>
-        <span className="thinking-state-icon">{item.state === "running" ? <LoaderCircle size={14} className="spin" /> : <Brain size={14} />}</span>
-        <span className="thinking-title">{item.state === "running" ? "思考中" : "思考"}</span>
+        <span className="thinking-state-icon">{running ? <LoaderCircle size={12} className="spin" /> : <Brain size={12} />}</span>
+        <span className="thinking-title">{running ? "思考中" : "思考"}{duration === undefined ? "" : ` · ${duration}`}</span>
+        {running ? <ElapsedClock startedAt={item.createdAt} /> : null}
         {!detailsOpen && preview !== "" ? <span className="thinking-preview">{preview}</span> : null}
-        {live === undefined ? item.state === "running" ? <ElapsedClock startedAt={item.createdAt} /> : null : <LiveGenerationMeta live={live} className="thinking-generation-meta" />}
       </button>
-      {item.generation === undefined ? null : <AssistantGenerationMeta generation={item.generation} />}
-      {open ? <div className="thinking-details" hidden={!showDetails}><div className="message-content"><MarkdownMessage text={item.text} streaming={item.state === "running"} baseDir={baseDir} /></div></div> : null}
+      {open ? <div className="thinking-details" hidden={!showDetails}><div className="message-content"><MarkdownMessage text={item.text} streaming={running} baseDir={baseDir} /></div></div> : null}
     </article>
   );
 }

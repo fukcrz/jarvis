@@ -561,15 +561,16 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .turn-process-current { display: grid; min-width: 0; gap: 4px; padding-top: 3px; }
 .process-commentary-preview { display: block; width: 100%; min-width: 0; overflow: hidden; border: 0; background: transparent; padding: 4px 0; color: var(--muted); text-align: left; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .process-commentary-preview:focus-visible { outline: 1px solid var(--line-strong); outline-offset: 2px; }
-.turn-process-body .message-body.assistant { color: var(--muted); }
-.turn-process-body .message-content { font-size: 12px; }
+.turn-process-body .message-body.assistant, .turn-process-body .message-body.assistant .message-content { color: var(--muted); }
+.turn-process-body .message-content { font-size: 12px; line-height: 1.6; }
 .thinking-item { min-width: 0; max-width: 100%; overflow: hidden; }
 .thinking-item.running, .thinking-item.completed { border: 0; background: transparent; }
 .thinking-summary { display: flex; align-items: center; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; gap: 7px; border: 0; background: transparent; padding: 4px 0; text-align: left; }
 .thinking-summary:focus-visible { color: var(--ink); }
 .thinking-state-icon { display: grid; flex: 0 0 auto; color: inherit; }
 .thinking-item.running .thinking-state-icon { color: var(--accent); }
-.thinking-title { flex: 0 0 auto; font-size: 11px; font-weight: 600; }
+.thinking-title { flex: 0 0 auto; font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.thinking-summary { gap: 6px; padding: 2px 0; }
 .thinking-preview { display: block; flex: 1 1 0; width: 0; min-width: 0; overflow: hidden; color: var(--subtle); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .thinking-generation-meta { flex: 0 0 auto; margin-left: auto; color: var(--accent-strong); font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-variant-numeric: tabular-nums; line-height: 1.35; white-space: nowrap; }
 .run-elapsed { flex: 0 0 auto; color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
