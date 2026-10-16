@@ -8,6 +8,25 @@ export async function setDesktopNotificationEnabled(enabled: boolean): Promise<v
   await invoke("set_notifications_enabled", { enabled });
 }
 
+export type DesktopUpdateChannel = "stable" | "beta";
+
+export function isDesktopUpdateChannel(value: unknown): value is DesktopUpdateChannel {
+  return value === "stable" || value === "beta";
+}
+
+export async function getDesktopUpdateChannel(): Promise<DesktopUpdateChannel | undefined> {
+  if (!isDesktopShell()) return undefined;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const channel = await invoke<unknown>("get_update_channel");
+  return isDesktopUpdateChannel(channel) ? channel : "stable";
+}
+
+export async function setDesktopUpdateChannel(channel: DesktopUpdateChannel): Promise<void> {
+  if (!isDesktopShell()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("set_update_channel", { channel });
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   if (isDesktopShell()) {
     const { invoke } = await import("@tauri-apps/api/core");

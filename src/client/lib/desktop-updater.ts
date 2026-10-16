@@ -28,9 +28,12 @@ type DownloadEvent =
   | { event: "Progress"; data: { chunkLength: number } }
   | { event: "Finished" };
 
-/** 与 tauri-plugin-updater 2.12 的 check / download / install 命令对应。 */
+/**
+ * 检查走桌面端的 `check_channel_update`（按设置里的更新通道选清单地址），
+ * 返回结构与 tauri-plugin-updater 2.12 的 check 相同；下载、安装仍用插件命令。
+ */
 export async function checkDesktopUpdate(): Promise<AvailableUpdate | null> {
-  const metadata = await invoke<UpdateMetadata | null>("plugin:updater|check");
+  const metadata = await invoke<UpdateMetadata | null>("check_channel_update");
   if (metadata === null || metadata === undefined) return null;
   if (typeof metadata.rid !== "number" || typeof metadata.version !== "string") throw new Error("更新信息不完整");
   return new DesktopUpdate(metadata);

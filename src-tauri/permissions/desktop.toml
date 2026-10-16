@@ -17,3 +17,8 @@ commands.allow = ["take_update_check"]
 identifier = "allow-check-desktop-update"
 description = "服务未启动时由桌面程序检查并安装更新"
 commands.allow = ["check_desktop_update"]
+
+[[permission]]
+identifier = "allow-update-channel"
+description = "读取和切换更新通道，并按所选通道检查更新"
+commands.allow = ["get_update_channel", "set_update_channel", "check_channel_update"]

@@ -1,12 +1,19 @@
 name: Desktop Release
 
+# 正式版标签 v1.2.3 与测试版标签 v1.2.3-beta.1 都会触发（GitHub 的 * 也匹配 - 和 .）。
 on:
   push:
     tags:
-      - "v*.*.*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
 
 permissions:
   contents: write
+
+concurrency:
+  # beta.json 是读-比较-覆盖，串行执行避免两个发版互相覆盖。
+  group: desktop-release
+  cancel-in-progress: false
 
 jobs:
   windows:
@@ -27,13 +34,29 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run desktop:build
-      - name: Write updater manifest
+      - name: Write updater manifests
+        id: manifest
         run: node scripts/write-desktop-latest-json.mjs
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
+          # 测试版是 prerelease，不会成为 releases/latest，正式版通道的 latest.json 不受影响。
+          prerelease: ${{ steps.manifest.outputs.prerelease }}
+          make_latest: ${{ steps.manifest.outputs.prerelease == 'true' && 'false' || 'true' }}
           files: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/nsis/*.sig
-            src-tauri/target/release/bundle/nsis/latest.json
+            ${{ steps.manifest.outputs.write_latest == 'true' && 'src-tauri/target/release/bundle/nsis/latest.json' || '' }}
           fail_on_unmatched_files: true
+      - name: Publish beta channel manifest
+        if: steps.manifest.outputs.write_beta == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 固定的 updater-beta Release 只存 beta.json，标为 prerelease 且不设为 latest。
+          if ! gh release view updater-beta >/dev/null 2>&1; then
+            gh release create updater-beta --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "测试版更新通道" --notes "测试版更新清单（beta.json），每次发版自动覆盖，请勿手动删除。"
+          fi
+          gh release upload updater-beta src-tauri/target/release/bundle/nsis/beta.json --clobber

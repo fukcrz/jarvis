@@ -24,6 +24,7 @@ struct AppState {
   sidecar: sidecar::SharedSidecar,
   port: Mutex<Option<u16>>,
   notifications_enabled: AtomicBool,
+  update_channel: Mutex<update::UpdateChannel>,
   last_session: Mutex<Option<(String, String)>>,
   quitting: AtomicBool,
   update_check_requested: AtomicBool,
@@ -43,7 +44,9 @@ struct OpenSessionPayload {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  let notifications_enabled = load_notifications_enabled();
+  let settings = load_desktop_settings();
+  let notifications_enabled = settings.get("notificationsEnabled").and_then(|value| value.as_bool()).unwrap_or(true);
+  let update_channel = update::UpdateChannel::from_settings(&settings);
   tauri::Builder::default()
     .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
       show_main(app);
@@ -56,6 +59,7 @@ pub fn run() {
       sidecar: Arc::default(),
       port: Mutex::new(None),
       notifications_enabled: AtomicBool::new(notifications_enabled),
+      update_channel: Mutex::new(update_channel),
       last_session: Mutex::new(None),
       quitting: AtomicBool::new(false),
       update_check_requested: AtomicBool::new(false),
@@ -63,7 +67,7 @@ pub fn run() {
       startup_failed: AtomicBool::new(false),
       updating: AtomicBool::new(false),
     })
-    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, take_update_check, check_desktop_update])
+    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, take_update_check, check_desktop_update, update::get_update_channel, update::set_update_channel, update::check_channel_update])
     .setup(|app| {
       app.resources_table().add(sidecar::SidecarCleanup(Arc::clone(&app.state::<AppState>().sidecar)));
       let handle = app.handle().clone();
@@ -102,7 +106,7 @@ pub fn run() {
 #[tauri::command]
 fn set_notifications_enabled(state: State<AppState>, enabled: bool) {
   state.notifications_enabled.store(enabled, Ordering::Relaxed);
-  save_notifications_enabled(enabled);
+  save_desktop_setting("notificationsEnabled", serde_json::Value::Bool(enabled));
 }
 
 #[tauri::command]
@@ -512,20 +516,57 @@ fn settings_path() -> PathBuf {
   dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".jarvis").join("desktop.json")
 }
 
-fn load_notifications_enabled() -> bool {
-  let Ok(text) = fs::read_to_string(settings_path()) else { return true };
-  serde_json::from_str::<serde_json::Value>(&text)
-    .ok()
-    .and_then(|value| value.get("notificationsEnabled")?.as_bool())
-    .unwrap_or(true)
+/// ~/.jarvis/desktop.json 里的桌面端设置；文件缺失或损坏时按空对象处理。
+fn load_desktop_settings() -> serde_json::Map<String, serde_json::Value> {
+  read_settings_object(&settings_path())
 }
 
-fn save_notifications_enabled(enabled: bool) {
-  let path = settings_path();
+fn read_settings_object(path: &std::path::Path) -> serde_json::Map<String, serde_json::Value> {
+  fs::read_to_string(path)
+    .ok()
+    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    .and_then(|value| match value {
+      serde_json::Value::Object(map) => Some(map),
+      _ => None,
+    })
+    .unwrap_or_default()
+}
+
+/// 只改一个键，保留文件里的其他设置。
+fn save_desktop_setting(key: &str, value: serde_json::Value) {
+  write_setting(&settings_path(), key, value);
+}
+
+fn write_setting(path: &std::path::Path, key: &str, value: serde_json::Value) {
+  let mut settings = read_settings_object(path);
+  settings.insert(key.to_string(), value);
   if let Some(parent) = path.parent() {
     let _ = fs::create_dir_all(parent);
   }
-  let _ = fs::write(path, format!("{{\"notificationsEnabled\":{enabled}}}"));
+  if let Ok(text) = serde_json::to_string_pretty(&serde_json::Value::Object(settings)) {
+    let _ = fs::write(path, text);
+  }
+}
+
+#[cfg(test)]
+mod settings_tests {
+  use super::{read_settings_object, write_setting};
+
+  #[test]
+  fn writing_one_setting_keeps_the_others() {
+    let dir = std::env::temp_dir().join(format!("jarvis-desktop-settings-{}", std::process::id()));
+    let path = dir.join("desktop.json");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&path, r#"{"notificationsEnabled":false}"#).unwrap();
+    write_setting(&path, "updateChannel", serde_json::json!("beta"));
+    let settings = read_settings_object(&path);
+    assert_eq!(settings.get("notificationsEnabled"), Some(&serde_json::json!(false)));
+    assert_eq!(settings.get("updateChannel"), Some(&serde_json::json!("beta")));
+    std::fs::write(&path, "not json").unwrap();
+    assert!(read_settings_object(&path).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+  }
 }
 
 fn show_alert(app: &AppHandle, message: &str) {

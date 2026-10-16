@@ -2,11 +2,105 @@
 //! 服务正常时托盘仍交给网页界面处理（它会先确认没有正在运行的会话）。
 
 use crate::AppState;
+use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State, Url, Webview};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use tauri_plugin_updater::{Update, UpdaterExt};
+use tauri_plugin_updater::{Update, Updater, UpdaterExt};
+
+const STABLE_ENDPOINT: &str = "https://github.com/fukcrz/jarvis/releases/latest/download/latest.json";
+const BETA_ENDPOINT: &str = "https://github.com/fukcrz/jarvis/releases/download/updater-beta/beta.json";
+const CHANNEL_SETTING: &str = "updateChannel";
+
+/// 更新通道：正式版只看 latest.json；测试版看 beta.json（发版时正式版也会写进去，取较高版本）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UpdateChannel {
+  #[default]
+  Stable,
+  Beta,
+}
+
+impl UpdateChannel {
+  pub fn parse(value: &str) -> Option<Self> {
+    match value {
+      "stable" => Some(Self::Stable),
+      "beta" => Some(Self::Beta),
+      _ => None,
+    }
+  }
+
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Stable => "stable",
+      Self::Beta => "beta",
+    }
+  }
+
+  /// 更新器按顺序尝试，第一个拿到有效清单的为准。测试版清单缺失（尚未发过、被误删）时退回正式版清单。
+  pub fn endpoints(self) -> &'static [&'static str] {
+    match self {
+      Self::Stable => &[STABLE_ENDPOINT],
+      Self::Beta => &[BETA_ENDPOINT, STABLE_ENDPOINT],
+    }
+  }
+
+  pub fn from_settings(settings: &serde_json::Map<String, serde_json::Value>) -> Self {
+    settings.get(CHANNEL_SETTING).and_then(|value| value.as_str()).and_then(Self::parse).unwrap_or_default()
+  }
+}
+
+fn current_channel(app: &AppHandle) -> UpdateChannel {
+  app.state::<AppState>().update_channel.lock().map(|channel| *channel).unwrap_or_default()
+}
+
+/// 按当前通道构建更新器；其余配置（公钥、退出前清理）沿用插件默认。
+fn channel_updater(app: &AppHandle) -> Result<Updater, String> {
+  let urls = current_channel(app).endpoints().iter().map(|endpoint| Url::parse(endpoint)).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+  app.updater_builder().endpoints(urls).and_then(|builder| builder.build()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn get_update_channel(state: State<AppState>) -> &'static str {
+  state.update_channel.lock().map(|channel| *channel).unwrap_or_default().as_str()
+}
+
+#[tauri::command]
+pub fn set_update_channel(state: State<AppState>, channel: String) -> Result<(), String> {
+  let channel = UpdateChannel::parse(&channel).ok_or_else(|| format!("未知的更新通道：{channel}"))?;
+  if let Ok(mut current) = state.update_channel.lock() {
+    *current = channel;
+  }
+  crate::save_desktop_setting(CHANNEL_SETTING, serde_json::Value::String(channel.as_str().to_string()));
+  Ok(())
+}
+
+/// 与插件 `check` 命令返回同样的结构，资源放进该网页的资源表，
+/// 之后网页仍用插件的 download / install 命令操作同一个 rid。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelUpdateMetadata {
+  rid: tauri::ResourceId,
+  current_version: String,
+  version: String,
+  body: Option<String>,
+  raw_json: serde_json::Value,
+}
+
+#[tauri::command]
+pub async fn check_channel_update(app: AppHandle, webview: Webview) -> Result<Option<ChannelUpdateMetadata>, String> {
+  let updater = channel_updater(&app)?;
+  let Some(update) = updater.check().await.map_err(|error| error.to_string())? else { return Ok(None) };
+  let metadata = ChannelUpdateMetadata {
+    rid: 0,
+    current_version: update.current_version.clone(),
+    version: update.version.clone(),
+    body: update.body.clone(),
+    raw_json: update.raw_json.clone(),
+  };
+  let rid = webview.resources_table().add(update);
+  Ok(Some(ChannelUpdateMetadata { rid, ..metadata }))
+}
 
 /// 同一时间只允许一个更新流程（启动失败自动检查、托盘、启动页按钮共用）。
 struct UpdateGuard<'a>(&'a AtomicBool);
@@ -70,7 +164,7 @@ fn manual_check(app: &AppHandle) {
 }
 
 fn check(app: &AppHandle) -> Result<Option<Update>, String> {
-  let updater = app.updater().map_err(|error| error.to_string())?;
+  let updater = channel_updater(app)?;
   tauri::async_runtime::block_on(updater.check()).map_err(|error| error.to_string())
 }
 
@@ -143,8 +237,25 @@ fn message(app: &AppHandle, text: &str, kind: MessageDialogKind) {
 
 #[cfg(test)]
 mod tests {
-  use super::{available_prompt, download_status, startup_failure_prompt, UpdateGuard};
+  use super::{available_prompt, download_status, startup_failure_prompt, UpdateChannel, UpdateGuard};
   use std::sync::atomic::AtomicBool;
+
+  #[test]
+  fn channel_defaults_to_stable_and_round_trips() {
+    let empty = serde_json::Map::new();
+    assert_eq!(UpdateChannel::from_settings(&empty), UpdateChannel::Stable);
+    let beta = serde_json::json!({"updateChannel": "beta"});
+    assert_eq!(UpdateChannel::from_settings(beta.as_object().unwrap()), UpdateChannel::Beta);
+    let unknown = serde_json::json!({"updateChannel": "nightly"});
+    assert_eq!(UpdateChannel::from_settings(unknown.as_object().unwrap()), UpdateChannel::Stable);
+    for channel in [UpdateChannel::Stable, UpdateChannel::Beta] {
+      assert_eq!(UpdateChannel::parse(channel.as_str()), Some(channel));
+    }
+    let stable = "https://github.com/fukcrz/jarvis/releases/latest/download/latest.json";
+    let beta = "https://github.com/fukcrz/jarvis/releases/download/updater-beta/beta.json";
+    assert_eq!(UpdateChannel::Stable.endpoints(), &[stable]);
+    assert_eq!(UpdateChannel::Beta.endpoints(), &[beta, stable]);
+  }
 
   #[test]
   fn only_one_update_flow_runs_at_a_time() {

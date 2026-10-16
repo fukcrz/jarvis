@@ -160,6 +160,9 @@ button.settings-row { cursor: pointer; }
 button.settings-row:disabled { opacity: .5; cursor: default; }
 .settings-row-icon { display: grid; place-items: center; flex: 0 0 auto; width: 22px; height: 22px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-strong); }
 .settings-row-label { flex: 1; min-width: 0; overflow: hidden; font-size: var(--ui-body); text-overflow: ellipsis; white-space: nowrap; }
+.settings-row-select { flex: 0 0 auto; appearance: none; -webkit-appearance: none; border: 1px solid var(--line-strong); border-radius: 6px; background-color: var(--surface); background-image: linear-gradient(45deg, transparent 50%, var(--subtle) 50%), linear-gradient(135deg, var(--subtle) 50%, transparent 50%); background-position: calc(100% - 11px) calc(50% - 1px), calc(100% - 6px) calc(50% - 1px); background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; padding: 3px 22px 3px 8px; color: var(--ink); font: inherit; font-size: var(--ui-meta); cursor: pointer; }
+.settings-row-select:focus-visible { outline: none; border-color: var(--accent); }
+.settings-row-select option { background: var(--surface-raised); color: var(--ink); }
 .settings-row-value { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--ui-meta); text-overflow: ellipsis; white-space: nowrap; }
 .settings-row-chevron { flex: 0 0 auto; color: var(--subtle); }
 .settings-row.danger .settings-row-label { color: #ffb8bb; }
