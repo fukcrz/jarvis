@@ -1201,6 +1201,9 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const outside = await server.inject({ method: "DELETE", url: `/api/workspaces/${workspace.workspace.id}/entry?path=..%2Foutside.txt` });
     expect(outside.statusCode).toBe(200);
     expect(existsSync(join(jarvisHome, "outside.txt"))).toBe(false);
+
+    const trash = await server.inject({ method: "GET", url: "/api/trash" });
+    expect((trash.json() as { entries: { label: string }[] }).entries.map((entry) => entry.label).sort()).toEqual(["outside.txt", "remove.txt", "src"]);
   });
 
   it("deletes a session JSONL file and broadcasts a workspace event", async () => {
@@ -1232,6 +1235,15 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/sessions` });
     expect(listed.statusCode).toBe(200);
     expect(listed.json()).toEqual({ sessions: [] });
+
+    const trash = await server.inject({ method: "GET", url: "/api/trash" });
+    const trashed = trash.json() as { entries: { id: string; kind: string; sessionId?: string; originalPath: string }[] };
+    expect(trashed.entries).toMatchObject([{ kind: "session", sessionId, originalPath: sessionFile }]);
+    const restored = await server.inject({ method: "POST", url: `/api/trash/${trashed.entries[0]?.id ?? ""}/restore` });
+    expect(restored.statusCode).toBe(200);
+    expect(existsSync(sessionFile)).toBe(true);
+    const relisted = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.workspace.id}/sessions` });
+    expect((relisted.json() as { sessions: { id: string }[] }).sessions.map((session) => session.id)).toEqual([sessionId]);
     socket.close();
   });
 

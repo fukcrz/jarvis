@@ -7,6 +7,7 @@ import { formatWorkspaceDropReference } from "../shared/drop-reference.js";
 import { canonicalizeLocalPathInput } from "../shared/local-path.js";
 import type { DirectoryListing, DroppedPathEntry, WorkspaceDirectoryListing, WorkspaceFile, WorkspaceFileContent } from "../shared/protocol.js";
 import { AppError } from "./errors.js";
+import type { TrashService } from "./trash.js";
 import { isMissingFile } from "./fs.js";
 
 const IGNORED_SEARCH_DIRECTORIES = new Set([
@@ -147,7 +148,7 @@ export async function listWorkspaceDirectory(cwd: string, requestedPath: string)
   return { path: publicPath(directory), name: basename(directory) || directory, ...(parent === undefined ? {} : { parent }), entries: visible, isGitRepository: await pathExists(join(directory, ".git")) };
 }
 
-export async function removeWorkspaceEntry(cwd: string, requestedPath: string): Promise<void> {
+export async function removeWorkspaceEntry(cwd: string, requestedPath: string, trash?: TrashService): Promise<void> {
   const root = await realpath(cwd).catch(() => { throw new AppError("WORKSPACE_UNAVAILABLE", "Workspace is unavailable", 404); });
   if (requestedPath.trim() === ".") throw new AppError("FILE_DELETE_INVALID", "The current directory cannot be deleted", 400);
   const candidate = resolveExistingCandidate(root, requestedPath);
@@ -159,7 +160,12 @@ export async function removeWorkspaceEntry(cwd: string, requestedPath: string): 
   const resolved = await realpath(candidate).catch(() => { throw new AppError("FILE_NOT_FOUND", "File or directory not found", 404); });
   if (resolved === parent) throw new AppError("FILE_DELETE_INVALID", "The current directory cannot be deleted", 400);
   try {
-    await rm(candidate, { recursive: metadata.isDirectory(), force: false });
+    if (trash !== undefined) {
+      const moved = await trash.moveToTrash(candidate, { kind: "file" });
+      if (moved === undefined) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    } else {
+      await rm(candidate, { recursive: metadata.isDirectory(), force: false });
+    }
   } catch (error) {
     if (isMissingFile(error)) throw new AppError("FILE_NOT_FOUND", "File or directory not found", 404);
     throw new AppError("FILE_DELETE_FAILED", "Unable to delete file or directory", 500);
