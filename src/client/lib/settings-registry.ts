@@ -1,4 +1,4 @@
-import { Bell, Folder, Globe, Info, KeyRound, LifeBuoy, Palette, Puzzle, Route, Settings, type LucideIcon } from "lucide-react";
+import { Bell, Folder, Globe, Info, KeyRound, Palette, Puzzle, Route, Settings, type LucideIcon } from "lucide-react";
 import type { SettingsCategoryId } from "./settings-routes";
 
 export interface SettingsCategory {
@@ -25,8 +25,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
   { id: "extensions", group: "AI", title: "插件与技能", description: "扩展 AI 能做的事。开关从下一次新开的会话开始生效。", icon: Puzzle },
   { id: "workspaces", group: "本机", title: "工作区", description: "会话按工作区分组。拖动调整侧栏顺序，名称可以直接改。", icon: Folder },
   { id: "remote", group: "本机", title: "远程访问", description: "用内网穿透从手机或外网打开这台电脑上的 Jarvis。对外开放时建议设置访问密码。", icon: Globe },
-  { id: "data", group: "其他", title: "数据与恢复", description: "回收站、配置恢复记录、日志与诊断包。", icon: LifeBuoy },
-  { id: "about", group: "其他", title: "关于与更新", description: "Jarvis 版本、更新与服务维护。", icon: Info },
+  { id: "about", group: "其他", title: "关于与更新", description: "Jarvis 版本、更新、服务维护与诊断。", icon: Info },
 ];
 
 export const SETTINGS_GROUPS = ["应用", "AI", "本机", "其他"] as const;

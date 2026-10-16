@@ -1,4 +1,3 @@
-mod desktop_log;
 mod node;
 mod sidecar;
 mod supervisor;
@@ -77,7 +76,7 @@ pub fn run() {
       restarting: AtomicBool::new(false),
       restart_budget: Mutex::new(supervisor::RestartBudget::default()),
     })
-    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, take_update_check, check_desktop_update, update::get_update_channel, update::set_update_channel, update::check_channel_update, open_logs_folder])
+    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, take_update_check, check_desktop_update, update::get_update_channel, update::set_update_channel, update::check_channel_update])
     .setup(|app| {
       app.resources_table().add(sidecar::SidecarCleanup(Arc::clone(&app.state::<AppState>().sidecar)));
       let handle = app.handle().clone();
@@ -134,14 +133,6 @@ fn take_update_check(state: State<AppState>) -> bool {
 #[tauri::command]
 fn check_desktop_update(app: AppHandle) {
   update::spawn_manual_check(&app);
-}
-
-/// 设置 → 数据与恢复 → 打开日志目录。
-#[tauri::command]
-fn open_logs_folder() -> Result<(), String> {
-  let dir = desktop_log::log_dir();
-  fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-  open::that_detached(&dir).map_err(|error| error.to_string())
 }
 
 fn request_update_check(app: &AppHandle) {
@@ -327,7 +318,6 @@ fn sidecar_exit_reason(app: &AppHandle) -> Option<String> {
 }
 
 fn recover_backend(app: &AppHandle, reason: &str) {
-  desktop_log::write(&format!("看门狗：{reason}"));
   if let Ok(mut slot) = app.state::<AppState>().port.lock() {
     *slot = None;
   }
@@ -335,10 +325,8 @@ fn recover_backend(app: &AppHandle, reason: &str) {
     if budget.try_take(Instant::now()) { Some(budget.backoff()) } else { None }
   }).unwrap_or(Some(Duration::from_secs(1)));
   let Some(backoff) = allowed else {
-    desktop_log::write("看门狗：5 分钟内已自动重启 3 次，停止自动重启");
     show_alert(app, &format!(
-      "Jarvis 服务多次异常退出，已停止自动重启。\n\n可以在托盘菜单点“重启服务”再试；设置 → 数据与恢复 里可以导出诊断包。\n日志目录：{}\n\n{reason}",
-      desktop_log::log_dir().display()
+      "Jarvis 服务多次异常退出，已停止自动重启。\n\n可以在托盘菜单点“重启服务”再试；设置 → 关于与更新 里可以导出诊断包。\n\n{reason}"
     ));
     return;
   };
@@ -349,7 +337,6 @@ fn recover_backend(app: &AppHandle, reason: &str) {
   }
   restart_sidecar(app);
   if backend_ready(app) {
-    desktop_log::write("看门狗：服务已自动恢复");
     let _ = app.notification().builder().title("Jarvis").body("服务已自动恢复").show();
   }
 }
@@ -359,7 +346,6 @@ fn manual_restart(app: &AppHandle) {
   if let Ok(mut budget) = app.state::<AppState>().restart_budget.lock() {
     budget.reset();
   }
-  desktop_log::write("托盘：重启服务");
   let app = app.clone();
   thread::spawn(move || restart_sidecar(&app));
 }
@@ -525,7 +511,6 @@ fn quit_app(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
       let _ = window.hide();
     }
-    desktop_log::write("托盘：退出");
     stop_current_sidecar(&app);
     app.exit(0);
   });

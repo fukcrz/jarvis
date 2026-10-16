@@ -8,7 +8,6 @@ export type SettingsCategoryId =
   | "extensions"
   | "workspaces"
   | "remote"
-  | "data"
   | "about";
 
 export type SettingsRoute =
@@ -25,7 +24,6 @@ export type SettingsRoute =
   | { page: "skill-files"; skillId: string }
   | { page: "workspaces" }
   | { page: "remote" }
-  | { page: "data" }
   | { page: "about" };
 
 /** 旧地址跳到新页面时附带的定位信息：跳过去后滚动并高亮对应项。 */
@@ -57,7 +55,6 @@ export function settingsPath(route: SettingsRoute): string {
     case "skill-files": return `${SETTINGS_ROOT}/extensions/skills/${encodeURIComponent(route.skillId)}`;
     case "workspaces": return `${SETTINGS_ROOT}/workspaces`;
     case "remote": return `${SETTINGS_ROOT}/remote`;
-    case "data": return `${SETTINGS_ROOT}/data`;
     case "about": return `${SETTINGS_ROOT}/about`;
   }
 }
@@ -71,7 +68,6 @@ const SIMPLE_PAGES: Record<string, SettingsRoute> = {
   extensions: { page: "plugins" },
   workspaces: { page: "workspaces" },
   remote: { page: "remote" },
-  data: { page: "data" },
   about: { page: "about" },
 };
 
@@ -95,6 +91,7 @@ export function legacySettingsRedirect(pathname: string): SettingsRedirect | und
   const segments = splitSegments(pathname);
   const [first, second, third] = segments;
   switch (first) {
+    case "data": return segments.length === 1 ? { route: { page: "about" }, focus: "diagnostics" } : undefined;
     case "assistant-name": return segments.length === 1 ? { route: { page: "general" }, focus: "assistant-name" } : undefined;
     case "model-scope": return segments.length === 1 ? { route: { page: "models" }, focus: "enabled-models" } : undefined;
     case "tunnel": return segments.length === 1 ? { route: { page: "remote" }, focus: "tunnels" } : undefined;

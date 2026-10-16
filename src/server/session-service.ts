@@ -45,7 +45,6 @@ import { projectModelSnapshot } from "./model-projection.js";
 import { bashExecutionItem, decodeTimelineMediaItemId, projectHistory, toExternalTimelineItem, toExternalTimelineItems } from "./projection.js";
 import { emitDesktopEvent } from "./desktop-bridge.js";
 import { WorkspaceStore } from "./workspace-store.js";
-import type { TrashService } from "./trash.js";
 import {
   ALLOWED_IMAGE_TYPES,
   FORK_SNAPSHOT_RETRIES,
@@ -115,8 +114,6 @@ export class SessionService {
     private readonly workspaces: WorkspaceStore,
     private readonly events: EventHub,
     private readonly backgroundTasks: BackgroundTaskService,
-    /** 提供时，删除会话改为把 JSONL 移进回收站（保留 30 天）。 */
-    private readonly trash?: TrashService,
   ) {
     this.piEvents = new SessionPiEvents({
       events: this.events,
@@ -492,13 +489,7 @@ export class SessionService {
         const path = knownPath ?? active?.session.sessionFile ?? await findSessionFile(workspace, ref.sessionId);
         if (active !== undefined) await this.disposeActive(active, "quit");
 
-        const trash = this.trash;
-        const meta = trash === undefined ? undefined : await this.attention.get(ref).catch(() => undefined);
-        const removeFile = trash === undefined
-          ? (file: string) => rm(file, { force: true })
-          : async (file: string) => {
-            await trash.moveToTrash(file, { kind: "session", label: meta?.name ?? meta?.preview ?? ref.sessionId, workspaceId: ref.workspaceId, sessionId: ref.sessionId });
-          };
+        const removeFile = (file: string) => rm(file, { force: true });
         try {
           if (path !== undefined) await removeFile(path);
           await removeSessionJsonl(workspace, ref.sessionId, removeFile);

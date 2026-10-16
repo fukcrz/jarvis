@@ -22,7 +22,7 @@ describe("searchSettings", () => {
 
   it("requires every token and ranks title hits first", () => {
     expect(titles("访问 密码")[0]).toBe("访问密码");
-    expect(titles("访问 回收站")).toEqual([]);
+    expect(titles("访问 快照")).toEqual([]);
     const entries: SettingsSearchEntry[] = [
       { key: "a", title: "其他", description: "模型说明", category: "models", route: { page: "models" } },
       { key: "b", title: "模型组", category: "model-groups", route: { page: "model-groups" } },

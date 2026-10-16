@@ -12,7 +12,6 @@ import { APP_VERSION } from "../lib/app-version";
 import { STATIC_SETTINGS_ENTRIES, type SettingsSearchEntry } from "../lib/settings-search";
 import { categoryRoute, isSettingsPath, legacySettingsRedirect, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsCategoryOf, settingsPath, type SettingsCategoryId, type SettingsRoute } from "../lib/settings-routes";
 import { AboutPage, AppearancePage, GeneralPage, NotificationsPage, WorkspacesPage, initialNotificationsEnabled } from "./settings-app-pages";
-import { DataPage } from "./settings-data";
 import { ExtensionsPage, SkillFilesPage, extensionsSummary } from "./settings-extensions";
 import { LeaveGuardProvider, SaveStatusProvider, SettingsToastProvider, useLeaveGuard, useSettingsToast } from "./settings-feedback";
 import { ModelGroupsPage } from "./settings-model-groups";
@@ -30,7 +29,6 @@ export interface SettingsPageProps {
   onWorkspacesChange: (workspaces: Workspace[]) => void;
   onAddWorkspace: (path: string, label?: string) => Promise<void>;
   onRemoveWorkspace: (workspace: Workspace) => Promise<void>;
-  onSessionRestored?: (workspaceId: string) => void;
   detailLevel: DetailLevel;
   onDetailLevelChange: (level: DetailLevel) => void;
   onBack: () => void;
@@ -55,7 +53,7 @@ export function SettingsPage(props: SettingsPageProps) {
   </SaveStatusProvider>;
 }
 
-function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onSessionRestored, detailLevel, onDetailLevelChange, onBack }: SettingsPageProps) {
+function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, detailLevel, onDetailLevelChange, onBack }: SettingsPageProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -198,7 +196,6 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
     extensions: extensionsSummary(plugins, skills),
     workspaces: `${String(workspaces.length)} 个`,
     remote: remote === undefined ? undefined : remote.running > 0 ? `${String(remote.running)} 运行中` : remote.total > 0 ? "已停止" : "未设置",
-    data: undefined,
     about: APP_VERSION === undefined ? undefined : `v${APP_VERSION}`,
   }), [assistantName, detailLevel, enabledModelCount, groupCount, notificationsEnabled, plugins, ps.connectedCount, ps.loading, remote, skills, workspaces.length]);
 
@@ -252,11 +249,8 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
     case "remote":
       page = <RemotePage refreshKeys={refreshKeys} onSummary={setRemote} />;
       break;
-    case "data":
-      page = <DataPage onSessionRestored={onSessionRestored} />;
-      break;
     case "about":
-      page = <AboutPage onOpenData={() => go({ page: "data" }, { focus: "logs" })} />;
+      page = <AboutPage />;
       break;
   }
 

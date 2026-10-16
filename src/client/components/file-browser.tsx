@@ -401,7 +401,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
   </DialogPrimitive.Root>
   <Dialog open={deleteTarget !== undefined} onOpenChange={(open) => { if (!open && !deletePending) setDeleteTarget(undefined); }}>
     <DialogContent title={deleteTarget?.kind === "directory" ? "删除目录" : "删除文件"} className="file-browser-delete-dialog" overlayClassName="file-browser-delete-overlay">
-      <p className="delete-session-message"><strong>{deleteTarget?.name ?? ""}</strong>{deleteTarget?.kind === "directory" ? "及其全部内容将移到回收站，30 天内可在 设置 → 数据与恢复 里还原。" : "将移到回收站，30 天内可在 设置 → 数据与恢复 里还原。"}</p>
+      <p className="delete-session-message"><strong>{deleteTarget?.name ?? ""}</strong>{deleteTarget?.kind === "directory" ? "及其全部内容将被永久删除，不可恢复。" : "将被永久删除，不可恢复。"}</p>
       <div className="dialog-actions"><Button variant="secondary" onClick={() => setDeleteTarget(undefined)} disabled={deletePending}>取消</Button><Button variant="danger" onClick={() => { void removeEntry(); }} disabled={deletePending}>{deletePending ? "删除中…" : "删除"}</Button></div>
     </DialogContent>
   </Dialog>

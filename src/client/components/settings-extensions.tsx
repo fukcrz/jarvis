@@ -118,7 +118,7 @@ export function ExtensionsPage({ tab, onTab, plugins, onPlugins, skills, onSkill
   const deleteSkill = (skill: SkillEntry) => {
     hide(setHiddenSkills, skill.id, true);
     toast.showUndo({
-      message: `已删除技能 ${skill.label || skill.name}（会移进回收站）`,
+      message: `已删除技能 ${skill.label || skill.name}`,
       undo: () => hide(setHiddenSkills, skill.id, false),
       commit: async () => { onSkills(await api.removeSkill(skill.id)); hide(setHiddenSkills, skill.id, false); },
       onCommitError: (error) => { hide(setHiddenSkills, skill.id, false); fail(error, "删除失败"); },
@@ -215,7 +215,7 @@ export function ExtensionsPage({ tab, onTab, plugins, onPlugins, skills, onSkill
               onClick={() => onOpenSkillFiles(skill.id)}
               control={<>
                 {!skill.loaded ? <SettingsTag tone="warn">未加载</SettingsTag> : skill.manualOnly ? <SettingsTag>手动</SettingsTag> : skill.source === undefined ? null : <SettingsTag>{skill.source}</SettingsTag>}
-                {skill.canDelete ? <StButton variant="ghost" icon aria-label={`删除 ${skill.name}`} title="删除（移进回收站）" onClick={() => deleteSkill(skill)}><Trash2 size={14} /></StButton> : null}
+                {skill.canDelete ? <StButton variant="ghost" icon aria-label={`删除 ${skill.name}`} title="删除" onClick={() => deleteSkill(skill)}><Trash2 size={14} /></StButton> : null}
               </>} />)}
           </SettingsCard>
         </SettingsSection>;

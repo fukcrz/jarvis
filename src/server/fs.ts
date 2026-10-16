@@ -130,7 +130,7 @@ export function takeUndeliveredRecoveryMessage(): string | undefined {
     ...(restored.length === 0 ? [] : [`已从备份恢复 ${[...new Set(restored)].join("、")}`]),
     ...(reset.length === 0 ? [] : [`${[...new Set(reset)].join("、")} 已损坏且没有可用备份，已改用默认值`]),
   ];
-  return `配置文件读取失败：${parts.join("；")}。坏文件已改名留存，详情见 设置 → 数据与恢复。`;
+  return `配置文件读取失败：${parts.join("；")}。坏文件已改名留存，详情见 设置 → 关于与更新。`;
 }
 
 export type JsonParser<T> = (value: unknown) => T;

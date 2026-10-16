@@ -4,7 +4,7 @@ import { sessionCleanupTargets, sortSessionSummaries } from "./utils";
 
 export function sessionCleanupConfirmMessage(sessions: SessionSummary[], keepSessionId?: string): string {
   const count = sessionCleanupTargets(sessions, keepSessionId).length;
-  return `删除 ${String(count)} 个闲置会话。30 天内可在 设置 → 数据与恢复 里找回。`;
+  return `永久删除 ${String(count)} 个闲置会话，不可恢复。`;
 }
 
 export function markSessionUserActivity(sessions: SessionSummary[], sessionId: string, viewedIdleKeys?: Set<string>): SessionSummary[] {

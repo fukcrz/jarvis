@@ -13,14 +13,14 @@ await forwardPiCliInvocation();
 const { buildApp } = await import("./app.js");
 const { emitDesktopEvent } = await import("./desktop-bridge.js");
 
-const { DailyLogFile, teeConsole } = await import("./log-files.js");
+const { RecentLogs, teeConsole } = await import("./recent-logs.js");
 const { acquireInstanceLock } = await import("./instance-lock.js");
 
 const production = process.env["NODE_ENV"] === "production";
-// 日志按天写到 ~/.jarvis/logs，保留 7 天；JARVIS_LOG_FILES=0 可关闭。
-const logFile = process.env["JARVIS_LOG_FILES"] === "0" ? undefined : new DailyLogFile();
-if (logFile !== undefined) teeConsole(logFile);
-const app = await buildApp({ serveStatic: production, ...(logFile === undefined ? {} : { logFile }) });
+// 最近的日志只留在内存里，导出诊断包时带上；不写日志文件。
+const recentLogs = new RecentLogs();
+teeConsole(recentLogs);
+const app = await buildApp({ serveStatic: production, recentLogs });
 
 // Extension code can leave async continuations (streams, timers, compaction
 // callbacks) running after a session is disposed. A stale extension ctx throws

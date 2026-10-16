@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Copy, Download, FolderPlus, GripVertical, Info, RefreshCw, RotateCw, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Copy, Download, FolderPlus, GripVertical, Info, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import type { AppSettings, Workspace } from "../../shared/protocol";
-import { api } from "../api";
+import type { RecoveryNotice } from "../../shared/system";
+import { api, type SystemInfo } from "../api";
 import { getDesktopUpdateChannel, setDesktopNotificationEnabled, setDesktopUpdateChannel, type DesktopUpdateChannel } from "../desktop";
 import { APP_VERSION, CHECK_UPDATE_EVENT } from "../lib/app-version";
 import { DETAIL_LEVELS, type DetailLevel } from "../lib/detail-level";
@@ -114,10 +115,18 @@ export function initialNotificationsEnabled(): boolean {
 
 /* ------------------------------ 关于与更新 ------------------------------ */
 
-export function AboutPage({ children, onOpenData }: { children?: React.ReactNode; onOpenData?: () => void }) {
+export function AboutPage({ children }: { children?: React.ReactNode }) {
   const saveStatus = useSaveStatus();
   const toast = useSettingsToast();
   const [channel, setChannel] = useState<DesktopUpdateChannel>();
+  const [info, setInfo] = useState<SystemInfo>();
+  const [recoveries, setRecoveries] = useState<RecoveryNotice[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void api.systemInfo().then((value) => { if (!cancelled) setInfo(value); }, () => undefined);
+    void api.recoveries().then((value) => { if (!cancelled) setRecoveries(value); }, () => undefined);
+    return () => { cancelled = true; };
+  }, []);
   const [restartOpen, setRestartOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
   useEffect(() => {
@@ -148,8 +157,16 @@ export function AboutPage({ children, onOpenData }: { children?: React.ReactNode
     void navigator.clipboard.writeText(lines.join("\n")).then(() => toast.notify("已复制版本信息"), () => toast.notify("复制失败，请手动选择文字复制", "error"));
   };
   return <>
-    <SettingsPageHead title="关于与更新" description="Jarvis 版本、更新与服务维护。" />
+    <SettingsPageHead title="关于与更新" description="Jarvis 版本、更新、服务维护与诊断。" />
     {children}
+    {(info?.warnings ?? []).length === 0 ? null : <SettingsSection id="startup-warnings" title="启动提示">
+      <SettingsCard>{(info?.warnings ?? []).map((warning) => <SettingRow key={warning} leading={<AlertTriangle size={15} className="st-row-glyph warn" />} title={warning} />)}</SettingsCard>
+    </SettingsSection>}
+    {recoveries.length === 0 ? null : <SettingsSection id="recoveries" title="本次启动的配置恢复">
+      <SettingsCard>{recoveries.map((notice) => <SettingRow key={`${notice.file}:${notice.at}`} title={fileName(notice.file)}
+        description={`${notice.outcome === "backup" ? "读取失败，已从备份恢复" : "读取失败且没有可用备份，已改用默认值"}（${notice.reason}）${notice.corruptPath === undefined ? "" : `。坏文件留在 ${notice.corruptPath}`}`}
+        control={<SettingsTag tone={notice.outcome === "backup" ? "acc" : "warn"}>{notice.outcome === "backup" ? "已恢复" : "已重置"}</SettingsTag>} />)}</SettingsCard>
+    </SettingsSection>}
     <SettingsSection id="updates" title="版本与更新">
       <SettingsCard>
         <SettingRow id="version" leading={<span className="st-row-icon acc"><Info size={15} /></span>} title={<>Jarvis<span className="st-sub-id">{versionText}</span></>}
@@ -166,15 +183,20 @@ export function AboutPage({ children, onOpenData }: { children?: React.ReactNode
     </SettingsSection>
     <SettingsSection id="about-diagnostics" title="诊断">
       <SettingsCard>
-        <SettingRow title="导出诊断包" description="日志、版本、配置（不含密码和 token），反馈问题时附上" control={<a className="st-btn" href="/api/system/diagnostics" download><Download size={13} />导出</a>} />
+        <SettingRow id="diagnostics" title="导出诊断包" description="版本、配置（不含密码和 token）和最近的服务日志，反馈问题时附上" control={<a className="st-btn" href="/api/system/diagnostics" download><Download size={13} />导出</a>} />
         <SettingRow title="复制版本信息" description="版本号、运行方式、更新通道和浏览器信息" control={<StButton onClick={copyVersion}><Copy size={13} />复制</StButton>} />
-        {onOpenData === undefined ? null : <SettingRow title="日志与快照" description="在「数据与恢复」里查看日志目录和每日快照" onClick={onOpenData} />}
+        {info?.snapshotDirectory === undefined ? null : <SettingRow id="snapshots" title={`每日快照（保留 ${String(info.snapshotKeep ?? 7)} 份）`} mono
+          description={info.snapshots === undefined || info.snapshots.length === 0 ? `还没有快照 · ${info.snapshotDirectory}` : `最近一份 ${info.snapshots[0]?.name.replace(/\.zip$/, "") ?? ""}，共 ${String(info.snapshots.length)} 份 · ${info.snapshotDirectory}`} />}
       </SettingsCard>
     </SettingsSection>
     <SettingsConfirm open={restartOpen} busy={restarting} danger title="重启服务？" confirmLabel="重启" onCancel={() => setRestartOpen(false)} onConfirm={() => { void restart(); }}>
       <p>所有会话会断开几秒，正在运行的回复会中断，随后自动重连恢复。</p>
     </SettingsConfirm>
   </>;
+}
+
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
 }
 
 /* ------------------------------ 工作区 ------------------------------ */

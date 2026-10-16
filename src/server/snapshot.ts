@@ -1,9 +1,8 @@
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { atomicWrite } from "./fs.js";
-import { localDay } from "./log-files.js";
 import { createZip, type ZipInput } from "./zip.js";
-import { jarvisHome } from "./jarvis-home.js";
+import { jarvisHome, localDay } from "./jarvis-home.js";
 
 export const SNAPSHOT_KEEP = 7;
 

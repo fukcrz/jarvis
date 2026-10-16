@@ -150,7 +150,6 @@ pub fn spawn_sidecar(node: &Path, root: &Path, port: u16, on_event: impl Fn(Desk
     command.creation_flags(CREATE_NO_WINDOW);
   }
   let mut child = command.spawn().map_err(|error| format!("无法启动 Jarvis 服务：{error}"))?;
-  crate::desktop_log::write(&format!("启动 Jarvis 服务 pid={} port={port}", child.id()));
   let stdin = child.stdin.take();
   let diagnostics = Arc::new(Mutex::new(DiagnosticTail::default()));
   if let Some(stdout) = child.stdout.take() {
@@ -171,7 +170,6 @@ pub fn spawn_sidecar(node: &Path, root: &Path, port: u16, on_event: impl Fn(Desk
     thread::spawn(move || {
       let reader = BufReader::new(stderr);
       for line in reader.lines().map_while(Result::ok) {
-        crate::desktop_log::write(&format!("[服务 stderr] {line}"));
         if let Ok(mut tail) = diagnostics.lock() {
           tail.push(&line);
         }
@@ -214,15 +212,11 @@ pub fn stop_sidecar_with_grace(sidecar: &mut Sidecar, grace: Duration) {
       let deadline = Instant::now() + grace;
       loop {
         match sidecar.child.try_wait() {
-          Ok(Some(status)) => {
-            crate::desktop_log::write(&format!("Jarvis 服务 pid={pid} 已正常关闭（{status}）"));
-            return;
-          }
+          Ok(Some(_)) => return,
           Err(_) => return,
           Ok(None) => {}
         }
         if Instant::now() >= deadline {
-          crate::desktop_log::write(&format!("Jarvis 服务 pid={pid} {}秒内没有退出，强制结束", grace.as_secs()));
           break;
         }
         thread::sleep(Duration::from_millis(50));

@@ -432,7 +432,7 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
 
   const dialog = <Dialog open={resetOpen} onOpenChange={(next) => { if (!next && !resetPending) setResetOpen(false); }}>
     <DialogContent title="重置侧聊">
-      <p className="delete-session-message">清空侧聊记录。30 天内可在 设置 → 数据与恢复 里找回。</p>
+      <p className="delete-session-message">清空侧聊记录，不可恢复。</p>
       <div className="dialog-actions">
         <Button variant="secondary" onClick={() => setResetOpen(false)} disabled={resetPending}>取消</Button>
         <Button variant="danger" onClick={() => { void reset(); }} disabled={resetPending}>{resetPending ? "正在重置…" : "重置"}</Button>

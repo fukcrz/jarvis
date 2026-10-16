@@ -16,10 +16,9 @@ import { AuthService } from "./auth-service.js";
 import { BackgroundTaskService } from "./background-task-service.js";
 import { AppError, asMessage, errorStatusCode } from "./errors.js";
 import { EventHub } from "./event-hub.js";
-import { TrashService } from "./trash.js";
 import { registerSystemRoutes } from "./system-routes.js";
 import { DailySnapshots } from "./snapshot.js";
-import { teeLogStream, type DailyLogFile } from "./log-files.js";
+import { teeLogStream, type RecentLogs } from "./recent-logs.js";
 import { takeUndeliveredStartupMessages } from "./fs.js";
 import { applyAuthCookie, authorizeSocket, clearAuthCookie, readAuthCookie } from "./http-auth.js";
 import { SessionService } from "./session-service.js";
@@ -138,18 +137,17 @@ export interface JarvisServices {
 export async function buildApp(options: {
   serveStatic?: boolean;
   staticRoot?: string;
-  /** 提供时，Fastify 日志同时写进按天的日志文件。 */
-  logFile?: DailyLogFile;
+  /** 提供时，Fastify 日志同时记一份到内存（诊断包用）。 */
+  recentLogs?: RecentLogs;
 } = {}): Promise<FastifyInstance> {
   const level = process.env["LOG_LEVEL"] ?? "info";
-  const app = Fastify({ logger: options.logFile === undefined ? { level } : { level, stream: teeLogStream(options.logFile) }, bodyLimit: 25 * 1024 * 1024 });
+  const app = Fastify({ logger: options.recentLogs === undefined ? { level } : { level, stream: teeLogStream(options.recentLogs) }, bodyLimit: 25 * 1024 * 1024 });
   const production = process.env["NODE_ENV"] === "production";
   const events = new EventHub();
   const workspaces = new WorkspaceStore(undefined, () => events.publishGlobal({ version: 1, type: "workspaces.changed" }));
   await workspaces.initialize(getAgentDir(), "pi agent");
   const backgroundTasks = new BackgroundTaskService(workspaces);
-  const trash = new TrashService();
-  const sessions = new SessionService(workspaces, events, backgroundTasks, trash);
+  const sessions = new SessionService(workspaces, events, backgroundTasks);
   const settings = new SettingsService(() => sessions.globalModelRuntime(), () => sessions.refreshModelConfiguration(), (type) => events.publishGlobal({ version: 1, type }));
   await settings.initialize();
   const auth = new AuthService();
@@ -164,7 +162,6 @@ export async function buildApp(options: {
   await plugins.initialize();
   const modelGroups = new ModelGroupsService(getAgentDir(), () => plugins.isBundledEnabled(MODEL_GROUPS_PLUGIN_ID), pluginLifecycle);
   const skills = new SkillService(getAgentDir(), undefined, () => workspaces.list().map((workspace) => ({ id: workspace.id, label: workspace.label, cwd: workspace.cwd })), (message) => app.log.warn(message));
-  skills.useTrash(trash);
   await skills.initialize();
   const services: JarvisServices = { workspaces, sessions, backgroundTasks, events, tunnel, auth, plugins, modelGroups, skills };
   await app.register(cors, { origin: production ? [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] : true });
@@ -250,10 +247,9 @@ export async function buildApp(options: {
 
   registerSelfRestart(app, events);
   const snapshots = new DailySnapshots({ agentDir: getAgentDir() });
-  registerSystemRoutes(app, { trash, snapshots, logDirectory: options.logFile?.directory, runningCount: () => sessions.runningCount() });
-  const stopTrashPurge = trash.startAutoPurge((message) => app.log.info(message));
+  registerSystemRoutes(app, { snapshots, ...(options.recentLogs === undefined ? {} : { recentLogs: options.recentLogs }), runningCount: () => sessions.runningCount() });
   const stopSnapshots = snapshots.start((message) => app.log.info(message));
-  app.addHook("onClose", async () => { stopTrashPurge(); await stopSnapshots(); });
+  app.addHook("onClose", async () => { await stopSnapshots(); });
 
   const tunnelMethodInput = z.enum(TUNNEL_METHODS);
   const tunnelSishInput = z.object({ server: z.string().min(1).max(500), subdomain: z.string().max(200).optional(), sshPort: z.number().int().min(1).max(65535).optional() }).strict();
@@ -548,7 +544,7 @@ export async function buildApp(options: {
     const params = z.object({ workspaceId: z.string().uuid() }).parse(request.params);
     const query = workspaceEntryQuery.parse(request.query);
     const workspace = workspaces.get(params.workspaceId);
-    await removeWorkspaceEntry(workspace.cwd, query.path, trash);
+    await removeWorkspaceEntry(workspace.cwd, query.path);
     return { removed: true };
   });
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/commands", async (request) => ({ commands: await sessions.commands(sessionRef(request.params)) }));
