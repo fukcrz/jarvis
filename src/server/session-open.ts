@@ -122,6 +122,9 @@ export async function createActiveSession(
   const sortMeta = await deps.attention.get(actualRef);
   const messageQueue = new SessionMessageQueue(session, (queue) => {
     active.queue = queue;
+    // 排队消息也落盘：服务重启后能把没发出的内容放回输入框。
+    void deps.attention.setPendingQueue(active.ref, [...queue.steering, ...queue.followUp].map((item) => item.text).filter((text) => text.trim() !== ""))
+      .catch(() => undefined);
     deps.events.publishSession(active.ref, {
       type: "queue.updated",
       ...(active.state.activeRun === undefined ? {} : { runId: active.state.activeRun.id }),

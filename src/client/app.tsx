@@ -200,6 +200,21 @@ export function App() {
   const updateSelectedDraft = useCallback((value: string, external = false) => {
     if (selectedSessionId !== undefined) updateDraft(selectedSessionId, value, external);
   }, [selectedSessionId, updateDraft]);
+  // 服务重启前还在排队、没发出的消息：打开会话时放回输入框（只放一次）。
+  useEffect(() => {
+    if (selectedRef === undefined) return;
+    const ref = selectedRef;
+    let disposed = false;
+    void api.takeRestoredQueue(ref).then((texts) => {
+      if (disposed || texts.length === 0) return;
+      const current = draftsRef.current[ref.sessionId] ?? "";
+      const missing = texts.filter((text) => !current.includes(text));
+      if (missing.length === 0) return;
+      updateDraft(ref.sessionId, [current, ...missing].filter((text) => text.trim() !== "").join("\n\n"), true);
+      setSessionNotice(`已把重启前没发出的 ${String(missing.length)} 条排队消息放回输入框`);
+    }).catch(() => undefined);
+    return () => { disposed = true; };
+  }, [selectedRef, updateDraft]);
   const selectedAttachments = selectedSessionId === undefined ? [] : attachmentsBySession[selectedSessionId] ?? [];
   const updateSelectedAttachments = useCallback((value: ImageAttachment[]) => {
     if (selectedSessionId === undefined) return;
