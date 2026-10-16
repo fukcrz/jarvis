@@ -91,7 +91,7 @@ export function SkillsPanel({ page, skillId, onOpenFiles, onMessage }: {
     <SkillDirectoryPicker open={pickerOpen} onOpenChange={setPickerOpen} busy={busy === "import"} onAdd={(path) => { setPickerOpen(false); void run("import", () => api.importSkill(path), "新开会话后生效"); }} />
     <Dialog open={confirm !== undefined} onOpenChange={(open) => { if (!open && busy === undefined) setConfirm(undefined); }}>
       <DialogContent title={confirm?.kind === "overwrite" ? "覆盖" : confirm?.kind === "disable" ? "关闭" : "删除"}>
-        <p className="delete-session-message">{confirm === undefined ? "" : confirm.kind === "overwrite" ? <><strong>{confirm.label}</strong>的修改将被自带版本替换，不可恢复。</> : confirm.kind === "disable" ? <><strong>{confirm.label}</strong>将停止加载，修改会保留。</> : <><strong>{confirm.label}</strong>及其全部内容将被永久删除。</>}</p>
+        <p className="delete-session-message">{confirm === undefined ? "" : confirm.kind === "overwrite" ? <><strong>{confirm.label}</strong>的修改将被自带版本替换，不可恢复。</> : confirm.kind === "disable" ? <><strong>{confirm.label}</strong>将停止加载，修改会保留。</> : <><strong>{confirm.label}</strong>及其全部内容将移进回收站，30 天内可在 设置 → 数据与恢复 里还原。</>}</p>
         <div className="dialog-actions">
           <Button variant="secondary" onClick={() => setConfirm(undefined)} disabled={busy !== undefined}>取消</Button>
           <Button variant={confirm?.kind === "overwrite" ? "default" : "danger"} disabled={busy !== undefined} onClick={() => {

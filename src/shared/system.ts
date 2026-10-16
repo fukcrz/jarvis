@@ -10,7 +10,7 @@ export interface RecoveryNotice {
   at: string;
 }
 
-export type TrashKind = "session" | "file";
+export type TrashKind = "session" | "file" | "skill";
 
 export interface TrashEntry {
   id: string;

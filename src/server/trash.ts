@@ -133,7 +133,7 @@ export class TrashService {
       if (parsed.version !== 1 || typeof parsed.originalPath !== "string" || typeof parsed.payload !== "string" || typeof parsed.deletedAt !== "string") return undefined;
       return {
         version: 1,
-        kind: parsed.kind === "session" ? "session" : "file",
+        kind: parsed.kind === "session" || parsed.kind === "skill" ? parsed.kind : "file",
         label: typeof parsed.label === "string" ? parsed.label : basename(parsed.originalPath),
         originalPath: parsed.originalPath,
         deletedAt: parsed.deletedAt,
