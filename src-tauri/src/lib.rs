@@ -1,12 +1,14 @@
+mod desktop_log;
 mod node;
 mod sidecar;
+mod supervisor;
 mod update;
 
 use serde::Serialize;
 use sidecar::DesktopEvent;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -32,6 +34,11 @@ struct AppState {
   splash: Mutex<String>,
   startup_failed: AtomicBool,
   updating: AtomicBool,
+  /// 每次启动服务加一；旧的看门狗发现代数变了就退出。
+  generation: AtomicU64,
+  /// 正在重启服务（看门狗、托盘、服务自己请求的重启互斥）。
+  restarting: AtomicBool,
+  restart_budget: Mutex<supervisor::RestartBudget>,
 }
 
 #[derive(Clone, Serialize)]
@@ -66,8 +73,11 @@ pub fn run() {
       splash: Mutex::new(String::new()),
       startup_failed: AtomicBool::new(false),
       updating: AtomicBool::new(false),
+      generation: AtomicU64::new(0),
+      restarting: AtomicBool::new(false),
+      restart_budget: Mutex::new(supervisor::RestartBudget::default()),
     })
-    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, take_update_check, check_desktop_update, update::get_update_channel, update::set_update_channel, update::check_channel_update])
+    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, take_update_check, check_desktop_update, update::get_update_channel, update::set_update_channel, update::check_channel_update, open_logs_folder])
     .setup(|app| {
       app.resources_table().add(sidecar::SidecarCleanup(Arc::clone(&app.state::<AppState>().sidecar)));
       let handle = app.handle().clone();
@@ -88,6 +98,7 @@ pub fn run() {
       "show" => show_main(app),
       "quit" => quit_app(app),
       "check-update" => request_update_check(app),
+      "restart-service" => manual_restart(app),
       _ => {}
     })
     .build(tauri::generate_context!())
@@ -123,6 +134,14 @@ fn take_update_check(state: State<AppState>) -> bool {
 #[tauri::command]
 fn check_desktop_update(app: AppHandle) {
   update::spawn_manual_check(&app);
+}
+
+/// 设置 → 数据与恢复 → 打开日志目录。
+#[tauri::command]
+fn open_logs_folder() -> Result<(), String> {
+  let dir = desktop_log::log_dir();
+  fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+  open::that_detached(&dir).map_err(|error| error.to_string())
 }
 
 fn request_update_check(app: &AppHandle) {
@@ -170,6 +189,7 @@ mod open_url_tests {
 }
 
 fn start_backend(app: AppHandle) {
+  app.state::<AppState>().generation.fetch_add(1, Ordering::SeqCst);
   app.state::<AppState>().startup_failed.store(false, Ordering::Relaxed);
   set_splash(&app, "正在启动");
   let port = desktop_port();
@@ -218,7 +238,11 @@ fn start_backend(app: AppHandle) {
 fn handle_event(app: &AppHandle, event: DesktopEvent) {
   match event {
     DesktopEvent::Ready { port } => mark_backend_ready(app, port),
-    DesktopEvent::Restart => restart_sidecar(app),
+    DesktopEvent::Restart => {
+      // 在单独线程里重启：当前是读服务输出的线程，优雅关闭期间还要继续读。
+      let app = app.clone();
+      thread::spawn(move || restart_sidecar(&app));
+    }
     DesktopEvent::RunFinished {
       workspace_id,
       session_id,
@@ -246,6 +270,96 @@ fn mark_backend_ready(app: &AppHandle, port: u16) {
     return;
   }
   open_ui(app, port);
+  spawn_watchdog(app, port);
+}
+
+/// 看门狗：每 5 秒看一次服务进程和 /api/health。进程退出或连续 4 次没响应，就自动重启；
+/// 5 分钟内最多自动重启 3 次，超过就停下来提示用户。
+fn spawn_watchdog(app: &AppHandle, port: u16) {
+  let generation = app.state::<AppState>().generation.load(Ordering::SeqCst);
+  let app = app.clone();
+  thread::spawn(move || {
+    let mut missed = 0u32;
+    loop {
+      thread::sleep(supervisor::CHECK_INTERVAL);
+      let state = app.state::<AppState>();
+      if state.generation.load(Ordering::SeqCst) != generation || state.quitting.load(Ordering::Relaxed) || state.updating.load(Ordering::Relaxed) {
+        return;
+      }
+      if state.restarting.load(Ordering::SeqCst) || sidecar_closing(&app) {
+        continue;
+      }
+      if let Some(reason) = sidecar_exit_reason(&app) {
+        recover_backend(&app, &reason);
+        return;
+      }
+      if matches!(probe_jarvis(port, supervisor::HEALTH_TIMEOUT), Some(true)) {
+        missed = 0;
+        continue;
+      }
+      missed += 1;
+      if missed >= supervisor::MAX_MISSED_HEALTH {
+        recover_backend(&app, &format!("Jarvis 服务连续 {missed} 次没有响应"));
+        return;
+      }
+    }
+  });
+}
+
+fn sidecar_closing(app: &AppHandle) -> bool {
+  app.state::<AppState>().sidecar.lock().map(|slot| slot.closing).unwrap_or(false)
+}
+
+/// 服务进程已退出时返回原因（含最后几行输出），并清掉进程记录。
+fn sidecar_exit_reason(app: &AppHandle) -> Option<String> {
+  let state = app.state::<AppState>();
+  let Ok(mut slot) = state.sidecar.lock() else { return None };
+  let sidecar = slot.child.as_mut()?;
+  let status = match sidecar.try_wait() {
+    Ok(Some(status)) => status,
+    _ => return None,
+  };
+  let diagnostics = sidecar.diagnostics();
+  slot.child = None;
+  Some(startup_failure(&format!("Jarvis 服务意外退出（{status}）"), &diagnostics))
+}
+
+fn recover_backend(app: &AppHandle, reason: &str) {
+  desktop_log::write(&format!("看门狗：{reason}"));
+  if let Ok(mut slot) = app.state::<AppState>().port.lock() {
+    *slot = None;
+  }
+  let allowed = app.state::<AppState>().restart_budget.lock().map(|mut budget| {
+    if budget.try_take(Instant::now()) { Some(budget.backoff()) } else { None }
+  }).unwrap_or(Some(Duration::from_secs(1)));
+  let Some(backoff) = allowed else {
+    desktop_log::write("看门狗：5 分钟内已自动重启 3 次，停止自动重启");
+    show_alert(app, &format!(
+      "Jarvis 服务多次异常退出，已停止自动重启。\n\n可以在托盘菜单点“重启服务”再试；设置 → 数据与恢复 里可以导出诊断包。\n日志目录：{}\n\n{reason}",
+      desktop_log::log_dir().display()
+    ));
+    return;
+  };
+  let _ = app.notification().builder().title("Jarvis").body("服务异常退出，正在自动重启…").show();
+  thread::sleep(backoff);
+  if app.state::<AppState>().quitting.load(Ordering::Relaxed) {
+    return;
+  }
+  restart_sidecar(app);
+  if backend_ready(app) {
+    desktop_log::write("看门狗：服务已自动恢复");
+    let _ = app.notification().builder().title("Jarvis").body("服务已自动恢复").show();
+  }
+}
+
+/// 托盘“重启服务”：不依赖服务本身还活着；手动重启会清空自动重启计数。
+fn manual_restart(app: &AppHandle) {
+  if let Ok(mut budget) = app.state::<AppState>().restart_budget.lock() {
+    budget.reset();
+  }
+  desktop_log::write("托盘：重启服务");
+  let app = app.clone();
+  thread::spawn(move || restart_sidecar(&app));
 }
 
 fn open_ui(app: &AppHandle, port: u16) {
@@ -292,8 +406,16 @@ fn window_is_front(app: &AppHandle) -> bool {
 }
 
 fn restart_sidecar(app: &AppHandle) {
+  let state = app.state::<AppState>();
+  if state.restarting.swap(true, Ordering::SeqCst) {
+    return;
+  }
+  if let Ok(mut slot) = state.port.lock() {
+    *slot = None;
+  }
   stop_current_sidecar(app);
   start_backend(app.clone());
+  app.state::<AppState>().restarting.store(false, Ordering::SeqCst);
 }
 
 fn stop_current_sidecar(app: &AppHandle) {
@@ -381,10 +503,45 @@ fn show_main(app: &AppHandle) {
   }
 }
 
+/// 托盘“退出”：有会话在运行时先确认；然后优雅关闭服务（最多等 8 秒）再退出。
 fn quit_app(app: &AppHandle) {
-  app.state::<AppState>().quitting.store(true, Ordering::Relaxed);
-  stop_current_sidecar(app);
-  app.exit(0);
+  let app = app.clone();
+  thread::spawn(move || {
+    let running = current_port(&app).map(running_sessions).unwrap_or(0);
+    if running > 0 {
+      let confirmed = app
+        .dialog()
+        .message(format!("有 {running} 个会话正在运行，退出会中断它们（重新打开后可以点“继续”接着做）。确定退出吗？"))
+        .title("Jarvis")
+        .buttons(MessageDialogButtons::OkCancelCustom("退出".into(), "取消".into()))
+        .blocking_show();
+      if !confirmed {
+        return;
+      }
+    }
+    app.state::<AppState>().quitting.store(true, Ordering::Relaxed);
+    if let Some(window) = app.get_webview_window("main") {
+      let _ = window.hide();
+    }
+    desktop_log::write("托盘：退出");
+    stop_current_sidecar(&app);
+    app.exit(0);
+  });
+}
+
+fn current_port(app: &AppHandle) -> Option<u16> {
+  app.state::<AppState>().port.lock().ok().and_then(|slot| *slot)
+}
+
+fn running_sessions(port: u16) -> u64 {
+  let url = format!("http://127.0.0.1:{port}/api/health");
+  ureq::get(&url)
+    .timeout(Duration::from_secs(1))
+    .call()
+    .ok()
+    .and_then(|response| response.into_json::<serde_json::Value>().ok())
+    .and_then(|body| body.get("running")?.as_u64())
+    .unwrap_or(0)
 }
 
 /// `None` = 没人听端口；`Some(true)` = 已有 Jarvis；`Some(false)` = 被其他程序占用。
@@ -404,8 +561,9 @@ fn probe_jarvis(port: u16, timeout: Duration) -> Option<bool> {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
   let show = MenuItem::with_id(app, "show", "显示", true, None::<&str>)?;
   let check_update = MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?;
+  let restart = MenuItem::with_id(app, "restart-service", "重启服务", true, None::<&str>)?;
   let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-  let menu = Menu::with_items(app, &[&show, &check_update, &quit])?;
+  let menu = Menu::with_items(app, &[&show, &check_update, &restart, &quit])?;
   let mut builder = TrayIconBuilder::new().menu(&menu).show_menu_on_left_click(false).on_tray_icon_event(|tray, event| {
     if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
       show_main(tray.app_handle());

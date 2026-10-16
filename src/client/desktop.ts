@@ -27,6 +27,12 @@ export async function setDesktopUpdateChannel(channel: DesktopUpdateChannel): Pr
   await invoke("set_update_channel", { channel });
 }
 
+export async function openLogsFolder(): Promise<void> {
+  if (!isDesktopShell()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_logs_folder");
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   if (isDesktopShell()) {
     const { invoke } = await import("@tauri-apps/api/core");

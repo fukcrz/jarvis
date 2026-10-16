@@ -1,8 +1,8 @@
 use serde::Deserialize;
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,6 +14,8 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const MAX_DIAGNOSTIC_LINES: usize = 40;
+/// 优雅关闭的等待时间：先通过 stdin 让服务自己关（保存状态、停掉会话），超时再强杀。
+pub const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_DIAGNOSTIC_LINE_CHARS: usize = 500;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,6 +67,7 @@ impl DiagnosticTail {
 
 pub struct Sidecar {
   child: Child,
+  stdin: Option<ChildStdin>,
   diagnostics: Arc<Mutex<DiagnosticTail>>,
 }
 
@@ -139,7 +142,7 @@ pub fn spawn_sidecar(node: &Path, root: &Path, port: u16, on_event: impl Fn(Desk
     .env("HOST", "0.0.0.0")
     .env("PORT", port.to_string())
     .env("JARVIS_DESKTOP", "1")
-    .stdin(Stdio::null())
+    .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
   #[cfg(windows)]
@@ -147,6 +150,8 @@ pub fn spawn_sidecar(node: &Path, root: &Path, port: u16, on_event: impl Fn(Desk
     command.creation_flags(CREATE_NO_WINDOW);
   }
   let mut child = command.spawn().map_err(|error| format!("无法启动 Jarvis 服务：{error}"))?;
+  crate::desktop_log::write(&format!("启动 Jarvis 服务 pid={} port={port}", child.id()));
+  let stdin = child.stdin.take();
   let diagnostics = Arc::new(Mutex::new(DiagnosticTail::default()));
   if let Some(stdout) = child.stdout.take() {
     let diagnostics = Arc::clone(&diagnostics);
@@ -166,13 +171,14 @@ pub fn spawn_sidecar(node: &Path, root: &Path, port: u16, on_event: impl Fn(Desk
     thread::spawn(move || {
       let reader = BufReader::new(stderr);
       for line in reader.lines().map_while(Result::ok) {
+        crate::desktop_log::write(&format!("[服务 stderr] {line}"));
         if let Ok(mut tail) = diagnostics.lock() {
           tail.push(&line);
         }
       }
     });
   }
-  Ok(Sidecar { child, diagnostics })
+  Ok(Sidecar { child, stdin, diagnostics })
 }
 
 /// Serialize spawn with exit cleanup so no child can appear after the guard runs.
@@ -196,7 +202,36 @@ pub fn stop_managed_sidecar(slot: &SharedSidecar, closing: bool) {
 }
 
 pub fn stop_sidecar(sidecar: &mut Sidecar) {
+  stop_sidecar_with_grace(sidecar, GRACEFUL_STOP_TIMEOUT);
+}
+
+/// 先请服务自己退出（stdin 写 `shutdown`），等 `grace`；还没退就强杀整个进程树。
+pub fn stop_sidecar_with_grace(sidecar: &mut Sidecar, grace: Duration) {
   let pid = sidecar.child.id();
+  if let Some(mut stdin) = sidecar.stdin.take() {
+    if stdin.write_all(b"shutdown\n").and_then(|_| stdin.flush()).is_ok() {
+      drop(stdin);
+      let deadline = Instant::now() + grace;
+      loop {
+        match sidecar.child.try_wait() {
+          Ok(Some(status)) => {
+            crate::desktop_log::write(&format!("Jarvis 服务 pid={pid} 已正常关闭（{status}）"));
+            return;
+          }
+          Err(_) => return,
+          Ok(None) => {}
+        }
+        if Instant::now() >= deadline {
+          crate::desktop_log::write(&format!("Jarvis 服务 pid={pid} {}秒内没有退出，强制结束", grace.as_secs()));
+          break;
+        }
+        thread::sleep(Duration::from_millis(50));
+      }
+    }
+  }
+  if let Ok(Some(_)) = sidecar.child.try_wait() {
+    return;
+  }
   #[cfg(windows)]
   {
     let mut killer = Command::new("taskkill");
@@ -233,7 +268,7 @@ fn truncate_line(line: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::{parse_desktop_line, spawn_managed_sidecar, stop_managed_sidecar, stop_sidecar, strip_windows_verbatim, DiagnosticTail, SharedSidecar, SidecarCleanup};
+  use super::{parse_desktop_line, spawn_managed_sidecar, stop_managed_sidecar, stop_sidecar, stop_sidecar_with_grace, strip_windows_verbatim, DiagnosticTail, SharedSidecar, SidecarCleanup};
   use std::fs;
   use std::path::{Path, PathBuf};
   use std::sync::{mpsc, Arc};
@@ -248,19 +283,29 @@ mod tests {
 
   impl ServiceFixture {
     fn start() -> Self {
+      Self::start_with(true)
+    }
+
+    fn start_with(honor_shutdown: bool) -> Self {
       let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
       let root = std::env::temp_dir().join(format!("jarvis-sidecar-test-{}-{unique}", std::process::id()));
       let mut fixture = Self { root, slot: Arc::default(), resources: Some(tauri::ResourceTable::default()), port: 0 };
       fixture.resources.as_mut().unwrap().add(SidecarCleanup(Arc::clone(&fixture.slot)));
       let entry = super::server_entry(&fixture.root);
       fs::create_dir_all(entry.parent().unwrap()).unwrap();
-      fs::write(&entry, r#"
+      let shutdown = if honor_shutdown {
+        "process.stdin.on('data', (chunk) => { if (String(chunk).includes('shutdown')) process.exit(0); });"
+      } else {
+        "process.stdin.on('data', () => {});"
+      };
+      fs::write(&entry, format!(r#"
 const http = require('node:http');
 const server = http.createServer((_, response) => response.end('fixture'));
-server.listen(0, '127.0.0.1', () => {
-  process.stdout.write('JARVIS_DESKTOP:' + JSON.stringify({type: 'ready', port: server.address().port}) + '\n');
-});
-"#).unwrap();
+server.listen(0, '127.0.0.1', () => {{
+  process.stdout.write('JARVIS_DESKTOP:' + JSON.stringify({{type: 'ready', port: server.address().port}}) + '\n');
+}});
+{shutdown}
+"#)).unwrap();
       let (sender, receiver) = mpsc::channel();
       assert!(spawn_managed_sidecar(&fixture.slot, &which::which("node").expect("Node required for sidecar lifecycle tests"), &fixture.root, 0, move |event| {
         if let super::DesktopEvent::Ready { port } = event {
@@ -341,6 +386,26 @@ server.listen(0, '127.0.0.1', () => {
     assert!(matches!(waiting, Err(mpsc::RecvTimeoutError::Timeout)), "cleanup must wait for the active stop");
     assert!(!fixture.reachable());
     assert!(fixture.slot.lock().unwrap().closing);
+  }
+
+  #[test]
+  fn graceful_stop_lets_the_service_exit_on_its_own() {
+    let fixture = ServiceFixture::start();
+    let mut child = fixture.slot.lock().unwrap().child.take().unwrap();
+    let started = std::time::Instant::now();
+    stop_sidecar(&mut child);
+    assert!(started.elapsed() < Duration::from_secs(3), "service should exit promptly after shutdown");
+    assert!(!fixture.reachable());
+  }
+
+  #[test]
+  fn graceful_stop_falls_back_to_kill() {
+    let fixture = ServiceFixture::start_with(false);
+    let mut child = fixture.slot.lock().unwrap().child.take().unwrap();
+    let started = std::time::Instant::now();
+    stop_sidecar_with_grace(&mut child, Duration::from_millis(300));
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    assert!(!fixture.reachable());
   }
 
   #[test]

@@ -49,14 +49,41 @@ const port = Number(process.env["PORT"] ?? defaultPort);
 // Listen on all interfaces (LAN access) in every mode. Override with HOST if needed.
 const host = process.env["HOST"] ?? "0.0.0.0";
 
+// 优雅关闭：断开所有连接、关掉会话和穿透，再退出；6 秒内关不完就直接退出。
+// 桌面端会再多等一会儿，超时才强杀进程树。
+let closing = false;
 const close = async (signal: string) => {
+  if (closing) return;
+  closing = true;
   app.log.info({ signal }, "Shutting down Jarvis");
-  await app.close();
+  const forceExit = setTimeout(() => {
+    app.log.warn({ signal }, "Graceful shutdown timed out; exiting");
+    process.exit(0);
+  }, 6_000);
+  forceExit.unref();
+  try {
+    app.jarvis.events.terminateAll();
+    await app.close();
+  } catch (error) {
+    app.log.error({ err: error }, "Graceful shutdown failed");
+  }
   process.exit(0);
 };
 
 process.on("SIGINT", () => { void close("SIGINT"); });
 process.on("SIGTERM", () => { void close("SIGTERM"); });
+// 桌面端在 Windows 上没法发信号：通过 stdin 写一行 shutdown 请服务自己退出。
+if (process.env["JARVIS_DESKTOP"] === "1") {
+  let buffered = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk: string) => {
+    buffered += chunk;
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    if (lines.some((line) => line.trim() === "shutdown")) void close("desktop");
+  });
+  process.stdin.on("error", () => undefined);
+}
 
 try {
   await listenWithRetry(app, port, host, process.env["JARVIS_SELF_RESTART"] === "1");
