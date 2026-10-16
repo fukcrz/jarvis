@@ -283,10 +283,12 @@ fn spawn_watchdog(app: &AppHandle, port: u16) {
     loop {
       thread::sleep(supervisor::CHECK_INTERVAL);
       let state = app.state::<AppState>();
-      if state.generation.load(Ordering::SeqCst) != generation || state.quitting.load(Ordering::Relaxed) || state.updating.load(Ordering::Relaxed) {
+      if state.generation.load(Ordering::SeqCst) != generation || state.quitting.load(Ordering::Relaxed) {
         return;
       }
-      if state.restarting.load(Ordering::SeqCst) || sidecar_closing(&app) {
+      // 检查/安装更新期间只暂停：没有更新或用户点了“稍后”时，还要继续看着服务。
+      if state.updating.load(Ordering::Relaxed) || state.restarting.load(Ordering::SeqCst) || sidecar_closing(&app) {
+        missed = 0;
         continue;
       }
       if let Some(reason) = sidecar_exit_reason(&app) {
