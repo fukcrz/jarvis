@@ -295,7 +295,7 @@ describe("summarizeTurnProcess", () => {
       message("m1"),
     ]);
 
-    expect(turn === undefined ? undefined : summarizeTurnProcess(turn)).toEqual({ operations: 2, durationMs: 20_000 });
+    expect(turn === undefined ? undefined : summarizeTurnProcess(turn)).toEqual({ operations: 2, durationMs: 20_000, failures: 2 });
   });
 
   it("omits durations that cannot be derived from timestamps", () => {
