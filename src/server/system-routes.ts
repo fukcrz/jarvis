@@ -1,12 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { buildDiagnosticsZip } from "./diagnostics.js";
-import { listRecoveryNotices } from "./fs.js";
+import { listRecoveryNotices, listStartupWarnings } from "./fs.js";
 import { defaultLogDirectory, LOG_RETENTION_DAYS } from "./log-files.js";
 import { TRASH_RETENTION_DAYS, type TrashService } from "./trash.js";
+import { SNAPSHOT_KEEP, type DailySnapshots } from "./snapshot.js";
 
 export interface SystemRouteDeps {
   trash: TrashService;
+  snapshots?: DailySnapshots;
   logDirectory?: string;
   runningCount?: () => number;
 }
@@ -17,7 +19,12 @@ export function registerSystemRoutes(app: FastifyInstance, deps: SystemRouteDeps
   const idParams = z.object({ id: z.string().min(1).max(200) });
 
   app.get("/api/system/recoveries", async () => ({ recoveries: listRecoveryNotices() }));
-  app.get("/api/system/info", async () => ({ logDirectory: deps.logDirectory ?? defaultLogDirectory(), logRetentionDays: LOG_RETENTION_DAYS }));
+  app.get("/api/system/info", async () => ({
+    logDirectory: deps.logDirectory ?? defaultLogDirectory(),
+    logRetentionDays: LOG_RETENTION_DAYS,
+    ...(deps.snapshots === undefined ? {} : { snapshotDirectory: deps.snapshots.path, snapshotKeep: SNAPSHOT_KEEP, snapshots: await deps.snapshots.list() }),
+    warnings: listStartupWarnings(),
+  }));
   app.get("/api/system/diagnostics", async (_request, reply) => {
     const { fileName, data } = await buildDiagnosticsZip({
       ...(deps.logDirectory === undefined ? {} : { logDirectory: deps.logDirectory }),

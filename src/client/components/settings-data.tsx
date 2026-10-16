@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileArchive, FolderOpen, Trash2 } from "lucide-react";
+import { AlertTriangle, Archive, FileArchive, FolderOpen, Trash2 } from "lucide-react";
 import type { RecoveryNotice, TrashListing } from "../../shared/system";
-import { api } from "../api";
+import { api, type SystemInfo } from "../api";
 import { isDesktopShell, openLogsFolder } from "../desktop";
 import { Button } from "./ui/button";
 import { SettingsEmpty, SettingsGroup, SettingsRow } from "./settings-ui";
@@ -15,7 +15,8 @@ export function DataPanel({ onMessage, onSessionRestored }: {
 }) {
   const [recoveries, setRecoveries] = useState<RecoveryNotice[]>([]);
   const [trash, setTrash] = useState<TrashListing | undefined>();
-  const [logDirectory, setLogDirectory] = useState<string | undefined>();
+  const [info, setInfo] = useState<SystemInfo | undefined>();
+  const logDirectory = info?.logDirectory;
   const [busy, setBusy] = useState<string | undefined>();
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
@@ -29,7 +30,7 @@ export function DataPanel({ onMessage, onSessionRestored }: {
       }),
     ]);
     setRecoveries(nextRecoveries);
-    void api.systemInfo().then((info) => setLogDirectory(info.logDirectory)).catch(() => undefined);
+    void api.systemInfo().then(setInfo).catch(() => undefined);
     if (nextTrash !== undefined) setTrash(nextTrash);
   }, []);
 
@@ -62,6 +63,9 @@ export function DataPanel({ onMessage, onSessionRestored }: {
   };
 
   return <div className="settings-stack">
+    {(info?.warnings ?? []).length === 0 ? null : <SettingsGroup title="启动提示">
+      {(info?.warnings ?? []).map((warning) => <SettingsRow key={warning} icon={AlertTriangle} label={warning} />)}
+    </SettingsGroup>}
     {recoveries.length === 0 ? null : <SettingsGroup title="本次启动的配置恢复">
       {recoveries.map((notice) => <div key={`${notice.file}:${notice.at}`} className="settings-row">
         <span className="settings-row-main">
@@ -73,6 +77,7 @@ export function DataPanel({ onMessage, onSessionRestored }: {
     <SettingsGroup title="日志与诊断">
       <SettingsRow icon={FileArchive} label={<a className="settings-row-link" href="/api/system/diagnostics" download>导出诊断包</a>} value="日志、版本、配置（不含密码和 token）" />
       <SettingsRow icon={FolderOpen} label="日志目录" value={<span title={logDirectory}>{logDirectory ?? "…"}</span>} control={isDesktopShell() ? <Button size="sm" variant="secondary" onClick={() => { void openLogsFolder().catch(() => onMessage("无法打开日志目录", "error")); }}>打开</Button> : undefined} />
+      {info?.snapshotDirectory === undefined ? null : <SettingsRow icon={Archive} label={`每日快照（保留 ${String(info.snapshotKeep ?? 7)} 份）`} value={<span title={info.snapshotDirectory}>{info.snapshots === undefined || info.snapshots.length === 0 ? "还没有快照" : `最近一份 ${info.snapshots[0]?.name.replace(/\.zip$/, "") ?? ""}，共 ${String(info.snapshots.length)} 份 · ${info.snapshotDirectory}`}</span>} />}
     </SettingsGroup>
     <SettingsGroup title={`最近删除${trash === undefined ? "" : `（保留 ${String(trash.retentionDays)} 天）`}`}>
       {trash === undefined ? <SettingsRow label="读取中…" /> : trash.entries.length === 0 ? <SettingsEmpty icon={Trash2} title="回收站是空的" /> : trash.entries.map((entry) => <div key={entry.id} className="settings-row">
