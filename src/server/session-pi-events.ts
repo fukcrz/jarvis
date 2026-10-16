@@ -114,6 +114,13 @@ export class SessionPiEvents {
 
     if (update.type === "thinking_start" || update.type === "thinking_delta" || update.type === "thinking_end") {
       active.assistantGenerationStartedAt ??= Date.now();
+      const thinkingStarts = active.thinkingStartedAt ??= new Map();
+      if (!thinkingStarts.has(contentIndex)) thinkingStarts.set(contentIndex, Date.now());
+      let thinkingMs: number | undefined;
+      if (update.type === "thinking_end") {
+        thinkingMs = Math.max(0, Date.now() - (thinkingStarts.get(contentIndex) ?? Date.now()));
+        (active.thinkingDurations ??= new Map()).set(contentIndex, thinkingMs);
+      }
       // partial is mutable response-so-far; only the event's delta/end is authoritative.
       const text = update.type === "thinking_end" ? update.content
         : (existing?.kind === "thinking" ? existing.text : "") + (update.type === "thinking_delta" ? update.delta : "");
@@ -121,6 +128,7 @@ export class SessionPiEvents {
         kind: "thinking", id: assistantThinkingBlockId(assistantMessageId, contentIndex),
         createdAt: existing?.createdAt ?? identity.createdAt, contentIndex, assistantMessageId,
         state: update.type === "thinking_end" ? "completed" : "running", text,
+        ...(thinkingMs === undefined ? {} : { durationMs: thinkingMs }),
       };
       active.partialAssistantItems.set(contentIndex, item);
       active.partialThinking = item.state === "running" ? item : undefined;
@@ -131,7 +139,7 @@ export class SessionPiEvents {
       this.host.events.publishSession(active.ref, {
         type: update.type === "thinking_end" ? "thinking.completed" : "thinking.delta", runId,
         payload: { thinkingId: item.id, createdAt: item.createdAt, contentIndex, assistantMessageId,
-          ...(update.type === "thinking_end" ? { text } : { delta: update.type === "thinking_delta" ? update.delta : "" }),
+          ...(update.type === "thinking_end" ? { text, ...(thinkingMs === undefined ? {} : { durationMs: thinkingMs }) } : { delta: update.type === "thinking_delta" ? update.delta : "" }),
           liveGeneration: active.liveGeneration },
       });
       return;
@@ -207,7 +215,9 @@ export class SessionPiEvents {
       ...[...active.activeTools.values()].filter((item) => item.assistantMessageId === assistantId).map((item) => item.id),
     ];
     const generation = assistantGenerationStats(message, active.assistantGenerationStartedAt);
-    const authoritative = assistantTimelineItemsFromPi(message, identity.createdAt, assistantId, assistantId, generation);
+    const thinkingDurations = active.thinkingDurations;
+    const authoritative = withThinkingDurations(assistantTimelineItemsFromPi(message, identity.createdAt, assistantId, assistantId, generation), thinkingDurations);
+    const thinking = thinkingDurations === undefined || thinkingDurations.size === 0 ? undefined : Object.fromEntries([...thinkingDurations].map(([index, ms]) => [String(index), ms]));
     if (generation !== undefined) active.latestGeneration = generation;
     for (const id of provisionalIds) {
       active.liveMessages.delete(id);
@@ -223,7 +233,7 @@ export class SessionPiEvents {
         active.liveThinking.set(item.id, item);
         this.host.events.publishSession(active.ref, { type: "thinking.completed", runId, payload: {
           thinkingId: item.id, contentIndex: item.contentIndex, assistantMessageId: item.assistantMessageId,
-          createdAt: item.createdAt, text: item.text,
+          createdAt: item.createdAt, text: item.text, ...(item.durationMs === undefined ? {} : { durationMs: item.durationMs }),
         } });
       } else {
         this.host.publishTool(active, item);
@@ -237,11 +247,13 @@ export class SessionPiEvents {
     active.partial = undefined;
     active.assistantGenerationStartedAt = undefined;
     active.liveGeneration = undefined;
+    active.thinkingStartedAt = undefined;
+    active.thinkingDurations = undefined;
     this.host.publishContextUsage(active, runId);
-    if (generation !== undefined) {
+    if (generation !== undefined || thinking !== undefined) {
       queueMicrotask(() => {
         try {
-          active.session.sessionManager.appendCustomEntry("jarvis.generation", { assistantMessageId: assistantId, generation });
+          active.session.sessionManager.appendCustomEntry("jarvis.generation", { assistantMessageId: assistantId, ...(generation === undefined ? {} : { generation }), ...(thinking === undefined ? {} : { thinking }) });
         } catch (error) {
           console.warn("Failed to persist Jarvis generation metadata", error);
         }
@@ -510,4 +522,14 @@ function estimateOutputTokens(text: string): number {
   }
   flushAscii();
   return tokens;
+}
+
+/** 把实时记录的思考耗时挂到定稿的思考块上。 */
+export function withThinkingDurations<T extends { kind: string; contentIndex?: number }>(items: T[], durations: ReadonlyMap<number, number> | undefined): T[] {
+  if (durations === undefined || durations.size === 0) return items;
+  return items.map((item) => {
+    if (item.kind !== "thinking" || item.contentIndex === undefined) return item;
+    const durationMs = durations.get(item.contentIndex);
+    return durationMs === undefined ? item : { ...item, durationMs };
+  });
 }

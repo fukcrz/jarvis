@@ -55,6 +55,9 @@ export interface ActiveSession {
   assistantGenerationStartedAt?: number;
   /** Runtime-only estimate for the response currently being streamed. */
   liveGeneration?: LiveGenerationStats;
+  /** 当前回复里各思考块（按 content index）开始的时间和已结束的耗时。 */
+  thinkingStartedAt?: Map<number, number>;
+  thinkingDurations?: Map<number, number>;
   /** Latest completed response, retained for the usage dialog. */
   latestGeneration?: AssistantGenerationStats;
   /** Actual execution starts, separate from a tool call's place in the transcript. */
