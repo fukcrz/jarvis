@@ -8,6 +8,7 @@ import { api } from "../api";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { DETAIL_LEVELS, type DetailLevel } from "../lib/detail-level";
 import { SETTINGS_CATEGORIES, SETTINGS_GROUPS, settingsCategory } from "../lib/settings-registry";
+import { APP_VERSION } from "../lib/app-version";
 import { STATIC_SETTINGS_ENTRIES, type SettingsSearchEntry } from "../lib/settings-search";
 import { categoryRoute, isSettingsPath, legacySettingsRedirect, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsCategoryOf, settingsPath, type SettingsCategoryId, type SettingsRoute } from "../lib/settings-routes";
 import { AboutPage, AppearancePage, GeneralPage, NotificationsPage, WorkspacesPage, initialNotificationsEnabled } from "./settings-app-pages";
@@ -198,7 +199,7 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
     workspaces: `${String(workspaces.length)} 个`,
     remote: remote === undefined ? undefined : remote.running > 0 ? `${String(remote.running)} 运行中` : remote.total > 0 ? "已停止" : "未设置",
     data: undefined,
-    about: undefined,
+    about: APP_VERSION === undefined ? undefined : `v${APP_VERSION}`,
   }), [assistantName, detailLevel, enabledModelCount, groupCount, notificationsEnabled, plugins, ps.connectedCount, ps.loading, remote, skills, workspaces.length]);
 
   const activeCategory = settingsCategoryOf(route);
@@ -255,7 +256,7 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
       page = <DataPage onSessionRestored={onSessionRestored} />;
       break;
     case "about":
-      page = <AboutPage />;
+      page = <AboutPage onOpenData={() => go({ page: "data" }, { focus: "logs" })} />;
       break;
   }
 

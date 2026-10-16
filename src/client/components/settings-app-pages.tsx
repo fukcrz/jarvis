@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, FolderPlus, GripVertical, RotateCw, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Copy, Download, FolderPlus, GripVertical, Info, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import type { AppSettings, Workspace } from "../../shared/protocol";
 import { api } from "../api";
 import { getDesktopUpdateChannel, setDesktopNotificationEnabled, setDesktopUpdateChannel, type DesktopUpdateChannel } from "../desktop";
+import { APP_VERSION, CHECK_UPDATE_EVENT } from "../lib/app-version";
 import { DETAIL_LEVELS, type DetailLevel } from "../lib/detail-level";
 import { isDesktopShell } from "../lib/desktop-shell";
 import { isNotificationEnabled, notificationPermission, requestNotificationPermission, setNotificationEnabled } from "../notifications";
@@ -113,7 +114,7 @@ export function initialNotificationsEnabled(): boolean {
 
 /* ------------------------------ 关于与更新 ------------------------------ */
 
-export function AboutPage({ children }: { children?: React.ReactNode }) {
+export function AboutPage({ children, onOpenData }: { children?: React.ReactNode; onOpenData?: () => void }) {
   const saveStatus = useSaveStatus();
   const toast = useSettingsToast();
   const [channel, setChannel] = useState<DesktopUpdateChannel>();
@@ -140,18 +141,34 @@ export function AboutPage({ children }: { children?: React.ReactNode }) {
       toast.notify(error instanceof Error ? error.message : "重启请求失败", "error");
     }
   };
+  const desktop = isDesktopShell();
+  const versionText = APP_VERSION === undefined ? "未知版本" : `v${APP_VERSION}`;
+  const copyVersion = () => {
+    const lines = [`Jarvis ${versionText}`, `运行方式：${desktop ? "桌面端" : "网页"}`, `更新通道：${channel === "beta" ? "测试版" : channel === "stable" ? "正式版" : "—"}`, `浏览器：${navigator.userAgent}`];
+    void navigator.clipboard.writeText(lines.join("\n")).then(() => toast.notify("已复制版本信息"), () => toast.notify("复制失败，请手动选择文字复制", "error"));
+  };
   return <>
     <SettingsPageHead title="关于与更新" description="Jarvis 版本、更新与服务维护。" />
     {children}
-    {channel === undefined ? null : <SettingsSection id="updates" title="更新">
+    <SettingsSection id="updates" title="版本与更新">
       <SettingsCard>
-        <SettingRow id="update-channel" title="更新通道" description={channel === "beta" ? "测试版：检查更新时会收到测试版和正式版中较新的一个" : "正式版：只接收正式版更新"}
-          control={<><SaveState k="update-channel" /><Segmented label="更新通道" value={channel} options={[{ value: "stable", label: "正式版" }, { value: "beta", label: "测试版" }]} onChange={changeChannel} /></>} />
+        <SettingRow id="version" leading={<span className="st-row-icon acc"><Info size={15} /></span>} title={<>Jarvis<span className="st-sub-id">{versionText}</span></>}
+          description={desktop ? "桌面端会定期自动检查更新，也可以手动检查" : "网页版跟随这台电脑上的 Jarvis 服务；在桌面端更新后刷新页面即可"}
+          control={desktop ? <StButton onClick={() => window.dispatchEvent(new Event(CHECK_UPDATE_EVENT))}><RefreshCw size={13} />检查更新</StButton> : <SettingsTag>网页</SettingsTag>} />
+        {channel === undefined ? null : <SettingRow id="update-channel" title="更新通道" description={channel === "beta" ? "测试版：检查更新时会收到测试版和正式版中较新的一个" : "正式版：只接收正式版更新"}
+          control={<><SaveState k="update-channel" /><Segmented label="更新通道" value={channel} options={[{ value: "stable", label: "正式版" }, { value: "beta", label: "测试版" }]} onChange={changeChannel} /></>} />}
       </SettingsCard>
-    </SettingsSection>}
+    </SettingsSection>
     <SettingsSection id="service" title="服务">
       <SettingsCard>
         <SettingRow id="restart-service" title="重启服务" description="所有会话会断开几秒，随后自动重连" control={<StButton disabled={restarting} onClick={() => setRestartOpen(true)}><RotateCw size={13} className={restarting ? "spin" : undefined} />{restarting ? "正在重启…" : "重启"}</StButton>} />
+      </SettingsCard>
+    </SettingsSection>
+    <SettingsSection id="about-diagnostics" title="诊断">
+      <SettingsCard>
+        <SettingRow title="导出诊断包" description="日志、版本、配置（不含密码和 token），反馈问题时附上" control={<a className="st-btn" href="/api/system/diagnostics" download><Download size={13} />导出</a>} />
+        <SettingRow title="复制版本信息" description="版本号、运行方式、更新通道和浏览器信息" control={<StButton onClick={copyVersion}><Copy size={13} />复制</StButton>} />
+        {onOpenData === undefined ? null : <SettingRow title="日志与快照" description="在「数据与恢复」里查看日志目录和每日快照" onClick={onOpenData} />}
       </SettingsCard>
     </SettingsSection>
     <SettingsConfirm open={restartOpen} busy={restarting} danger title="重启服务？" confirmLabel="重启" onCancel={() => setRestartOpen(false)} onConfirm={() => { void restart(); }}>
