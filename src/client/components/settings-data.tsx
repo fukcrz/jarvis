@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FileArchive, FolderOpen, Trash2 } from "lucide-react";
 import type { RecoveryNotice, TrashListing } from "../../shared/system";
 import { api } from "../api";
+import { isDesktopShell, openLogsFolder } from "../desktop";
 import { Button } from "./ui/button";
 import { SettingsEmpty, SettingsGroup, SettingsRow } from "./settings-ui";
 
@@ -71,7 +72,7 @@ export function DataPanel({ onMessage, onSessionRestored }: {
     </SettingsGroup>}
     <SettingsGroup title="日志与诊断">
       <SettingsRow icon={FileArchive} label={<a className="settings-row-link" href="/api/system/diagnostics" download>导出诊断包</a>} value="日志、版本、配置（不含密码和 token）" />
-      <SettingsRow icon={FolderOpen} label="日志目录" value={<span title={logDirectory}>{logDirectory ?? "…"}</span>} />
+      <SettingsRow icon={FolderOpen} label="日志目录" value={<span title={logDirectory}>{logDirectory ?? "…"}</span>} control={isDesktopShell() ? <Button size="sm" variant="secondary" onClick={() => { void openLogsFolder().catch(() => onMessage("无法打开日志目录", "error")); }}>打开</Button> : undefined} />
     </SettingsGroup>
     <SettingsGroup title={`最近删除${trash === undefined ? "" : `（保留 ${String(trash.retentionDays)} 天）`}`}>
       {trash === undefined ? <SettingsRow label="读取中…" /> : trash.entries.length === 0 ? <SettingsEmpty icon={Trash2} title="回收站是空的" /> : trash.entries.map((entry) => <div key={entry.id} className="settings-row">
