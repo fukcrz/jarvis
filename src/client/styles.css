@@ -1160,3 +1160,21 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .turn-changes-file-head { display: flex; align-items: center; min-width: 0; gap: 8px; }
 .turn-changes-file-head .file-chip { flex: 0 1 auto; }
 .turn-changes-kind { color: var(--subtle); font-size: 11px; }
+/* 回合失败卡：一张卡说清哪一步失败、为什么，给出重试/继续，原始错误折叠 */
+.turn-failure { display: grid; gap: 6px; padding: 9px 10px 6px; }
+.turn-failure-head { display: flex; align-items: flex-start; gap: 8px; }
+.turn-failure-head > svg { flex: 0 0 auto; margin-top: 2px; color: var(--danger); }
+.turn-failure .timeline-error-copy { gap: 3px; }
+.turn-failure .timeline-error-copy strong { font-size: 12.5px; color: #ffb4b6; }
+.turn-failure .timeline-error-copy .turn-failure-reason { color: #f2d4d6; font-family: inherit; font-size: 12.5px; line-height: 1.55; }
+.turn-failure .timeline-error-copy .turn-failure-step { color: var(--muted); font-family: inherit; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.turn-failure-actions { display: flex; gap: 7px; padding-left: 23px; }
+.turn-failure-actions .button, .run-failure-actions .button { min-height: 26px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); }
+button.turn-failure-raw.timeline-event-summary { display: inline-flex; align-items: center; gap: 4px; width: fit-content; margin-left: 19px; padding: 3px 4px; color: var(--subtle); font-size: 11px; }
+.turn-failure-raw > svg { transition: transform .12s ease; }
+.turn-failure-raw > svg.expanded { transform: rotate(90deg); }
+.turn-failure-tool { display: grid; gap: 5px; }
+.turn-failure-tool > strong { color: var(--muted); font-size: 11px; font-weight: 600; }
+.run-failure .run-failure-copy > span { color: var(--muted); font-family: inherit; font-size: 12px; line-height: 1.5; }
+.turn-failure { border: 1px solid rgb(255 107 115 / .22); border-radius: 8px; background: rgb(120 30 40 / .12); }
+.timeline-error-header.turn-failure-raw > svg { margin-top: 0; color: inherit; }

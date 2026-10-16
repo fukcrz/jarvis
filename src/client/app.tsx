@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, ChevronDown, Folder, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
-import type { ComposerCommand, GlobalEvent, ImageAttachment, ModelDescriptor, RunState, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
+import type { ComposerCommand, GlobalEvent, ImageAttachment, MessageTimelineItem, ModelDescriptor, RunState, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { api, isSessionConflict, notifyUnauthorized } from "./api";
 import { listenDesktopOpenSession } from "./desktop";
 import { PromptEditor } from "./components/prompt-editor";
@@ -942,6 +942,38 @@ export function App() {
     }
   };
 
+  /** 失败卡的「重试」：用同样的文字和图片重新发送这一轮的用户消息（走编辑并重新生成）。 */
+  const retryTurn = async (user: MessageTimelineItem): Promise<void> => {
+    if (selectedRef === undefined) return;
+    const clientRequestId = randomUUID();
+    const images = user.images ?? [];
+    stream.replaceUserMessage(user.id, clientRequestId, user.text, images);
+    try {
+      await api.editAndResend(selectedRef, user.id, user.text, clientRequestId, images);
+      setPageError(undefined);
+    } catch (error) {
+      stream.discardOptimisticUser(clientRequestId);
+      await stream.refresh().catch(() => undefined);
+      if (await recoverSessionConflict(error)) return;
+      setPageError(errorMessage(error, "无法重试"));
+    }
+  };
+
+  /** 失败卡的「继续」：发一句「继续」，让模型接着做。 */
+  const continueTurn = async (): Promise<void> => {
+    if (selectedRef === undefined) return;
+    const clientRequestId = randomUUID();
+    stream.addOptimisticUser(clientRequestId, "继续", []);
+    try {
+      await api.prompt(selectedRef, "继续", clientRequestId, []);
+      setPageError(undefined);
+    } catch (error) {
+      stream.discardOptimisticUser(clientRequestId);
+      if (await recoverSessionConflict(error)) return;
+      setPageError(errorMessage(error, "无法发送消息"));
+    }
+  };
+
   const restoreQueuedMessages = useCallback((
     targetRef: SessionRef,
     messages: readonly { text: string; images?: ImageAttachment[] }[],
@@ -1204,7 +1236,7 @@ export function App() {
   const renderChatContent = () => <>
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <div className="chat-stage">
-      <Timeline sessionKey={selectedRefKey} localMediaVersion={stream.localMediaVersion} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} liveGeneration={stream.transcript.liveGeneration} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} />
+      <Timeline sessionKey={selectedRefKey} localMediaVersion={stream.localMediaVersion} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} liveGeneration={stream.transcript.liveGeneration} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onRetryTurn={(user) => { void retryTurn(user); }} onContinue={() => { void continueTurn(); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} />
       <div className="chat-dock">
         <ExtensionPanels panels={stream.extensionPanels} />
         <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} workspaceId={selectedRef.workspaceId} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage?.sessionId === selectedRef.sessionId ? cancelMessageEdit : undefined} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>

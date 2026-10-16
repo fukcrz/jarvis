@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import { Archive, ArrowDown, Bell, Brain, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
 import type { AssistantGenerationStats, ContextSummaryTimelineItem, FileChange, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
 import { userMessageOutline as outlineFromItems } from "../../shared/user-message";
+import { plainErrorReason } from "../lib/error-reason";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { copyText } from "../lib/clipboard";
 import { imageDataUrl } from "../lib/image";
@@ -11,7 +12,7 @@ import { LocalMediaVersionContext } from "../lib/local-media";
 import { encodeMultiSelectValue, multiSelectAnswerLabel, parseMultiSelectDialog, parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, settledMultiRows, settledSelectRows, splitDialogHeading, type ExtensionSelectOption, type SettledChoiceRow } from "../lib/extension-dialog";
 import { MarkdownMessage } from "./markdown-message";
 import { ImagePreview } from "./image-lightbox";
-import { summarizeToolActivity, ToolActivity } from "./tool-activity";
+import { commandHeadline, summarizeToolActivity, ToolActivity } from "./tool-activity";
 import { DiffStat, DiffView } from "./diff-view";
 import { LocalTextFileLink } from "./text-file-preview";
 import { mergeFileChanges } from "../../shared/file-change";
@@ -37,6 +38,10 @@ interface TimelineProps {
   onDismissNotice?: () => void;
   status: SessionStatus;
   onRetryCompaction?: () => void;
+  /** 失败后重新发送这一轮的用户消息。 */
+  onRetryTurn?: (user: MessageTimelineItem) => void;
+  /** 失败后发一句「继续」。 */
+  onContinue?: () => void;
   onEditUserMessage?: (item: MessageTimelineItem) => void;
   onForkMessage?: (item: MessageTimelineItem) => void;
   onExtensionUiRespond?: (id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }) => void | Promise<void>;
@@ -127,7 +132,7 @@ export function formatUserMessageIndex(index: number): string {
   return String(index).padStart(2, "0");
 }
 
-export function Timeline({ sessionKey, localMediaVersion, items, streamingMessageId, liveGeneration, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage }: TimelineProps) {
+export function Timeline({ sessionKey, localMediaVersion, items, streamingMessageId, liveGeneration, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onRetryTurn, onContinue, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage }: TimelineProps) {
   const [foldState, setFoldState] = useState<TimelineFoldState>(() => emptyTimelineFoldState(sessionKey));
   const foldStateForRender = foldState.sessionKey === sessionKey ? foldState : emptyTimelineFoldState(sessionKey);
   const turns = useMemo(() => groupTimelineTurns(items), [items]);
@@ -191,7 +196,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   }, [outline, outlineLoading, items]);
   const userMessageKey = userMessages.map((item) => item.id).join(":");
   const feedback = getRunFeedback(status, items, streamingMessageId);
-  const hasMatchingTimelineFailure = status.lastError !== undefined && items.some((item) => item.kind === "error" && item.state === "failed" && item.code === status.lastError!.code && item.message === status.lastError!.message);
+  const hasMatchingTimelineFailure = status.lastError !== undefined && (turns.at(-1)?.finalError !== undefined || items.some((item) => item.kind === "error" && item.state === "failed" && item.code === status.lastError!.code && item.message === status.lastError!.message));
   const statusIndicatorKey = `${status.runState}:${status.compacting?.reason ?? ""}:${status.compacting?.retrying?.retryAt ?? ""}:${status.retrying?.retryAt ?? ""}:${status.lastError?.occurredAt ?? ""}:${error ?? ""}:${notice ?? ""}`;
 
   useLayoutEffect(() => {
@@ -451,13 +456,13 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
           <div className="timeline-feed">
             {hasMore ? <button type="button" className="timeline-load-earlier" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "加载中" : "更早"}</button> : null}
             <LocalMediaVersionContext.Provider value={localMediaVersion}>
-              {renderTimelineTurns(turns, streamingMessageId, liveGeneration, status, foldStateForRender, toggleProcess, toggleDetail, toggleGroup, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, workspaceCwd, highlightedMessageId)}
+              {renderTimelineTurns(turns, streamingMessageId, liveGeneration, status, foldStateForRender, toggleProcess, toggleDetail, toggleGroup, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, workspaceCwd, highlightedMessageId, status.runState === "idle" ? onRetryTurn : undefined, status.runState === "idle" ? onContinue : undefined)}
             </LocalMediaVersionContext.Provider>
             {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
             {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
             {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
             {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
-            {status.lastError === undefined || hasMatchingTimelineFailure ? null : <RunFailureCard failure={status.lastError} onRetryCompaction={onRetryCompaction} />}
+            {status.lastError === undefined || hasMatchingTimelineFailure ? null : <RunFailureCard failure={status.lastError} onRetryCompaction={onRetryCompaction} onRetry={status.runState !== "idle" || onRetryTurn === undefined || turns.at(-1)?.user === undefined ? undefined : () => onRetryTurn(turns.at(-1)!.user!)} onContinue={status.runState === "idle" ? onContinue : undefined} />}
             {feedback === undefined || hasActiveActivity(items, status) ? null : <WorkingIndicator feedback={feedback} />}
           </div>
         </div>
@@ -559,13 +564,13 @@ function RetryCountdown({ retrying }: { retrying: NonNullable<SessionStatus["ret
   return <time aria-live="off" aria-hidden="true">{secondsLeft}s</time>;
 }
 
-function RunFailureCard({ failure, onRetryCompaction }: { failure: NonNullable<SessionStatus["lastError"]>; onRetryCompaction: TimelineProps["onRetryCompaction"] }) {
+function RunFailureCard({ failure, onRetryCompaction, onRetry, onContinue }: { failure: NonNullable<SessionStatus["lastError"]>; onRetryCompaction: TimelineProps["onRetryCompaction"]; onRetry?: () => void; onContinue?: () => void }) {
   const [open, setOpen] = useState(false);
   const compactionFailed = failure.code === "PI_COMPACTION_FAILED";
   const occurredAt = formatFailureTime(failure.occurredAt);
   const requestId = requestIdFromMessage(failure.message);
   const title = compactionFailed ? "上下文压缩未完成" : "本次任务未完成";
-  const summary = compactionFailed ? "压缩没有生成可用摘要，任务已停止。" : undefined;
+  const summary = compactionFailed ? "压缩没有生成可用摘要，任务已停止。" : plainErrorReason(failure.message, failure.code) ?? errorSummary(failure.message);
 
   return <article className="timeline-event run-failure" role="alert">
     <button className="timeline-event-summary run-failure-header" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
@@ -583,6 +588,59 @@ function RunFailureCard({ failure, onRetryCompaction }: { failure: NonNullable<S
     {!compactionFailed || onRetryCompaction === undefined ? null : <footer className="run-failure-actions">
       <Button variant="secondary" size="sm" onClick={onRetryCompaction}><RefreshCw size={13} />重试压缩</Button>
     </footer>}
+    {compactionFailed ? null : <FailureActions className="run-failure-actions" onRetry={onRetry} onContinue={onContinue} />}
+  </article>;
+}
+
+function FailureActions({ className, onRetry, onContinue }: { className: string; onRetry?: () => void; onContinue?: () => void }) {
+  if (onRetry === undefined && onContinue === undefined) return null;
+  return <footer className={className}>
+    {onRetry === undefined ? null : <Button variant="secondary" size="sm" onClick={onRetry} title="用同样的内容重新发送这一轮"><RefreshCw size={13} />重试</Button>}
+    {onContinue === undefined ? null : <Button variant="secondary" size="sm" onClick={onContinue} title="发送「继续」，让模型接着做"><ChevronRight size={13} />继续</Button>}
+  </footer>;
+}
+
+export function lastFailedTool(entries: TimelineRenderItem[]): ToolTimelineItem | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.kind !== "activity") continue;
+    const failed = [...entry.items].reverse().find((item) => item.state === "failed");
+    if (failed !== undefined) return failed;
+  }
+  return undefined;
+}
+
+export function failedStepLabel(tool: ToolTimelineItem): string {
+  if (tool.name === "bash" || tool.name === "powershell") return `命令 ${commandHeadline(tool.inputPreview ?? tool.target)}${tool.exitCode === undefined ? "" : `（退出码 ${String(tool.exitCode)}）`}`;
+  return tool.target === undefined || tool.title.includes(tool.target) ? tool.title : `${tool.title} ${tool.target}`;
+}
+
+/** 一轮以失败收尾时只出一张卡：哪一步失败、白话原因、重试/继续，原始错误折叠。 */
+function TurnFailureCard({ items, failedTool, onRetry, onContinue }: { items: ErrorTimelineItem[]; failedTool?: ToolTimelineItem; onRetry?: () => void; onContinue?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const latest = items.at(-1)!;
+  if (latest.state === "retrying") return null;
+  if (latest.state === "recovered") return <ErrorItem items={items} />;
+  const reason = plainErrorReason(latest.message, latest.code) ?? errorSummary(latest.message);
+  const retries = items.length > 1 ? `，已自动重试 ${String(items.length - 1)} 次` : "";
+  const step = failedTool === undefined ? `请求模型时出错${retries}` : `${failedStepLabel(failedTool)} 没有通过，之后请求模型时出错${retries}`;
+  return <article className="timeline-event timeline-error failed turn-failure" role="alert">
+    <div className="turn-failure-head">
+      <CircleAlert size={15} />
+      <div className="timeline-error-copy">
+        <strong>本次任务未完成</strong>
+        <span className="turn-failure-reason">{reason}</span>
+        <span className="turn-failure-step">{step}</span>
+      </div>
+    </div>
+    <FailureActions className="turn-failure-actions" onRetry={onRetry} onContinue={onContinue} />
+    <button className="timeline-event-summary timeline-error-header turn-failure-raw" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+      <ChevronRight size={12} className={open ? "expanded" : undefined} aria-hidden />原始错误
+    </button>
+    {!open ? null : <div className="timeline-error-details">
+      {failedTool?.error === undefined ? null : <section className="turn-failure-tool"><strong>{failedStepLabel(failedTool)}</strong><pre>{failedTool.error}</pre></section>}
+      {items.map((item, index) => <ErrorDetails key={item.id} item={item} showAttempt={items.length > 1} index={index} />)}
+    </div>}
   </article>;
 }
 
@@ -1281,6 +1339,8 @@ interface TurnRenderContext {
   customAnswers?: ReadonlyMap<string, string>;
   /** 只有回合的最终回答显示 token/速度/用时。 */
   showGenerationMeta?: boolean;
+  onRetryTurn?: TimelineProps["onRetryTurn"];
+  onContinue?: TimelineProps["onContinue"];
 }
 
 export interface PresentedTurnProcess {
@@ -1447,12 +1507,12 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
     {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, true), onToggleCall: (_toolId, callId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, callId, true) }, true, false)}</div>)}
     {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: true })}
     {live || changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />}
-    {turn.finalError === undefined ? null : renderTimelineEntry({ kind: "error", items: turn.finalError }, context)}
+    {turn.finalError === undefined ? null : <TurnFailureCard items={turn.finalError} failedTool={lastFailedTool(split.process)} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} />}
   </>;
 }
 
-function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string, open: boolean) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined): ReactNode[] {
-  const context: TurnRenderContext = { streamingMessageId, liveGeneration, status, openDetailIds: foldState.openDetailIds, openGroupIds: foldState.openGroupIds, onToggleDetail: () => undefined, onToggleCall: () => undefined, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage };
+function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string, open: boolean) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined, onRetryTurn?: TimelineProps["onRetryTurn"], onContinue?: TimelineProps["onContinue"]): ReactNode[] {
+  const context: TurnRenderContext = { streamingMessageId, liveGeneration, status, openDetailIds: foldState.openDetailIds, openGroupIds: foldState.openGroupIds, onToggleDetail: () => undefined, onToggleCall: () => undefined, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage, onRetryTurn, onContinue };
   const liveTurnKey = status.runState === "idle" ? undefined : turns.at(-1)?.key;
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} live={turn.key === liveTurnKey} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
 }
