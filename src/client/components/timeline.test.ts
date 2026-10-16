@@ -342,7 +342,7 @@ describe("structured text phases", () => {
     expect(turns).toHaveLength(1);
     expect(timelineProcessId(turns[0])).toBe("process:response");
     expect(turns[0]?.final).toBeUndefined();
-    expect(turns[0]?.process.map((entry) => entry.kind === "message" ? entry.item.id : entry.items[0]?.id)).toEqual(["first", "between", "second", "after"]);
+    expect(turns[0]?.process.map((entry) => "items" in entry ? entry.items[0]?.id : entry.item.id)).toEqual(["first", "between", "second", "after"]);
   });
 
   it("keeps a leading process identity stable when a user message is paged in", () => {

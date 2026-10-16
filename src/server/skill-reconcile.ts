@@ -189,6 +189,6 @@ async function removeRetiredSkillCopies(skillsDir: string, retiredHashes: Readon
 }
 
 export function isDirectChild(parent: string, child: string): boolean {
-  const normalizedParent = parent.replace(/[\/]+$/, "");
+  const normalizedParent = parent.replace(/[\\/]+$/, "");
   return dirname(child).toLowerCase() === normalizedParent.toLowerCase();
 }
