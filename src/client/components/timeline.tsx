@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
-import { Archive, ArrowDown, Bell, Brain, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
+import { Archive, ArrowDown, Bell, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
 import type { AssistantGenerationStats, ContextSummaryTimelineItem, FileChange, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
 import { userMessageOutline as outlineFromItems } from "../../shared/user-message";
 import { plainErrorReason } from "../lib/error-reason";
@@ -1359,7 +1359,6 @@ function turnProcessLabel(summary: TurnProcessSummary, categories = "", changedF
     ...(summary.durationMs === undefined ? [] : [`用时 ${minutes === 0 ? `${String(seconds)} 秒` : `${String(minutes)} 分 ${String(seconds % 60)} 秒`}`]),
     ...(categories !== "" ? [categories] : summary.operations === 0 ? [] : [`${String(summary.operations)} 项操作`]),
     ...(changedFiles === 0 ? [] : [`改了 ${String(changedFiles)} 个文件`]),
-    ...(summary.failures === undefined ? [] : [`${String(summary.failures)} 项失败`]),
   ].join("，");
 }
 
@@ -1494,16 +1493,19 @@ function TurnChanges({ changes, cwd }: { changes: FileChange[]; cwd?: string }) 
   const added = changes.reduce((sum, change) => sum + change.added, 0);
   const removed = changes.reduce((sum, change) => sum + change.removed, 0);
   return <section className={`turn-changes${open ? " expanded" : ""}`}>
-    <div className="turn-changes-row">
-      <button type="button" className="turn-changes-summary" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
+    {open ? null : <div className="turn-changes-row">
+      <button type="button" className="turn-changes-summary" aria-expanded={false} onClick={() => setOpen(true)}>
+        <ChevronRight size={13} className="turn-process-chevron" aria-hidden />
         <span>{changes.length} 个文件</span>
         <DiffStat added={added} removed={removed} />
       </button>
-      <span className="turn-changes-chips">{changes.slice(0, TURN_CHANGE_CHIP_LIMIT).map((change) => <FileChip key={change.path} path={change.path} cwd={cwd} />)}{changes.length > TURN_CHANGE_CHIP_LIMIT ? <button type="button" className="turn-changes-more" aria-expanded={open} aria-label={`${open ? "收起" : "查看"}全部 ${String(changes.length)} 个改动文件`} onClick={() => setOpen((value) => !value)}>等 {changes.length} 个</button> : null}</span>
-    </div>
-    {open ? <div className="turn-changes-files">{changes.map((change) => <div key={change.path} className="turn-changes-file">
-      <div className="turn-changes-file-head"><FileChip path={change.path} cwd={cwd}>{change.path}</FileChip>{change.kind === "write" ? <span className="turn-changes-kind">写入</span> : null}<DiffStat added={change.added} removed={change.removed} /></div>
+      <span className="turn-changes-chips">{changes.slice(0, TURN_CHANGE_CHIP_LIMIT).map((change) => <FileChip key={change.path} path={change.path} cwd={cwd} />)}{changes.length > TURN_CHANGE_CHIP_LIMIT ? <button type="button" className="turn-changes-more" aria-expanded={false} aria-label={`查看全部 ${String(changes.length)} 个改动文件`} onClick={() => setOpen(true)}>等 {changes.length} 个</button> : null}</span>
+    </div>}
+    {open ? <div className="turn-changes-files">{changes.map((change, index) => <div key={change.path} className="turn-changes-file">
+      <div className="turn-changes-file-head">
+        {index === 0 ? <button type="button" className="turn-changes-collapse" aria-expanded aria-label="收起文件改动" onClick={() => setOpen(false)}><ChevronRight size={13} className="turn-process-chevron expanded" aria-hidden /></button> : <span className="turn-changes-collapse-spacer" aria-hidden />}
+        <FileChip path={change.path} cwd={cwd}>{change.path}</FileChip>{change.kind === "write" ? <span className="turn-changes-kind">写入</span> : null}<DiffStat added={change.added} removed={change.removed} />
+      </div>
       <DiffView change={change} />
     </div>)}</div> : null}
   </section>;
@@ -1538,7 +1540,6 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
       {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
       {categories === "" ? null : <span className="turn-process-count">{categories}</span>}
       {changes.length === 0 ? null : <span className="turn-process-changes">改了 {changes.length} 个文件</span>}
-      {summary.failures === undefined ? null : <span className="turn-process-failed"><span className="turn-process-failed-dot" aria-hidden />{summary.failures} 项失败</span>}
     </button>}
     {showAll ? <div className={!collapsible ? "turn-process-stack" : "turn-process-body"}>
       {displayTurn.process.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
@@ -1562,28 +1563,38 @@ function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string |
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} live={turn.key === liveTurnKey} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
 }
 
-/** 思考耗时：不足 1 秒按 1 秒算，超过 1 分钟显示「1分5秒」。 */
-export function formatThinkingDuration(durationMs: number | undefined): string | undefined {
-  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) return undefined;
-  const seconds = Math.max(1, Math.round(durationMs / 1_000));
-  return seconds < 60 ? `${String(seconds)}s` : `${String(Math.floor(seconds / 60))}分${String(seconds % 60)}秒`;
+/** 超过 3 行或 160 字算较长，默认收成一行；更短的直接展示正文。 */
+export const THINKING_FOLD_MAX_LINES = 3;
+export const THINKING_FOLD_MAX_CHARS = 160;
+
+export function thinkingTextIsLong(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed === "") return false;
+  const lines = trimmed.split(/\r?\n/).filter((line) => line.trim() !== "").length;
+  return lines > THINKING_FOLD_MAX_LINES || trimmed.length > THINKING_FOLD_MAX_CHARS;
 }
 
-/** 思考是一行弱化的小字：进行中「思考中 · 0:03」带最新一行预览，结束后「思考 · 3s」，点开看全文。 */
+export function thinkingFoldPreview(text: string): string {
+  const line = text.split(/\r?\n/).find((item) => item.trim() !== "")?.trim() ?? "";
+  return line.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/^#{1,6}\s+/, "");
+}
+
+/** 过程里的思考不标「思考」。正在生成或较短的直接出正文；较长的收成一行预览，点开看全文。 */
 function ThinkingItem({ item, baseDir, open, showDetails, onToggle }: { item: ThinkingTimelineItem; live?: LiveGenerationStats; baseDir?: string; open: boolean; showDetails: boolean; onToggle: () => void }) {
   const running = item.state === "running";
-  const preview = running ? processTextPreview(item.text).replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/^#{1,6}\s+/, "") : "";
-  const detailsOpen = open && showDetails;
-  const duration = running ? undefined : formatThinkingDuration(item.durationMs);
+  if (item.text.trim() === "") return null;
+  const foldable = !running && thinkingTextIsLong(item.text);
+  const expanded = !foldable || (open && showDetails);
+  const body = <div className="thinking-body"><div className="message-content"><MarkdownMessage text={item.text} streaming={running} baseDir={baseDir} /></div></div>;
+  if (!foldable) return <article className={`thinking-item ${item.state}`}>{body}</article>;
+  const preview = thinkingFoldPreview(item.text);
   return (
-    <article className={`thinking-item ${item.state}`}>
-      <button className="thinking-summary" type="button" onClick={onToggle} aria-expanded={detailsOpen}>
-        <span className="thinking-state-icon">{running ? <LoaderCircle size={12} className="spin" /> : <Brain size={12} />}</span>
-        <span className="thinking-title">{running ? "思考中" : "思考"}{duration === undefined ? "" : ` · ${duration}`}</span>
-        {running ? <ElapsedClock startedAt={item.createdAt} /> : null}
-        {!detailsOpen && preview !== "" ? <span className="thinking-preview">{preview}</span> : null}
+    <article className={`thinking-item ${item.state}${expanded ? " expanded" : ""}`}>
+      <button className="thinking-summary" type="button" onClick={onToggle} aria-expanded={expanded} aria-label={expanded ? "收起" : preview}>
+        <ChevronRight size={13} className={`turn-process-chevron${expanded ? " expanded" : ""}`} aria-hidden />
+        {expanded || preview === "" ? null : <span className="thinking-preview">{preview}</span>}
       </button>
-      {open ? <div className="thinking-details" hidden={!showDetails}><div className="message-content"><MarkdownMessage text={item.text} streaming={running} baseDir={baseDir} /></div></div> : null}
+      {expanded ? body : null}
     </article>
   );
 }

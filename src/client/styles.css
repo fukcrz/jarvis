@@ -426,29 +426,24 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .turn-process-summary:focus-visible { color: var(--ink); outline: none; }
 .turn-process-chevron { flex: 0 0 auto; transition: transform .14s ease; }
 .turn-process-chevron.expanded { transform: rotate(90deg); }
-.turn-process-label, .turn-process-count, .turn-process-elapsed, .turn-process-changes, .turn-process-failed { flex: 0 0 auto; color: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.turn-process-label, .turn-process-count, .turn-process-elapsed, .turn-process-changes { flex: 0 0 auto; color: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; }
 .turn-process-elapsed { font-variant-numeric: tabular-nums; }
 .turn-process-count { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 400; }
 .turn-process-changes { font-weight: 400; }
-.turn-process-failed { display: inline-flex; align-items: center; gap: 5px; color: var(--danger); font-weight: 400; }
-.turn-process-failed-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--danger); }
 .turn-process-body { margin-top: 4px; border-left: 1px solid var(--line); padding-left: 7px; }
 .turn-process-entry { min-width: 0; max-width: 100%; overflow: hidden; }
 .turn-process-body .message-body.assistant, .turn-process-body .message-body.assistant .message-content { color: var(--muted); }
 .turn-process-body .message-content { font-size: 12px; line-height: 1.6; }
 .thinking-item { min-width: 0; max-width: 100%; overflow: hidden; }
 .thinking-item.running, .thinking-item.completed { border: 0; background: transparent; }
-.thinking-summary { display: flex; align-items: center; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; gap: 7px; border: 0; background: transparent; padding: 4px 0; text-align: left; }
+.thinking-summary { display: flex; align-items: center; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; gap: 6px; border: 0; background: transparent; padding: 2px 0; color: var(--subtle); text-align: left; cursor: pointer; }
 .thinking-summary:focus-visible { color: var(--ink); }
-.thinking-state-icon { display: grid; flex: 0 0 auto; color: inherit; }
-.thinking-item.running .thinking-state-icon { color: var(--accent); }
-.thinking-title { flex: 0 0 auto; font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
-.thinking-summary { gap: 6px; padding: 2px 0; }
-.thinking-preview { display: block; flex: 1 1 0; width: 0; min-width: 0; overflow: hidden; color: var(--subtle); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.thinking-item.expanded { display: grid; grid-template-columns: 13px minmax(0, 1fr); column-gap: 6px; align-items: start; }
+.thinking-item.expanded .thinking-summary { grid-column: 1; grid-row: 1; width: 13px; padding: 3px 0 0; }
+.thinking-item.expanded .thinking-body { grid-column: 2; grid-row: 1; }
+.thinking-preview { display: block; flex: 1 1 0; width: 0; min-width: 0; overflow: hidden; color: var(--subtle); font-size: 12px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .run-elapsed { flex: 0 0 auto; color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.thinking-details { border-top: 1px solid rgb(255 255 255 / .07); padding: 7px 2px 8px 0; }
-.thinking-details .message-content { color: var(--muted); font-size: 12px; line-height: 1.6; }
-@media (max-width: 480px) { .thinking-summary { flex-wrap: wrap; } }
+.thinking-body .message-content { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .tool-item { margin: 6px 0 18px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .command-item { border-color: #343943; background: #1b1d21; }
 .command-item.running { border-color: #625337; background: #242018; }
@@ -994,6 +989,9 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .turn-changes-file { display: grid; min-width: 0; gap: 5px; }
 .turn-changes-file-head { display: flex; align-items: center; min-width: 0; gap: 8px; }
 .turn-changes-file-head .file-chip { flex: 0 1 auto; }
+.turn-changes-collapse, .turn-changes-collapse-spacer { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 13px; height: 16px; }
+.turn-changes-collapse { border: 0; background: transparent; padding: 0; color: var(--subtle); cursor: pointer; }
+.turn-changes-collapse:focus-visible { color: var(--ink); outline: none; }
 .turn-changes-kind { color: var(--subtle); font-size: 11px; }
 /* 回合失败卡：一张卡说清哪一步失败、为什么，给出重试/继续，原始错误折叠 */
 .turn-failure { display: grid; gap: 6px; padding: 9px 10px 6px; }
