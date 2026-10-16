@@ -181,6 +181,20 @@ describe("SessionAttentionStore interrupted runs", () => {
     await expect(restarted.get(ref)).resolves.not.toHaveProperty("interruptedAt");
   });
 
+  it("keeps the running marker and queue when shutdown aborts the run", async () => {
+    const store = new SessionAttentionStore(directory);
+    await store.setAttention(ref, "running", "2026-01-02T00:00:00.000Z");
+    await store.setPendingQueue(ref, ["接着改"]);
+    store.freezeRunState();
+    // 关闭时中止回合会走到这些调用，冻结后不应落盘。
+    await store.setPendingQueue(ref, []);
+    await store.setAttention(ref, "completed_unread", "2026-01-02T00:01:00.000Z");
+
+    const restarted = new SessionAttentionStore(directory);
+    await expect(restarted.get(ref)).resolves.toMatchObject({ attentionState: "failed", interruptedAt: "2026-01-02T00:00:00.000Z" });
+    await expect(restarted.takePendingQueue(ref)).resolves.toEqual(["接着改"]);
+  });
+
   it("does not flag runs that finished normally", async () => {
     const store = new SessionAttentionStore(directory);
     await store.setAttention(ref, "running", "2026-01-02T00:00:00.000Z");
