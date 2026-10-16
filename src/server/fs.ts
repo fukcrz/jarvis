@@ -182,5 +182,8 @@ export function timestampForFile(date: Date): string {
 }
 
 function asText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const text = error instanceof Error ? error.message : String(error);
+  // 截断/清零的文件会让报错里带上 NUL 等控制字符，换成 � 便于显示。
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u0008\u000b-\u001f]/g, "�").slice(0, 300);
 }

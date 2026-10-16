@@ -1208,3 +1208,6 @@ html.text-selecting .run-status-bar { pointer-events: none !important; }
 .md-heading:hover .md-heading-anchor, .md-heading-anchor:focus-visible { opacity: 1; }
 .md-heading-anchor:hover { color: var(--accent-strong); }
 @media (hover: none) { .md-heading-anchor { display: none; } }
+.settings-row-link { color: inherit; text-decoration: none; }
+.settings-row-link::after { content: ""; position: absolute; inset: 0; }
+.settings-row:has(.settings-row-link) { position: relative; cursor: pointer; }

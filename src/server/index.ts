@@ -13,8 +13,13 @@ await forwardPiCliInvocation();
 const { buildApp } = await import("./app.js");
 const { emitDesktopEvent } = await import("./desktop-bridge.js");
 
+const { DailyLogFile, teeConsole } = await import("./log-files.js");
+
 const production = process.env["NODE_ENV"] === "production";
-const app = await buildApp({ serveStatic: production });
+// 日志按天写到 ~/.jarvis/logs，保留 7 天；JARVIS_LOG_FILES=0 可关闭。
+const logFile = process.env["JARVIS_LOG_FILES"] === "0" ? undefined : new DailyLogFile();
+if (logFile !== undefined) teeConsole(logFile);
+const app = await buildApp({ serveStatic: production, ...(logFile === undefined ? {} : { logFile }) });
 
 // Extension code can leave async continuations (streams, timers, compaction
 // callbacks) running after a session is disposed. A stale extension ctx throws
@@ -24,8 +29,17 @@ const app = await buildApp({ serveStatic: production });
 process.on("unhandledRejection", (reason) => {
   app.log.error({ err: reason }, "Unhandled promise rejection; keeping the server alive");
 });
+// 一分钟内被吞掉的异常太多，说明进程已经不正常：桌面端托管时主动退出，让桌面端重启服务。
+const recentExceptions: number[] = [];
 process.on("uncaughtException", (error) => {
   app.log.error({ err: error }, "Uncaught exception; keeping the server alive");
+  const now = Date.now();
+  recentExceptions.push(now);
+  while (recentExceptions.length > 0 && (recentExceptions[0] ?? now) < now - 60_000) recentExceptions.shift();
+  if (recentExceptions.length >= 30 && process.env["JARVIS_DESKTOP"] === "1") {
+    app.log.fatal({ count: recentExceptions.length }, "Too many uncaught exceptions in one minute; exiting so the desktop app restarts the server");
+    process.exit(70);
+  }
 });
 
 // Development defaults to a fixed port (39130) so it never collides with the

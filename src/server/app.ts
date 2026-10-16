@@ -18,6 +18,7 @@ import { AppError, asMessage, errorStatusCode } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { TrashService } from "./trash.js";
 import { registerSystemRoutes } from "./system-routes.js";
+import { teeLogStream, type DailyLogFile } from "./log-files.js";
 import { takeUndeliveredRecoveryMessage } from "./fs.js";
 import { applyAuthCookie, authorizeSocket, clearAuthCookie, readAuthCookie } from "./http-auth.js";
 import { SessionService } from "./session-service.js";
@@ -136,8 +137,11 @@ export interface JarvisServices {
 export async function buildApp(options: {
   serveStatic?: boolean;
   staticRoot?: string;
+  /** 提供时，Fastify 日志同时写进按天的日志文件。 */
+  logFile?: DailyLogFile;
 } = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: { level: process.env["LOG_LEVEL"] ?? "info" }, bodyLimit: 25 * 1024 * 1024 });
+  const level = process.env["LOG_LEVEL"] ?? "info";
+  const app = Fastify({ logger: options.logFile === undefined ? { level } : { level, stream: teeLogStream(options.logFile) }, bodyLimit: 25 * 1024 * 1024 });
   const production = process.env["NODE_ENV"] === "production";
   const events = new EventHub();
   const workspaces = new WorkspaceStore(undefined, () => events.publishGlobal({ version: 1, type: "workspaces.changed" }));
@@ -243,7 +247,7 @@ export async function buildApp(options: {
   });
 
   registerSelfRestart(app, events);
-  registerSystemRoutes(app, { trash });
+  registerSystemRoutes(app, { trash, logDirectory: options.logFile?.directory, runningCount: () => sessions.runningCount() });
   const stopTrashPurge = trash.startAutoPurge((message) => app.log.info(message));
   app.addHook("onClose", async () => { stopTrashPurge(); });
 
