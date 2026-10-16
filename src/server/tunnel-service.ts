@@ -6,6 +6,7 @@ import { basename, dirname, join, relative } from "node:path";
 import type { TunnelEntryConfig, TunnelFrpConfig, TunnelLogEntry, TunnelMethod, TunnelSnapshot, TunnelState } from "../shared/protocol.js";
 import { TUNNEL_METHODS } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
+import { atomicWrite } from "./fs.js";
 
 const CONFIG_VERSION = 2;
 const MAX_LOG_LINES = 300;
@@ -248,7 +249,7 @@ export class TunnelService {
 
   private async persist(): Promise<void> {
     await mkdir(dirname(this.configPath), { recursive: true });
-    await writeFile(this.configPath, JSON.stringify({ version: CONFIG_VERSION, tunnels: this.tunnels }, null, 2));
+    await atomicWrite(this.configPath, JSON.stringify({ version: CONFIG_VERSION, tunnels: this.tunnels }, null, 2));
   }
 
   private async spawnTunnel(instance: TunnelInstance): Promise<void> {
