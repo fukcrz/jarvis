@@ -37,7 +37,7 @@ import type {
   ProviderStatus,
 } from "../shared/protocol";
 import type { ModelGroupsConfig, ModelGroupsSnapshot, PluginCatalogItem, PluginSnapshot } from "../shared/plugins";
-import type { RecoveryNotice, TrashEntry, TrashListing } from "../shared/system";
+import type { RecoveryNotice } from "../shared/system";
 import type { SkillFileContent, SkillFileListing, SkillSnapshot } from "../shared/skills";
 
 /** 会话失效（HTTP 401 / WebSocket 4401）时广播，由 AuthGate 切回登录页。 */
@@ -162,8 +162,6 @@ function parseValidationDetails(message: string): string | undefined {
 }
 
 export interface SystemInfo {
-  logDirectory: string;
-  logRetentionDays: number;
   snapshotDirectory?: string;
   snapshotKeep?: number;
   snapshots?: Array<{ name: string; size: number }>;
@@ -334,9 +332,6 @@ export const api = {
   selfRestart: async (): Promise<{ restarting: boolean }> => request("/api/self/restart", { method: "POST" }),
   systemInfo: async (): Promise<SystemInfo> => request("/api/system/info"),
   recoveries: async (): Promise<RecoveryNotice[]> => (await request<{ recoveries: RecoveryNotice[] }>("/api/system/recoveries")).recoveries,
-  trash: async (): Promise<TrashListing> => request("/api/trash"),
-  restoreTrash: async (id: string): Promise<{ entry: TrashEntry; restoredPath: string }> => request(`/api/trash/${encodeURIComponent(id)}/restore`, { method: "POST" }),
-  removeTrash: async (id: string): Promise<void> => { await request(`/api/trash/${encodeURIComponent(id)}`, { method: "DELETE" }); },
 };
 
 export function sessionPath(ref: SessionRef): string {

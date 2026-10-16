@@ -1,4 +1,4 @@
-/** 数据安全相关的接口类型：配置恢复记录、回收站。 */
+/** 数据安全相关的接口类型：配置恢复记录。 */
 
 export interface RecoveryNotice {
   file: string;
@@ -8,24 +8,4 @@ export interface RecoveryNotice {
   corruptPath?: string;
   reason: string;
   at: string;
-}
-
-export type TrashKind = "session" | "file" | "skill";
-
-export interface TrashEntry {
-  id: string;
-  kind: TrashKind;
-  /** 列表里显示的名字：会话名或文件名。 */
-  label: string;
-  originalPath: string;
-  deletedAt: string;
-  workspaceId?: string;
-  sessionId?: string;
-  isDirectory?: boolean;
-}
-
-export interface TrashListing {
-  entries: TrashEntry[];
-  retentionDays: number;
-  directory: string;
 }

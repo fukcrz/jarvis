@@ -64,16 +64,14 @@ describe("sanitizeConfig", () => {
 describe("buildDiagnosticsZip", () => {
   it("bundles info, recent logs and sanitized config", async () => {
     const home = join(directory, "home");
-    const logs = join(home, "logs");
-    await mkdir(logs, { recursive: true });
-    await writeFile(join(logs, "server-2026-10-16.log"), "{\"msg\":\"hi\"}\n");
+    await mkdir(home, { recursive: true });
     await writeFile(join(home, "auth.json"), JSON.stringify({ version: 1, secret: "SECRET", tokenVersion: 1, password: null }));
     await writeFile(join(home, "settings.json"), JSON.stringify({ version: 1, assistantName: "J" }));
 
-    const { fileName, data } = await buildDiagnosticsZip({ jarvisHome: home, logDirectory: logs, agentDir: join(directory, "agent") });
+    const { fileName, data } = await buildDiagnosticsZip({ jarvisHome: home, recentLogs: () => "{\"msg\":\"hi\"}\n", agentDir: join(directory, "agent") });
     expect(fileName).toMatch(/^jarvis-diagnostics-\d{8}T\d{6}\.zip$/);
     const files = readZip(data);
-    expect(files.get("logs/server-2026-10-16.log")).toContain("hi");
+    expect(files.get("logs/recent.log")).toContain("hi");
     expect(JSON.parse(files.get("info.json") ?? "{}")).toMatchObject({ node: process.version, jarvisVersion: expect.any(String) as unknown });
     expect(files.get("config/auth.json")).not.toContain("SECRET");
     expect(files.get("config/settings.json")).toContain("\"J\"");

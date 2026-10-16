@@ -9,7 +9,6 @@ import { AppError } from "./errors.js";
 import { isMissingFile, readJsonRecovering, writeWithBackup } from "./fs.js";
 import { BUNDLED_SKILLS, isDirectChild, isSkillName, reconcileBundledSkills, type BundledSkillStatus } from "./skill-reconcile.js";
 import { readWorkspaceFile } from "./workspace-fs.js";
-import type { TrashService } from "./trash.js";
 import { jarvisHome } from "./jarvis-home.js";
 
 interface SkillPrefs { version: 1; disabledBundled: string[] }
@@ -48,13 +47,6 @@ export class SkillService {
     private readonly workspaces: () => SkillWorkspaceRef[] = () => [],
     private readonly log: (message: string) => void = (message) => console.warn(message),
   ) {}
-
-  private trash: TrashService | undefined;
-
-  /** 设置后删除技能改为移进回收站。 */
-  useTrash(trash: TrashService): void {
-    this.trash = trash;
-  }
 
   async initialize(): Promise<void> {
     const manifest = await readManifest();
@@ -118,8 +110,7 @@ export class SkillService {
     if (parent === undefined || !isDirectChild(parent, root)) throw new AppError("SKILL_DELETE_INVALID", "不能删除", 400);
     const link = await lstat(root);
     if (link.isSymbolicLink()) throw new AppError("SKILL_DELETE_INVALID", "不能删除", 400);
-    if (this.trash === undefined) await rm(root, { recursive: true, force: false });
-    else await this.trash.moveToTrash(root, { kind: "skill", label: `技能：${entry.name}` });
+    await rm(root, { recursive: true, force: false });
     return this.snapshot();
   }
 

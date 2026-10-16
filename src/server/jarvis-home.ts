@@ -5,3 +5,9 @@ import { join } from "node:path";
 export function jarvisHome(): string {
   return process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis");
 }
+
+/** 本地日期 YYYY-MM-DD（每日快照文件名用）。 */
+export function localDay(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${String(date.getFullYear())}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}

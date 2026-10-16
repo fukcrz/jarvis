@@ -5,24 +5,22 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { listRecoveryNotices } from "./fs.js";
-import { defaultLogDirectory, LOG_RETENTION_DAYS } from "./log-files.js";
 import { createZip, type ZipInput } from "./zip.js";
 import { jarvisHome as defaultJarvisHome } from "./jarvis-home.js";
 
-const MAX_LOG_BYTES = 40 * 1024 * 1024;
 const SECRET_KEY = /(key|token|secret|password|passwd|authorization|cookie|credential)/i;
 
 export interface DiagnosticsContext {
   jarvisHome?: string;
-  logDirectory?: string;
+  /** 内存里最近的服务日志（不落盘）。 */
+  recentLogs?: () => string;
   agentDir?: string;
   extra?: () => Record<string, unknown>;
 }
 
-/** 导出诊断包：最近 7 天日志、版本信息、去掉密码和 token 的配置。 */
+/** 导出诊断包：版本信息、内存里最近的服务日志、去掉密码和 token 的配置。 */
 export async function buildDiagnosticsZip(context: DiagnosticsContext = {}): Promise<{ fileName: string; data: Buffer }> {
   const jarvisHome = context.jarvisHome ?? defaultJarvisHome();
-  const logDirectory = context.logDirectory ?? defaultLogDirectory();
   const agentDir = context.agentDir ?? getAgentDir();
   const now = new Date();
   const entries: ZipInput[] = [];
@@ -39,23 +37,14 @@ export async function buildDiagnosticsZip(context: DiagnosticsContext = {}): Pro
     uptimeSeconds: Math.round(process.uptime()),
     memory: { rss: process.memoryUsage().rss, heapUsed: process.memoryUsage().heapUsed, systemTotal: totalmem(), systemFree: freemem() },
     env: pickEnv(["NODE_ENV", "PORT", "HOST", "JARVIS_DESKTOP", "JARVIS_SELF_RESTART", "LOG_LEVEL"]),
-    paths: { jarvisHome, agentDir, logDirectory, cwd: process.cwd() },
+    paths: { jarvisHome, agentDir, cwd: process.cwd() },
     recoveries: listRecoveryNotices(),
     ...(context.extra?.() ?? {}),
   };
   entries.push({ name: "info.json", data: `${JSON.stringify(info, null, 2)}\n` });
 
-  // 日志：从新到旧，总量不超过上限。
-  const logs = await listFiles(logDirectory);
-  logs.sort((left, right) => right.mtimeMs - left.mtimeMs);
-  let budget = MAX_LOG_BYTES;
-  for (const log of logs) {
-    if (!log.name.endsWith(".log")) continue;
-    if (now.getTime() - log.mtimeMs > (LOG_RETENTION_DAYS + 1) * 86_400_000) continue;
-    if (log.size > budget) continue;
-    budget -= log.size;
-    entries.push({ name: `logs/${log.name}`, data: await readFile(log.path), date: new Date(log.mtimeMs) });
-  }
+  const recent = context.recentLogs?.() ?? "";
+  if (recent !== "") entries.push({ name: "logs/recent.log", data: recent });
   // 自重启的输出（Windows）放在程序目录的 logs 下。
   for (const name of ["self-restart.log", "self-restart.error.log"]) {
     const path = join(process.cwd(), "logs", name);

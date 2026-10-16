@@ -22,8 +22,3 @@ commands.allow = ["check_desktop_update"]
 identifier = "allow-update-channel"
 description = "读取和切换更新通道，并按所选通道检查更新"
 commands.allow = ["get_update_channel", "set_update_channel", "check_channel_update"]
-
-[[permission]]
-identifier = "allow-open-logs-folder"
-description = "在文件管理器里打开日志目录"
-commands.allow = ["open_logs_folder"]

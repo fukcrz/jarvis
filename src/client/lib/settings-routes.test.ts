@@ -16,7 +16,6 @@ const routes: SettingsRoute[] = [
   { page: "skill-files", skillId: "browser-qa" },
   { page: "workspaces" },
   { page: "remote" },
-  { page: "data" },
   { page: "about" },
 ];
 
@@ -56,6 +55,7 @@ describe("settings routes", () => {
     expect(legacySettingsRedirect("/settings/plugins/model-groups")).toEqual({ route: { page: "model-groups" } });
     expect(legacySettingsRedirect("/settings/skills")).toEqual({ route: { page: "skills" } });
     expect(legacySettingsRedirect("/settings/skills/browser-qa")).toEqual({ route: { page: "skill-files", skillId: "browser-qa" } });
+    expect(legacySettingsRedirect("/settings/data")).toEqual({ route: { page: "about" }, focus: "diagnostics" });
     expect(legacySettingsRedirect("/settings/workspaces")).toBeUndefined();
     expect(legacySettingsRedirect("/settings/nope")).toBeUndefined();
   });
