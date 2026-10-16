@@ -1154,7 +1154,9 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .turn-changes-row { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 6px 10px; }
 .turn-changes-summary { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; border: 0; background: transparent; padding: 3px 0; color: var(--subtle); font-size: 12px; font-weight: 500; cursor: pointer; }
 .turn-changes-summary[aria-expanded="true"], .turn-changes-summary:hover { color: var(--muted); }
-.turn-changes-chips { display: inline-flex; flex-wrap: wrap; min-width: 0; gap: 5px; }
+.turn-changes-chips { display: inline-flex; flex-wrap: wrap; align-items: center; min-width: 0; gap: 5px; }
+.turn-changes-more { border: 0; background: transparent; padding: 1px 2px; color: var(--subtle); font-size: 11px; cursor: pointer; }
+.turn-changes-more:hover, .turn-changes-more[aria-expanded="true"] { color: var(--muted); }
 .file-chip { display: inline-flex; max-width: 100%; min-width: 0; align-items: center; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); padding: 1px 8px; color: var(--muted); font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .file-chip > * { min-width: 0; overflow: hidden; color: inherit; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
 .file-chip:hover { border-color: var(--line-strong); color: var(--ink); }

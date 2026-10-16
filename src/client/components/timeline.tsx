@@ -1479,6 +1479,9 @@ function FileChip({ path, cwd, children }: { path: string; cwd?: string; childre
   return <span className="file-chip" title={path}><LocalTextFileLink path={path} cwd={cwd}>{children ?? fileBaseName(path)}</LocalTextFileLink></span>;
 }
 
+/** 回合改动汇总行最多直接显示的文件名小标签数，其余收成"等 N 个"。 */
+const TURN_CHANGE_CHIP_LIMIT = 3;
+
 function TurnChanges({ changes, cwd }: { changes: FileChange[]; cwd?: string }) {
   const [open, setOpen] = useState(false);
   const added = changes.reduce((sum, change) => sum + change.added, 0);
@@ -1490,7 +1493,7 @@ function TurnChanges({ changes, cwd }: { changes: FileChange[]; cwd?: string }) 
         <span>{changes.length} 个文件</span>
         <DiffStat added={added} removed={removed} />
       </button>
-      <span className="turn-changes-chips">{changes.map((change) => <FileChip key={change.path} path={change.path} cwd={cwd} />)}</span>
+      <span className="turn-changes-chips">{changes.slice(0, TURN_CHANGE_CHIP_LIMIT).map((change) => <FileChip key={change.path} path={change.path} cwd={cwd} />)}{changes.length > TURN_CHANGE_CHIP_LIMIT ? <button type="button" className="turn-changes-more" aria-expanded={open} aria-label={`${open ? "收起" : "查看"}全部 ${String(changes.length)} 个改动文件`} onClick={() => setOpen((value) => !value)}>等 {changes.length} 个</button> : null}</span>
     </div>
     {open ? <div className="turn-changes-files">{changes.map((change) => <div key={change.path} className="turn-changes-file">
       <div className="turn-changes-file-head"><FileChip path={change.path} cwd={cwd}>{change.path}</FileChip>{change.kind === "write" ? <span className="turn-changes-kind">写入</span> : null}<DiffStat added={change.added} removed={change.removed} /></div>
@@ -1541,7 +1544,7 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
     {processBlock}
     {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, true), onToggleCall: (_toolId, callId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, callId, true) }, true, false)}</div>)}
     {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: true })}
-    {live || changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />}
+    {live || changes.length === 0 || context.detailLevel === "concise" ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />}
     {turn.finalError === undefined ? null : <TurnFailureCard items={turn.finalError} failedTool={lastFailedTool(split.process)} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} />}
   </>;
 }
