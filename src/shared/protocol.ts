@@ -481,6 +481,18 @@ export interface ToolTimelineItem {
   images?: ImageAttachment[];
   /** Compact @mjakl/pi-subagent snapshot. Never includes child message trees. */
   subagent?: SubagentView;
+  /** edit/write 对文件的改动：行数统计和用于展示的 diff（"@@"/" "/"-"/"+" 前缀的行）。 */
+  fileChange?: FileChange;
+}
+
+export interface FileChange {
+  kind: "edit" | "write";
+  path: string;
+  added: number;
+  removed: number;
+  diff?: string;
+  /** diff 太长只保留了前一部分。 */
+  truncated?: boolean;
 }
 
 export type SubagentCallState = "running" | "completed" | "failed" | "cancelled";
@@ -518,6 +530,8 @@ export interface ThinkingTimelineItem {
   text: string;
   /** Exact usage and duration when a response has no visible text block. */
   generation?: AssistantGenerationStats;
+  /** 从 thinking_start 到 thinking_end 的耗时，由 Jarvis 实时记录。 */
+  durationMs?: number;
   /** Original Pi assistant content-block index, when available. */
   contentIndex?: number;
   assistantMessageId?: string;

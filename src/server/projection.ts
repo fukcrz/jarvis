@@ -1,4 +1,5 @@
 import { isRecord, type AssistantGenerationStats, type AssistantTextPhase, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type TokenUsage, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
+import { fileChangeFromCall, fileChangeFromPatch } from "../shared/file-change.js";
 import { attachSubagentView, subagentViewFromArgs } from "./subagent-view.js";
 import { numberValue, stringValue, toIso } from "./values.js";
 
@@ -69,11 +70,11 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
       if (existingIndex !== undefined) {
         const current = items[existingIndex];
         if (current?.kind === "tool") {
-          items[existingIndex] = attachSubagentView({
+          items[existingIndex] = attachSubagentView(withFileChangeResult({
             ...current,
             state,
             ...(state === "failed" ? { error: output } : { output, ...(images.length === 0 ? {} : { images }) }),
-          }, message);
+          }, message, state === "failed"), message);
           continue;
         }
       }
@@ -363,6 +364,7 @@ export function toolFromCall(
   const title = toolTitle(name);
   const inputPreview = summarizeArgs(args);
   const subagent = subagentViewFromArgs(name, args);
+  const fileChange = fileChangeFromCall(name, args);
   return {
     kind: "tool",
     id,
@@ -376,7 +378,24 @@ export function toolFromCall(
     ...(metadata?.contentIndex === undefined ? {} : { contentIndex: metadata.contentIndex }),
     ...(metadata?.assistantMessageId === undefined ? {} : { assistantMessageId: metadata.assistantMessageId }),
     ...(subagent === undefined ? {} : { subagent }),
+    ...(fileChange === undefined ? {} : { fileChange }),
   };
+}
+
+/** 失败的改动不算数；成功时优先用工具返回的真实 patch。 */
+export function withFileChangeResult(tool: ToolTimelineItem, result: unknown, failed: boolean): ToolTimelineItem {
+  if (failed) {
+    if (tool.fileChange === undefined) return tool;
+    const next = { ...tool };
+    delete next.fileChange;
+    return next;
+  }
+  const details = isRecord(result) && isRecord(result["details"]) ? result["details"] : undefined;
+  const patch = details?.["patch"];
+  const path = tool.fileChange?.path ?? tool.target;
+  if (typeof patch !== "string" || path === undefined || path === "") return tool;
+  const fileChange = fileChangeFromPatch(path, patch, tool.fileChange?.kind ?? "edit");
+  return fileChange === undefined ? tool : { ...tool, fileChange };
 }
 
 export function toolWithResult(tool: ToolTimelineItem, result: unknown, isError: boolean, durationMs?: number): ToolTimelineItem {
@@ -396,12 +415,12 @@ export function toolWithResult(tool: ToolTimelineItem, result: unknown, isError:
     delete next.output;
     delete next.images;
     if (text !== "") next.error = text;
-    return attachSubagentView(next, result);
+    return attachSubagentView(withFileChangeResult(next, result, true), result);
   }
   delete next.error;
   if (text !== "") next.output = text;
   if (images.length > 0) next.images = images;
-  return attachSubagentView(next, result);
+  return attachSubagentView(withFileChangeResult(next, result, false), result);
 }
 
 export function toolWithPartial(tool: ToolTimelineItem, result: unknown): ToolTimelineItem {

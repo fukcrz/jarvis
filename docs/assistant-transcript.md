@@ -43,6 +43,10 @@ Thinking starts with a single-line preview and opens to its full content. While 
 
 The process is the only parent fold. Tool groups are labels rather than a second toggle; each tool row keeps its own detail state. Opening a row opens the process, and folding the process hides details without resetting them. Manual expansion of a thought, tool result, or process is preserved across later events and completion. Pending extension input pins its process open. Failed tools and error diagnostics stay accessible. User `!cmd` entries remain outside the process fold.
 
+## File changes
+
+`edit` and `write` tool items carry a `fileChange` (path, added/removed line counts, display diff). It is first derived from the call arguments (edit `oldText`/`newText` pairs, or the whole written content) and replaced by the unified patch in Pi's `details.patch` once the edit succeeds; a failed edit drops it. The diff is capped at 400 lines. The row shows `+a −b` next to its title and opens to a coloured diff. After a turn settles, a `N 个文件 +a −b` line sits under the final answer with clickable file chips (existing text preview); it expands to per-file diffs, with repeated edits to one file merged.
+
 ## Verification
 
 `session-pi-events.test.ts` exercises real EventHub envelopes through the client reducer and compares live, snapshot, and history identities/order. Projection, transcript, socket coalescing, tool summaries, and timeline grouping have focused regression tests.

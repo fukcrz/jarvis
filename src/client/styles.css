@@ -1123,3 +1123,34 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .skill-file-preview { max-height: min(70vh, 720px); overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 12px; }
 .skill-file-code { margin: 0; overflow: auto; color: var(--ink); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
 .skill-file-line { display: block; }
+
+/* 文件改动：行数统计、diff、回合改动汇总 */
+.diff-stat { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.diff-stat-added { color: var(--success); }
+.diff-stat-removed { color: var(--danger); }
+.activity-items .tool-list-item .tool-summary.has-diff { display: flex; align-items: center; }
+.activity-items .tool-list-item .tool-summary.has-diff .tool-title { flex: 0 1 auto; min-width: 0; }
+.diff-view { min-width: 0; max-width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--code); }
+.diff-view pre { display: grid; max-height: 420px; margin: 0; overflow: auto; background: transparent; padding: 4px 0; font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
+.activity-items .tool-list-item .tool-details .diff-view pre { max-height: 420px; }
+.diff-line { display: block; min-width: max-content; padding: 0 10px 0 4px; color: var(--muted); }
+.diff-line.added { background: rgb(143 206 169 / .12); color: #cfeedd; }
+.diff-line.removed { background: rgb(239 143 147 / .12); color: #f6c9cb; }
+.diff-line.hunk { color: var(--subtle); text-align: left; padding-left: 20px; }
+.diff-sign { display: inline-block; width: 16px; color: var(--subtle); user-select: none; }
+.diff-line.added .diff-sign { color: var(--success); }
+.diff-line.removed .diff-sign { color: var(--danger); }
+.diff-view-empty, .diff-view-truncated { color: var(--subtle); font-size: 11px; padding: 4px 10px; }
+.turn-changes { display: grid; min-width: 0; max-width: 100%; gap: 6px; margin: 2px 0 10px; color: var(--muted); }
+.turn-changes-row { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 6px 10px; }
+.turn-changes-summary { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; border: 0; background: transparent; padding: 3px 0; color: var(--subtle); font-size: 12px; font-weight: 500; cursor: pointer; }
+.turn-changes-summary[aria-expanded="true"], .turn-changes-summary:hover { color: var(--muted); }
+.turn-changes-chips { display: inline-flex; flex-wrap: wrap; min-width: 0; gap: 5px; }
+.file-chip { display: inline-flex; max-width: 100%; min-width: 0; align-items: center; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); padding: 1px 8px; color: var(--muted); font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.file-chip > * { min-width: 0; overflow: hidden; color: inherit; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.file-chip:hover { border-color: var(--line-strong); color: var(--ink); }
+.turn-changes-files { display: grid; min-width: 0; gap: 10px; }
+.turn-changes-file { display: grid; min-width: 0; gap: 5px; }
+.turn-changes-file-head { display: flex; align-items: center; min-width: 0; gap: 8px; }
+.turn-changes-file-head .file-chip { flex: 0 1 auto; }
+.turn-changes-kind { color: var(--subtle); font-size: 11px; }
