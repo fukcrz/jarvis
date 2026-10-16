@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, open, readFile, rename, rm } from "node:fs/promises";
+import { open, readFile, rename, rm } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import { isRecord } from "../shared/protocol.js";
 
@@ -65,32 +65,15 @@ export function backupPath(path: string): string {
 }
 
 /**
- * 带备份的原子写：先把当前文件复制成 `.bak`（同样先写临时文件再改名），再原子写入新内容。
- * 备份失败不阻止写入。
+ * 带备份的原子写：先原子写入目标（已刷盘），再把同样的内容原子写成 `.bak`。
+ * 目标文件日后被截断或清零时，可以从 `.bak` 恢复到最后一次成功保存的内容；
+ * 两步之间断电时 `.bak` 只是落后一版。备份失败不影响这次保存。
  */
 export async function writeWithBackup(path: string, content: string): Promise<void> {
-  await backupCurrent(path).catch((error: unknown) => {
-    if (!isMissingFile(error)) console.warn(`[jarvis] 备份 ${basename(path)} 失败`, error);
-  });
   await atomicWrite(path, content);
-}
-
-async function backupCurrent(path: string): Promise<void> {
-  const target = backupPath(path);
-  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await withFsRetry(() => copyFile(path, temporary));
-    const handle = await open(temporary, "r+");
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await withFsRetry(() => rename(temporary, target));
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  await atomicWrite(backupPath(path), content).catch((error: unknown) => {
+    console.warn(`[jarvis] 备份 ${basename(path)} 失败`, error);
+  });
 }
 
 export function isMissingFile(error: unknown): boolean {
@@ -116,6 +99,23 @@ export function listRecoveryNotices(): RecoveryNotice[] {
 
 export function clearRecoveryNoticesForTest(): void {
   recoveryNotices.length = 0;
+  deliveredNotices = 0;
+}
+
+let deliveredNotices = 0;
+
+/** 取出还没推送给界面的恢复记录（每条只提示一次），合成一句中文提示。 */
+export function takeUndeliveredRecoveryMessage(): string | undefined {
+  const pending = recoveryNotices.slice(deliveredNotices);
+  deliveredNotices = recoveryNotices.length;
+  if (pending.length === 0) return undefined;
+  const restored = pending.filter((notice) => notice.outcome === "backup").map((notice) => basename(notice.file));
+  const reset = pending.filter((notice) => notice.outcome === "default").map((notice) => basename(notice.file));
+  const parts = [
+    ...(restored.length === 0 ? [] : [`已从备份恢复 ${[...new Set(restored)].join("、")}`]),
+    ...(reset.length === 0 ? [] : [`${[...new Set(reset)].join("、")} 已损坏且没有可用备份，已改用默认值`]),
+  ];
+  return `配置文件读取失败：${parts.join("；")}。坏文件已改名留存，详情见 设置 → 数据与恢复。`;
 }
 
 export type JsonParser<T> = (value: unknown) => T;

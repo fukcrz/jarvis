@@ -6,7 +6,7 @@ import { getAgentDir, readStoredCredential, resolveModelScopeWithDiagnostics, Se
 import type { AuthEvent, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
 import type { AppSettings, AuthLoginOperation, EnabledModelRef, EnabledModelsStatus, FetchedModel, ManagedCompat, ManagedMaxTokensField, ManagedModel, ManagedProvider, ManagedThinkingFormat, ProviderOverride, ProviderStatus } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
-import { atomicWrite, isMissingFile } from "./fs.js";
+import { isMissingFile, readJsonRecovering, writeWithBackup } from "./fs.js";
 import { isRecord } from "../shared/protocol.js";
 
 interface StoredSettings { version: 1; assistantName: string; }
@@ -48,17 +48,13 @@ export class SettingsService {
 
   async initialize(): Promise<void> {
     await mkdir(dirname(this.settingsPath), { recursive: true });
-    try {
-      const parsed = JSON.parse(await readFile(this.settingsPath, "utf8")) as Partial<StoredSettings>;
-      if (parsed.version !== 1 || typeof parsed.assistantName !== "string") throw new Error("Unsupported settings format");
-      this.settings = {
-        version: 1,
-        assistantName: normalizeAssistantName(parsed.assistantName),
-      };
-    } catch (error) {
-      if (!isMissingFile(error)) throw error;
-      await this.persistSettings();
-    }
+    const loaded = await readJsonRecovering(this.settingsPath, (value) => {
+      const parsed = value as Partial<StoredSettings> | null;
+      if (parsed === null || typeof parsed !== "object" || parsed.version !== 1 || typeof parsed.assistantName !== "string") throw new Error("Unsupported settings format");
+      return parsed.assistantName;
+    });
+    if (loaded.value !== undefined) this.settings = { version: 1, assistantName: normalizeAssistantName(loaded.value) };
+    else await this.persistSettings();
   }
 
   getSettings(): AppSettings { return { assistantName: this.settings.assistantName }; }
@@ -447,11 +443,11 @@ export class SettingsService {
 
   private async writeModelsConfig(config: ModelConfig): Promise<void> {
     await mkdir(dirname(this.modelsPath), { recursive: true });
-    await atomicWrite(this.modelsPath, `${JSON.stringify(config, null, 2)}\n`);
+    await writeWithBackup(this.modelsPath, `${JSON.stringify(config, null, 2)}\n`);
   }
 
   private async persistSettings(): Promise<void> {
-    await atomicWrite(this.settingsPath, `${JSON.stringify(this.settings, null, 2)}\n`);
+    await writeWithBackup(this.settingsPath, `${JSON.stringify(this.settings, null, 2)}\n`);
   }
 }
 

@@ -1,7 +1,7 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { SessionAttentionState, SessionRef } from "../shared/protocol.js";
-import { atomicWrite, isMissingFile } from "./fs.js";
+import { readJsonRecovering, writeWithBackup } from "./fs.js";
 
 export interface SessionSortMeta {
   attentionState: SessionAttentionState;
@@ -215,15 +215,18 @@ export class SessionAttentionStore {
 
   private async load(): Promise<PersistedAttentionFile> {
     if (this.data !== undefined) return this.data;
-    try {
-      const parsed: unknown = JSON.parse(await readFile(this.path, "utf8"));
+    // 读坏时坏文件改名留存并用 .bak 恢复，不再悄悄用空数据覆盖星标、未读和侧聊关系。
+    const loaded = await readJsonRecovering(this.path, (parsed) => {
       const migrated = migratePersistedFile(parsed);
-      if (migrated !== undefined) {
-        this.data = migrated;
-        return migrated;
-      }
-    } catch (error) {
-      if (!isMissingFile(error)) console.warn("Could not read Jarvis session attention state", error);
+      if (migrated === undefined) throw new Error("Unsupported session attention format");
+      return migrated;
+    }).catch((error: unknown) => {
+      console.warn("Could not read Jarvis session attention state", error);
+      return { value: undefined };
+    });
+    if (loaded.value !== undefined) {
+      this.data = loaded.value;
+      return loaded.value;
     }
     this.data = { version: 2, sessions: {} };
     return this.data;
@@ -232,7 +235,7 @@ export class SessionAttentionStore {
   private async persist(data: PersistedAttentionFile): Promise<void> {
     if (data.sideChats !== undefined && Object.keys(data.sideChats).length === 0) delete data.sideChats;
     await mkdir(dirname(this.path), { recursive: true });
-    await atomicWrite(this.path, `${JSON.stringify(data)}\n`);
+    await writeWithBackup(this.path, `${JSON.stringify(data)}\n`);
   }
 }
 
