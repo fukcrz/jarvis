@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatRunElapsed, getRunFeedback } from "./run-feedback";
+import type { SessionStatus, TimelineItem } from "../shared/protocol";
+import { formatRunElapsed, getRunFeedback, getRunStatusActivity } from "./run-feedback";
 
 const running = {
   sessionId: "session",
@@ -27,5 +28,19 @@ describe("run feedback", () => {
   it("formats an elapsed run duration", () => {
     expect(formatRunElapsed(running.activeRun.startedAt, Date.parse("2026-08-09T00:01:04.000Z"))).toBe("1:04");
     expect(formatRunElapsed(undefined)).toBeUndefined();
+  });
+});
+
+describe("getRunStatusActivity", () => {
+  const runningStatus = { runState: "running", activeRun: { startedAt: "2026-01-01T00:00:00.000Z" } } as unknown as SessionStatus;
+  it("names the running command", () => {
+    const items = [{ kind: "tool", id: "t", createdAt: "", name: "bash", title: "运行命令", state: "running", inputPreview: "npm test\nmore" }] as TimelineItem[];
+    expect(getRunStatusActivity(runningStatus, items)).toEqual({ label: "正在执行：npm test", target: "tool" });
+  });
+  it("reports thinking, replying and idle", () => {
+    expect(getRunStatusActivity(runningStatus, [{ kind: "thinking", id: "k", createdAt: "", state: "running", text: "" }] as unknown as TimelineItem[])?.label).toBe("思考中");
+    expect(getRunStatusActivity(runningStatus, [], "m")?.label).toBe("正在回复");
+    expect(getRunStatusActivity(runningStatus, [])?.label).toBe("处理中");
+    expect(getRunStatusActivity({ ...runningStatus, runState: "idle" } as SessionStatus, [])).toBeUndefined();
   });
 });

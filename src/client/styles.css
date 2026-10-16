@@ -1178,3 +1178,13 @@ button.turn-failure-raw.timeline-event-summary { display: inline-flex; align-ite
 .run-failure .run-failure-copy > span { color: var(--muted); font-family: inherit; font-size: 12px; line-height: 1.5; }
 .turn-failure { border: 1px solid rgb(255 107 115 / .22); border-radius: 8px; background: rgb(120 30 40 / .12); }
 .timeline-error-header.turn-failure-raw > svg { margin-top: 0; color: inherit; }
+/* 运行中状态条：贴在输入框上方，说明当前在做什么、已用时长，点击跳到那一步 */
+.run-status-bar { position: absolute; z-index: 3; left: 50%; bottom: 17px; translate: -50% 0; grid-column: 1; grid-row: 1; display: inline-flex; align-items: center; gap: 7px; max-width: min(560px, calc(100% - 32px)); min-height: 30px; border: 1px solid var(--glass-border); border-radius: 999px; background: var(--surface-raised); box-shadow: 0 8px 22px rgb(0 0 0 / .32), var(--glass-highlight); padding: 4px 12px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.run-status-bar:hover { color: var(--ink); }
+.run-status-bar > svg { flex: 0 0 auto; color: var(--accent-strong); }
+.run-status-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-status-bar .run-elapsed { flex: 0 0 auto; color: var(--subtle); font-variant-numeric: tabular-nums; }
+.chat-stage .run-status-bar { bottom: 204px; }
+.chat-stage .timeline-shell.has-run-status .timeline-inner { padding-bottom: calc(var(--chat-dock-space, 216px) + 40px); }
+html.text-selecting .run-status-bar { pointer-events: none !important; }
+@media (max-width: 760px) { .chat-stage .run-status-bar { bottom: 168px; } .run-status-bar { max-width: calc(100% - 24px); } }
