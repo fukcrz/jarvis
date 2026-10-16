@@ -10,6 +10,7 @@ import { z } from "zod";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { MANAGED_APIS, MANAGED_MAX_TOKENS_FIELDS, MANAGED_THINKING_FORMATS, THINKING_LEVELS, TUNNEL_METHODS } from "../shared/protocol.js";
 import type { ApiErrorBody, SessionRef } from "../shared/protocol.js";
+import { ModelGroupsService, MODEL_GROUPS_PLUGIN_ID } from "./model-groups-service.js";
 import { AuthService } from "./auth-service.js";
 import { BackgroundTaskService } from "./background-task-service.js";
 import { AppError, asMessage, errorStatusCode } from "./errors.js";
@@ -19,6 +20,7 @@ import { SessionService } from "./session-service.js";
 import { desktopEnabled } from "./desktop-bridge.js";
 import { registerSelfRestart } from "./self-restart.js";
 import { WorkspaceStore } from "./workspace-store.js";
+import { PluginService } from "./plugin-service.js";
 import { SkillService } from "./skill-service.js";
 import { SettingsService } from "./settings-service.js";
 import { TunnelService } from "./tunnel-service.js";
@@ -101,6 +103,7 @@ const providerOverrideInput = z.object({
   headers: managedHeadersInput.optional(),
   compat: managedCompatInput.optional(),
 }).strict();
+const providerApiKeyInput = z.object({ apiKey: z.string().max(20_000) }).strict();
 const extensionUiInput = z.object({
   id: z.string().uuid(),
   value: z.string().max(200_000).optional(),
@@ -121,6 +124,8 @@ export interface JarvisServices {
   events: EventHub;
   tunnel: TunnelService;
   auth: AuthService;
+  plugins: PluginService;
+  modelGroups: ModelGroupsService;
   skills: SkillService;
 }
 
@@ -140,9 +145,17 @@ export async function buildApp(options: {
   const auth = new AuthService();
   await auth.initialize();
   const tunnel = new TunnelService((message) => app.log.info({ tunnel: message }), () => events.publishGlobal({ version: 1, type: "tunnel.changed" }));
+  const pluginLifecycle = {
+    assertReady: () => sessions.assertExtensionsReloadReady(),
+    reload: () => sessions.reloadExtensions(),
+    withReload: <T>(operation: (reload: () => Promise<number>) => Promise<T>) => sessions.withExtensionReload(operation),
+  };
+  const plugins = new PluginService(getAgentDir(), undefined, undefined, (message) => app.log.warn(message), pluginLifecycle);
+  await plugins.initialize();
+  const modelGroups = new ModelGroupsService(getAgentDir(), () => plugins.isBundledEnabled(MODEL_GROUPS_PLUGIN_ID), pluginLifecycle);
   const skills = new SkillService(getAgentDir(), undefined, () => workspaces.list().map((workspace) => ({ id: workspace.id, label: workspace.label, cwd: workspace.cwd })), (message) => app.log.warn(message));
   await skills.initialize();
-  const services: JarvisServices = { workspaces, sessions, backgroundTasks, events, tunnel, auth, skills };
+  const services: JarvisServices = { workspaces, sessions, backgroundTasks, events, tunnel, auth, plugins, modelGroups, skills };
   await app.register(cors, { origin: production ? [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] : true });
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
@@ -256,6 +269,41 @@ export async function buildApp(options: {
     await services.tunnel.removeTunnel(tunnelId);
     return { removed: true };
   });
+  app.get("/api/plugins", async () => ({ plugins: await plugins.snapshot() }));
+  app.get("/api/plugins/model-groups", async () => ({ modelGroups: await modelGroups.snapshot() }));
+  app.put("/api/plugins/model-groups", async (request) => {
+    const body = z.object({ config: z.unknown(), revision: z.string().min(1).max(128).optional() }).strict().parse(request.body);
+    return { modelGroups: await modelGroups.save(body.config, body.revision) };
+  });
+  app.get("/api/plugins/search", async (request) => {
+    const query = z.object({ q: z.string().max(200).optional() }).parse(request.query);
+    return { results: await plugins.search(query.q ?? "") };
+  });
+  app.put("/api/plugins/bundled/:id", async (request) => {
+    const params = z.object({ id: z.string().min(1).max(80) }).parse(request.params);
+    const body = z.object({ enabled: z.boolean() }).strict().parse(request.body);
+    return { plugins: await plugins.setBundledEnabled(params.id, body.enabled) };
+  });
+  app.post("/api/plugins/bundled/:id/overwrite", async (request) => {
+    const params = z.object({ id: z.string().min(1).max(80) }).parse(request.params);
+    return { plugins: await plugins.overwriteBundled(params.id) };
+  });
+  app.put("/api/plugins/recommended", async (request) => {
+    const body = z.object({ name: z.string().min(1).max(200), enabled: z.boolean() }).strict().parse(request.body);
+    return { plugins: await plugins.setRecommendedEnabled(body.name, body.enabled) };
+  });
+  app.post("/api/plugins/install", async (request) => {
+    const body = z.object({ source: z.string().min(1).max(500) }).strict().parse(request.body);
+    return { plugins: await plugins.install(body.source) };
+  });
+  app.post("/api/plugins/remove", async (request) => {
+    const body = z.object({ source: z.string().min(1).max(500) }).strict().parse(request.body);
+    return { plugins: await plugins.remove(body.source) };
+  });
+  app.post("/api/plugins/update", async (request) => {
+    const body = z.object({ source: z.string().min(1).max(500) }).strict().parse(request.body);
+    return { plugins: await plugins.update(body.source) };
+  });
   app.get("/api/skills", async () => ({ skills: await skills.snapshot() }));
   app.put("/api/skills/bundled/:id", async (request) => {
     const params = z.object({ id: z.string().min(1).max(80) }).parse(request.params);
@@ -300,6 +348,11 @@ export async function buildApp(options: {
     const params = z.object({ providerId: z.string().min(1).max(120) }).parse(request.params);
     await settings.removeCustomProvider(params.providerId);
     return { removed: true };
+  });
+  app.put("/api/settings/providers/:providerId/api-key", async (request) => {
+    const params = z.object({ providerId: z.string().min(1).max(120) }).parse(request.params);
+    await settings.setProviderApiKey(params.providerId, providerApiKeyInput.parse(request.body).apiKey);
+    return { saved: true };
   });
   app.put("/api/settings/providers/:providerId/override", async (request) => {
     const params = z.object({ providerId: z.string().min(1).max(120) }).parse(request.params);

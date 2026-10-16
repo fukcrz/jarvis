@@ -101,6 +101,9 @@ export class SessionService {
   private readonly deleting = new Set<string>();
   /** Serialize operations which replace or tear down an in-memory session. */
   private readonly sessionTransitions = new Map<string, Promise<void>>();
+  /** Global barrier for settings-side extension reloads. */
+  private extensionReloadTail: Promise<void> = Promise.resolve();
+  private extensionReloadBlock: Promise<void> | undefined;
   private readonly sideChatEnsures = new Map<string, Promise<SessionSummary>>();
   private modelRuntimePromise: Promise<ModelRuntime> | undefined;
   private readonly attention = new SessionAttentionStore(getAgentDir());
@@ -175,6 +178,54 @@ export class SessionService {
     return this.getModelRuntime(getAgentDir());
   }
 
+  assertExtensionsReloadReady(): void {
+    for (const active of this.active.values()) {
+      if (this.isBusy(active) || active.extensionUi.hasPendingDialogs) {
+        throw new AppError("SESSION_BUSY", "请先停止运行中的会话并处理待确认操作", 409);
+      }
+    }
+  }
+
+  async withExtensionReload<T>(operation: (reload: () => Promise<number>) => Promise<T>): Promise<T> {
+    const previous = this.extensionReloadTail;
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    this.extensionReloadTail = current;
+    this.extensionReloadBlock = current;
+    await previous;
+    try {
+      this.assertExtensionsReloadReady();
+      return await operation(() => this.reloadExtensionsInternal());
+    } finally {
+      release();
+      if (this.extensionReloadBlock === current) this.extensionReloadBlock = undefined;
+      if (this.extensionReloadTail === current) this.extensionReloadTail = Promise.resolve();
+    }
+  }
+
+  /** Reload all active Pi extensions after a settings-side plugin config change. */
+  async reloadExtensions(): Promise<number> {
+    return this.withExtensionReload((reload) => reload());
+  }
+
+  private async reloadExtensionsInternal(): Promise<number> {
+    const refs = [...this.active.values()].map((active) => active.ref);
+    for (const ref of refs) {
+      await this.withSessionTransition(ref, async () => {
+        const active = this.active.get(activeKey(ref));
+        if (active === undefined) return;
+        if (this.isBusy(active) || active.extensionUi.hasPendingDialogs) {
+          throw new AppError("SESSION_BUSY", "请先停止运行中的会话并处理待确认操作", 409);
+        }
+        await active.extensionReady.catch(() => undefined);
+        await active.session.reload();
+        bindOwnerSessionId(this.ownerBoundSessions, active.session);
+        this.events.publishSession(active.ref, { type: "model.changed", payload: { model: this.modelSnapshot(active) } });
+      });
+    }
+    return refs.length;
+  }
+
   /** Rebuild global provider configuration and publish fresh model pickers. */
   async refreshModelConfiguration(): Promise<void> {
     const runtime = await this.getModelRuntime(getAgentDir());
@@ -193,6 +244,7 @@ export class SessionService {
   }
 
   async create(workspaceId: string): Promise<SessionSummary> {
+    await this.waitForExtensionReload();
     const workspace = this.workspaces.get(workspaceId);
     const manager = createManagedSession(workspace.cwd);
     const active = await this.createActive({ workspaceId, sessionId: "" }, workspace, manager);
@@ -219,6 +271,7 @@ export class SessionService {
     // windows / delayed first flush), so retry briefly until the snapshot
     // provably contains the entry instead of rejecting the action wholesale.
     const manager = await this.openSnapshotWithEntry(sessionDir, sourcePath, entryId);
+    await this.waitForExtensionReload();
     // createBranchedSession mutates its manager, so never call it on the
     // currently active source manager.
     manager.createBranchedSession(entryId);
@@ -300,6 +353,7 @@ export class SessionService {
     }
     const workspace = this.workspaces.get(parent.workspaceId);
     const manager = await persistEmptyManagedSession(createManagedSession(workspace.cwd));
+    await this.waitForExtensionReload();
     const side = await this.createActive({ workspaceId: parent.workspaceId, sessionId: "" }, workspace, manager, { readOnly: true, ...(source === undefined ? {} : { sideChatSource: source }) });
     await this.attention.setSideChat(parent, side.ref.sessionId, source);
     return this.summaryFromActive(side);
@@ -1252,6 +1306,7 @@ export class SessionService {
   private async getActive(ref: SessionRef, options: { waitForExtensions?: boolean; waitForTransition?: boolean } = {}): Promise<ActiveSession> {
     const waitForExtensions = options.waitForExtensions ?? true;
     const waitForTransition = options.waitForTransition ?? true;
+    await this.waitForExtensionReload();
     const key = activeKey(ref);
     if (waitForTransition) {
       const transition = this.sessionTransitions.get(key);
@@ -1261,12 +1316,14 @@ export class SessionService {
     const existing = this.active.get(key);
     if (existing !== undefined) {
       if (waitForExtensions) await existing.extensionReady;
+      await this.waitForExtensionReload();
       return existing;
     }
     const pending = this.pendingOpens.get(key);
     if (pending !== undefined) {
       const active = await pending;
       if (waitForExtensions) await active.extensionReady;
+      await this.waitForExtensionReload();
       return active;
     }
     const promise = this.openActive(ref);
@@ -1274,10 +1331,15 @@ export class SessionService {
     try {
       const active = await promise;
       if (waitForExtensions) await active.extensionReady;
+      await this.waitForExtensionReload();
       return active;
     } finally {
       if (this.pendingOpens.get(key) === promise) this.pendingOpens.delete(key);
     }
+  }
+
+  private async waitForExtensionReload(): Promise<void> {
+    while (this.extensionReloadBlock !== undefined) await this.extensionReloadBlock;
   }
 
   private async openActive(ref: SessionRef): Promise<ActiveSession> {
@@ -1285,6 +1347,7 @@ export class SessionService {
     const workspace = this.workspaces.get(ref.workspaceId);
     const path = await findSessionFile(workspace, ref.sessionId);
     if (path === undefined) throw new AppError("SESSION_NOT_FOUND", "Session not found", 404);
+    await this.waitForExtensionReload();
     return this.createActive(ref, workspace, openManagedSession(workspace.cwd, path));
   }
 

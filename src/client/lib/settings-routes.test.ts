@@ -13,6 +13,9 @@ const routes: SettingsRoute[] = [
   { page: "workspaces" },
   { page: "tunnel" },
   { page: "security" },
+  { page: "plugins" },
+  { page: "plugins-install" },
+  { page: "model-groups" },
   { page: "skills" },
   { page: "skill-files", skillId: "browser-qa" },
 ];
@@ -41,6 +44,8 @@ describe("settings routes", () => {
   it("walks back to the parent page when history cannot pop", () => {
     expect(parentSettingsRoute({ page: "home" })).toBeUndefined();
     expect(parentSettingsRoute({ page: "workspaces" })).toEqual({ page: "home" });
+    expect(parentSettingsRoute({ page: "plugins-install" })).toEqual({ page: "plugins" });
+    expect(parentSettingsRoute({ page: "model-groups" })).toEqual({ page: "plugins" });
     expect(parentSettingsRoute({ page: "skill-files", skillId: "browser-qa" })).toEqual({ page: "skills" });
     expect(parentSettingsRoute({ page: "provider", providerId: "openai" })).toEqual({ page: "providers" });
     expect(parentSettingsRoute({ page: "provider-edit", providerId: "openai" })).toEqual({ page: "provider", providerId: "openai" });

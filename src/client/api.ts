@@ -36,6 +36,7 @@ import type {
   ProviderOverride,
   ProviderStatus,
 } from "../shared/protocol";
+import type { ModelGroupsConfig, ModelGroupsSnapshot, PluginCatalogItem, PluginSnapshot } from "../shared/plugins";
 import type { SkillFileContent, SkillFileListing, SkillSnapshot } from "../shared/skills";
 
 /** 会话失效（HTTP 401 / WebSocket 4401）时广播，由 AuthGate 切回登录页。 */
@@ -187,6 +188,16 @@ export const api = {
   restartBackgroundTask: async (workspaceId: string, taskId: string): Promise<BackgroundTaskSnapshot> => (await request<{ task: BackgroundTaskSnapshot }>(`/api/workspaces/${workspaceId}/background-tasks/${taskId}/restart`, { method: "POST", body: "{}" })).task,
   settings: async (): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings")).settings,
   updateSettings: async (patch: Partial<Pick<AppSettings, "assistantName">>): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) })).settings,
+  plugins: async (): Promise<PluginSnapshot> => (await request<{ plugins: PluginSnapshot }>("/api/plugins")).plugins,
+  modelGroups: async (): Promise<ModelGroupsSnapshot> => (await request<{ modelGroups: ModelGroupsSnapshot }>("/api/plugins/model-groups")).modelGroups,
+  saveModelGroups: async (config: ModelGroupsConfig, revision?: string): Promise<ModelGroupsSnapshot> => (await request<{ modelGroups: ModelGroupsSnapshot }>("/api/plugins/model-groups", { method: "PUT", body: JSON.stringify({ config, ...(revision === undefined ? {} : { revision }) }) })).modelGroups,
+  searchPlugins: async (query: string): Promise<PluginCatalogItem[]> => (await request<{ results: PluginCatalogItem[] }>(`/api/plugins/search?q=${encodeURIComponent(query)}`)).results,
+  setBundledPlugin: async (id: string, enabled: boolean): Promise<PluginSnapshot> => (await request<{ plugins: PluginSnapshot }>(`/api/plugins/bundled/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ enabled }) })).plugins,
+  overwriteBundledPlugin: async (id: string): Promise<PluginSnapshot> => (await request<{ plugins: PluginSnapshot }>(`/api/plugins/bundled/${encodeURIComponent(id)}/overwrite`, { method: "POST", body: "{}" })).plugins,
+  setRecommendedPlugin: async (name: string, enabled: boolean): Promise<PluginSnapshot> => (await request<{ plugins: PluginSnapshot }>("/api/plugins/recommended", { method: "PUT", body: JSON.stringify({ name, enabled }) })).plugins,
+  installPlugin: async (source: string): Promise<PluginSnapshot> => (await request<{ plugins: PluginSnapshot }>("/api/plugins/install", { method: "POST", body: JSON.stringify({ source }) })).plugins,
+  removePlugin: async (source: string): Promise<PluginSnapshot> => (await request<{ plugins: PluginSnapshot }>("/api/plugins/remove", { method: "POST", body: JSON.stringify({ source }) })).plugins,
+  updatePlugin: async (source: string): Promise<PluginSnapshot> => (await request<{ plugins: PluginSnapshot }>("/api/plugins/update", { method: "POST", body: JSON.stringify({ source }) })).plugins,
   skills: async (): Promise<SkillSnapshot> => (await request<{ skills: SkillSnapshot }>("/api/skills")).skills,
   setBundledSkill: async (id: string, enabled: boolean): Promise<SkillSnapshot> => (await request<{ skills: SkillSnapshot }>(`/api/skills/bundled/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ enabled }) })).skills,
   overwriteBundledSkill: async (id: string): Promise<SkillSnapshot> => (await request<{ skills: SkillSnapshot }>(`/api/skills/bundled/${encodeURIComponent(id)}/overwrite`, { method: "POST", body: "{}" })).skills,
@@ -201,6 +212,7 @@ export const api = {
   customProviders: async (): Promise<ManagedProvider[]> => (await request<{ providers: ManagedProvider[] }>("/api/settings/custom-providers")).providers,
   saveCustomProvider: async ({ id, ...provider }: ManagedProvider): Promise<ManagedProvider> => (await request<{ provider: ManagedProvider }>(`/api/settings/custom-providers/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(provider) })).provider,
   removeCustomProvider: async (providerId: string): Promise<void> => { await request(`/api/settings/custom-providers/${encodeURIComponent(providerId)}`, { method: "DELETE" }); },
+  setProviderApiKey: async (providerId: string, apiKey: string): Promise<void> => { await request(`/api/settings/providers/${encodeURIComponent(providerId)}/api-key`, { method: "PUT", body: JSON.stringify({ apiKey }) }); },
   saveProviderOverride: async (providerId: string, override: ProviderOverride): Promise<ProviderOverride | undefined> => {
     const result = await request<{ override: ProviderOverride | null }>(`/api/settings/providers/${encodeURIComponent(providerId)}/override`, { method: "PUT", body: JSON.stringify(override) });
     return result.override ?? undefined;

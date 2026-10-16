@@ -418,6 +418,36 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(after.json()).toMatchObject({ model: { current: { provider: "test-b", id: "beta", inScope: false } } });
   });
 
+  it("reads and updates model groups through the enabled plugin settings API", async () => {
+    const server = activeApp();
+    const initial = await server.inject({ method: "GET", url: "/api/plugins/model-groups" });
+    expect(initial.statusCode).toBe(200);
+    const initialBody = initial.json<{ modelGroups: { enabled: boolean; exists: boolean; revision: string; config: { groups: Record<string, unknown> } } }>().modelGroups;
+    expect(initialBody.enabled).toBe(true);
+    expect(initialBody.exists).toBe(false);
+    expect(initialBody.config.groups).toEqual({});
+
+    const config = {
+      version: 1,
+      groups: {
+        balanced: {
+          name: "Balanced",
+          contextWindow: 128000,
+          maxTokens: 8192,
+          reasoning: true,
+          input: ["text"],
+          routes: [{ provider: "openai", model: "gpt-4.1" }],
+        },
+      },
+    };
+    const saved = await server.inject({ method: "PUT", url: "/api/plugins/model-groups", payload: { config, revision: initialBody.revision } });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ modelGroups: { enabled: true, exists: true, config } });
+    const stale = await server.inject({ method: "PUT", url: "/api/plugins/model-groups", payload: { config, revision: initialBody.revision } });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: { code: "MODEL_GROUPS_CONFLICT" } });
+  });
+
   it("reads and updates the enabled models scope via the settings API", async () => {
     const agentDir = join(jarvisHome, "agent");
     await mkdir(agentDir, { recursive: true });
@@ -550,6 +580,55 @@ describe("Jarvis HTTP and WebSocket API", () => {
       headers: { "X-Title": "Jarvis" },
       compat: { supportsDeveloperRole: false, thinkingFormat: "deepseek" },
     });
+  });
+
+  it("keeps guided API key providers on the login flow", async () => {
+    const server = activeApp();
+    const providers = (await server.inject({ method: "GET", url: "/api/settings/providers" })).json<{ providers: Array<{ id: string; apiKeyLogin?: string }> }>().providers;
+    expect(providers.find((provider) => provider.id === "openai")?.apiKeyLogin).toBe("key");
+    expect(providers.find((provider) => provider.id === "amazon-bedrock")?.apiKeyLogin).toBe("login");
+    expect(providers.find((provider) => provider.id === "google-vertex")?.apiKeyLogin).toBe("login");
+    expect(providers.find((provider) => provider.id === "cloudflare-ai-gateway")?.apiKeyLogin).toBe("login");
+    const rejected = await server.inject({ method: "PUT", url: "/api/settings/providers/amazon-bedrock/api-key", payload: { apiKey: "should-not-replace-guided-login" } });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json()).toMatchObject({ error: { code: "AUTH_LOGIN_INTERACTIVE" } });
+  });
+
+  it("saves and displays a custom provider API key without the login prompt", async () => {
+    const agentDir = join(jarvisHome, "agent");
+    const server = activeApp();
+    const created = await server.inject({
+      method: "PUT",
+      url: "/api/settings/custom-providers/local",
+      payload: {
+        baseUrl: "http://127.0.0.1:11434/v1",
+        api: "openai-completions",
+        authHeader: true,
+        models: [{ id: "alpha", reasoning: false, vision: false }],
+      },
+    });
+    expect(created.statusCode).toBe(200);
+    const modelsPath = join(agentDir, "models.json");
+    const existing = JSON.parse(await readFile(modelsPath, "utf8")) as { providers: { local: Record<string, unknown> } };
+    existing.providers.local["apiKey"] = "old-key";
+    await writeFile(modelsPath, JSON.stringify(existing));
+    const saved = await server.inject({
+      method: "PUT",
+      url: "/api/settings/providers/local/api-key",
+      payload: { apiKey: "sk-visible" },
+    });
+    expect(saved.statusCode).toBe(200);
+    const listed = (await server.inject({ method: "GET", url: "/api/settings/providers" })).json<{ providers: Array<{ id: string; apiKey?: string; authConfigured: boolean }> }>().providers.find((provider) => provider.id === "local");
+    expect(listed).toMatchObject({ apiKey: "sk-visible", authConfigured: true });
+    const models = JSON.parse(await readFile(join(agentDir, "models.json"), "utf8")) as { providers: { local: { apiKey?: string } } };
+    expect(models.providers.local.apiKey).toBeUndefined();
+    const auth = JSON.parse(await readFile(join(agentDir, "auth.json"), "utf8")) as { local?: { type: string; key: string } };
+    expect(auth.local).toEqual({ type: "api_key", key: "sk-visible" });
+
+    const cleared = await server.inject({ method: "PUT", url: "/api/settings/providers/local/api-key", payload: { apiKey: "" } });
+    expect(cleared.statusCode).toBe(200);
+    const after = (await server.inject({ method: "GET", url: "/api/settings/providers" })).json<{ providers: Array<{ id: string; apiKey?: string }> }>().providers.find((provider) => provider.id === "local");
+    expect(after?.apiKey).toBeUndefined();
   });
 
   it("overrides a built-in provider connection without replacing its model catalog", async () => {

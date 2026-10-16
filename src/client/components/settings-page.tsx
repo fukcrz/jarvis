@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, Library, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, Library, Puzzle, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
 import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderOverride, ProviderStatus, Workspace } from "../../shared/protocol";
-import { api } from "../api";
+import { ApiError, api } from "../api";
 import { isSettingsPath, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsPath, type SettingsRoute } from "../lib/settings-routes";
 import { setDesktopNotificationEnabled } from "../desktop";
 import { isDesktopShell } from "../lib/desktop-shell";
@@ -10,6 +10,8 @@ import { isNotificationEnabled, requestNotificationPermission, setNotificationEn
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
 import { WorkspaceDialog } from "./workspace-dialog";
+import { PluginsPanel } from "./settings-plugins";
+import { ModelGroupsPanel } from "./settings-model-groups";
 import { SkillsPanel } from "./settings-skills";
 import { TunnelPanel } from "./tunnel-panel";
 import { SecurityPanel } from "./settings-security";
@@ -50,7 +52,6 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [customProviders, setCustomProviders] = useState<ManagedProvider[]>([]);
   const [enabledDraft, setEnabledDraft] = useState<Set<string>>(new Set());
-  const [providersShowAll, setProvidersShowAll] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | undefined>();
   const [message, setMessage] = useState<string | undefined>();
@@ -204,10 +205,23 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
       setBusy(undefined);
     }
   };
-  const saveOverride = async (providerId: string, override: ProviderOverride) => {
+  const saveApiKey = async (providerId: string, apiKey: string) => {
+    try {
+      await api.setProviderApiKey(providerId, apiKey);
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "AUTH_LOGIN_INTERACTIVE") {
+        const target = providers.find((item) => item.id === providerId);
+        if (target !== undefined) await startLogin(target, "api_key");
+        return;
+      }
+      throw error;
+    }
+  };
+  const saveOverride = async (providerId: string, override: ProviderOverride, apiKey?: string) => {
     setBusy("provider");
     try {
       await api.saveProviderOverride(providerId, override);
+      if (apiKey !== undefined) await saveApiKey(providerId, apiKey);
       showMessage("连接已保存");
       await reload();
       goBack();
@@ -230,17 +244,31 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
       setBusy(undefined);
     }
   };
-  const saveProvider = async (provider: ManagedProvider, openModelsAfterSave: boolean) => {
+  const saveProvider = async (provider: ManagedProvider, openModelsAfterSave: boolean, apiKey: string) => {
     setBusy("provider");
     try {
       const saved = await api.saveCustomProvider(provider);
       setCustomProviders((current) => [...current.filter((item) => item.id !== saved.id), saved].sort((left, right) => left.id.localeCompare(right.id)));
+      await saveApiKey(saved.id, apiKey);
       showMessage(saved.models.length === 0 ? "供应商已保存" : "供应商和模型配置已保存");
       await reload();
       if (openModelsAfterSave) replaceTop({ page: "provider", providerId: saved.id });
       else goBack();
     } catch (error) {
       showMessage(error instanceof Error ? error.message : "供应商保存失败", "error");
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const saveKnownApiKey = async (providerId: string, apiKey: string) => {
+    setBusy("provider");
+    try {
+      await saveApiKey(providerId, apiKey);
+      showMessage("API Key 已保存");
+      await reload();
+      goBack();
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : "API Key 保存失败", "error");
     } finally {
       setBusy(undefined);
     }
@@ -380,6 +408,7 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
     page = <><SettingsTopBar title="设置" home onBack={onBack} /><SettingsShell><div className="settings-stack">
       <SettingsGroup title="常规">
         <SettingsRow icon={Bot} label="助手名称" value={name} chevron onClick={() => push({ page: "assistant-name" })} />
+        <SettingsRow icon={Puzzle} label="插件" chevron onClick={() => push({ page: "plugins" })} />
         <SettingsRow icon={Library} label="技能" chevron onClick={() => push({ page: "skills" })} />
         <SettingsRow icon={Bell} label="运行结束通知" control={<SettingsSwitch checked={notificationsEnabled} onChange={(enabled) => { void toggleNotifications(enabled); }} label="运行结束通知" />} />
       </SettingsGroup>
@@ -396,8 +425,8 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
   } else if (route.page === "assistant-name") {
     page = <AssistantNamePage initialName={name} busy={busy === "name"} onSave={saveName} onBack={goBack} />;
   } else if (route.page === "providers") {
-    page = <ProvidersListPage providers={providers} customProviders={customProviders} customById={customById} enabledDraft={enabledDraft} loading={loading} showAll={providersShowAll} unrestricted={unrestricted}
-      onShowAllChange={setProvidersShowAll} onOpenScope={() => push({ page: "model-scope" })} onOpenProvider={(providerId) => push({ page: "provider", providerId })}
+    page = <ProvidersListPage providers={providers} customProviders={customProviders} customById={customById} enabledDraft={enabledDraft} loading={loading} unrestricted={unrestricted}
+      onOpenScope={() => push({ page: "model-scope" })} onOpenProvider={(providerId) => push({ page: "provider", providerId })}
       onEditCustom={(provider) => push({ page: "provider-edit", providerId: provider.id })} onAddProvider={() => push({ page: "provider-new" })} onBack={goBack} />;
   } else if (route.page === "provider") {
     const provider = providers.find((item) => item.id === route.providerId);
@@ -405,19 +434,24 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
       onToggleModel={toggleModelInstant} onEnableModels={enableModelsInstant} onCustomModels={persistCustomModels} onLogin={startLogin} onLogout={logout}
       onEdit={() => push(customById.has(provider.id) ? { page: "provider-edit", providerId: provider.id } : { page: "provider-override", providerId: provider.id })} onFetch={api.fetchProviderModels} onBack={goBack} />;
   } else if (route.page === "provider-new") {
-    page = <ProviderWizardPage providers={providers} busy={busy === "provider"} onSave={saveProvider} onLogin={startLogin} onBack={goBack} />;
+    page = <ProviderWizardPage providers={providers} busy={busy === "provider"} onSave={saveProvider} onSaveApiKey={saveKnownApiKey} onLogin={startLogin} onBack={goBack} />;
   } else if (route.page === "provider-edit") {
     const custom = customProviders.find((item) => item.id === route.providerId);
-    page = custom === undefined ? <SettingsSubpage title="供应商" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <ProviderWizardPage key={JSON.stringify(custom)} providers={providers} editing={custom} busy={busy === "provider"} onSave={saveProvider} onDelete={setProviderRemoveTarget} onLogin={startLogin} onFetch={api.fetchProviderModels} onBack={goBack} />;
+    const editingKey = providers.find((item) => item.id === custom?.id)?.apiKey ?? "";
+    page = custom === undefined ? <SettingsSubpage title="供应商" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <ProviderWizardPage key={`${editingKey}:${JSON.stringify(custom)}`} providers={providers} editing={custom} initialApiKey={editingKey} busy={busy === "provider"} onSave={saveProvider} onSaveApiKey={saveKnownApiKey} onDelete={setProviderRemoveTarget} onLogin={startLogin} onFetch={api.fetchProviderModels} onBack={goBack} />;
   } else if (route.page === "provider-override") {
     const provider = providers.find((item) => item.id === route.providerId);
-    page = provider === undefined ? <SettingsSubpage title="编辑连接" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <BuiltinOverridePage key={`${provider.id}:${JSON.stringify(provider.override ?? {})}`} provider={provider} busy={busy === "provider"} onSave={(override) => saveOverride(provider.id, override)} onClear={() => clearOverride(provider.id)} onFetch={api.fetchProviderModels} onBack={goBack} />;
+    page = provider === undefined ? <SettingsSubpage title="编辑连接" onBack={goBack}><p className="settings-page-note">正在读取供应商…</p></SettingsSubpage> : <BuiltinOverridePage key={`${provider.id}:${provider.apiKey ?? ""}:${JSON.stringify(provider.override ?? {})}`} provider={provider} busy={busy === "provider"} onSave={(override, apiKey) => saveOverride(provider.id, override, provider.apiKeyLogin === "login" ? undefined : apiKey)} onLogin={() => { void startLogin(provider, "api_key"); }} onClear={() => clearOverride(provider.id)} onFetch={api.fetchProviderModels} onBack={goBack} />;
   } else if (route.page === "model-scope") {
     page = <ModelScopePage providers={providers} customById={customById} draft={enabledDraft} busy={busy === "model-manager"} onToggleModel={toggleModelInstant} onBack={goBack} />;
   } else if (route.page === "workspaces") {
     page = <WorkspacesPage workspaces={workspaces} busy={workspaceBusy} onMove={moveWorkspace} onRemove={setWorkspaceRemoveTarget} onAdd={() => setWorkspaceDialogOpen(true)} onBack={goBack} />;
   } else if (route.page === "tunnel") {
     page = <SettingsSubpage title="内网穿透" onBack={goBack}><TunnelPanel refreshKey={refreshKeys.tunnel} onMessage={showMessage} /></SettingsSubpage>;
+  } else if (route.page === "plugins" || route.page === "plugins-install") {
+    page = <SettingsSubpage title={route.page === "plugins" ? "插件" : "浏览"} onBack={goBack}><PluginsPanel page={route.page} onOpenBrowse={() => push({ page: "plugins-install" })} onOpenModelGroups={() => push({ page: "model-groups" })} onMessage={showMessage} /></SettingsSubpage>;
+  } else if (route.page === "model-groups") {
+    page = <ModelGroupsPanel onBack={goBack} onMessage={showMessage} />;
   } else if (route.page === "skills" || route.page === "skill-files") {
     const skillTitle = route.page === "skill-files" ? route.skillId : "技能";
     page = <SettingsSubpage title={skillTitle} onBack={goBack}><SkillsPanel page={route.page} skillId={route.page === "skill-files" ? route.skillId : undefined} onOpenFiles={(id) => push({ page: "skill-files", skillId: id })} onMessage={showMessage} /></SettingsSubpage>;
