@@ -1,8 +1,9 @@
 import { readFileSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { addStartupWarning, atomicWrite } from "./fs.js";
+import { jarvisHome } from "./jarvis-home.js";
 
 interface LockInfo {
   pid: number;
@@ -12,7 +13,7 @@ interface LockInfo {
 }
 
 export function defaultLockPath(): string {
-  return join(process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis"), "instance.lock");
+  return join(jarvisHome(), "instance.lock");
 }
 
 /**

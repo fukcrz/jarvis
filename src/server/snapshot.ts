@@ -1,8 +1,9 @@
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { atomicWrite } from "./fs.js";
+import { localDay } from "./log-files.js";
 import { createZip, type ZipInput } from "./zip.js";
+import { jarvisHome } from "./jarvis-home.js";
 
 export const SNAPSHOT_KEEP = 7;
 
@@ -22,7 +23,7 @@ export class DailySnapshots {
   private readonly directory: string;
 
   constructor(private readonly options: SnapshotOptions) {
-    this.jarvisHome = options.jarvisHome ?? process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis");
+    this.jarvisHome = options.jarvisHome ?? jarvisHome();
     this.directory = join(this.jarvisHome, "snapshots");
   }
 
@@ -81,9 +82,4 @@ export class DailySnapshots {
       await running;
     };
   }
-}
-
-function localDay(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${String(date.getFullYear())}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }

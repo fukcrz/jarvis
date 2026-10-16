@@ -1,10 +1,10 @@
 import { mkdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Workspace } from "../shared/protocol.js";
 import { AppError } from "./errors.js";
 import { readJsonRecovering, writeWithBackup } from "./fs.js";
+import { jarvisHome } from "./jarvis-home.js";
 
 interface PersistedWorkspaces {
   version: 1;
@@ -18,7 +18,7 @@ export class WorkspaceStore {
   private workspaces: Workspace[] = [];
 
   constructor(
-    filePath = join(process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis"), "workspaces.json"),
+    filePath = join(jarvisHome(), "workspaces.json"),
     private readonly onChanged: () => void = () => undefined,
   ) {
     this.filePath = filePath;

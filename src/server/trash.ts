@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { cp, lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import type { TrashEntry, TrashKind } from "../shared/system.js";
 import { AppError } from "./errors.js";
 import { atomicWrite, errorCode, isMissingFile, timestampForFile, withFsRetry } from "./fs.js";
+import { jarvisHome } from "./jarvis-home.js";
 
 export const TRASH_RETENTION_DAYS = 30;
 export type { TrashEntry, TrashKind };
@@ -16,7 +16,7 @@ interface TrashMeta extends Omit<TrashEntry, "id"> {
 }
 
 export function defaultTrashRoot(): string {
-  return join(process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis"), "trash");
+  return join(jarvisHome(), "trash");
 }
 
 /**

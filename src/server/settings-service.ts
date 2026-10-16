@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir, readStoredCredential, resolveModelScopeWithDiagnostics, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthEvent, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
@@ -8,6 +7,7 @@ import type { AppSettings, AuthLoginOperation, EnabledModelRef, EnabledModelsSta
 import { AppError, asMessage } from "./errors.js";
 import { isMissingFile, readJsonRecovering, writeWithBackup } from "./fs.js";
 import { isRecord } from "../shared/protocol.js";
+import { jarvisHome } from "./jarvis-home.js";
 
 interface StoredSettings { version: 1; assistantName: string; }
 type ModelConfig = Record<string, unknown> & { providers: Record<string, Record<string, unknown>> };
@@ -40,7 +40,7 @@ export class SettingsService {
     private readonly modelRuntime: () => Promise<ModelRuntime>,
     private readonly refreshSessions: () => Promise<void>,
     private readonly onChanged: (type: "settings.changed" | "models.changed") => void = () => undefined,
-    settingsPath = join(process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis"), "settings.json"),
+    settingsPath = join(jarvisHome(), "settings.json"),
   ) {
     this.settingsPath = settingsPath;
     this.modelsPath = join(getAgentDir(), "models.json");

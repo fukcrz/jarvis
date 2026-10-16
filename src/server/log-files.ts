@@ -1,13 +1,13 @@
 import { appendFileSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
+import { jarvisHome } from "./jarvis-home.js";
 
 export const LOG_RETENTION_DAYS = 7;
 export const LOG_FILE_MAX_BYTES = 20 * 1024 * 1024;
 
 export function defaultLogDirectory(): string {
-  return join(process.env["JARVIS_HOME"] ?? join(homedir(), ".jarvis"), "logs");
+  return join(jarvisHome(), "logs");
 }
 
 /**
@@ -89,7 +89,8 @@ export class DailyLogFile {
   }
 }
 
-function localDay(date: Date): string {
+/** 本地日期 YYYY-MM-DD（日志文件名、每日快照共用）。 */
+export function localDay(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${String(date.getFullYear())}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
