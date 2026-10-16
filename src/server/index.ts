@@ -14,6 +14,7 @@ const { buildApp } = await import("./app.js");
 const { emitDesktopEvent } = await import("./desktop-bridge.js");
 
 const { DailyLogFile, teeConsole } = await import("./log-files.js");
+const { acquireInstanceLock } = await import("./instance-lock.js");
 
 const production = process.env["NODE_ENV"] === "production";
 // 日志按天写到 ~/.jarvis/logs，保留 7 天；JARVIS_LOG_FILES=0 可关闭。
@@ -52,6 +53,7 @@ const host = process.env["HOST"] ?? "0.0.0.0";
 // 优雅关闭：断开所有连接、关掉会话和穿透，再退出；6 秒内关不完就直接退出。
 // 桌面端会再多等一会儿，超时才强杀进程树。
 let closing = false;
+let releaseInstanceLock: () => void = () => undefined;
 const close = async (signal: string) => {
   if (closing) return;
   closing = true;
@@ -63,6 +65,7 @@ const close = async (signal: string) => {
   forceExit.unref();
   try {
     app.jarvis.events.terminateAll();
+    releaseInstanceLock();
     await app.close();
   } catch (error) {
     app.log.error({ err: error }, "Graceful shutdown failed");
@@ -98,6 +101,10 @@ await app.jarvis.tunnel.initialize(actualPort);
 void app.jarvis.plugins.ensureRecommended().catch((error: unknown) => {
   app.log.warn({ err: error }, "Recommended plugin sync failed");
 });
+// 实例锁：同一数据目录已有别的 Jarvis 在跑时只提示，不拦启动。
+const instanceLock = await acquireInstanceLock(actualPort, undefined, { selfRestart: process.env["JARVIS_SELF_RESTART"] === "1" }).catch(() => undefined);
+releaseInstanceLock = () => instanceLock?.release();
+process.on("exit", () => { releaseInstanceLock(); });
 emitDesktopEvent({ type: "ready", port: actualPort });
 
 /**
