@@ -164,3 +164,30 @@ describe("SessionAttentionStore corruption recovery", () => {
     expect((await readdir(directory)).some((name) => name.startsWith("jarvis-session-attention.json.corrupt-"))).toBe(true);
   });
 });
+
+describe("SessionAttentionStore interrupted runs", () => {
+  it("marks a run that was still going when the process stopped as interrupted", async () => {
+    const store = new SessionAttentionStore(directory);
+    await store.setStarred(ref, true);
+    await store.setAttention(ref, "running", "2026-01-02T00:00:00.000Z");
+
+    const restarted = new SessionAttentionStore(directory);
+    await expect(restarted.get(ref)).resolves.toMatchObject({ attentionState: "failed", interruptedAt: "2026-01-02T00:00:00.000Z", starred: true });
+
+    // 查看过（回到 idle）不清标记；下一轮开始才清。
+    await restarted.setAttention(ref, "idle", "2026-01-03T00:00:00.000Z");
+    await expect(restarted.get(ref)).resolves.toMatchObject({ attentionState: "idle", interruptedAt: "2026-01-02T00:00:00.000Z" });
+    await restarted.setAttention(ref, "running", "2026-01-04T00:00:00.000Z");
+    await expect(restarted.get(ref)).resolves.not.toHaveProperty("interruptedAt");
+  });
+
+  it("does not flag runs that finished normally", async () => {
+    const store = new SessionAttentionStore(directory);
+    await store.setAttention(ref, "running", "2026-01-02T00:00:00.000Z");
+    await store.setAttention(ref, "completed_unread", "2026-01-02T00:01:00.000Z");
+    const restarted = new SessionAttentionStore(directory);
+    const meta = await restarted.get(ref);
+    expect(meta.attentionState).toBe("completed_unread");
+    expect(meta.interruptedAt).toBeUndefined();
+  });
+});
