@@ -1188,3 +1188,6 @@ button.turn-failure-raw.timeline-event-summary { display: inline-flex; align-ite
 .chat-stage .timeline-shell.has-run-status .timeline-inner { padding-bottom: calc(var(--chat-dock-space, 216px) + 40px); }
 html.text-selecting .run-status-bar { pointer-events: none !important; }
 @media (max-width: 760px) { .chat-stage .run-status-bar { bottom: 168px; } .run-status-bar { max-width: calc(100% - 24px); } }
+.detail-level-menu { width: min(230px, calc(100vw - 24px)); }
+.detail-level-hint { display: block; margin-top: 2px; color: var(--subtle); font-size: 10.5px; font-weight: 400; }
+.selector-sheet-item .detail-level-hint { font-size: 12px; }
