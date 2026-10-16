@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   getAgentDir,
@@ -523,6 +524,7 @@ export class SessionService {
   }
 
   async timeline(ref: SessionRef, before?: number, limit = PAGE_LIMIT): Promise<TimelinePage> {
+    if (before === undefined) await this.reloadIfExternallyModified(ref);
     const active = await this.getActive(ref, { waitForExtensions: false });
     const items = this.timelineItems(active);
     const end = clamp(before ?? items.length, 0, items.length);
@@ -764,6 +766,7 @@ export class SessionService {
     if (prompt.length > MAX_PROMPT_LENGTH) throw new AppError("PROMPT_TOO_LARGE", `Prompt must be at most ${String(MAX_PROMPT_LENGTH)} characters`);
     const attachments = this.validateAttachments(images);
     const behavior = options?.behavior;
+    await this.reloadIfExternallyModified(ref);
     const active = await this.getActive(ref, { waitForTransition: options?.skipTransitionWait !== true });
     const requestKey = `prompt:${clientRequestId}`;
     const previous = active.requestRuns.get(requestKey);
@@ -804,6 +807,46 @@ export class SessionService {
     this.publishSummary(active);
     void this.executePrompt(active, prompt, run.id, attachments);
     return accepted;
+  }
+
+  /**
+   * 会话文件被别的进程（命令行 pi、另一个 Jarvis 实例）追加过时，内存里的会话已经过时，
+   * 继续往后写会把对方的内容挤到看不见的分支。空闲时发现就丢掉内存副本、从文件重新加载。
+   */
+  private async reloadIfExternallyModified(ref: SessionRef): Promise<void> {
+    const key = activeKey(ref);
+    const active = this.active.get(key);
+    if (active === undefined || this.isBusy(active) || this.deleting.has(key)) return;
+    if (!await this.externallyModified(active).catch(() => false)) return;
+    let reloaded = false;
+    await this.withSessionTransition(ref, async () => {
+      if (this.active.get(key) !== active || this.isBusy(active)) return;
+      await this.disposeActive(active, "resume");
+      reloaded = true;
+    });
+    if (!reloaded) return;
+    console.warn(`[jarvis] 会话 ${ref.sessionId} 已在别处更新，已重新加载`);
+    this.events.publishWorkspace(ref.workspaceId, {
+      version: 1,
+      type: "extension.notify",
+      workspaceId: ref.workspaceId,
+      notification: { id: randomUUID(), message: "这个会话在别处（例如命令行 pi）有更新，已重新加载。", notifyType: "info", sessionId: ref.sessionId },
+    });
+  }
+
+  private readonly externalChecks = new WeakMap<ActiveSession, { mtimeMs: number; size: number }>();
+
+  private async externallyModified(active: ActiveSession): Promise<boolean> {
+    const file = active.session.sessionFile;
+    if (file === undefined) return false;
+    const info = await stat(file).catch(() => undefined);
+    if (info === undefined) return false;
+    const previous = this.externalChecks.get(active);
+    if (previous !== undefined && previous.mtimeMs === info.mtimeMs && previous.size === info.size) return false;
+    this.externalChecks.set(active, { mtimeMs: info.mtimeMs, size: info.size });
+    const lines = await countJsonlLines(file);
+    // 文件 = 一行 header + 每个 entry 一行；行数更多说明有人在外面追加了。
+    return lines > active.session.sessionManager.getEntryCount() + 1;
   }
 
   private isBusy(active: ActiveSession): boolean {
@@ -1660,4 +1703,22 @@ export class SessionService {
   private catalogDeps() {
     return { workspaces: this.workspaces, attention: this.attention, active: this.active };
   }
+}
+
+/** 数非空行数（流式读，不把整个文件读进内存）。 */
+async function countJsonlLines(path: string): Promise<number> {
+  let lines = 0;
+  let lineHasContent = false;
+  for await (const chunk of createReadStream(path)) {
+    const buffer = chunk as Buffer;
+    for (const byte of buffer) {
+      if (byte === 10) {
+        if (lineHasContent) lines += 1;
+        lineHasContent = false;
+      } else if (byte !== 13 && byte !== 32) {
+        lineHasContent = true;
+      }
+    }
+  }
+  return lineHasContent ? lines + 1 : lines;
 }

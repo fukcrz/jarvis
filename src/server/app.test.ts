@@ -305,6 +305,30 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(JSON.stringify(allFiles.json())).not.toContain(".git");
   });
 
+  it("reloads a session that another process appended to while it was idle", async () => {
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "external-append-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const sessionId = randomUUID();
+    const timestamp = new Date().toISOString();
+    const sessionFile = join(sessionDir, `${timestamp.replace(/[:.]/g, "-")}_${sessionId}.jsonl`);
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(sessionFile, [
+      JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp, cwd: workspacePath }),
+      JSON.stringify({ type: "message", id: "11111111", parentId: null, timestamp, message: { role: "user", content: "first question", timestamp: Date.parse(timestamp) } }),
+    ].join("\n") + "\n");
+    const url = `/api/workspaces/${workspace.id}/sessions/${sessionId}/timeline`;
+    const before = await server.inject({ method: "GET", url });
+    expect(JSON.stringify(before.json())).toContain("first question");
+    expect(JSON.stringify(before.json())).not.toContain("added from the CLI");
+
+    const { appendFile } = await import("node:fs/promises");
+    await appendFile(sessionFile, `${JSON.stringify({ type: "message", id: "22222222", parentId: "11111111", timestamp, message: { role: "user", content: "added from the CLI", timestamp: Date.parse(timestamp) } })}\n`);
+    const after = await server.inject({ method: "GET", url });
+    expect(JSON.stringify(after.json())).toContain("added from the CLI");
+  });
+
   it("lists session JSONL files for composer session references", async () => {
     const server = activeApp();
     const workspacePath = join(jarvisHome, "session-file-search-workspace");
