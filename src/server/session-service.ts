@@ -666,6 +666,13 @@ export class SessionService {
       : [JARVIS_RELOAD_COMMAND, ...withCompact];
   }
 
+  /** 取回上次服务退出前还在排队、没发出去的消息（只取一次）。会话正在运行时不取。 */
+  async takeRestoredQueue(ref: SessionRef): Promise<string[]> {
+    const active = this.active.get(activeKey(ref));
+    if (active !== undefined && active.queue.steering.length + active.queue.followUp.length > 0) return [];
+    return this.attention.takePendingQueue(ref);
+  }
+
   async runtime(ref: SessionRef): Promise<SessionStreamSnapshot> {
     const active = await this.getActive(ref, { waitForExtensions: false });
     const contextUsage = this.contextUsageSnapshot(active);

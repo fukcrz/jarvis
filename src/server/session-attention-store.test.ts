@@ -191,3 +191,17 @@ describe("SessionAttentionStore interrupted runs", () => {
     expect(meta.interruptedAt).toBeUndefined();
   });
 });
+
+describe("SessionAttentionStore pending queue", () => {
+  it("keeps queued texts across a restart and hands them out once", async () => {
+    const store = new SessionAttentionStore(directory);
+    await store.setAttention(ref, "running", "2026-01-02T00:00:00.000Z");
+    await store.setPendingQueue(ref, ["再跑一遍测试", "顺便更新文档"]);
+    await store.setStarred(ref, true);
+
+    const restarted = new SessionAttentionStore(directory);
+    await expect(restarted.takePendingQueue(ref)).resolves.toEqual(["再跑一遍测试", "顺便更新文档"]);
+    await expect(restarted.takePendingQueue(ref)).resolves.toEqual([]);
+    await expect(restarted.get(ref)).resolves.toMatchObject({ starred: true, interruptedAt: "2026-01-02T00:00:00.000Z" });
+  });
+});

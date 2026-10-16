@@ -35,6 +35,8 @@ interface PersistedSessionMeta {
   runningSince?: string;
   /** 被中断的那一轮的开始时间；下一轮开始时清掉。 */
   interruptedAt?: string;
+  /** 还没投递给模型的排队消息（只存文字）。 */
+  pendingQueue?: string[];
 }
 
 export interface SideChatSource {
@@ -91,6 +93,7 @@ export class SessionAttentionStore {
           ...(running ? { runningSince: current.runningSince ?? at } : {}),
           // 查看过（回到 idle）不清"被中断"标记，下一轮开始才清。
           ...(!running && current.interruptedAt !== undefined ? { interruptedAt: current.interruptedAt } : {}),
+          ...(current.pendingQueue === undefined ? {} : { pendingQueue: current.pendingQueue }),
         });
         if (next === undefined) delete data.sessions[entryKey];
         else data.sessions[entryKey] = next;
@@ -100,6 +103,27 @@ export class SessionAttentionStore {
       delete rest.runningSince;
       data.sessions[entryKey] = { ...rest, attentionState: state, attentionAt: at };
     });
+  }
+
+  async setPendingQueue(ref: SessionRef, texts: string[]): Promise<void> {
+    const entryKey = key(ref);
+    const current = (await this.load()).sessions[entryKey];
+    if (texts.length === 0 && current?.pendingQueue === undefined) return;
+    await this.update((data) => {
+      const entry = { ...data.sessions[entryKey] };
+      if (texts.length === 0) delete entry.pendingQueue;
+      else entry.pendingQueue = texts;
+      if (Object.keys(entry).length === 0) delete data.sessions[entryKey];
+      else data.sessions[entryKey] = entry;
+    });
+  }
+
+  /** 取出并清掉上次进程留下的排队消息。 */
+  async takePendingQueue(ref: SessionRef): Promise<string[]> {
+    const entryKey = key(ref);
+    const texts = (await this.load()).sessions[entryKey]?.pendingQueue ?? [];
+    if (texts.length > 0) await this.setPendingQueue(ref, []);
+    return texts;
   }
 
   async setLastUserMessageAt(ref: SessionRef, at: string): Promise<void> {
@@ -280,8 +304,9 @@ function persistedSortTimes(entry: PersistedSessionMeta): Pick<PersistedSessionM
   };
 }
 
-function runMarkers(entry: PersistedSessionMeta): Pick<PersistedSessionMeta, "runningSince" | "interruptedAt"> {
+function runMarkers(entry: PersistedSessionMeta): Pick<PersistedSessionMeta, "runningSince" | "interruptedAt" | "pendingQueue"> {
   return {
+    ...(entry.pendingQueue === undefined ? {} : { pendingQueue: entry.pendingQueue }),
     ...(entry.runningSince === undefined ? {} : { runningSince: entry.runningSince }),
     ...(entry.interruptedAt === undefined ? {} : { interruptedAt: entry.interruptedAt }),
   };
@@ -373,6 +398,10 @@ function migratePersistedEntry(value: unknown): PersistedSessionMeta | undefined
   if (runningSince !== undefined) next.runningSince = runningSince;
   const interruptedAt = stringTime(item["interruptedAt"]);
   if (interruptedAt !== undefined) next.interruptedAt = interruptedAt;
+  if (Array.isArray(item["pendingQueue"])) {
+    const pending = item["pendingQueue"].filter((text): text is string => typeof text === "string" && text !== "");
+    if (pending.length > 0) next.pendingQueue = pending;
+  }
   return Object.keys(next).length === 0 ? undefined : next;
 }
 

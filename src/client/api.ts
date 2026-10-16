@@ -321,6 +321,7 @@ export const api = {
   respondExtensionUi: async (ref: SessionRef, id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> => {
     await request(`${sessionPath(ref)}/extension-ui`, { method: "POST", body: JSON.stringify({ id, ...response }) });
   },
+  takeRestoredQueue: async (ref: SessionRef): Promise<string[]> => (await request<{ texts: string[] }>(`${sessionPath(ref)}/restored-queue`, { method: "POST", body: "{}" })).texts,
   selfRestart: async (): Promise<{ restarting: boolean }> => request("/api/self/restart", { method: "POST" }),
   systemInfo: async (): Promise<{ logDirectory: string; logRetentionDays: number }> => request("/api/system/info"),
   recoveries: async (): Promise<RecoveryNotice[]> => (await request<{ recoveries: RecoveryNotice[] }>("/api/system/recoveries")).recoveries,

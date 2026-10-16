@@ -620,6 +620,7 @@ export async function buildApp(options: {
     const body = bashInput.parse(request.body);
     return sessions.bash(ref, body.command, body.excludeFromContext === true, body.clientRequestId);
   });
+  app.post("/api/workspaces/:workspaceId/sessions/:sessionId/restored-queue", async (request) => ({ texts: await sessions.takeRestoredQueue(sessionRef(request.params)) }));
   app.post("/api/workspaces/:workspaceId/sessions/:sessionId/abort", async (request) => {
     const ref = sessionRef(request.params);
     const body = abortInput.parse(request.body);
