@@ -17,6 +17,7 @@
     "allow-open-external-url",
     "allow-set-notifications-enabled",
     "allow-take-update-check",
-    "allow-check-desktop-update"
+    "allow-check-desktop-update",
+    "allow-update-channel"
   ]
 }

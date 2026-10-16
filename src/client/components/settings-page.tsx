@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, Library, Puzzle, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, Bot, CloudDownload, CheckCircle2, CircleAlert, FolderGit2, FolderPlus, Globe, KeyRound, Library, Puzzle, RotateCw, ShieldCheck, Trash2, X } from "lucide-react";
 import type { AppSettings, AuthLoginOperation, ManagedModel, ManagedProvider, ProviderOverride, ProviderStatus, Workspace } from "../../shared/protocol";
 import { ApiError, api } from "../api";
 import { isSettingsPath, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsPath, type SettingsRoute } from "../lib/settings-routes";
-import { setDesktopNotificationEnabled } from "../desktop";
+import { getDesktopUpdateChannel, isDesktopUpdateChannel, setDesktopNotificationEnabled, setDesktopUpdateChannel, type DesktopUpdateChannel } from "../desktop";
 import { isDesktopShell } from "../lib/desktop-shell";
 import { isNotificationEnabled, requestNotificationPermission, setNotificationEnabled } from "../notifications";
 import { Button } from "./ui/button";
@@ -49,6 +49,7 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
   const route = parseSettingsPath(location.pathname) ?? { page: "home" };
   const [name, setName] = useState(assistantName);
   const [notificationsEnabled, setNotificationsEnabledState] = useState(() => isNotificationEnabled());
+  const [updateChannel, setUpdateChannelState] = useState<DesktopUpdateChannel>();
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [customProviders, setCustomProviders] = useState<ManagedProvider[]>([]);
   const [enabledDraft, setEnabledDraft] = useState<Set<string>>(new Set());
@@ -69,6 +70,22 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
   const reloadGeneration = useRef(0);
   const showMessage = useCallback((nextMessage: string, tone: SettingsMessageTone = "success") => { setMessageTone(tone); setMessage(nextMessage); }, []);
   useEffect(() => { setName(assistantName); }, [assistantName]);
+  useEffect(() => {
+    let cancelled = false;
+    void getDesktopUpdateChannel().then((channel) => { if (!cancelled) setUpdateChannelState(channel); }, () => undefined);
+    return () => { cancelled = true; };
+  }, []);
+  const changeUpdateChannel = async (channel: DesktopUpdateChannel) => {
+    const previous = updateChannel;
+    setUpdateChannelState(channel);
+    try {
+      await setDesktopUpdateChannel(channel);
+      showMessage(channel === "beta" ? "已切换到测试版，检查更新时会收到测试版和正式版中较新的一个" : "已切换到正式版，之后只接收正式版更新");
+    } catch (error) {
+      setUpdateChannelState(previous);
+      showMessage(`切换更新通道失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  };
   const push = (nextRoute: SettingsRoute) => { navigate(settingsPath(nextRoute)); };
   const replaceTop = (nextRoute: SettingsRoute) => { navigate(settingsPath(nextRoute), { replace: true }); };
   const goBack = () => {
@@ -411,6 +428,11 @@ export function SettingsPage({ assistantName, refreshKeys, workspaces, onWorkspa
         <SettingsRow icon={Puzzle} label="插件" chevron onClick={() => push({ page: "plugins" })} />
         <SettingsRow icon={Library} label="技能" chevron onClick={() => push({ page: "skills" })} />
         <SettingsRow icon={Bell} label="运行结束通知" control={<SettingsSwitch checked={notificationsEnabled} onChange={(enabled) => { void toggleNotifications(enabled); }} label="运行结束通知" />} />
+        {updateChannel === undefined ? null : <SettingsRow icon={CloudDownload} label="更新通道" control={<select className="settings-row-select" aria-label="更新通道" value={updateChannel}
+          onChange={(event) => { if (isDesktopUpdateChannel(event.target.value)) void changeUpdateChannel(event.target.value); }}>
+          <option value="stable">正式版</option>
+          <option value="beta">测试版</option>
+        </select>} />}
       </SettingsGroup>
       <SettingsGroup title="连接">
         <SettingsRow icon={KeyRound} label="供应商与账号" value={providerSummary} chevron onClick={() => push({ page: "providers" })} />

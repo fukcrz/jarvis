@@ -12,7 +12,7 @@ Windows 先行的 Tauri 壳。窗口加载本机 Fastify 服务，数据仍在 `
 - 运行结束通知默认开启；窗口在前台时不弹
 - 本机已有 Jarvis 在跑时，窗口直接连上，不另起一份；退出桌面壳也不会关掉那份服务
 - 端口被非 Jarvis 程序占用才启动失败
-- 自动更新读取公开 GitHub Releases 的 `latest.json`。启动后以及每 30 分钟检查一次；有新版本先确认下载，下载完成后再确认安装。下载显示进度，失败可重试。同一版本点过稍后，本次运行不再自动弹。有会话在跑时先提示数量，确认后停止本壳启动的后端，再退出并安装。Windows 更新器的 `cleanup_before_exit` 同样清理后端，避免更新后继续复用旧进程
+- 自动更新按设置里的「更新通道」读取清单：正式版读 `releases/latest/download/latest.json`，测试版读 `releases/download/updater-beta/beta.json`（默认正式版，记在 `~/.jarvis/desktop.json` 的 `updateChannel`）。测试版清单读不到时退回正式版清单。网页界面和服务没起来时的桌面端更新走同一个通道。启动后以及每 30 分钟检查一次；有新版本先确认下载，下载完成后再确认安装。下载显示进度，失败可重试。同一版本点过稍后，本次运行不再自动弹。有会话在跑时先提示数量，确认后停止本壳启动的后端，再退出并安装。Windows 更新器的 `cleanup_before_exit` 同样清理后端，避免更新后继续复用旧进程
 - 聊天和设置里的外链用系统浏览器打开，不离开 Jarvis 窗口
 
 ## 开发
@@ -51,4 +51,47 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 npm run desktop:build
 ```
 
-CI 在 tag `vX.Y.Z` 时构建 NSIS 安装包。更新签名私钥放在 GitHub Actions secrets：`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+CI（`.github/workflows/release-desktop.yml`）在推送 `vX.Y.Z` 或 `vX.Y.Z-beta.N` 标签时构建 NSIS 安装包。更新签名私钥放在 GitHub Actions secrets：`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+
+### 两个通道
+
+| 标签 | GitHub Release | 写入的更新清单 |
+| --- | --- | --- |
+| `v0.1.28-beta.1` | 预发布（prerelease），不会成为 latest | 只写 `beta.json` |
+| `v0.1.28` | 正式版，设为 latest | `latest.json`，并在不低于当前测试版时写 `beta.json` |
+
+- `beta.json` 放在固定的预发布 Release `updater-beta` 的附件里，每次覆盖；不要删这个 Release。
+- 测试版用户总能拿到测试版和正式版中较高的版本：`0.1.28-beta.2 < 0.1.28 < 0.1.29-beta.1`（SemVer 预发布排序）。
+- 正式版用户只看 `releases/latest`，预发布不影响它。
+- 版本号只用 `X.Y.Z` 或 `X.Y.Z-beta.N`，不要带 `+构建元数据`。项目只打 NSIS 包（MSI 才要求预发布标识是纯数字）。
+- 从测试版切回正式版不会降级，等下一个更高的正式版再更新。
+
+### 发测试版
+
+```bash
+node scripts/bump-version.mjs 0.1.28-beta.1   # 改 package.json、package-lock.json、Cargo.toml、Cargo.lock
+git commit -am "chore(release): 更新版本至 0.1.28-beta.1"
+git tag v0.1.28-beta.1
+git push origin main v0.1.28-beta.1
+```
+
+继续修就递增 `beta.2`、`beta.3`……
+
+### 转正
+
+测试版验证没问题后，在同一代码上改成正式版本号再打标签：
+
+```bash
+node scripts/bump-version.mjs 0.1.28
+git commit -am "chore(release): 更新版本至 0.1.28"
+git tag v0.1.28
+git push origin main v0.1.28
+```
+
+正式版会同时更新 `latest.json` 和 `beta.json`，测试版用户也会升到 `0.1.28`。清单脚本会校验标签和 `package.json` 版本一致，不一致直接失败。
+
+本地试跑清单脚本（不联网、不上传）：
+
+```bash
+JARVIS_NSIS_DIR=<含 exe 和 .sig 的目录> JARVIS_CURRENT_BETA=0.1.27 GITHUB_REF_NAME=v<版本> node scripts/write-desktop-latest-json.mjs
+```
