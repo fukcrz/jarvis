@@ -100,7 +100,9 @@ export const STATIC_SETTINGS_ENTRIES: readonly SettingsSearchEntry[] = [
   { key: "diagnostics", title: "导出诊断包", description: "数据与恢复 · 日志、版本、配置（不含密码）", keywords: "反馈 问题", category: "data", route: { page: "data" }, focus: "diagnostics" },
   { key: "logs", title: "日志目录", description: "数据与恢复 · 日志文件位置", category: "data", route: { page: "data" }, focus: "logs" },
   { key: "snapshots", title: "每日快照", description: "数据与恢复 · 保留 7 份", keywords: "备份", category: "data", route: { page: "data" }, focus: "snapshots" },
-  { key: "version", title: "当前版本", description: "关于与更新 · 版本号、检查更新", keywords: "检查更新", category: "about", route: { page: "about" }, focus: "version" },
+  { key: "version", title: "当前版本", description: "关于与更新 · 版本号", keywords: "关于 about", category: "about", route: { page: "about" }, focus: "version" },
+  { key: "check-update", title: "检查更新", description: "关于与更新 · 桌面端手动检查新版本", keywords: "新版本 下载 安装", category: "about", route: { page: "about" }, focus: "version" },
+  { key: "copy-version", title: "复制版本信息", description: "关于与更新 · 反馈问题时附上", keywords: "诊断 反馈", category: "about", route: { page: "about" }, focus: "about-diagnostics" },
   { key: "update-channel", title: "更新通道", description: "关于与更新 · 正式版 / 测试版", category: "about", route: { page: "about" }, focus: "update-channel" },
   { key: "restart-service", title: "重启服务", description: "关于与更新 · 重新启动 Jarvis 后台服务", category: "about", route: { page: "about" }, focus: "restart-service" },
 ];

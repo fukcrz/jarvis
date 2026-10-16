@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listenDesktopCheckUpdate, showDesktopWindow } from "../desktop";
+import { CHECK_UPDATE_EVENT } from "../lib/app-version";
 import {
   UPDATE_CHECK_INTERVAL_MS,
   canDismissUpdate,
@@ -168,6 +169,8 @@ export function DesktopUpdatePrompt() {
       void import("@tauri-apps/api/core").then(({ invoke }) => invoke("take_update_check")).catch(() => undefined);
       void runCheckRef.current(true);
     });
+    const onManualCheck = () => { void runCheckRef.current(true); };
+    window.addEventListener(CHECK_UPDATE_EVENT, onManualCheck);
     const timer = window.setInterval(() => { void runCheckRef.current(false); }, UPDATE_CHECK_INTERVAL_MS);
     void listening.ready.then(async () => {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -179,6 +182,7 @@ export function DesktopUpdatePrompt() {
     return () => {
       disposed = true;
       listening.stop();
+      window.removeEventListener(CHECK_UPDATE_EVENT, onManualCheck);
       window.clearInterval(timer);
     };
   }, []);
