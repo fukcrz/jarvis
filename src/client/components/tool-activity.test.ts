@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { SubagentView, ToolTimelineItem } from "../../shared/protocol";
-import { collapsedToolActivityItems, SubagentCallBody, SubagentCallList, subagentRowLabel, subagentStatusLine, subagentTaskLine, subagentToolLine, summarizeToolActivity, ToolActivity } from "./tool-activity";
+import { collapsedToolActivityItems, commandHeadline, SubagentCallBody, SubagentCallList, subagentRowLabel, subagentStatusLine, subagentTaskLine, subagentToolLine, summarizeToolActivity, ToolActivity } from "./tool-activity";
 
 function subagentTool(state: ToolTimelineItem["state"], view: SubagentView): ToolTimelineItem {
   return {
@@ -65,6 +65,24 @@ describe("ToolActivity command rows", () => {
     const markup = renderToStaticMarkup(createElement(ToolActivity, { items: [item], active: false }));
     expect(markup).toContain("export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL=&quot;*&quot; node &quot;c:/Users/fszax/.pi/agent/skills/panel1/scripts/client.mjs&quot; api list");
     expect(markup).not.toContain("…");
+  });
+
+  it("shows only the first line of a multi-line command and keeps the full command in the details", () => {
+    const command = "python - << 'PY'\nimport json\nprint(json.dumps({'ok': True}))\nPY";
+    const item: ToolTimelineItem = { kind: "tool", id: "cmd-2", createdAt: "", name: "bash", title: "Run command", state: "completed", inputPreview: command };
+    const collapsed = renderToStaticMarkup(createElement(ToolActivity, { items: [item], active: false }));
+    expect(collapsed).toContain('<span class="tool-target">python - &lt;&lt; &#x27;PY&#x27; …</span>');
+    expect(collapsed).not.toContain("import json");
+    const opened = renderToStaticMarkup(createElement(ToolActivity, { items: [item], active: false, openItems: new Set(["cmd-2"]) }));
+    expect(opened).toContain("print(json.dumps");
+    expect(opened.indexOf("import json")).toBeGreaterThan(opened.indexOf("detail-command-line"));
+  });
+
+  it("builds a one-line headline from the first non-empty line", () => {
+    expect(commandHeadline("\n  npm test  \n")).toBe("npm test");
+    expect(commandHeadline("cat <<EOF\r\nhello\r\nEOF")).toBe("cat <<EOF …");
+    expect(commandHeadline("")).toBe("");
+    expect(subagentToolLine("bash", "python - << 'PY'\nprint(1)\nPY")).toBe("执行了 python - << 'PY' …");
   });
 });
 

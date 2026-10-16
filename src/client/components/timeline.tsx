@@ -163,8 +163,8 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   const isMobile = useIsMobile();
   const activeProcessId = status.runState === "idle" ? undefined : timelineProcessId(turns.at(-1));
   const previousActiveProcessRef = useRef<{ sessionKey?: string; processId?: string }>({ sessionKey, processId: activeProcessId });
-  const toggleProcess = useCallback((processId: string) => {
-    setFoldState((current) => toggleTimelineProcess(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), processId));
+  const toggleProcess = useCallback((processId: string, open: boolean) => {
+    setFoldState((current) => toggleTimelineProcess(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), processId, open));
   }, [sessionKey]);
   const toggleDetail = useCallback((processId: string, detailId: string, parentShowingAll: boolean) => {
     setFoldState((current) => toggleTimelineDetail(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), processId, detailId, parentShowingAll));
@@ -1185,9 +1185,11 @@ export function shouldFoldTurnProcess(turn: TimelineTurn): boolean {
   return turn.process.length > 0;
 }
 
-/** 回合还在跑时不套「过程」，直接展开；结束后再收起。 */
-export function shouldPresentCollapsedProcess(turn: TimelineTurn, live: boolean): boolean {
-  return !live && shouldFoldTurnProcess(turn);
+/** 进行中的回合默认展开「过程」，结束后默认收起；用户手动开合过就一直按用户的来。 */
+export function isTurnProcessOpen(foldState: Pick<TimelineFoldState, "openProcessIds" | "touchedProcessIds">, processId: string | undefined, live: boolean): boolean {
+  if (processId === undefined) return false;
+  if (foldState.touchedProcessIds.has(processId)) return foldState.openProcessIds.has(processId);
+  return live || foldState.openProcessIds.has(processId);
 }
 
 function isUserCommand(item: ToolTimelineItem): boolean {
@@ -1343,14 +1345,14 @@ export function timelineProcessId(turn: TimelineTurn | undefined): string | unde
   return `process:${sourceMessageId}`;
 }
 
-function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; live: boolean; foldState: TimelineFoldState; onToggleProcess: (id: string) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string) => void }) {
+function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; live: boolean; foldState: TimelineFoldState; onToggleProcess: (id: string, open: boolean) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string) => void }) {
   const presented = useMemo(() => presentTurnProcess(turn.process), [turn.process]);
   const split = useMemo(() => splitVisibleTurnEntries(presented.entries), [presented.entries]);
   const displayTurn = { ...turn, process: split.process };
   const summary = summarizeTurnProcess(displayTurn);
-  const collapsible = shouldPresentCollapsedProcess(displayTurn, live);
+  const collapsible = shouldFoldTurnProcess(displayTurn);
   const processId = timelineProcessId(turn);
-  const open = !collapsible || processId !== undefined && foldState.openProcessIds.has(processId);
+  const open = !collapsible || isTurnProcessOpen(foldState, processId, live);
   const touched = processId !== undefined && foldState.touchedProcessIds.has(processId);
   const showAll = !collapsible || open;
   const processContext: TurnRenderContext = {
@@ -1364,7 +1366,7 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   };
   const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
   const processBlock = displayTurn.process.length === 0 ? null : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
-    {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => onToggleProcess(processId)}>
+    {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => onToggleProcess(processId, open)}>
       <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
       <span className="turn-process-label">过程</span>
       {summary.operations === 0 ? null : <span className="turn-process-count">{summary.operations} 项操作</span>}
@@ -1385,7 +1387,7 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   </>;
 }
 
-function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined): ReactNode[] {
+function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string, open: boolean) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined): ReactNode[] {
   const context: TurnRenderContext = { streamingMessageId, liveGeneration, status, openDetailIds: foldState.openDetailIds, openGroupIds: foldState.openGroupIds, onToggleDetail: () => undefined, onToggleCall: () => undefined, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage };
   const liveTurnKey = status.runState === "idle" ? undefined : turns.at(-1)?.key;
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} live={turn.key === liveTurnKey} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
