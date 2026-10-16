@@ -77,6 +77,10 @@ function providerAvatarStyle(id: string): { background: string } {
   return { background: `linear-gradient(135deg, hsl(${String(hash)} 62% 46%), hsl(${String((hash + 40) % 360)} 58% 38%))` };
 }
 
+function ApiKeyField({ value, onChange, readOnly = false }: { value: string; onChange: (value: string) => void; readOnly?: boolean }) {
+  return <label className="settings-form-field"><span>API Key</span><input value={value} readOnly={readOnly} autoComplete="off" autoCapitalize="off" spellCheck={false} onChange={(event) => onChange(event.target.value)} /></label>;
+}
+
 function isValidHttpUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
@@ -163,9 +167,7 @@ interface ProvidersListPageProps {
   customById: Map<string, ManagedProvider>;
   enabledDraft: Set<string>;
   loading: boolean;
-  showAll: boolean;
   unrestricted: boolean;
-  onShowAllChange: (value: boolean) => void;
   onOpenScope: () => void;
   onOpenProvider: (providerId: string) => void;
   onEditCustom: (provider: ManagedProvider) => void;
@@ -174,11 +176,8 @@ interface ProvidersListPageProps {
 }
 
 /** 供应商总览：范围控制 + 供应商分组行，详情进入子页。 */
-export function ProvidersListPage({ providers, customProviders, customById, enabledDraft, loading, showAll, unrestricted, onShowAllChange, onOpenScope, onOpenProvider, onEditCustom, onAddProvider, onBack }: ProvidersListPageProps) {
-  const visibleProviders = useMemo(() => {
-    const enabled = providers.filter(isProviderUsable);
-    return showAll ? providers : enabled;
-  }, [providers, showAll]);
+export function ProvidersListPage({ providers, customProviders, customById, enabledDraft, loading, unrestricted, onOpenScope, onOpenProvider, onEditCustom, onAddProvider, onBack }: ProvidersListPageProps) {
+  const visibleProviders = useMemo(() => providers.filter(isProviderUsable), [providers]);
   const orphanedProviders = useMemo(() => customProviders.filter((provider) => !providers.some((status) => status.id === provider.id)), [customProviders, providers]);
   const providerEnabledCounts = useMemo(() => new Map(providers.map((provider) => [provider.id, provider.models.filter((model) => enabledDraft.has(modelKey(provider.id, model.id))).length])), [providers, enabledDraft]);
   const empty = visibleProviders.length === 0 && orphanedProviders.length === 0;
@@ -188,7 +187,6 @@ export function ProvidersListPage({ providers, customProviders, customById, enab
       {loading ? <p className="settings-page-note">正在读取供应商…</p> : <>
         <SettingsGroup>
           <SettingsRow icon={Boxes} label="模型范围" value={unrestricted ? "全部可用" : `已启用 ${String(enabledDraft.size)}`} chevron onClick={onOpenScope} />
-          <SettingsRow icon={Boxes} label="显示全部供应商" control={<SettingsSwitch checked={showAll} onChange={onShowAllChange} label="显示全部供应商" />} />
         </SettingsGroup>
         {empty ? <SettingsEmpty icon={KeyRound} title="还没有供应商" actionLabel="添加供应商" onAction={onAddProvider} /> : <SettingsGroup>
           {visibleProviders.map((provider) => <ProviderListRow key={provider.id} provider={provider} custom={customById.get(provider.id)} enabledCount={providerEnabledCounts.get(provider.id) ?? 0} onOpen={() => onOpenProvider(provider.id)} />)}
@@ -343,10 +341,9 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
         </div>
       </SettingsGroup>
       <SettingsGroup>
-        {provider.authConfigured ? <SettingsRow icon={LogOut} label="退出登录" danger disabled={accountBusy} onClick={() => onLogout(provider)} /> : <>
-          {provider.supportsApiKey ? <SettingsRow icon={KeyRound} label="使用 API Key 登录" disabled={accountBusy} onClick={() => onLogin(provider, "api_key")} /> : null}
-          {provider.supportsOAuth ? <SettingsRow icon={ExternalLink} label="账号授权登录" disabled={accountBusy} onClick={() => onLogin(provider, "oauth")} /> : null}
-        </>}
+        {provider.authConfigured ? <SettingsRow icon={LogOut} label="退出登录" danger disabled={accountBusy} onClick={() => onLogout(provider)} /> : null}
+        {provider.apiKeyLogin === "login" ? <SettingsRow icon={KeyRound} label="登录" disabled={accountBusy} onClick={() => onLogin(provider, "api_key")} /> : null}
+        {!provider.authConfigured && provider.supportsOAuth ? <SettingsRow icon={ExternalLink} label="账号授权登录" disabled={accountBusy} onClick={() => onLogin(provider, "oauth")} /> : null}
         <SettingsRow icon={Pencil} label="编辑连接" chevron onClick={onEdit} />
       </SettingsGroup>
       <SettingsGroup title={modelTitle}>
@@ -459,8 +456,10 @@ export function ModelScopePage({ providers, customById, draft, busy, onToggleMod
 interface ProviderWizardPageProps {
   providers: ProviderStatus[];
   editing?: ManagedProvider;
+  initialApiKey?: string;
   busy: boolean;
-  onSave: (provider: ManagedProvider, openModelsAfterSave: boolean) => Promise<void>;
+  onSave: (provider: ManagedProvider, openModelsAfterSave: boolean, apiKey: string) => Promise<void>;
+  onSaveApiKey: (providerId: string, apiKey: string) => Promise<void>;
   onDelete?: (provider: ManagedProvider) => void;
   onLogin: (provider: ProviderStatus, type: "api_key" | "oauth") => void;
   onFetch?: (providerId: string) => Promise<FetchedModel[]>;
@@ -468,19 +467,20 @@ interface ProviderWizardPageProps {
 }
 
 /** 添加/编辑供应商：保留原有步骤，但不再使用对话框。 */
-export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete, onLogin, onFetch, onBack }: ProviderWizardPageProps) {
+export function ProviderWizardPage({ providers, editing, initialApiKey = "", busy, onSave, onSaveApiKey, onDelete, onLogin, onFetch, onBack }: ProviderWizardPageProps) {
   const [provider, setProvider] = useState<ManagedProvider>(() => editing === undefined
     ? { ...EMPTY_PROVIDER, models: [] }
     : { ...editing, models: editing.models.map((model) => ({ ...model })) });
+  const [apiKey, setApiKey] = useState(initialApiKey);
   const [stage, setStage] = useState<ProviderStage>(() => editing === undefined ? { kind: "pick" } : { kind: "custom-connection" });
   const [search, setSearch] = useState("");
   const detailsValid = provider.id.trim() !== "" && isValidHttpUrl(provider.baseUrl);
   const idAvailable = editing !== undefined || !providers.some((item) => item.id === provider.id.trim());
   const pickerProviders = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
-    return providers.filter((item) => needle === "" || `${item.name}\n${item.id}`.toLocaleLowerCase().includes(needle));
+    return providers.filter((item) => !item.custom && (needle === "" || `${item.name}\n${item.id}`.toLocaleLowerCase().includes(needle)));
   }, [providers, search]);
-  const title = editing !== undefined ? "编辑供应商" : stage.kind === "pick" ? "添加供应商" : stage.kind === "known" ? "登录供应商" : stage.kind === "custom-protocol" ? "选择接口" : "连接信息";
+  const title = editing !== undefined ? "编辑供应商" : stage.kind === "pick" ? "添加供应商" : stage.kind === "known" ? "连接供应商" : stage.kind === "custom-protocol" ? "选择接口" : "连接信息";
   const stepBack = () => {
     if (stage.kind === "known" || stage.kind === "custom-protocol") setStage({ kind: "pick" });
     else setStage({ kind: "custom-protocol" });
@@ -495,29 +495,29 @@ export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete,
   };
 
   const check = useConnectionCheck(editing?.id, onFetch);
+  const knownProvider = stage.kind === "known" ? stage.provider : undefined;
   return <SettingsSubpage title={title} onBack={goBack} action={stage.kind === "custom-connection" ? <>
     {check.available ? <button type="button" className="settings-topbar-action muted" disabled={busy || check.checking} onClick={check.run}>{check.checking ? "检查中…" : check.result?.ok === true ? check.result.text : "检查连接"}</button> : null}
-    <button type="button" className="settings-topbar-action" disabled={busy || !detailsValid || !idAvailable} onClick={() => { void onSave(provider, editing === undefined); }}>{busy ? "保存中…" : "保存"}</button>
-  </> : undefined}>
+    <button type="button" className="settings-topbar-action" disabled={busy || !detailsValid || !idAvailable} onClick={() => { void onSave(provider, editing === undefined, apiKey); }}>{busy ? "保存中…" : "保存"}</button>
+  </> : knownProvider?.supportsApiKey === true && knownProvider.apiKeyLogin !== "login" ? <button type="button" className="settings-topbar-action" disabled={busy || apiKey.trim() === (knownProvider.apiKey ?? "")} onClick={() => { void onSaveApiKey(knownProvider.id, apiKey); }}>{busy ? "保存中…" : "保存"}</button> : undefined}>
     {stage.kind === "pick" ? <div className="settings-stack">
       <label className="provider-picker-search"><Search size={14} /><input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索供应商" /></label>
       <div className="api-choice-list provider-picker-list">
-        <button type="button" className="api-choice provider-picker-custom" onClick={() => setStage({ kind: "custom-protocol" })}><span><strong>自定义供应商</strong></span><Plus size={16} /></button>
-        {pickerProviders.map((item) => {
-          const configured = item.authConfigured || item.custom;
-          return <button type="button" key={item.id} className={`api-choice ${configured ? "provider-picker-configured" : ""}`} onClick={() => setStage({ kind: "known", provider: item })}>
-            <span><strong>{item.name}</strong><small>{item.id} · {String(item.models.length)} 个模型{configured ? " · 已配置" : ""}</small></span>
-            {configured ? <span className="status-ready"><Check size={13} />已配置</span> : null}
-          </button>;
-        })}
+        <button type="button" className="api-choice provider-picker-custom" onClick={() => { setApiKey(""); setStage({ kind: "custom-protocol" }); }}><span><strong>自定义供应商</strong></span><Plus size={16} /></button>
+        {pickerProviders.map((item) => <button type="button" key={item.id} className={`api-choice ${item.authConfigured ? "provider-picker-configured" : ""}`} onClick={() => { setApiKey(item.apiKey ?? ""); setStage({ kind: "known", provider: item }); }}>
+          <span><strong>{item.name}</strong><small>{item.id} · {String(item.models.length)} 个模型{item.authConfigured ? " · 已配置" : ""}</small></span>
+          {item.authConfigured ? <span className="status-ready"><Check size={13} />已配置</span> : null}
+        </button>)}
       </div>
     </div> : null}
     {stage.kind === "known" ? <div className="settings-stack">
       <div className="api-choice provider-known-head"><span><strong>{stage.provider.name}</strong><small>{stage.provider.id} · {String(stage.provider.models.length)} 个模型</small></span></div>
-      <div className="dialog-actions">
-        {stage.provider.supportsApiKey ? <Button disabled={busy} onClick={() => { onLogin(stage.provider, "api_key"); onBack(); }}><KeyRound size={14} />API Key</Button> : null}
-        {stage.provider.supportsOAuth ? <Button disabled={busy} onClick={() => { onLogin(stage.provider, "oauth"); onBack(); }}><ExternalLink size={14} />登录</Button> : null}
-      </div>
+      {stage.provider.supportsApiKey && stage.provider.apiKeyLogin !== "login" ? <SettingsForm><SettingsFormSection><ApiKeyField value={apiKey} onChange={setApiKey} /></SettingsFormSection></SettingsForm> : null}
+      {stage.provider.apiKeyLogin === "login" && (stage.provider.apiKey ?? "") !== "" ? <SettingsForm><SettingsFormSection><ApiKeyField value={stage.provider.apiKey ?? ""} readOnly onChange={() => undefined} /></SettingsFormSection></SettingsForm> : null}
+      {stage.provider.apiKeyLogin === "login" || stage.provider.supportsOAuth ? <div className="dialog-actions">
+        {stage.provider.apiKeyLogin === "login" ? <Button disabled={busy} onClick={() => { onLogin(stage.provider, "api_key"); onBack(); }}><KeyRound size={14} />登录</Button> : null}
+        {stage.provider.supportsOAuth ? <Button disabled={busy} onClick={() => { onLogin(stage.provider, "oauth"); onBack(); }}><ExternalLink size={14} />账号授权</Button> : null}
+      </div> : null}
     </div> : null}
     {stage.kind === "custom-protocol" ? <div className="settings-stack">
       <div className="api-choice-list">{API_OPTIONS.map((option) => <button type="button" key={option.id} className={`api-choice ${provider.api === option.id ? "selected" : ""}`} onClick={() => setProvider({ ...provider, api: option.id })}>
@@ -530,6 +530,7 @@ export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete,
         <label className="settings-form-field"><span>ID</span><input value={provider.id} disabled={editing !== undefined} autoFocus={editing === undefined} onChange={(event) => setProvider({ ...provider, id: event.target.value })} aria-invalid={!idAvailable} />{idAvailable ? null : <small className="field-error">该 ID 已被使用</small>}</label>
         <label className="settings-form-field"><span>显示名称</span><input value={provider.name ?? ""} onChange={(event) => setProvider({ ...provider, name: event.target.value || undefined })} /></label>
         <label className="settings-form-field"><span>Base URL</span><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" aria-invalid={provider.baseUrl.trim() !== "" && !isValidHttpUrl(provider.baseUrl)} />{provider.baseUrl.trim() === "" || isValidHttpUrl(provider.baseUrl) ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
+        <ApiKeyField value={apiKey} onChange={setApiKey} />
         <label className="settings-form-field"><span>接口协议</span><select value={provider.api} onChange={(event) => setProvider({ ...provider, api: event.target.value as ManagedApi })}>{API_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
         <SettingsFormSwitch label="Bearer Authorization" checked={provider.authHeader} onChange={(checked) => setProvider({ ...provider, authHeader: checked })} />
       </SettingsFormSection>
@@ -543,15 +544,17 @@ export function ProviderWizardPage({ providers, editing, busy, onSave, onDelete,
 interface BuiltinOverridePageProps {
   provider: ProviderStatus;
   busy: boolean;
-  onSave: (override: ProviderOverride) => Promise<void>;
+  onSave: (override: ProviderOverride, apiKey: string) => Promise<void>;
+  onLogin?: () => void;
   onClear: () => Promise<void>;
   onFetch?: (providerId: string) => Promise<FetchedModel[]>;
   onBack: () => void;
 }
 
-/** 内置供应商连接覆盖：只改 URL / 头 / compat，不碰官方模型目录。 */
-export function BuiltinOverridePage({ provider, busy, onSave, onClear, onFetch, onBack }: BuiltinOverridePageProps) {
+/** 内置供应商连接覆盖：改 URL / 头 / compat / API Key，不碰官方模型目录。 */
+export function BuiltinOverridePage({ provider, busy, onSave, onLogin, onClear, onFetch, onBack }: BuiltinOverridePageProps) {
   const [baseUrl, setBaseUrl] = useState(provider.override?.baseUrl ?? "");
+  const [apiKey, setApiKey] = useState(provider.apiKey ?? "");
   const [headers, setHeaders] = useState<Record<string, string> | undefined>(provider.override?.headers);
   const [compat, setCompat] = useState<ManagedCompat | undefined>(provider.override?.compat);
   const urlValid = baseUrl.trim() === "" || isValidHttpUrl(baseUrl);
@@ -559,11 +562,14 @@ export function BuiltinOverridePage({ provider, busy, onSave, onClear, onFetch, 
   const check = useConnectionCheck(provider.id, onFetch);
   return <SettingsSubpage title="编辑连接" onBack={onBack} action={<>
     {check.available ? <button type="button" className="settings-topbar-action muted" disabled={busy || check.checking} onClick={check.run}>{check.checking ? "检查中…" : check.result?.ok === true ? check.result.text : "检查连接"}</button> : null}
-    <button type="button" className="settings-topbar-action" disabled={busy || !urlValid} onClick={() => { void onSave({ ...(baseUrl.trim() === "" ? {} : { baseUrl: baseUrl.trim() }), headers, compat }); }}>{busy ? "保存中…" : "保存"}</button>
+    <button type="button" className="settings-topbar-action" disabled={busy || !urlValid} onClick={() => { void onSave({ ...(baseUrl.trim() === "" ? {} : { baseUrl: baseUrl.trim() }), headers, compat }, apiKey); }}>{busy ? "保存中…" : "保存"}</button>
   </>}>
     <SettingsForm>
       <SettingsFormSection>
         <label className="settings-form-field"><span>Base URL</span><input value={baseUrl} autoFocus onChange={(event) => setBaseUrl(event.target.value)} placeholder="官方默认" aria-invalid={!urlValid} />{urlValid ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
+        {provider.supportsApiKey && provider.apiKeyLogin !== "login" ? <ApiKeyField value={apiKey} onChange={setApiKey} /> : null}
+        {provider.apiKeyLogin === "login" && (provider.apiKey ?? "") !== "" ? <ApiKeyField value={provider.apiKey ?? ""} readOnly onChange={() => undefined} /> : null}
+        {provider.apiKeyLogin === "login" && onLogin !== undefined ? <button type="button" className="settings-form-link" disabled={busy} onClick={onLogin}>登录</button> : null}
       </SettingsFormSection>
       <ConnectionExtras headers={headers} compat={compat} onChange={({ headers: nextHeaders, compat: nextCompat }) => { setHeaders(nextHeaders); setCompat(nextCompat); }} />
       {check.result === undefined || check.result.ok ? null : <p className="field-error">{check.result.text}</p>}

@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "plugins": {
+    "model-groups-router.ts": ["b43219642ec2bf76f9697f5be5f89c03", "08a3db6c80312f3b7012653735386104"],
+    "session-board.ts": ["3d0b20156711008896c40147db2700bc"]
+  }
+}

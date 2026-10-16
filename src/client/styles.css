@@ -170,6 +170,15 @@ button.settings-row:disabled { opacity: .5; cursor: default; }
 .settings-row-main small { overflow: hidden; color: var(--subtle); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .settings-row-main-button { display: grid; flex: 1; min-width: 0; gap: 2px; border: 0; background: transparent; padding: 0; color: var(--ink); text-align: left; cursor: pointer; }
 .settings-row-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 2px; }
+.settings-row-main small.settings-plugin-note { white-space: normal; overflow: visible; text-overflow: unset; line-height: 1.35; }
+.plugin-market { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+.plugin-card { display: grid; align-content: start; gap: 6px; min-width: 0; padding: 10px 12px; border: 1px solid var(--glass-border); border-radius: 8px; background: var(--surface); }
+.plugin-card-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.plugin-card-head strong { flex: 1; min-width: 0; overflow: hidden; font-size: var(--ui-body); text-overflow: ellipsis; white-space: nowrap; }
+.plugin-card-head span, .plugin-card-state { flex: 0 0 auto; color: var(--muted); font-size: var(--ui-meta); }
+.plugin-card-desc { display: -webkit-box; margin: 0; overflow: hidden; color: var(--muted); font-size: var(--ui-meta); line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.plugin-card-link { overflow: hidden; color: var(--accent-strong); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-card-actions { display: flex; justify-content: flex-end; align-items: center; min-height: 28px; }
 .settings-provider-row .provider-avatar { width: 26px; height: 26px; border-radius: 7px; font-size: 12px; }
 /* --- iOS 风开关 --- */
 .settings-switch { position: relative; flex: 0 0 auto; width: 38px; height: 22px; border: 0; border-radius: 999px; background: var(--line-strong); padding: 0; cursor: pointer; transition: background .18s ease; }
@@ -206,6 +215,24 @@ button.settings-row:disabled { opacity: .5; cursor: default; }
 .settings-form-field select { padding-right: 18px; background-image: linear-gradient(45deg, transparent 50%, var(--subtle) 50%), linear-gradient(135deg, var(--subtle) 50%, transparent 50%); background-position: calc(100% - 8px) calc(50% - 1px), calc(100% - 3px) calc(50% - 1px); background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
 .settings-form-field input:focus, .settings-form-field select:focus, .settings-form-field input:focus-visible, .settings-form-field select:focus-visible { outline: none; border-bottom-color: var(--accent); color: var(--ink); }
 .settings-form-field input[aria-invalid="true"] { border-bottom-color: var(--danger); color: var(--danger); }
+.settings-form-field textarea { width: 100%; min-height: 92px; resize: vertical; border: 1px solid var(--line-strong); border-radius: 5px; background: rgb(12 14 16 / .55); padding: 8px; color: var(--ink); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.settings-form-field textarea:focus, .settings-form-field textarea:focus-visible { outline: none; border-color: var(--accent); }
+.settings-shell:has(.model-groups-page) { width: min(960px, 100%); }
+.model-groups-globals, .model-groups-fields, .model-groups-levels { display: grid; gap: 10px 16px; }
+.model-groups-globals { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 8px 12px 10px; }
+.model-groups-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
+.model-groups-layout > .settings-block { position: sticky; top: 56px; }
+.model-groups-layout .settings-row.accent { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.model-groups-fields { grid-template-columns: 1fr 1fr; }
+.model-groups-fields .settings-form-switch, .model-groups-fields .model-groups-inputs { grid-column: 1 / -1; }
+.model-groups-levels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.model-groups-inputs { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: var(--ui-title); }
+.model-groups-inputs .settings-checkbox { min-height: 28px; }
+.model-groups-route-list { display: grid; gap: 8px; }
+.model-groups-route-head, .model-groups-route { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.5fr) 88px 32px; align-items: center; gap: 8px; }
+.model-groups-route-head { color: var(--subtle); font-size: 11px; font-weight: 600; }
+.model-groups-route .settings-form-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.settings-error-note { border-left: 2px solid var(--danger); background: var(--danger-soft); padding: 8px 10px; color: #ffb4b6; }
 .settings-form-field input:disabled { color: var(--subtle); }
 .settings-form-field input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .settings-form-field input[type="number"]::-webkit-outer-spin-button, .settings-form-field input[type="number"]::-webkit-inner-spin-button { margin: 0; -webkit-appearance: none; }
@@ -856,6 +883,11 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
   .settings-shell { padding: 12px 12px 36px; }.settings-section { gap: 12px; }.settings-section-heading { align-items: center; gap: 8px; }.settings-section-heading .button { flex: 0 0 auto; }
     .provider-avatar { width: 28px; height: 28px; font-size: 12px; }
     .settings-row, .settings-model-row, .settings-provider-row, .settings-form-switch { min-height: 44px; }
+  .model-groups-layout, .model-groups-globals, .model-groups-fields, .model-groups-levels { grid-template-columns: 1fr; }
+  .model-groups-route-head { display: none; }
+  .model-groups-route { grid-template-columns: 1fr; align-items: stretch; }
+  .model-groups-route .settings-form-field > span { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
+  .model-groups-route > .button { justify-self: end; }
     .settings-empty { padding: 16px 12px; }.tunnel-methods { grid-template-columns: 1fr 1fr; }.tunnel-url { align-items: flex-start; flex-direction: column; }.tunnel-url-actions { width: 100%; justify-content: flex-end; }
   /* 隧道行：操作条吃满卡片宽度，URL 收缩省略，图标/启停不压缩，避免「停止」被顶出卡片 */
   .tunnel-entry { min-width: 0; }.tunnel-entry-head { flex-wrap: wrap; row-gap: 6px; }.tunnel-entry-toggle { flex: 1 1 100%; }.tunnel-entry-actions { flex: 1 1 100%; width: 100%; min-width: 0; flex-wrap: wrap; justify-content: flex-start; row-gap: 6px; }.tunnel-entry-actions a.button { flex: 1 1 0; min-width: 0; max-width: 100%; }.tunnel-entry-actions .button-icon, .tunnel-entry-actions .button-sm { flex: 0 0 auto; min-width: auto; overflow: visible; }.tunnel-config-fields { padding: 10px; }.tunnel-caddy-head { flex-wrap: wrap; }

@@ -10,6 +10,9 @@ export type SettingsRoute =
   | { page: "workspaces" }
   | { page: "tunnel" }
   | { page: "security" }
+  | { page: "plugins" }
+  | { page: "plugins-install" }
+  | { page: "model-groups" }
   | { page: "skills" }
   | { page: "skill-files"; skillId: string };
 
@@ -32,6 +35,9 @@ export function settingsPath(route: SettingsRoute): string {
     case "workspaces": return `${SETTINGS_ROOT}/workspaces`;
     case "tunnel": return `${SETTINGS_ROOT}/tunnel`;
     case "security": return `${SETTINGS_ROOT}/security`;
+    case "plugins": return `${SETTINGS_ROOT}/plugins`;
+    case "plugins-install": return `${SETTINGS_ROOT}/plugins/install`;
+    case "model-groups": return `${SETTINGS_ROOT}/plugins/model-groups`;
     case "skills": return `${SETTINGS_ROOT}/skills`;
     case "skill-files": return `${SETTINGS_ROOT}/skills/${encodeURIComponent(route.skillId)}`;
   }
@@ -49,10 +55,13 @@ export function parseSettingsPath(pathname: string): SettingsRoute | undefined {
       case "workspaces": return { page: "workspaces" };
       case "tunnel": return { page: "tunnel" };
       case "security": return { page: "security" };
+      case "plugins": return { page: "plugins" };
       case "skills": return { page: "skills" };
       default: return undefined;
     }
   }
+  if (segments[0] === "plugins" && segments.length === 2 && segments[1] === "install") return { page: "plugins-install" };
+  if (segments[0] === "plugins" && segments.length === 2 && segments[1] === "model-groups") return { page: "model-groups" };
   if (segments[0] === "skills" && segments.length === 2 && segments[1] !== undefined) return { page: "skill-files", skillId: segments[1] };
   if (segments[0] !== "providers" || segments[1] === undefined) return undefined;
   if (segments.length === 2) return segments[1] === "new" ? { page: "provider-new" } : { page: "provider", providerId: segments[1] };
@@ -71,8 +80,12 @@ export function parentSettingsRoute(route: SettingsRoute, options?: { hasProvide
     case "workspaces":
     case "tunnel":
     case "security":
+    case "plugins":
     case "skills":
       return { page: "home" };
+    case "plugins-install":
+    case "model-groups":
+      return { page: "plugins" };
     case "skill-files":
       return { page: "skills" };
     case "provider":

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { getAgentDir, resolveModelScopeWithDiagnostics, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, readStoredCredential, resolveModelScopeWithDiagnostics, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthEvent, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
 import type { AppSettings, AuthLoginOperation, EnabledModelRef, EnabledModelsStatus, FetchedModel, ManagedCompat, ManagedMaxTokensField, ManagedModel, ManagedProvider, ManagedThinkingFormat, ProviderOverride, ProviderStatus } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
@@ -80,6 +80,7 @@ export class SettingsService {
       const hasPlaceholder = configured?.["apiKey"] === CUSTOM_API_KEY_PLACEHOLDER && credentialType.has(provider.id) === false;
       const custom = isManagedCustomProvider(configured);
       const override = custom ? undefined : projectProviderOverride(configured);
+      const apiKey = displayedApiKey(readStoredCredential(provider.id, this.authFilePath()), configured?.["apiKey"]);
       return {
         id: provider.id,
         name: provider.name,
@@ -88,6 +89,8 @@ export class SettingsService {
         credentialType: credentialType.get(provider.id),
         supportsApiKey: provider.auth.apiKey !== undefined,
         supportsOAuth: provider.auth.oauth !== undefined,
+        ...(provider.auth.apiKey === undefined ? {} : { apiKeyLogin: usesGuidedApiKeyLogin(provider.id) ? "login" as const : "key" as const }),
+        ...(apiKey === undefined ? {} : { apiKey }),
         custom,
         ...(override === undefined ? {} : { override }),
         models: runtime.getModels(provider.id).map(projectModel),
@@ -267,6 +270,45 @@ export class SettingsService {
     return scopedModels.map(({ model }) => ({ provider: model.provider, id: model.id }));
   }
 
+  /** 把表单里的 API Key 写入 Pi 凭证。空字符串只清除已存的 API Key，不碰 OAuth。 */
+  async setProviderApiKey(providerId: string, apiKey: string): Promise<void> {
+    assertProviderId(providerId);
+    const key = apiKey.trim();
+    if (key.length > 20_000) throw new AppError("PROVIDER_API_KEY_INVALID", "API key is too long", 400);
+    const runtime = await this.modelRuntime();
+    const provider = runtime.getProvider(providerId);
+    if (provider === undefined) throw new AppError("PROVIDER_NOT_FOUND", "Provider not found", 404);
+    if (usesGuidedApiKeyLogin(providerId)) throw new AppError("AUTH_LOGIN_INTERACTIVE", "This provider login needs the guided flow", 400);
+    const current = displayedApiKey(readStoredCredential(providerId, this.authFilePath()), (await this.readModelsConfig()).providers[providerId]?.["apiKey"]) ?? "";
+    if (key === current) return;
+    if (key === "") {
+      if (readStoredCredential(providerId, this.authFilePath())?.type === "api_key") await runtime.logout(providerId);
+    } else {
+      if (provider.auth.apiKey?.login === undefined) throw new AppError("AUTH_METHOD_UNAVAILABLE", "This provider does not support API key login", 400);
+      let answered = false;
+      try {
+        await runtime.login(providerId, "api_key", {
+          notify: () => undefined,
+          prompt: async (prompt) => {
+            if (answered || prompt.type !== "secret") throw new Error("This provider cannot be saved with only an API key");
+            answered = true;
+            return key;
+          },
+        });
+      } catch (error) {
+        if (error instanceof AppError) throw error;
+        throw new AppError("AUTH_LOGIN_FAILED", asMessage(error), 400);
+      }
+    }
+    const removedConfiguredKey = await this.removeConfiguredApiKey(providerId);
+    if (removedConfiguredKey) {
+      await this.refreshRuntime();
+      return;
+    }
+    await this.refreshSessions();
+    this.onChanged("models.changed");
+  }
+
   async startLogin(providerId: string, type: AuthType): Promise<AuthLoginOperation> {
     assertProviderId(providerId);
     const runtime = await this.modelRuntime();
@@ -364,6 +406,20 @@ export class SettingsService {
       ...(operation.event === undefined ? {} : { event: operation.event }),
       ...(operation.error === undefined ? {} : { error: operation.error }),
     };
+  }
+
+  private authFilePath(): string {
+    return join(getAgentDir(), "auth.json");
+  }
+
+  /** 连接表单改由凭证保存密钥后，去掉 models.json 里的旧 apiKey，避免清空后又冒出来。 */
+  private async removeConfiguredApiKey(providerId: string): Promise<boolean> {
+    const config = await this.readModelsConfig();
+    const existing = config.providers[providerId];
+    if (!isRecord(existing) || existing["apiKey"] === undefined) return false;
+    delete existing["apiKey"];
+    await this.writeModelsConfig(config);
+    return true;
   }
 
   private async refreshRuntime(): Promise<void> {
@@ -505,6 +561,18 @@ const MAX_TOKENS_FIELDS = new Set<ManagedMaxTokensField>(["max_completion_tokens
 
 function isManagedCustomProvider(value: unknown): boolean {
   return isRecord(value) && isApi(value["api"]);
+}
+
+const GUIDED_API_KEY_LOGIN = new Set(["amazon-bedrock", "google-vertex", "cloudflare-workers-ai", "cloudflare-ai-gateway"]);
+
+function usesGuidedApiKeyLogin(providerId: string): boolean {
+  return GUIDED_API_KEY_LOGIN.has(providerId);
+}
+
+function displayedApiKey(stored: ReturnType<typeof readStoredCredential>, configuredApiKey: unknown): string | undefined {
+  if (stored?.type === "api_key" && typeof stored.key === "string" && stored.key !== "") return stored.key;
+  if (typeof configuredApiKey === "string" && configuredApiKey !== "" && configuredApiKey !== CUSTOM_API_KEY_PLACEHOLDER) return configuredApiKey;
+  return undefined;
 }
 
 function isEmptyProviderRecord(value: Record<string, unknown>): boolean {

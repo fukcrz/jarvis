@@ -103,6 +103,10 @@ export interface ProviderStatus {
   credentialType?: "api_key" | "oauth";
   supportsApiKey: boolean;
   supportsOAuth: boolean;
+  /** key：页面上的一个 API Key 就能保存。login：还要选择或填写其他项，必须走登录流程。 */
+  apiKeyLogin?: "key" | "login";
+  /** 已保存的 API Key。只在设置页回显，不从 OAuth 令牌推导。 */
+  apiKey?: string;
   custom: boolean;
   override?: ProviderOverride;
   models: ManagedModel[];
