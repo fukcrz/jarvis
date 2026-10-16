@@ -12,7 +12,8 @@ export const AUTH_COOKIE_NAME = "jarvis_auth";
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** 距上次签发超过 24 小时才重发 Cookie，避免每个请求都 Set-Cookie。 */
 const RENEW_INTERVAL_MS = 24 * 60 * 60 * 1000;
-export const MIN_PASSWORD_LENGTH = 8;
+/** 只拦空密码；短密码由界面提醒（用户偏好宽松）。 */
+export const MIN_PASSWORD_LENGTH = 1;
 const MAX_PASSWORD_LENGTH = 200;
 
 const SCRYPT_KEY_LENGTH = 32;
@@ -275,7 +276,7 @@ function parseStoredAuth(value: unknown, path: string): StoredAuth {
 }
 
 export function validatePassword(password: string): void {
-  if (password.length < MIN_PASSWORD_LENGTH) throw new AppError("AUTH_PASSWORD_TOO_SHORT", `密码至少 ${String(MIN_PASSWORD_LENGTH)} 位`, 400);
+  if (password.length < MIN_PASSWORD_LENGTH) throw new AppError("AUTH_PASSWORD_TOO_SHORT", "密码不能为空", 400);
   if (password.length > MAX_PASSWORD_LENGTH) throw new AppError("AUTH_PASSWORD_TOO_LONG", `密码不能超过 ${String(MAX_PASSWORD_LENGTH)} 位`, 400);
 }
 

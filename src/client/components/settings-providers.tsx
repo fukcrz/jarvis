@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Boxes, Check, ExternalLink, KeyRound, LogOut, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { Boxes, Check, ExternalLink, Eye, EyeOff, KeyRound, LogOut, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import type { AuthLoginOperation, EnabledModelsStatus, FetchedModel, ManagedApi, ManagedCompat, ManagedMaxTokensField, ManagedModel, ManagedProvider, ManagedThinkingFormat, ProviderOverride, ProviderStatus } from "../../shared/protocol";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
 import { displayModelName } from "../model-display";
@@ -77,8 +77,23 @@ function providerAvatarStyle(id: string): { background: string } {
   return { background: `linear-gradient(135deg, hsl(${String(hash)} 62% 46%), hsl(${String((hash + 40) % 360)} 58% 38%))` };
 }
 
-function ApiKeyField({ value, onChange, readOnly = false }: { value: string; onChange: (value: string) => void; readOnly?: boolean }) {
-  return <label className="settings-form-field"><span>API Key</span><input value={value} readOnly={readOnly} autoComplete="off" autoCapitalize="off" spellCheck={false} onChange={(event) => onChange(event.target.value)} /></label>;
+/** API Key 输入：默认打码，可临时显示；只保存在本机。 */
+export function ApiKeyField({ value, onChange, readOnly = false, placeholder }: { value: string; onChange: (value: string) => void; readOnly?: boolean; placeholder?: string }) {
+  const [visible, setVisible] = useState(false);
+  return <div className="settings-form-field api-key-field">
+    <span>API Key</span>
+    <span className="api-key-input">
+      <input type={visible ? "text" : "password"} aria-label="API Key" value={value} readOnly={readOnly} placeholder={placeholder} autoComplete="off" autoCapitalize="off" spellCheck={false} onChange={(event) => onChange(event.target.value)} />
+      <button type="button" className="api-key-toggle" aria-label={visible ? "隐藏 API Key" : "显示 API Key"} title={visible ? "隐藏" : "显示"} onClick={() => setVisible((current) => !current)}>{visible ? <EyeOff size={13} /> : <Eye size={13} />}<span>{visible ? "隐藏" : "显示"}</span></button>
+    </span>
+    <small className="settings-field-hint">只保存在本机，不会写进日志</small>
+  </div>;
+}
+
+/** 已保存密钥的打码展示：只露后 4 位。 */
+export function maskApiKey(key: string | undefined): string | undefined {
+  if (key === undefined || key.trim() === "") return undefined;
+  return `••••${key.trim().slice(-4)}`;
 }
 
 function isValidHttpUrl(value: string): boolean {
@@ -155,10 +170,25 @@ export function ProviderAvatar({ id, name }: { id: string; name?: string }) {
   return <span aria-hidden className="provider-avatar" style={providerAvatarStyle(id)}>{(name ?? id).slice(0, 1).toUpperCase()}</span>;
 }
 
+/** 供应商状态的中文短词，不露 authSource 等内部值。 */
+export function providerStatusLabel(provider: ProviderStatus, custom?: ManagedProvider): { label: string; tone: "ready" | "unset" } {
+  if (provider.authConfigured) return { label: provider.credentialType === "oauth" ? "已登录" : "已连接", tone: "ready" };
+  if (custom !== undefined || provider.custom) return { label: "已连接 · 无密钥", tone: "ready" };
+  return { label: provider.supportsOAuth && !provider.supportsApiKey ? "未登录" : provider.supportsApiKey ? "未设置密钥" : "未登录", tone: "unset" };
+}
+
+/** 凭据来源的中文说明：stored / environment / runtime。 */
+export function authSourceLabel(provider: ProviderStatus): string | undefined {
+  if (!provider.authConfigured || provider.authSource === undefined) return undefined;
+  if (provider.authSource === "stored") return provider.credentialType === "oauth" ? "账号授权" : "本机保存的密钥";
+  if (provider.authSource === "runtime") return "运行时提供";
+  if (provider.authSource === "environment") return "环境变量";
+  return /^[A-Z0-9_]+$/u.test(provider.authSource) ? `环境变量 ${provider.authSource}` : provider.authSource;
+}
+
 function ProviderStatusChip({ provider, custom }: { provider: ProviderStatus; custom?: ManagedProvider }) {
-  return <span className={`provider-chip ${provider.authConfigured ? "ready" : "unset"}`}>
-    {provider.authConfigured ? <><Check size={12} />{provider.authSource ?? "已配置"}</> : custom !== undefined ? "仅配置" : "未登录"}
-  </span>;
+  const status = providerStatusLabel(provider, custom);
+  return <span className={`provider-chip ${status.tone}`}>{status.tone === "ready" ? <Check size={12} /> : null}{status.label}</span>;
 }
 
 interface ProvidersListPageProps {
@@ -203,19 +233,20 @@ export function ProvidersListPage({ providers, customProviders, customById, enab
 }
 
 function ProviderListRow({ provider, custom, enabledCount, onOpen }: { provider: ProviderStatus; custom?: ManagedProvider; enabledCount: number; onOpen: () => void }) {
-  const configuredCount = custom?.models.length ?? 0;
-  const modelCount = configuredCount > 0 ? configuredCount : provider.models.length;
   const endpoint = hostLabel(custom?.baseUrl ?? provider.override?.baseUrl);
-  const summary = modelCount === 0
-    ? "未加载"
-    : custom !== undefined
-      ? `${String(modelCount)} 个模型`
-      : enabledCount >= modelCount ? `全部 ${String(modelCount)} 个模型可用` : `${String(enabledCount)}/${String(modelCount)} 个模型已启用`;
+  const key = maskApiKey(provider.apiKey);
+  const parts = [endpoint ?? (custom === undefined ? "官方接口" : undefined), key === undefined ? undefined : `API Key ${key}`, providerModelSummary(provider.models.length, enabledCount)].filter((part): part is string => part !== undefined);
   return <button type="button" className="settings-row settings-provider-row" onClick={onOpen}>
     <ProviderAvatar id={provider.id} name={custom?.name ?? provider.name} />
-    <span className="settings-row-main"><strong>{custom?.name ?? provider.name}</strong><small>{summary}{endpoint === undefined ? "" : ` · ${endpoint}`}</small></span>
+    <span className="settings-row-main"><strong>{custom?.name ?? provider.name}</strong><small>{parts.join(" · ")}</small></span>
     <ProviderStatusChip provider={provider} custom={custom} />
   </button>;
+}
+
+/** 模型数统一口径：可用 N · 已启用 M（首页摘要、列表行、详情共用）。 */
+export function providerModelSummary(available: number, enabled: number): string {
+  if (available === 0) return "还没有模型";
+  return `可用 ${String(available)} · 已启用 ${String(enabled)}`;
 }
 
 interface ProviderDetailPageProps {
@@ -250,9 +281,13 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
   const modelBusy = busy === "model-manager";
   const accountBusy = busy === provider.id;
 
-  const addedModels = useMemo(() => (custom?.models ?? provider.models)
-    .filter((model) => custom !== undefined || draft.has(modelKey(provider.id, model.id)))
-    .sort((left, right) => (left.name ?? left.id).localeCompare(right.name ?? right.id)), [provider, custom, draft]);
+  // 与「启用的模型」同一口径：列出该供应商全部可用模型（内置 + 自定义），开关即启用。
+  const addedModels = useMemo(() => {
+    const merged = new Map(provider.models.map((model) => [model.id, model]));
+    for (const model of custom?.models ?? []) if (!merged.has(model.id)) merged.set(model.id, model);
+    return [...merged.values()].sort((left, right) => (left.name ?? left.id).localeCompare(right.name ?? right.id));
+  }, [provider, custom]);
+  const enabledInProvider = addedModels.filter((model) => draft.has(modelKey(provider.id, model.id))).length;
   const addCandidates = useMemo(() => {
     if (custom !== undefined) {
       if (fetched === undefined) return [];
@@ -327,40 +362,37 @@ export function ProviderDetailPage({ provider, custom, draft, busy, onToggleMode
 
   const title = view === "add" ? "添加模型" : view === "edit" ? "编辑模型" : custom?.name ?? provider.name;
   const handleBack = view === "list" ? onBack : () => { setEditModel(undefined); setView("list"); };
-  const modelTitle = custom === undefined
-    ? `模型 · 已启用 ${String(addedModels.length)}/${String(provider.models.length)}`
-    : `模型 · 已配置 ${String(addedModels.length)}`;
+  const modelTitle = `模型 · ${providerModelSummary(addedModels.length, enabledInProvider)}`;
 
   return <SettingsSubpage title={title} onBack={handleBack} action={view === "edit" && editModel !== undefined ? <button type="button" className="settings-topbar-action" disabled={modelBusy} onClick={saveEdit}>保存</button> : undefined}>
     {view === "list" ? <div className="settings-stack">
       <SettingsGroup>
         <div className="settings-account">
           <ProviderAvatar id={provider.id} name={custom?.name ?? provider.name} />
-          <div className="settings-account-main"><strong>{custom?.name ?? provider.name}</strong><small>{custom?.baseUrl === undefined ? (provider.override?.baseUrl === undefined ? provider.id : `${provider.override.baseUrl}`) : `${custom.baseUrl} · ${apiLabel(custom.api)}`}</small></div>
+          <div className="settings-account-main"><strong>{custom?.name ?? provider.name}</strong><small>{[custom?.baseUrl === undefined ? (provider.override?.baseUrl ?? "官方接口") : `${custom.baseUrl} · ${apiLabel(custom.api)}`, authSourceLabel(provider), maskApiKey(provider.apiKey)].filter(Boolean).join(" · ")}</small></div>
           <ProviderStatusChip provider={provider} custom={custom} />
         </div>
       </SettingsGroup>
       <SettingsGroup>
-        {provider.authConfigured ? <SettingsRow icon={LogOut} label="退出登录" danger disabled={accountBusy} onClick={() => onLogout(provider)} /> : null}
+        {provider.authConfigured && provider.authSource !== "environment" ? <SettingsRow icon={LogOut} label={provider.credentialType === "oauth" ? "退出账号" : "清除密钥"} danger disabled={accountBusy} onClick={() => onLogout(provider)} /> : null}
         {provider.apiKeyLogin === "login" ? <SettingsRow icon={KeyRound} label="登录" disabled={accountBusy} onClick={() => onLogin(provider, "api_key")} /> : null}
         {!provider.authConfigured && provider.supportsOAuth ? <SettingsRow icon={ExternalLink} label="账号授权登录" disabled={accountBusy} onClick={() => onLogin(provider, "oauth")} /> : null}
         <SettingsRow icon={Pencil} label="编辑连接" chevron onClick={onEdit} />
       </SettingsGroup>
       <SettingsGroup title={modelTitle}>
-        {addedModels.length === 0 ? <div className="settings-model-empty">尚未添加模型</div> : addedModels.map((model) => {
+        {addedModels.length === 0 ? <div className="settings-model-empty">{provider.authConfigured || custom !== undefined ? "还没有模型" : "登录后会自动列出可用模型"}</div> : addedModels.map((model) => {
           const configured = customModelById.get(model.id);
           const detail = `${model.id}${model.reasoning ? " · 思考" : ""}${model.vision ? " · 图片" : ""}`;
-          return custom === undefined ? <div className="settings-row settings-model-row" key={model.id}>
-            <span className="settings-row-main"><strong>{displayModelName(model.name ?? model.id)}</strong><small>{detail}</small></span>
+          return <div className="settings-row settings-model-row" key={model.id}>
+            {configured === undefined ? <span className="settings-row-main"><strong>{displayModelName(model.name ?? model.id)}</strong><small>{detail}</small></span>
+              : <button type="button" className="settings-row-main settings-row-main-button" title="编辑模型" onClick={() => { setEditModel({ ...configured }); setView("edit"); }}>
+                <strong>{displayModelName(model.name ?? model.id)}</strong><small>{detail}</small>
+              </button>}
             <SettingsSwitch checked={draft.has(modelKey(provider.id, model.id))} disabled={modelBusy} onChange={() => onToggleModel(provider.id, model.id)} label={`启用 ${model.id}`} />
-          </div> : <div className="settings-row settings-model-row" key={model.id}>
-            <button type="button" className="settings-row-main settings-row-main-button" onClick={() => { setEditModel(configured ?? { ...model }); setView("edit"); }}>
-              <strong>{displayModelName(model.name ?? model.id)}</strong><small>{detail}</small>
-            </button>
-            <Button variant="ghost" size="icon" aria-label={`移除 ${model.id}`} title="移除模型" disabled={modelBusy} onClick={() => removeModel(model.id)}><Trash2 size={15} /></Button>
+            {configured === undefined ? null : <Button variant="ghost" size="icon" aria-label={`移除 ${model.id}`} title="移除模型" disabled={modelBusy} onClick={() => removeModel(model.id)}><Trash2 size={15} /></Button>}
           </div>;
         })}
-        <SettingsRow icon={Plus} label="添加模型" accent disabled={modelBusy || (custom === undefined && provider.models.length === 0)} onClick={openAddModels} />
+        {custom === undefined ? null : <SettingsRow icon={Plus} label="添加模型" accent disabled={modelBusy} onClick={openAddModels} />}
       </SettingsGroup>
     </div> : null}
     {view === "add" && custom === undefined ? <SettingsForm>
@@ -529,10 +561,10 @@ export function ProviderWizardPage({ providers, editing, initialApiKey = "", bus
       <SettingsFormSection>
         <label className="settings-form-field"><span>ID</span><input value={provider.id} disabled={editing !== undefined} autoFocus={editing === undefined} onChange={(event) => setProvider({ ...provider, id: event.target.value })} aria-invalid={!idAvailable} />{idAvailable ? null : <small className="field-error">该 ID 已被使用</small>}</label>
         <label className="settings-form-field"><span>显示名称</span><input value={provider.name ?? ""} onChange={(event) => setProvider({ ...provider, name: event.target.value || undefined })} /></label>
-        <label className="settings-form-field"><span>Base URL</span><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" aria-invalid={provider.baseUrl.trim() !== "" && !isValidHttpUrl(provider.baseUrl)} />{provider.baseUrl.trim() === "" || isValidHttpUrl(provider.baseUrl) ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
+        <label className="settings-form-field"><span>Base URL（接口地址）</span><input value={provider.baseUrl} onChange={(event) => setProvider({ ...provider, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" aria-invalid={provider.baseUrl.trim() !== "" && !isValidHttpUrl(provider.baseUrl)} />{provider.baseUrl.trim() === "" || isValidHttpUrl(provider.baseUrl) ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
         <ApiKeyField value={apiKey} onChange={setApiKey} />
         <label className="settings-form-field"><span>接口协议</span><select value={provider.api} onChange={(event) => setProvider({ ...provider, api: event.target.value as ManagedApi })}>{API_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
-        <SettingsFormSwitch label="Bearer Authorization" checked={provider.authHeader} onChange={(checked) => setProvider({ ...provider, authHeader: checked })} />
+        <SettingsFormSwitch label="Bearer 认证头（Authorization: Bearer 发送密钥）" checked={provider.authHeader} onChange={(checked) => setProvider({ ...provider, authHeader: checked })} />
       </SettingsFormSection>
       <ConnectionExtras api={provider.api} headers={provider.headers} compat={provider.compat} onChange={({ headers, compat }) => setProvider({ ...provider, headers, compat })} />
       {check.result === undefined || check.result.ok ? null : <p className="field-error">{check.result.text}</p>}
@@ -566,7 +598,7 @@ export function BuiltinOverridePage({ provider, busy, onSave, onLogin, onClear, 
   </>}>
     <SettingsForm>
       <SettingsFormSection>
-        <label className="settings-form-field"><span>Base URL</span><input value={baseUrl} autoFocus onChange={(event) => setBaseUrl(event.target.value)} placeholder="官方默认" aria-invalid={!urlValid} />{urlValid ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
+        <label className="settings-form-field"><span>Base URL（接口地址）</span><input value={baseUrl} autoFocus onChange={(event) => setBaseUrl(event.target.value)} placeholder="官方默认" aria-invalid={!urlValid} />{urlValid ? null : <small className="field-error">需要合法的 http(s) 地址</small>}</label>
         {provider.supportsApiKey && provider.apiKeyLogin !== "login" ? <ApiKeyField value={apiKey} onChange={setApiKey} /> : null}
         {provider.apiKeyLogin === "login" && (provider.apiKey ?? "") !== "" ? <ApiKeyField value={provider.apiKey ?? ""} readOnly onChange={() => undefined} /> : null}
         {provider.apiKeyLogin === "login" && onLogin !== undefined ? <button type="button" className="settings-form-link" disabled={busy} onClick={onLogin}>登录</button> : null}

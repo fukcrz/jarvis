@@ -5,6 +5,7 @@ import { api } from "../api";
 import { copyText } from "../lib/clipboard";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent } from "./ui/dialog";
+import { SettingsSwitch } from "./settings-ui";
 
 const TUNNEL_METHODS: Array<{ id: TunnelMethod; name: string; description: string }> = [
   { id: "cloudflared", name: "Cloudflare 隧道", description: "无需账号" },
@@ -162,29 +163,31 @@ export function TunnelPanel({ onMessage, refreshKey = 0 }: { onMessage: (message
           </div>
           {tunnel.error === undefined ? null : <div className="settings-error" role="alert">{tunnel.error}</div>}
           {detailOpen ? <div className="tunnel-entry-detail">
-            <div className="tunnel-config-fields">
-              <label className="settings-field"><span>目标端口</span><input value="" disabled placeholder="跟随当前服务端口" /></label>
-            </div>
-            {tunnel.method === "sish" && tunnel.sish !== undefined ? <div className="tunnel-config-fields">
-              <label className="settings-field"><span>服务器地址</span><input value={tunnel.sish.server} disabled /></label>
-              <label className="settings-field"><span>子域名</span><input value={tunnel.sish.subdomain ?? "（随机分配）"} disabled /></label>
-              <label className="settings-field"><span>SSH 端口</span><input value={String(tunnel.sish.sshPort ?? 22)} disabled /></label>
-            </div> : null}
-            {tunnel.method === "frp" && tunnel.frp !== undefined ? <div className="tunnel-config-fields">
-              <label className="settings-field"><span>frps 服务器</span><input value={tunnel.frp.server} disabled /></label>
-              <label className="settings-field"><span>远程端口</span><input value={String(tunnel.frp.remotePort ?? "（同本地）")} disabled /></label>
-              {caddySnippet === "" ? null : <div className="tunnel-caddy">
-                <div className="tunnel-caddy-head"><span>Caddyfile</span><Button variant="ghost" size="sm" onClick={() => { void copyValue(caddySnippet, "caddy"); }}>{copied === "caddy" ? <Check size={13} /> : <Copy size={13} />}复制</Button></div>
-                <pre>{caddySnippet}</pre>
-              </div>}
-            </div> : null}
-            <label className="settings-checkbox tunnel-auto-start"><input type="checkbox" checked={tunnel.enabled} disabled={busy !== undefined} onChange={(event) => { const enabled = event.target.checked; void run("update", tunnel.id, () => api.tunnelUpdate(tunnel.id, {
-          method: tunnel.method,
-          enabled,
-          ...(tunnel.name === undefined ? {} : { name: tunnel.name }),
-          ...(tunnel.sish === undefined ? {} : { sish: tunnel.sish }),
-          ...(tunnel.frp === undefined ? {} : { frp: tunnel.frp }),
-        })); }} /><span>自动启动</span></label>
+            <dl className="settings-kv">
+              <dt>类型</dt><dd>{methodName(tunnel.method)}</dd>
+              <dt>目标端口</dt><dd>跟随当前服务端口</dd>
+              {tunnel.method === "sish" && tunnel.sish !== undefined ? <>
+                <dt>服务器地址</dt><dd>{tunnel.sish.server}</dd>
+                <dt>子域名</dt><dd>{tunnel.sish.subdomain ?? "随机分配"}</dd>
+                <dt>SSH 端口</dt><dd>{String(tunnel.sish.sshPort ?? 22)}</dd>
+              </> : null}
+              {tunnel.method === "frp" && tunnel.frp !== undefined ? <>
+                <dt>frps 服务器</dt><dd>{tunnel.frp.server}</dd>
+                <dt>远程端口</dt><dd>{tunnel.frp.remotePort === undefined ? "同本地" : String(tunnel.frp.remotePort)}</dd>
+                {tunnel.frp.domain === undefined ? null : <><dt>域名</dt><dd>{tunnel.frp.domain}</dd></>}
+              </> : null}
+            </dl>
+            {caddySnippet === "" ? null : <div className="tunnel-caddy">
+              <div className="tunnel-caddy-head"><span>Caddyfile</span><Button variant="ghost" size="sm" onClick={() => { void copyValue(caddySnippet, "caddy"); }}>{copied === "caddy" ? <Check size={13} /> : <Copy size={13} />}复制</Button></div>
+              <pre>{caddySnippet}</pre>
+            </div>}
+            <div className="tunnel-auto-start-row"><span>自动启动<small>Jarvis 启动时自动打开这条穿透</small></span><SettingsSwitch label="自动启动" checked={tunnel.enabled} disabled={busy !== undefined} onChange={(enabled) => { void run("update", tunnel.id, () => api.tunnelUpdate(tunnel.id, {
+              method: tunnel.method,
+              enabled,
+              ...(tunnel.name === undefined ? {} : { name: tunnel.name }),
+              ...(tunnel.sish === undefined ? {} : { sish: tunnel.sish }),
+              ...(tunnel.frp === undefined ? {} : { frp: tunnel.frp }),
+            })); }} /></div>
             {tunnel.logs.length === 0 ? null : <TunnelLogView logs={tunnel.logs} />}
           </div> : null}
         </article>;
@@ -292,7 +295,7 @@ function TunnelEditor({ open, tunnel, busy, onClose, onSave }: { open: boolean; 
         <label className="settings-field"><span>域名</span><input value={frpDomain} onChange={(event) => setFrpDomain(event.target.value)} /></label>
         {caddySnippet === "" ? null : <div className="tunnel-caddy"><div className="tunnel-caddy-head"><span>Caddyfile</span></div><pre>{caddySnippet}</pre></div>}
       </div> : null}
-      <label className="settings-checkbox"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>自动启动</span></label>
+      <div className="tunnel-auto-start-row"><span>自动启动<small>Jarvis 启动时自动打开这条穿透</small></span><SettingsSwitch label="自动启动" checked={enabled} onChange={setEnabled} /></div>
       <div className="dialog-actions">
         <Button variant="secondary" onClick={onClose}>取消</Button>
         <Button disabled={busy || !formValid} onClick={() => onSave(buildInput(), tunnel?.id)}><Check size={14} />{busy ? "保存中…" : tunnel === undefined ? "添加" : "保存"}</Button>
