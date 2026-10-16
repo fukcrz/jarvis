@@ -1,12 +1,15 @@
-import { ChevronDown, ChevronUp, Focus, Folder, FolderPlus, MessageSquarePlus, Search, Settings2, Star } from "lucide-react";
+import { ChevronDown, ChevronUp, Focus, Folder, FolderPlus, MessageSquarePlus, Search, Settings2, SquarePen, Star } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionLabel, sessionListWindow, sortSessionSummaries, workspaceDropTarget } from "../lib/utils";
+import { ProjectPickerDialog } from "./project-picker-dialog";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
 interface SidebarProps {
   workspaces: Workspace[];
+  /** 新建会话弹窗可选的全部项目（聚焦模式下侧栏只显示部分项目）。 */
+  allWorkspaces: Workspace[];
   sessionsByWorkspace: Record<string, SessionSummary[]>;
   workspaceId?: string;
   selectedSessionId?: string;
@@ -42,6 +45,7 @@ export function Sidebar(props: SidebarProps) {
   /** 每个项目展开会话的步数（0 = 默认收起状态，每展开一次 +1）。 */
   const [sessionExpands, setSessionExpands] = useState<Record<string, number>>({});
   const [draggingWorkspaceId, setDraggingWorkspaceId] = useState<string | undefined>();
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [dropTarget, setDropTarget] = useState<{ id: string; placeAfter: boolean } | undefined>();
   const treeRef = useRef<HTMLElement>(null);
   const pointerDragRef = useRef<WorkspacePointerDrag | undefined>(undefined);
@@ -138,7 +142,7 @@ export function Sidebar(props: SidebarProps) {
     <aside className="sidebar">
       <div className="sidebar-toolbar">
         <span>项目</span>
-        <div className="sidebar-toolbar-actions"><Tooltip label="搜索会话"><Button variant="ghost" size="icon" aria-label="搜索会话" onClick={props.onOpenSearch}><Search size={15} /></Button></Tooltip><Tooltip label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"}><Button variant="ghost" size="icon" className={`session-focus-toggle${props.focusMode ? " active" : ""}`} aria-label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} aria-pressed={props.focusMode} onClick={props.onToggleFocusMode}><Focus size={15} /></Button></Tooltip><Tooltip label="添加项目"><Button variant="ghost" size="icon" aria-label="添加项目" onClick={props.onOpenWorkspaceDialog}><FolderPlus size={16} /></Button></Tooltip></div>
+        <div className="sidebar-toolbar-actions"><Tooltip label="搜索会话"><Button variant="ghost" size="icon" aria-label="搜索会话" onClick={props.onOpenSearch}><Search size={15} /></Button></Tooltip><Tooltip label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"}><Button variant="ghost" size="icon" className={`session-focus-toggle${props.focusMode ? " active" : ""}`} aria-label={props.focusMode ? "关闭聚焦会话" : "开启聚焦会话"} aria-pressed={props.focusMode} onClick={props.onToggleFocusMode}><Focus size={15} /></Button></Tooltip><Tooltip label="添加项目"><Button variant="ghost" size="icon" aria-label="添加项目" onClick={props.onOpenWorkspaceDialog}><FolderPlus size={16} /></Button></Tooltip><Tooltip label="新建会话"><Button variant="ghost" size="icon" aria-label="新建会话" onClick={() => setProjectPickerOpen(true)} disabled={props.allWorkspaces.length === 0}><SquarePen size={15} /></Button></Tooltip></div>
       </div>
       <nav ref={treeRef} className="project-tree" aria-label="项目列表">
         {props.workspaces.map((workspace) => {
@@ -184,6 +188,7 @@ export function Sidebar(props: SidebarProps) {
         })}
         {props.workspaces.length === 0 ? <div className="session-list-empty"><Settings2 size={17} /><span>暂无项目</span></div> : null}
       </nav>
+      <ProjectPickerDialog open={projectPickerOpen} onOpenChange={setProjectPickerOpen} workspaces={props.allWorkspaces} onPick={props.onCreateSession} />
       <button type="button" className="sidebar-settings" onClick={props.onOpenSettings}><Settings2 size={15} /><span>{props.assistantName} 设置</span></button>
     </aside>
   );

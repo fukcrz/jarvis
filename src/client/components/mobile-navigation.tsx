@@ -3,7 +3,7 @@ import { CheckCircle2, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Circle
 import type { SessionSummary, Workspace } from "../../shared/protocol";
 import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionAttentionRank, sessionAttentionState, sessionLabel, sessionListWindow, sessionRecencyAt, sortSessionSummaries } from "../lib/utils";
 import { Button } from "./ui/button";
-import { Dialog, DialogContent } from "./ui/dialog";
+import { ProjectPickerDialog } from "./project-picker-dialog";
 
 interface MobileSessionSwitcherProps {
   workspaces: Workspace[];
@@ -159,13 +159,7 @@ export function MobileSessionSwitcher(props: MobileSessionSwitcherProps) {
         </section>;
       })}
     </div>
-    <Dialog open={projectPickerOpen} onOpenChange={setProjectPickerOpen}>
-      <DialogContent title="选择项目">
-        <div className="mobile-project-picker">
-          {props.workspaces.map((workspace) => <button type="button" key={workspace.id} onClick={() => { setProjectPickerOpen(false); props.onCreateSession(workspace.id); }}><Folder size={16} /><span>{workspace.label}</span><ChevronRight size={16} /></button>)}
-        </div>
-      </DialogContent>
-    </Dialog>
+    <ProjectPickerDialog open={projectPickerOpen} onOpenChange={setProjectPickerOpen} workspaces={props.workspaces} onPick={props.onCreateSession} />
   </section>;
 }
 

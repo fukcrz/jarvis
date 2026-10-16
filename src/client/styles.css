@@ -806,12 +806,12 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .mobile-session-projects .mobile-project-status.attention-completed_unread { color: var(--success); }
 .mobile-session-projects .mobile-add-project { display: flex; align-items: center; justify-content: center; width: 24px; padding: 2px 0; color: var(--subtle); }
 .mobile-switcher-list { flex: 1; padding: 0 0 24px; }
-.mobile-project-picker { display: grid; gap: 2px; }
-.mobile-project-picker button { display: grid; grid-template-columns: 18px minmax(0, 1fr) 18px; align-items: center; width: 100%; min-height: 48px; gap: 10px; border: 0; border-radius: 5px; background: transparent; padding: 9px 8px; color: var(--ink); text-align: left; }
-.mobile-project-picker button:focus-visible { background: var(--surface-hover); outline: none; }
-.mobile-project-picker button svg:first-child { color: var(--warm); }
-.mobile-project-picker button svg:last-child { color: var(--subtle); }
-.mobile-project-picker button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.project-picker { display: grid; gap: 2px; }
+.project-picker button { display: grid; grid-template-columns: 18px minmax(0, 1fr) 18px; align-items: center; width: 100%; min-height: 48px; gap: 10px; border: 0; border-radius: 5px; background: transparent; padding: 9px 8px; color: var(--ink); text-align: left; }
+.project-picker button:focus-visible { background: var(--surface-hover); outline: none; }
+.project-picker button svg:first-child { color: var(--warm); }
+.project-picker button svg:last-child { color: var(--subtle); }
+.project-picker button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 /* 默认无 hover。触屏会把 :hover 粘住，且媒体查询常谎报精细指针。用 class 正选，避免压缩器把 [data-pointer=fine] 反写成 :not([data-pointer=coarse])。 */
 @media (hover: hover) and (pointer: fine) {
   html.allow-hover {
@@ -819,7 +819,7 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
   .button-secondary:hover:not(:disabled) { border-color: #55555e; background: var(--surface-hover); }
   .button-ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--ink); }
   .session-search-row:hover { background: var(--surface-hover); outline: none; }
-  .mobile-project-picker button:hover { background: var(--surface-hover); outline: none; }
+  .project-picker button:hover { background: var(--surface-hover); outline: none; }
   .action-sheet-item:hover { background: var(--surface-hover); }
   .action-sheet-item.danger:hover { background: var(--danger-soft); color: #ffd1d3; }
   .sidebar-settings:hover { color: var(--ink); }
