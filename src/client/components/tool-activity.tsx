@@ -2,6 +2,7 @@ import { ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import type { SubagentCallView, SubagentView, ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
 import { ImagePreview } from "./image-lightbox";
+import { DiffStat, DiffView } from "./diff-view";
 import { collapsedToolActivityItems as collapsedItems, subagentCallDetailId } from "./timeline-fold";
 
 export { collapsedToolActivityItems } from "./timeline-fold";
@@ -155,18 +156,20 @@ function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: 
   const output = item.error ?? item.output;
   const images = item.images ?? [];
   const stateIcon = compactToolStateIcon(item.state, pending);
+  const change = item.fileChange;
   return (
     <article className={`tool-item tool-list-item ${item.state}`}>
-      <button className="tool-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
+      <button className={`tool-summary${change === undefined ? "" : " has-diff"}`} type="button" onClick={onToggle} aria-expanded={open && showDetails}>
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
         <span className="tool-title">{toolActivityLabel(item)}</span>
+        {change === undefined ? null : <DiffStat added={change.added} removed={change.removed} />}
       </button>
       {open ? <div className="tool-details inline-details" hidden={!showDetails}>
         {images.length === 0 ? null : <div className="tool-images" aria-label="读取到的图片">
           {images.map((image, index) => <ImagePreview key={`${image.mimeType}:${index}`} className="message-image-thumb" src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`}><img src={imageDataUrl(image)} alt={`图片 ${String(index + 1)}`} loading="lazy" /></ImagePreview>)}
         </div>}
-        {item.name === "read" ? null : item.inputPreview === undefined ? null : <div className="detail-input"><span className="detail-label">输入</span><code>{item.inputPreview}</code></div>}
-        {output === undefined ? null : <div><pre className={item.error === undefined ? "" : "tool-error-output"}>{output}</pre></div>}
+        {change !== undefined ? <DiffView change={change} /> : item.name === "read" || item.inputPreview === undefined ? null : <div className="detail-input"><span className="detail-label">输入</span><code>{item.inputPreview}</code></div>}
+        {output === undefined || (change !== undefined && item.error === undefined) ? null : <div><pre className={item.error === undefined ? "" : "tool-error-output"}>{output}</pre></div>}
       </div> : null}
     </article>
   );

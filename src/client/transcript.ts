@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type AssistantGenerationStats, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type ImageAttachment, type LiveGenerationStats, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type TokenUsage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol.js";
+import { THINKING_LEVELS, type AssistantGenerationStats, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type FileChange, type ImageAttachment, type LiveGenerationStats, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type TokenUsage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol.js";
 import { isRecord } from "../shared/protocol.js";
 
 export interface TranscriptState {
@@ -552,7 +552,8 @@ function recordThinkingItem(value: unknown): ThinkingTimelineItem | undefined {
   if (state !== "running" && state !== "completed") return undefined;
   if (typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["text"] !== "string") return undefined;
   const generation = recordGeneration(value["generation"]);
-  return { kind: "thinking", id: value["id"], createdAt: value["createdAt"], state, text: value["text"], ...recordBlockMetadata(value), ...(generation === undefined ? {} : { generation }) };
+  const durationMs = typeof value["durationMs"] === "number" && Number.isFinite(value["durationMs"]) && value["durationMs"] >= 0 ? value["durationMs"] : undefined;
+  return { kind: "thinking", id: value["id"], createdAt: value["createdAt"], state, text: value["text"], ...recordBlockMetadata(value), ...(generation === undefined ? {} : { generation }), ...(durationMs === undefined ? {} : { durationMs }) };
 }
 
 function recordTool(value: unknown): ToolTimelineItem | undefined {
@@ -579,7 +580,20 @@ function recordTool(value: unknown): ToolTimelineItem | undefined {
     ...(typeof value["error"] === "string" ? { error: value["error"] } : {}),
     ...toolImagesFromValue(value["images"]),
     ...recordSubagentView(value["subagent"]),
+    ...recordFileChange(value["fileChange"]),
   };
+}
+
+function recordFileChange(value: unknown): { fileChange: FileChange } | Record<string, never> {
+  if (!isRecord(value) || (value["kind"] !== "edit" && value["kind"] !== "write") || typeof value["path"] !== "string") return {};
+  const added = value["added"];
+  const removed = value["removed"];
+  if (typeof added !== "number" || typeof removed !== "number") return {};
+  return { fileChange: {
+    kind: value["kind"], path: value["path"], added, removed,
+    ...(typeof value["diff"] === "string" ? { diff: value["diff"] } : {}),
+    ...(value["truncated"] === true ? { truncated: true } : {}),
+  } };
 }
 
 function recordSubagentView(value: unknown): { subagent: SubagentView } | Record<string, never> {

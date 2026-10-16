@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { KeyboardEvent, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import { Archive, ArrowDown, Bell, Brain, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
-import type { AssistantGenerationStats, ContextSummaryTimelineItem, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
+import type { AssistantGenerationStats, ContextSummaryTimelineItem, FileChange, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
 import { userMessageOutline as outlineFromItems } from "../../shared/user-message";
 import { formatRunElapsed, getRunFeedback, type RunFeedback } from "../run-feedback";
 import { copyText } from "../lib/clipboard";
@@ -12,6 +12,9 @@ import { encodeMultiSelectValue, multiSelectAnswerLabel, parseMultiSelectDialog,
 import { MarkdownMessage } from "./markdown-message";
 import { ImagePreview } from "./image-lightbox";
 import { ToolActivity } from "./tool-activity";
+import { DiffStat, DiffView } from "./diff-view";
+import { LocalTextFileLink } from "./text-file-preview";
+import { mergeFileChanges } from "../../shared/file-change";
 import { activityGroupId, collapseUntouchedTimelineProcess, emptyTimelineFoldState, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, visibleToolActivityItemIds, type TimelineFoldState } from "./timeline-fold";
 import { Dialog, DialogContent } from "./ui/dialog";
 import { Button } from "./ui/button";
@@ -1345,6 +1348,44 @@ export function timelineProcessId(turn: TimelineTurn | undefined): string | unde
   return `process:${sourceMessageId}`;
 }
 
+/** 回合内成功落地的文件改动，同一文件合并。 */
+export function turnFileChanges(entries: TimelineRenderItem[]): FileChange[] {
+  const changes: FileChange[] = [];
+  for (const entry of entries) {
+    if (entry.kind !== "activity") continue;
+    for (const item of entry.items) if (item.fileChange !== undefined && item.state === "completed") changes.push(item.fileChange);
+  }
+  return mergeFileChanges(changes);
+}
+
+function fileBaseName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+function FileChip({ path, cwd, children }: { path: string; cwd?: string; children?: ReactNode }) {
+  return <span className="file-chip" title={path}><LocalTextFileLink path={path} cwd={cwd}>{children ?? fileBaseName(path)}</LocalTextFileLink></span>;
+}
+
+function TurnChanges({ changes, cwd }: { changes: FileChange[]; cwd?: string }) {
+  const [open, setOpen] = useState(false);
+  const added = changes.reduce((sum, change) => sum + change.added, 0);
+  const removed = changes.reduce((sum, change) => sum + change.removed, 0);
+  return <section className={`turn-changes${open ? " expanded" : ""}`}>
+    <div className="turn-changes-row">
+      <button type="button" className="turn-changes-summary" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
+        <span>{changes.length} 个文件</span>
+        <DiffStat added={added} removed={removed} />
+      </button>
+      <span className="turn-changes-chips">{changes.map((change) => <FileChip key={change.path} path={change.path} cwd={cwd} />)}</span>
+    </div>
+    {open ? <div className="turn-changes-files">{changes.map((change) => <div key={change.path} className="turn-changes-file">
+      <div className="turn-changes-file-head"><FileChip path={change.path} cwd={cwd}>{change.path}</FileChip>{change.kind === "write" ? <span className="turn-changes-kind">写入</span> : null}<DiffStat added={change.added} removed={change.removed} /></div>
+      <DiffView change={change} />
+    </div>)}</div> : null}
+  </section>;
+}
+
 function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; live: boolean; foldState: TimelineFoldState; onToggleProcess: (id: string, open: boolean) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string) => void }) {
   const presented = useMemo(() => presentTurnProcess(turn.process), [turn.process]);
   const split = useMemo(() => splitVisibleTurnEntries(presented.entries), [presented.entries]);
@@ -1365,6 +1406,7 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
     customAnswers: presented.customAnswers,
   };
   const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
+  const changes = useMemo(() => turnFileChanges(split.process), [split.process]);
   const processBlock = displayTurn.process.length === 0 ? null : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
     {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary)} onClick={() => onToggleProcess(processId, open)}>
       <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
@@ -1383,6 +1425,7 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
     {processBlock}
     {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, true), onToggleCall: (_toolId, callId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, callId, true) }, true, false)}</div>)}
     {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, context)}
+    {live || changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />}
     {turn.finalError === undefined ? null : renderTimelineEntry({ kind: "error", items: turn.finalError }, context)}
   </>;
 }
