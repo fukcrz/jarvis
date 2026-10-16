@@ -269,6 +269,8 @@ type SessionRuntime = {
 	continuationQueued: boolean;
 	pendingLastUser: string | undefined;
 	taskActive: boolean;
+	/** agent_end 之后、下一次 agent_start 之前为 true:此时的阈值压缩发生在任务答完之后。 */
+	agentEnded: boolean;
 	runtimeActive: boolean;
 	// Report a switch only after the next retry actually selects a route.
 	pendingSwitchFrom: string | undefined;
@@ -349,6 +351,7 @@ export default function (pi: ExtensionAPI) {
 		continuationQueued: false,
 		pendingLastUser: undefined,
 		taskActive: false,
+		agentEnded: false,
 		runtimeActive: true,
 		pendingSwitchFrom: undefined,
 		groupRestartAt: undefined,
@@ -817,6 +820,11 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_start", () => {
 		rt.continuationQueued = false;
 		rt.taskActive = true;
+		rt.agentEnded = false;
+	});
+
+	pi.on("agent_end", () => {
+		rt.agentEnded = true;
 	});
 
 	// A settled run is the end of a task. The next user task starts again at the
@@ -837,6 +845,16 @@ export default function (pi: ExtensionAPI) {
 		// protects the next task from an already-full context. Applies to every
 		// model, because the extension threshold is capped at Pi's native one
 		// and has therefore already compacted mid-task whenever Pi would.
+		//
+		// A subagent cannot use the abort-and-continue compaction below: the abort
+		// makes Pi emit agent_settled(aborted), and pi-subagent ends the child on
+		// that event, so the continuation never runs and the delegated task fails
+		// with "This operation was aborted". Let Pi compact in-run between turns
+		// instead (no abort, no settle); skip only the one after the final answer.
+		if (isSubagentProcess()) {
+			if (event.reason === "threshold" && rt.agentEnded) return { cancel: true };
+			return;
+		}
 		if (event.reason === "threshold" && rt.taskActive) return { cancel: true };
 	});
 
@@ -849,6 +867,8 @@ export default function (pi: ExtensionAPI) {
 		// prove that the task is still in progress; otherwise a new task would
 		// restore the last user message after compaction.
 		if (event.turnIndex === 0) return;
+		// Subagents rely on Pi's in-run compaction; see session_before_compact.
+		if (isSubagentProcess()) return;
 		if (rt.compactionInProgress || rt.continuationQueued) return;
 		const tokens = ctx.getContextUsage()?.tokens;
 		if (tokens === null || tokens === undefined || tokens < thresholdTokens(ctx)) return;

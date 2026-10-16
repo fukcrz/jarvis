@@ -1,7 +1,7 @@
 {
   "version": 1,
   "plugins": {
-    "model-groups-router.ts": ["b43219642ec2bf76f9697f5be5f89c03", "08a3db6c80312f3b7012653735386104", "7df7c583e39c091a63b4b317c4d0cb11"],
+    "model-groups-router.ts": ["b43219642ec2bf76f9697f5be5f89c03", "08a3db6c80312f3b7012653735386104", "7df7c583e39c091a63b4b317c4d0cb11", "2ddb0e3738e712c5df1c1e29b50e9d2e"],
     "session-board.ts": ["3d0b20156711008896c40147db2700bc", "517f53df327f32265fb6b1f93bdab7ca"]
   }
 }
