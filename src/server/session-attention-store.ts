@@ -152,6 +152,19 @@ export class SessionAttentionStore {
     });
   }
 
+  /** 用户点了「知道了」：清掉"被中断"标记，下次打开不再显示。 */
+  async clearInterrupted(ref: SessionRef): Promise<void> {
+    const entryKey = key(ref);
+    if ((await this.load()).sessions[entryKey]?.interruptedAt === undefined) return;
+    await this.update((data) => {
+      const current = data.sessions[entryKey];
+      if (current?.interruptedAt === undefined) return;
+      const next = { ...current };
+      delete next.interruptedAt;
+      data.sessions[entryKey] = next;
+    });
+  }
+
   async setStarred(ref: SessionRef, starred: boolean): Promise<void> {
     await this.update((data) => {
       const entryKey = key(ref);

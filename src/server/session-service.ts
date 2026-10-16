@@ -144,6 +144,17 @@ export class SessionService {
     return listWorkspaceSessions(this.catalogDeps(), workspaceId, query);
   }
 
+  /** 关掉"被中断"卡片：清掉持久化的标记，已打开的会话也去掉这条错误。 */
+  async dismissInterrupted(ref: SessionRef): Promise<void> {
+    await this.attention.clearInterrupted(ref);
+    const active = this.active.get(activeKey(ref));
+    if (active?.state.lastError?.code !== "RUN_INTERRUPTED") return;
+    const status = { ...active.state };
+    delete status.lastError;
+    active.state = status;
+    this.events.publishSession(active.ref, { type: "session.updated", payload: { status: active.state } });
+  }
+
   async markViewed(ref: SessionRef): Promise<SessionSummary> {
     return this.withSessionTransition(ref, async () => {
       const key = activeKey(ref);
