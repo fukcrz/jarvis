@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldPresentCollapsedProcess, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
+import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -478,13 +478,20 @@ describe("shouldFoldTurnProcess", () => {
   });
 });
 
-describe("shouldPresentCollapsedProcess", () => {
-  const turn = { key: "t", process: [{ kind: "thinking", item: thinking("t1") }] };
+describe("isTurnProcessOpen", () => {
+  const untouched = { openProcessIds: new Set<string>(), touchedProcessIds: new Set<string>() };
 
-  it("keeps a live turn expanded and collapses it after the run ends", () => {
-    expect(shouldPresentCollapsedProcess(turn, true)).toBe(false);
-    expect(shouldPresentCollapsedProcess(turn, false)).toBe(true);
-    expect(shouldPresentCollapsedProcess({ key: "t", process: [] }, false)).toBe(false);
+  it("opens a live process by default and collapses it after the run ends", () => {
+    expect(isTurnProcessOpen(untouched, "p", true)).toBe(true);
+    expect(isTurnProcessOpen(untouched, "p", false)).toBe(false);
+    expect(isTurnProcessOpen(untouched, undefined, true)).toBe(false);
+  });
+
+  it("respects a manual toggle while live and after settlement", () => {
+    const closed = { openProcessIds: new Set<string>(), touchedProcessIds: new Set(["p"]) };
+    expect(isTurnProcessOpen(closed, "p", true)).toBe(false);
+    const opened = { openProcessIds: new Set(["p"]), touchedProcessIds: new Set(["p"]) };
+    expect(isTurnProcessOpen(opened, "p", false)).toBe(true);
   });
 });
 

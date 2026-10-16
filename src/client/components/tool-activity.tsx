@@ -139,8 +139,16 @@ function compactTarget(value?: string): string {
 }
 
 function compactCommand(value?: string): string {
-  if (value === undefined || value.trim() === "") return "命令";
-  return value.trim().replace(/^(?:cd\s+[^;&]+\s*&&\s*)+/i, "").replace(/\s+/g, " ");
+  const headline = commandHeadline(value);
+  if (headline === "") return "命令";
+  return headline.replace(/^(?:cd\s+[^;&]+\s*&&\s*)+/i, "").replace(/\s+/g, " ");
+}
+
+/** 行内只显示命令首行，多行命令（如 heredoc）加省略号；完整命令留在详情里。 */
+export function commandHeadline(value?: string): string {
+  const lines = (value ?? "").split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "");
+  const first = lines[0] ?? "";
+  return lines.length > 1 ? `${first} …` : first;
 }
 
 function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; onToggle: () => void }) {
@@ -277,13 +285,14 @@ function truncateEnd(value: string, max: number): string {
 
 function CommandToolRow({ item, pending, open, showDetails, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; onToggle: () => void }) {
   const command = item.inputPreview ?? item.target ?? "";
+  const headline = commandHeadline(command);
   const output = item.error ?? item.output;
   const stateIcon = compactToolStateIcon(item.state, pending);
   return (
     <article className={`tool-item tool-list-item command-item ${item.state}`}>
       <button className="tool-summary command-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
-        <span className="tool-target">{command.trim() === "" ? "命令" : command}</span>
+        <span className="tool-target">{headline === "" ? "命令" : headline}</span>
         {item.excludeFromContext === true ? <span className="command-excluded" title="输出不会发送给模型">不进上下文</span> : null}
       </button>
       {open ? <div className="tool-details command-details inline-details" hidden={!showDetails}>

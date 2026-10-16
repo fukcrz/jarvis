@@ -18,9 +18,10 @@ export function emptyTimelineFoldState(sessionKey?: string): TimelineFoldState {
   };
 }
 
-export function toggleTimelineProcess(state: TimelineFoldState, processId: string): TimelineFoldState {
+/** `currentlyOpen` 是界面上当前的开合状态（进行中的过程未经手动开合时默认展开）。 */
+export function toggleTimelineProcess(state: TimelineFoldState, processId: string, currentlyOpen = state.openProcessIds.has(processId)): TimelineFoldState {
   const openProcessIds = new Set(state.openProcessIds);
-  if (openProcessIds.has(processId)) openProcessIds.delete(processId);
+  if (currentlyOpen) openProcessIds.delete(processId);
   else openProcessIds.add(processId);
   const touchedProcessIds = new Set(state.touchedProcessIds);
   touchedProcessIds.add(processId);

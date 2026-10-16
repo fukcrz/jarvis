@@ -32,6 +32,13 @@ describe("timeline fold state", () => {
     expect(preserved.openProcessIds.has("process-1")).toBe(true);
     expect(preserved.touchedProcessIds.has("process-1")).toBe(true);
   });
+
+  it("closes a process that is open by default without being in the open set", () => {
+    const closed = toggleTimelineProcess(emptyTimelineFoldState(), "live", true);
+    expect(closed.openProcessIds.has("live")).toBe(false);
+    expect(closed.touchedProcessIds.has("live")).toBe(true);
+    expect(toggleTimelineProcess(closed, "live", false).openProcessIds.has("live")).toBe(true);
+  });
 });
 
 describe("collapsed tool visibility", () => {
