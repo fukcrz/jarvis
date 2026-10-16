@@ -459,7 +459,33 @@ function MermaidBlock({ code }: { code: string }) {
   </div>;
 }
 
-const components = { pre: CodeBlock, code: MarkdownCode, a: LocalLink, img: MarkdownMedia };
+/** 标题锚点 id：保留中文和字母数字，其余换成 -。 */
+export function headingSlug(text: string): string {
+  return text.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "");
+}
+
+type HeadingTag = "h1" | "h2" | "h3" | "h4";
+
+function headingComponent(Tag: HeadingTag) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- node is react-markdown's hast node, not a DOM prop.
+  return function MarkdownHeading({ node: _node, children, ...rest }: ComponentProps<HeadingTag> & { node?: HastNode }) {
+    const streaming = useContext(MarkdownStreamingContext);
+    const slug = headingSlug(textFromReactNode(children));
+    const id = slug === "" ? undefined : `md-${slug}`;
+    // 路由用的是 hash，不能用 href="#..."；点 # 把这一节滚到顶部。
+    return <Tag {...rest} id={id} className="md-heading">
+      {children}
+      {streaming || id === undefined ? null : <button type="button" className="md-heading-anchor" aria-label="滚到这一节" title="滚到这一节" onClick={(event) => event.currentTarget.parentElement?.scrollIntoView({ block: "start", behavior: "smooth" })}>#</button>}
+    </Tag>;
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- node is react-markdown's hast node, not a DOM prop.
+function MarkdownTable({ node: _node, ...rest }: ComponentProps<"table"> & { node?: HastNode }) {
+  return <div className="table-scroll"><table {...rest} /></div>;
+}
+
+const components = { pre: CodeBlock, code: MarkdownCode, a: LocalLink, img: MarkdownMedia, table: MarkdownTable, h1: headingComponent("h1"), h2: headingComponent("h2"), h3: headingComponent("h3"), h4: headingComponent("h4") };
 
 export const MarkdownMessage = memo(function MarkdownMessage({ text, streaming = false, baseDir, interactiveFiles = false }: MarkdownMessageProps) {
   const content = separateAdjacentBoldTitles(baseDir === undefined ? text : rewriteLocalImageUrls(text, baseDir));

@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { MarkdownMessage, imageFallbackTarget, mediaKindForSource, rewriteLocalImageUrls, separateAdjacentBoldTitles } from "./markdown-message";
+import { MarkdownMessage, headingSlug, imageFallbackTarget, mediaKindForSource, rewriteLocalImageUrls, separateAdjacentBoldTitles } from "./markdown-message";
 import { LocalMediaVersionContext } from "../lib/local-media";
 
 describe("MarkdownMessage", () => {
@@ -11,7 +11,7 @@ describe("MarkdownMessage", () => {
       text: "# Heading\n\n**Bold** with `code`.\n\n- First\n- Second",
     }));
 
-    expect(markup).toContain("<h1>Heading</h1>");
+    expect(markup).toContain("<h1 id=\"md-heading\" class=\"md-heading\">Heading</h1>");
     expect(markup).toContain("<strong>Bold</strong>");
     expect(markup).toContain("<code>code</code>");
     expect(markup).toContain("<li>First</li>");
@@ -302,5 +302,19 @@ describe("MarkdownMessage", () => {
     expect(imageFallbackTarget("data:image/png;base64,AAAA")).toBe("内嵌图片");
     expect(imageFallbackTarget("https://example.com/a/b.png?x=1")).toBe("example.com/a/b.png");
     expect(imageFallbackTarget(undefined)).toBe("图片地址缺失");
+  });
+});
+
+describe("long answers", () => {
+  it("slugs headings and keeps Chinese", () => {
+    expect(headingSlug(" 改动明细 (v2) ")).toBe("改动明细-v2");
+    expect(headingSlug("!!")).toBe("");
+  });
+
+  it("wraps tables and adds heading anchors", () => {
+    const html = renderToStaticMarkup(createElement(MarkdownMessage, { text: "## 改动\n\n| a | b |\n| - | - |\n| 1 | 2 |" }));
+    expect(html).toContain('<h2 id="md-改动" class="md-heading">');
+    expect(html).toContain('class="md-heading-anchor"');
+    expect(html).toContain('<div class="table-scroll"><table>');
   });
 });

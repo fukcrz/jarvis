@@ -1191,3 +1191,15 @@ html.text-selecting .run-status-bar { pointer-events: none !important; }
 .detail-level-menu { width: min(230px, calc(100vw - 24px)); }
 .detail-level-hint { display: block; margin-top: 2px; color: var(--subtle); font-size: 10.5px; font-weight: 400; }
 .selector-sheet-item .detail-level-hint { font-size: 12px; }
+/* 长回答：最终回答下的复制按钮和统计放一行；表格横向滚动不再挤成窄列；标题旁的 # 锚点 */
+.assistant-message-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.assistant-message-footer .message-actions, .assistant-message-footer .message-generation-meta { margin-top: 0; }
+.message-content .table-scroll { max-width: 100%; overflow-x: auto; margin: 10px 0; -webkit-overflow-scrolling: touch; }
+.message-content .table-scroll > table { display: table; width: auto; max-width: none; margin: 0; overflow: visible; }
+.message-content .table-scroll td { overflow-wrap: normal; word-break: normal; }
+@media (max-width: 760px) { .message-content .table-scroll > table { width: max-content; max-width: 620px; } }
+.message-content .md-heading { position: relative; scroll-margin-top: 16px; }
+.md-heading-anchor { margin-left: 6px; border: 0; background: transparent; padding: 0 2px; color: var(--subtle); font: inherit; font-weight: 400; opacity: 0; cursor: pointer; }
+.md-heading:hover .md-heading-anchor, .md-heading-anchor:focus-visible { opacity: 1; }
+.md-heading-anchor:hover { color: var(--accent-strong); }
+@media (hover: none) { .md-heading-anchor { display: none; } }
