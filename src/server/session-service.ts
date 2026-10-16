@@ -1362,6 +1362,19 @@ export class SessionService {
   }
 
   private async createActive(ref: SessionRef, workspace: Workspace, manager: SessionManager, options?: { readOnly?: boolean; sideChatSource?: SideChatSource }): Promise<ActiveSession> {
+    const active = await this.createActiveRaw(ref, workspace, manager, options);
+    // 上次进程退出时这轮还在跑：在时间线底部显示"被中断"，并提供「继续」。
+    const meta = await this.attention.get(ref).catch(() => undefined);
+    if (meta?.interruptedAt !== undefined && active.state.runState === "idle" && active.state.lastError === undefined) {
+      active.state = {
+        ...active.state,
+        lastError: { code: "RUN_INTERRUPTED", message: "上次运行被中断：Jarvis 服务在这一轮结束前重启或异常退出了，回答和工具结果可能没有写完。", occurredAt: meta.interruptedAt },
+      };
+    }
+    return active;
+  }
+
+  private async createActiveRaw(ref: SessionRef, workspace: Workspace, manager: SessionManager, options?: { readOnly?: boolean; sideChatSource?: SideChatSource }): Promise<ActiveSession> {
     return createActiveSession({
       attention: this.attention,
       events: this.events,

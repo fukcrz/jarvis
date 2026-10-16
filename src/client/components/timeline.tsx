@@ -596,7 +596,7 @@ function RunFailureCard({ failure, onRetryCompaction, onRetry, onContinue }: { f
   const compactionFailed = failure.code === "PI_COMPACTION_FAILED";
   const occurredAt = formatFailureTime(failure.occurredAt);
   const requestId = requestIdFromMessage(failure.message);
-  const title = compactionFailed ? "上下文压缩未完成" : "本次任务未完成";
+  const title = compactionFailed ? "上下文压缩未完成" : failure.code === "RUN_INTERRUPTED" ? "被中断" : "本次任务未完成";
   const summary = compactionFailed ? "压缩没有生成可用摘要，任务已停止。" : plainErrorReason(failure.message, failure.code) ?? errorSummary(failure.message);
 
   return <article className="timeline-event run-failure" role="alert">

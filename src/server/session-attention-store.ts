@@ -12,6 +12,8 @@ export interface SessionSortMeta {
   name?: string;
   preview?: string;
   listCopyMtime?: number;
+  /** 上次运行开始的时间：服务重启或崩溃时这轮没跑完。 */
+  interruptedAt?: string;
 }
 
 export interface SessionListCopy {
@@ -29,6 +31,10 @@ interface PersistedSessionMeta {
   name?: string;
   preview?: string;
   listCopyMtime?: number;
+  /** 正在运行（开始时间）。进程重启后读到它，说明这轮被中断了。 */
+  runningSince?: string;
+  /** 被中断的那一轮的开始时间；下一轮开始时清掉。 */
+  interruptedAt?: string;
 }
 
 export interface SideChatSource {
@@ -74,18 +80,25 @@ export class SessionAttentionStore {
     await this.update((data) => {
       const entryKey = key(ref);
       const current = data.sessions[entryKey] ?? {};
-      // Running / waiting are reconstructed from the live session and must not survive a restart.
+      // Running / waiting are reconstructed from the live session; only a
+      // `runningSince` marker survives so a restart can tell the turn was cut off.
       if (state !== "completed_unread" && state !== "failed") {
+        const running = state === "running" || state === "waiting_interaction";
         const next = compactPersistedMeta({
           ...listCopyFields(current),
           ...persistedSortTimes(current),
           ...(current.starred === true ? { starred: true } : {}),
+          ...(running ? { runningSince: current.runningSince ?? at } : {}),
+          // 查看过（回到 idle）不清"被中断"标记，下一轮开始才清。
+          ...(!running && current.interruptedAt !== undefined ? { interruptedAt: current.interruptedAt } : {}),
         });
         if (next === undefined) delete data.sessions[entryKey];
         else data.sessions[entryKey] = next;
         return;
       }
-      data.sessions[entryKey] = { ...current, attentionState: state, attentionAt: at };
+      const rest = { ...current };
+      delete rest.runningSince;
+      data.sessions[entryKey] = { ...rest, attentionState: state, attentionAt: at };
     });
   }
 
@@ -116,6 +129,7 @@ export class SessionAttentionStore {
         ...(current.attentionState === undefined ? {} : { attentionState: current.attentionState }),
         ...(current.attentionAt === undefined ? {} : { attentionAt: current.attentionAt }),
         ...persistedSortTimes(current),
+        ...runMarkers(current),
       });
       if (next === undefined) delete data.sessions[entryKey];
       else data.sessions[entryKey] = next;
@@ -133,6 +147,7 @@ export class SessionAttentionStore {
           ...(current.attentionAt === undefined ? {} : { attentionAt: current.attentionAt }),
           ...persistedSortTimes(current),
           ...(current.starred === true ? { starred: true } : {}),
+          ...runMarkers(current),
           ...listCopyFields({
             ...(copy.name === null || copy.name === "" ? {} : { name: copy.name }),
             ...(copy.preview === null || copy.preview === "" ? {} : { preview: copy.preview }),
@@ -225,6 +240,7 @@ export class SessionAttentionStore {
       return { value: undefined };
     });
     if (loaded.value !== undefined) {
+      markInterruptedRuns(loaded.value);
       this.data = loaded.value;
       return loaded.value;
     }
@@ -239,6 +255,20 @@ export class SessionAttentionStore {
   }
 }
 
+/**
+ * 进程启动后第一次读状态文件时调用：还带着 `runningSince` 的会话，是上次进程退出时正在跑的，
+ * 标记为"被中断"（并当作失败提醒），等用户点"继续"或发新消息。
+ */
+function markInterruptedRuns(data: PersistedAttentionFile): void {
+  for (const entry of Object.values(data.sessions)) {
+    if (entry.runningSince === undefined) continue;
+    entry.interruptedAt = entry.runningSince;
+    delete entry.runningSince;
+    entry.attentionState = "failed";
+    entry.attentionAt = entry.interruptedAt;
+  }
+}
+
 function key(ref: SessionRef): string {
   return `${ref.workspaceId}:${ref.sessionId}`;
 }
@@ -247,6 +277,13 @@ function persistedSortTimes(entry: PersistedSessionMeta): Pick<PersistedSessionM
   return {
     ...(entry.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: entry.lastUserMessageAt }),
     ...(entry.lastReplyEndedAt === undefined ? {} : { lastReplyEndedAt: entry.lastReplyEndedAt }),
+  };
+}
+
+function runMarkers(entry: PersistedSessionMeta): Pick<PersistedSessionMeta, "runningSince" | "interruptedAt"> {
+  return {
+    ...(entry.runningSince === undefined ? {} : { runningSince: entry.runningSince }),
+    ...(entry.interruptedAt === undefined ? {} : { interruptedAt: entry.interruptedAt }),
   };
 }
 
@@ -266,6 +303,7 @@ function metaFromPersisted(entry: PersistedSessionMeta | undefined): SessionSort
     ...persistedSortTimes(entry),
     ...(entry.starred === true ? { starred: true } : {}),
     ...listCopyFields(entry),
+    ...(entry.interruptedAt === undefined ? {} : { interruptedAt: entry.interruptedAt }),
   };
 }
 
@@ -331,6 +369,10 @@ function migratePersistedEntry(value: unknown): PersistedSessionMeta | undefined
   if (preview !== undefined) next.preview = preview;
   const listCopyMtime = numberField(item["listCopyMtime"]);
   if (listCopyMtime !== undefined) next.listCopyMtime = listCopyMtime;
+  const runningSince = stringTime(item["runningSince"]);
+  if (runningSince !== undefined) next.runningSince = runningSince;
+  const interruptedAt = stringTime(item["interruptedAt"]);
+  if (interruptedAt !== undefined) next.interruptedAt = interruptedAt;
   return Object.keys(next).length === 0 ? undefined : next;
 }
 
