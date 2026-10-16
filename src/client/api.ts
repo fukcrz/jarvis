@@ -322,6 +322,7 @@ export const api = {
     await request(`${sessionPath(ref)}/extension-ui`, { method: "POST", body: JSON.stringify({ id, ...response }) });
   },
   selfRestart: async (): Promise<{ restarting: boolean }> => request("/api/self/restart", { method: "POST" }),
+  systemInfo: async (): Promise<{ logDirectory: string; logRetentionDays: number }> => request("/api/system/info"),
   recoveries: async (): Promise<RecoveryNotice[]> => (await request<{ recoveries: RecoveryNotice[] }>("/api/system/recoveries")).recoveries,
   trash: async (): Promise<TrashListing> => request("/api/trash"),
   restoreTrash: async (id: string): Promise<{ entry: TrashEntry; restoredPath: string }> => request(`/api/trash/${encodeURIComponent(id)}/restore`, { method: "POST" }),

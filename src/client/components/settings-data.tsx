@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { FileArchive, FolderOpen, Trash2 } from "lucide-react";
 import type { RecoveryNotice, TrashListing } from "../../shared/system";
 import { api } from "../api";
 import { Button } from "./ui/button";
@@ -7,13 +7,14 @@ import { SettingsEmpty, SettingsGroup, SettingsRow } from "./settings-ui";
 
 type SettingsMessageTone = "success" | "error";
 
-/** 数据与恢复：配置恢复记录、回收站。 */
+/** 数据与恢复：配置恢复记录、回收站、日志与诊断包。 */
 export function DataPanel({ onMessage, onSessionRestored }: {
   onMessage: (message: string, tone?: SettingsMessageTone) => void;
   onSessionRestored?: (workspaceId: string) => void;
 }) {
   const [recoveries, setRecoveries] = useState<RecoveryNotice[]>([]);
   const [trash, setTrash] = useState<TrashListing | undefined>();
+  const [logDirectory, setLogDirectory] = useState<string | undefined>();
   const [busy, setBusy] = useState<string | undefined>();
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
@@ -27,6 +28,7 @@ export function DataPanel({ onMessage, onSessionRestored }: {
       }),
     ]);
     setRecoveries(nextRecoveries);
+    void api.systemInfo().then((info) => setLogDirectory(info.logDirectory)).catch(() => undefined);
     if (nextTrash !== undefined) setTrash(nextTrash);
   }, []);
 
@@ -67,6 +69,10 @@ export function DataPanel({ onMessage, onSessionRestored }: {
         </span>
       </div>)}
     </SettingsGroup>}
+    <SettingsGroup title="日志与诊断">
+      <SettingsRow icon={FileArchive} label={<a className="settings-row-link" href="/api/system/diagnostics" download>导出诊断包</a>} value="日志、版本、配置（不含密码和 token）" />
+      <SettingsRow icon={FolderOpen} label="日志目录" value={<span title={logDirectory}>{logDirectory ?? "…"}</span>} />
+    </SettingsGroup>
     <SettingsGroup title={`最近删除${trash === undefined ? "" : `（保留 ${String(trash.retentionDays)} 天）`}`}>
       {trash === undefined ? <SettingsRow label="读取中…" /> : trash.entries.length === 0 ? <SettingsEmpty icon={Trash2} title="回收站是空的" /> : trash.entries.map((entry) => <div key={entry.id} className="settings-row">
         <span className="settings-row-main">
