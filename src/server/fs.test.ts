@@ -122,6 +122,25 @@ describe("writeWithBackup + readJsonRecovering", () => {
     expect(listRecoveryNotices()).toMatchObject([{ outcome: "default" }]);
   });
 
+  it("seeds a missing backup from a good file written before backups existed", async () => {
+    const path = join(directory, "auth.json");
+    await writeFile(path, JSON.stringify({ version: 1, name: "old" }));
+    await expect(readJsonRecovering(path, parseVersioned)).resolves.toEqual({ value: { version: 1, name: "old" }, source: "file" });
+    expect(JSON.parse(await readFile(backupPath(path), "utf8"))).toEqual({ version: 1, name: "old" });
+
+    // 之后读坏，可以用补建的备份恢复。
+    await writeFile(path, "\0\0");
+    await expect(readJsonRecovering(path, parseVersioned)).resolves.toMatchObject({ value: { name: "old" }, source: "backup" });
+  });
+
+  it("does not overwrite an existing backup on read", async () => {
+    const path = join(directory, "settings.json");
+    await writeFile(path, JSON.stringify({ version: 1, name: "current" }));
+    await writeFile(backupPath(path), JSON.stringify({ version: 1, name: "bak" }));
+    await readJsonRecovering(path, parseVersioned);
+    expect(JSON.parse(await readFile(backupPath(path), "utf8"))).toEqual({ version: 1, name: "bak" });
+  });
+
   it("uses the backup when the main file has vanished", async () => {
     const path = join(directory, "tunnel.json");
     await writeFile(backupPath(path), JSON.stringify({ version: 1, name: "bak" }));

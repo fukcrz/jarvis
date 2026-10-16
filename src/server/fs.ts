@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { open, readFile, rename, rm } from "node:fs/promises";
+import { access, open, readFile, rename, rm } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import { isRecord } from "../shared/protocol.js";
 import type { RecoveryNotice } from "../shared/system.js";
@@ -159,10 +159,15 @@ export async function readJsonRecovering<T>(path: string, parse: JsonParser<T>, 
   }
   let failure: unknown;
   if (raw !== undefined) {
+    let value: T | undefined;
     try {
-      return { value: decode(raw), source: "file" };
+      value = decode(raw);
     } catch (error) {
       failure = error;
+    }
+    if (failure === undefined) {
+      await seedBackup(path, raw);
+      return { value: value as T, source: "file" };
     }
   }
   const fromBackup = await readBackup(path, decode);
@@ -180,6 +185,17 @@ export async function readJsonRecovering<T>(path: string, parse: JsonParser<T>, 
   }
   recordRecovery({ file: path, outcome: "default", ...(corruptPath === undefined ? {} : { corruptPath }), reason });
   return { value: undefined, source: "default" };
+}
+
+/**
+ * 还没有 .bak 时用这次读到的好内容补一份。升级前写的配置（尤其是很少改动的 auth.json、settings.json）
+ * 否则要等下次保存才有备份，在那之前读坏就只能回到默认值。失败不影响读取。
+ */
+async function seedBackup(path: string, raw: string): Promise<void> {
+  const backup = backupPath(path);
+  const exists = await access(backup).then(() => true, () => false);
+  if (exists) return;
+  await atomicWrite(backup, raw).catch((error: unknown) => console.warn(`[jarvis] 补建 ${basename(backup)} 失败`, error));
 }
 
 async function readBackup<T>(path: string, decode: (raw: string) => T): Promise<{ raw: string; value: T } | undefined> {
