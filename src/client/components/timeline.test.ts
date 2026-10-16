@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
+import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, thinkingFoldPreview, thinkingTextIsLong, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -282,6 +282,16 @@ describe("groupTimelineTurns", () => {
     expect(turn?.finalError).toBeUndefined();
     expect(turn?.final).toEqual(message("m1"));
     expect(turn?.process).toEqual([{ kind: "error", items: [recovered] }]);
+  });
+});
+
+describe("thinkingTextIsLong", () => {
+  it("shows a short thought and folds a long one", () => {
+    expect(thinkingTextIsLong("正在核对相邻路径。")).toBe(false);
+    expect(thinkingTextIsLong("第一行\n第二行\n第三行")).toBe(false);
+    expect(thinkingTextIsLong("第一行\n第二行\n第三行\n第四行")).toBe(true);
+    expect(thinkingTextIsLong("字".repeat(161))).toBe(true);
+    expect(thinkingFoldPreview("**先看** `refund`\n后面还有很长的内容")).toBe("先看 refund");
   });
 });
 
