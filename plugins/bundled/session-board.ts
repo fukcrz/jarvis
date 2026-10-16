@@ -2,11 +2,12 @@
  * 项目内会话互通：列出同项目其他会话，并让模型改自己的标题 / 上报当前步骤。
  *
  * 标题走 Pi 的 setSessionName（Jarvis 侧栏会跟着变）。
- * 摘要和心跳写在该项目 session 目录的 `.session-board/`，不进 git、不进对话。
+ * 摘要和心跳只写在绝对路径的会话目录 `.session-board/`，不进 git、不进对话。
+ * 会话目录为空、相对路径，或等于当前项目目录时不写。
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -30,6 +31,19 @@ function trimText(value: unknown): string {
 
 function limitCharacters(value: string, limit: number): string {
   return Array.from(value).slice(0, limit).join("");
+}
+
+function samePath(left: string, right: string): boolean {
+  const resolvedLeft = resolve(left);
+  const resolvedRight = resolve(right);
+  return process.platform === "win32"
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
+}
+
+function writableSessionDir(sessionDir: string | undefined, cwd = process.cwd()): string | undefined {
+  if (!sessionDir || !isAbsolute(sessionDir) || samePath(sessionDir, cwd)) return undefined;
+  return sessionDir;
 }
 
 function boardDir(sessionDir: string): string {
@@ -72,8 +86,10 @@ async function readBoardFile(path: string): Promise<BoardRecord | undefined> {
   }
 }
 
-async function mergeBoard(sessionDir: string, sessionId: string, patch: Partial<BoardRecord>): Promise<BoardRecord> {
-  const path = boardFile(sessionDir, sessionId);
+async function mergeBoard(sessionDir: string, sessionId: string, patch: Partial<BoardRecord>): Promise<BoardRecord | undefined> {
+  const dir = writableSessionDir(sessionDir);
+  if (!dir) return undefined;
+  const path = boardFile(dir, sessionId);
   const current = (await readBoardFile(path)) ?? { updatedAt: new Date().toISOString() };
   const next: BoardRecord = { updatedAt: new Date().toISOString() };
   const summary = patch.summary === undefined ? current.summary : patch.summary;
@@ -89,22 +105,25 @@ async function mergeBoard(sessionDir: string, sessionId: string, patch: Partial<
 }
 
 async function clearBoard(sessionDir: string | undefined, sessionId: string | undefined): Promise<void> {
-  if (!sessionDir || !sessionId) return;
-  await rm(boardFile(sessionDir, sessionId), { force: true });
+  const dir = writableSessionDir(sessionDir);
+  if (!dir || !sessionId) return;
+  await rm(boardFile(dir, sessionId), { force: true });
 }
 
-async function loadBoardMap(sessionDir: string): Promise<Map<string, BoardRecord>> {
+async function loadBoardMap(sessionDir: string, cwd = process.cwd()): Promise<Map<string, BoardRecord>> {
   const map = new Map<string, BoardRecord>();
+  const dir = writableSessionDir(sessionDir, cwd);
+  if (!dir) return map;
   let names: string[];
   try {
-    names = await readdir(boardDir(sessionDir));
+    names = await readdir(boardDir(dir));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return map;
     throw error;
   }
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
-    const record = await readBoardFile(join(boardDir(sessionDir), name));
+    const record = await readBoardFile(join(boardDir(dir), name));
     if (record) map.set(name.slice(0, -".json".length), record);
   }
   return map;
@@ -200,14 +219,13 @@ export default function (pi: ExtensionAPI) {
     promptGuidelines: [
       "Use session_list only when you need to avoid colliding with other sessions in this project. Do not call session_list every turn.",
       "Results include running sessions and sessions updated in the last 6 hours. Older idle sessions appear only as omitted count.",
-      "Do not use read or bash to inspect other sessions' JSONL; use session_list for project session metadata.",
     ],
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const dir = ctx.sessionManager.getSessionDir();
       const selfId = ctx.sessionManager.getSessionId();
       const listed = await SessionManager.list(ctx.cwd, dir);
-      const board = await loadBoardMap(dir);
+      const board = await loadBoardMap(dir, ctx.cwd);
       const now = Date.now();
       const cutoff = now - LIST_WINDOW_MS;
       const others: Array<{
@@ -294,14 +312,18 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (params.summary !== undefined) {
-        const dir = ctx.sessionManager.getSessionDir();
-        const id = ctx.sessionManager.getSessionId();
-        await enqueue(async () => {
-          await mergeBoard(dir, id, {
-            summary: summaryInput ? limitCharacters(summaryInput, SUMMARY_LIMIT) : "",
+        const dir = writableSessionDir(ctx.sessionManager.getSessionDir(), ctx.cwd);
+        if (!dir) {
+          changed.push("summary skipped");
+        } else {
+          const id = ctx.sessionManager.getSessionId();
+          await enqueue(async () => {
+            await mergeBoard(dir, id, {
+              summary: summaryInput ? limitCharacters(summaryInput, SUMMARY_LIMIT) : "",
+            });
           });
-        });
-        changed.push(summaryInput ? `summary=${limitCharacters(summaryInput, SUMMARY_LIMIT)}` : "summary=cleared");
+          changed.push(summaryInput ? `summary=${limitCharacters(summaryInput, SUMMARY_LIMIT)}` : "summary=cleared");
+        }
       }
 
       return {

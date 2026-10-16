@@ -28,6 +28,12 @@ export const CONTINUATION_WRAPPER =
 	"Context was compacted. The user's last message follows, restored verbatim. Answer that message. Do not treat this wrapper, the compaction summary, or in-progress tool work as permission to implement.";
 export const CONTINUATION_FALLBACK =
 	"Context was compacted. Answer the user's last message using the compacted summary. Do not treat this wrapper, the compaction summary, or in-progress tool work as permission to implement.";
+export const SUBAGENT_CONTINUATION_WRAPPER =
+	"Context was compacted. Continue the delegated task from the summary and the kept recent messages. Do not restart completed work. The original task follows.";
+export const SUBAGENT_CONTINUATION_FALLBACK =
+	"Context was compacted. Continue the delegated task from the summary and the kept recent messages. Do not restart completed work.";
+export const SUBAGENT_COMPACTION_INSTRUCTIONS_PREFIX =
+	"The latest user message is an already-authorized delegated task. Preserve the task, file paths, decisions, and remaining work. Next Steps must continue that task, not wait for confirmation.";
 const COMPACTION_INSTRUCTIONS_PREFIX =
 	'Quote the user\'s last message VERBATIM in a section titled "## User\'s last message". Do not paraphrase it. Do not treat assistant actions as user authorization. If the last user message is a question or has not confirmed a plan, Next Steps must wait for confirmation rather than implement.';
 
@@ -149,10 +155,23 @@ const clipText = (value: string, maxChars: number) => {
 	return `${trimmed.slice(0, maxChars).trimEnd()}…`;
 };
 
+export const isSubagentProcess = (): boolean => {
+	const raw = process.env.PI_SUBAGENT_DEPTH;
+	if (raw === undefined || raw.trim() === "") return false;
+	const depth = Number(raw);
+	return Number.isInteger(depth) && depth > 0;
+};
+
 export const buildCompactionInstructions = (lastUserText: string | undefined): string => {
 	const quoted = lastUserText?.trim() ? clipText(lastUserText, COMPACTION_INSTRUCTIONS_MAX_CHARS) : "";
 	if (!quoted) return COMPACTION_INSTRUCTIONS_PREFIX;
 	return `${COMPACTION_INSTRUCTIONS_PREFIX}\n\nUser's last message:\n${quoted}`;
+};
+
+export const buildSubagentCompactionInstructions = (lastUserText: string | undefined): string => {
+	const quoted = lastUserText?.trim() ? clipText(lastUserText, COMPACTION_INSTRUCTIONS_MAX_CHARS) : "";
+	if (!quoted) return SUBAGENT_COMPACTION_INSTRUCTIONS_PREFIX;
+	return `${SUBAGENT_COMPACTION_INSTRUCTIONS_PREFIX}\n\nDelegated task:\n${quoted}`;
 };
 
 export const sessionLogHint = (sessionFile: string | undefined): string => {
@@ -165,6 +184,15 @@ export const buildContinuationContent = (lastUserText: string | undefined, sessi
 	const body = lastUserText?.trim() ?? "";
 	const hint = sessionLogHint(sessionFile);
 	const parts = [body ? CONTINUATION_WRAPPER : CONTINUATION_FALLBACK];
+	if (hint) parts.push(hint);
+	if (body) parts.push(body);
+	return parts.join("\n\n");
+};
+
+export const buildSubagentContinuationContent = (lastUserText: string | undefined, sessionFile?: string): string => {
+	const body = lastUserText?.trim() ?? "";
+	const hint = sessionLogHint(sessionFile);
+	const parts = [body ? SUBAGENT_CONTINUATION_WRAPPER : SUBAGENT_CONTINUATION_FALLBACK];
 	if (hint) parts.push(hint);
 	if (body) parts.push(body);
 	return parts.join("\n\n");
@@ -456,32 +484,40 @@ export default function (pi: ExtensionAPI) {
 
 	const startCompaction = (ctx: ExtensionContext, tokens: number) => {
 		if (!rt.runtimeActive || rt.compactionInProgress || rt.continuationQueued) return;
+		const subagent = isSubagentProcess();
 		rt.compactionInProgress = true;
 		try {
 			rt.pendingLastUser = lastUserMessageFromBranch(ctx.sessionManager.getBranch());
 		} catch {
 			rt.pendingLastUser = undefined;
 		}
-		notify(ctx, `Context reached ${formatTokens(tokens)} tokens; compacting, then restoring the last user message.`);
+		notify(ctx, subagent
+			? `Context reached ${formatTokens(tokens)} tokens; compacting, then continuing the delegated task.`
+			: `Context reached ${formatTokens(tokens)} tokens; compacting, then restoring the last user message.`);
 		ctx.compact({
-			customInstructions: buildCompactionInstructions(rt.pendingLastUser),
+			customInstructions: subagent
+				? buildSubagentCompactionInstructions(rt.pendingLastUser)
+				: buildCompactionInstructions(rt.pendingLastUser),
 			onComplete: () => {
 				rt.compactionInProgress = false;
 				const lastUserText = rt.pendingLastUser;
 				rt.pendingLastUser = undefined;
 				try {
 					if (!rt.runtimeActive || rt.continuationQueued) return;
-					// Route promotion only applies while the session still runs on a
-					// model-group model; a direct model must not touch route state a
-					// previous group task left behind.
-					const groupId = ctx.model?.provider === PROVIDER_ID ? rt.state.groupId : undefined;
-					const previousRoute = groupId && rt.state.taskRouteIndex !== undefined ? rt.config.groups[groupId]?.routes[rt.state.taskRouteIndex] : undefined;
-					const selectedRoute = groupId ? selectGroupRoute(groupId, true, ctx) : undefined;
-					if (previousRoute && selectedRoute && routeKey(previousRoute) !== routeKey(selectedRoute)) {
-						notify(ctx, `Model-group promoted after compaction:\n${routeKey(previousRoute)}\n→ ${routeKey(selectedRoute)}`);
+					// Route promotion is for a parent task restart. A subagent must stay
+					// on the route that was already doing the delegated work.
+					if (!subagent) {
+						const groupId = ctx.model?.provider === PROVIDER_ID ? rt.state.groupId : undefined;
+						const previousRoute = groupId && rt.state.taskRouteIndex !== undefined ? rt.config.groups[groupId]?.routes[rt.state.taskRouteIndex] : undefined;
+						const selectedRoute = groupId ? selectGroupRoute(groupId, true, ctx) : undefined;
+						if (previousRoute && selectedRoute && routeKey(previousRoute) !== routeKey(selectedRoute)) {
+							notify(ctx, `Model-group promoted after compaction:\n${routeKey(previousRoute)}\n→ ${routeKey(selectedRoute)}`);
+						}
+						notify(ctx, groupId ? "Context compacted; selecting the first route and restoring the last user message." : "Context compacted; restoring the last user message.");
+					} else {
+						notify(ctx, "Context compacted; continuing the delegated task.");
 					}
 					rt.continuationQueued = true;
-					notify(ctx, groupId ? "Context compacted; selecting the first route and restoring the last user message." : "Context compacted; restoring the last user message.");
 					// If the aborted agent loop has not fully settled yet, retain this
 					// as a follow-up instead of steering or dropping the continuation.
 					// Hidden custom message: Jarvis/TUI must not show this as a user bubble.
@@ -493,7 +529,9 @@ export default function (pi: ExtensionAPI) {
 					}
 					pi.sendMessage({
 						customType: CONTINUATION_CUSTOM_TYPE,
-						content: buildContinuationContent(lastUserText, sessionFile),
+						content: subagent
+							? buildSubagentContinuationContent(lastUserText, sessionFile)
+							: buildContinuationContent(lastUserText, sessionFile),
 						display: false,
 					}, { triggerTurn: true, deliverAs: "followUp" });
 				} catch {
