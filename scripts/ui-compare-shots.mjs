@@ -370,6 +370,97 @@ async function scenarioRunning(baseUrl, workspace, viewport, label) {
   }
 }
 
+
+const WIDE = { width: 1440, height: 900 };
+
+async function sidebarShots(page, name) {
+  await shot(page, name);
+  const box = await page.locator(".sidebar").boundingBox();
+  if (box !== null) await page.screenshot({ path: join(outDir, `${name}-header.png`), clip: { x: box.x, y: box.y, width: box.width, height: Math.min(box.height, 260) } });
+}
+
+/** PC 侧栏：项目标题栏按钮，以及（改后才有的）"新建会话"选项目弹窗，普通/聚焦模式各一套。 */
+async function scenarioSidebar(baseUrl, workspace, viewport, label) {
+  if (label !== "desktop") return;
+  for (const extra of ["社区超市", "无人自助", "官网改版"]) {
+    const cwd = await mkdtemp(join(tmpdir(), "jarvis-compare-extra-"));
+    extraDirs.push(cwd);
+    await api(baseUrl, "/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd, label: extra }) });
+  }
+  const { session, fixture } = await newSession(baseUrl, workspace);
+  fixture.start();
+  fixture.user("把登录页的错误提示改成中文。");
+  fixture.end(fixture.assistant([fixture.text("已改好。", "final_answer")]));
+  fixture.settle();
+  for (const mode of ["normal", "focus"]) {
+    const view = await newPage(WIDE, label);
+    await view.context.addInitScript((focus) => { window.localStorage.setItem("jarvis.sessions.focus", focus); }, String(mode === "focus"));
+    try {
+      await openChat(view.page, baseUrl, workspace.id, session.id);
+      await sleep(300);
+      await sidebarShots(view.page, `desktop-sidebar-${mode}`);
+      const button = view.page.locator(".sidebar-toolbar-actions").getByRole("button", { name: "新建会话", exact: true });
+      if (await button.count() > 0) {
+        await button.hover();
+        await sleep(400);
+        await sidebarShots(view.page, `desktop-sidebar-${mode}-hover`);
+        await button.click();
+        await view.page.getByRole("dialog").waitFor();
+        await sleep(250);
+        await shot(view.page, `desktop-picker-${mode}`);
+        if (mode === "focus") {
+          // 聚焦模式下侧栏看不到的项目，也能从弹窗里新建会话。
+          await view.page.getByRole("dialog").getByRole("button", { name: "官网改版" }).click();
+          await view.page.getByRole("dialog").waitFor({ state: "hidden" });
+          await view.page.locator(".sidebar .project-node").filter({ hasText: "官网改版" }).waitFor({ timeout: 10_000 });
+          await sleep(300);
+          await shot(view.page, `desktop-picker-${mode}-created`);
+        }
+      } else {
+        await shot(view.page, `desktop-picker-${mode}`);
+      }
+    } finally {
+      await view.context.close();
+    }
+  }
+}
+
+/** 一轮改了 7 个文件：看文件名小标签是否截断为 3 个 + "等 N 个"，以及简洁档是否隐藏。 */
+async function scenarioManyFiles(baseUrl, workspace, viewport, label) {
+  if (label !== "desktop") return;
+  const { session, fixture } = await newSession(baseUrl, workspace);
+  fixture.start();
+  fixture.user("把所有页面的错误提示都改成中文。");
+  const files = ["src/login.ts", "src/register.ts", "src/reset-password.ts", "src/profile.ts", "src/i18n/zh.json", "tests/login.test.ts", "tests/register.test.ts"];
+  const calls = files.map((path, index) => ({ type: "toolCall", id: `many-${String(index)}`, name: "write", arguments: { path, content: `// ${path}\nexport const message = "中文提示";\n` } }));
+  const first = fixture.assistant([fixture.text("逐个改写这些文件。", "commentary"), ...calls], { stopReason: "toolUse", output: 300 });
+  fixture.streamText(first, 0);
+  calls.forEach((_, index) => fixture.callEnd(first, index + 1));
+  fixture.end(first);
+  for (const call of calls) { fixture.toolStart(call); fixture.toolEnd(call, `Successfully wrote 40 bytes to ${call.arguments.path}`); }
+  fixture.end(fixture.assistant([fixture.text("7 个文件的错误提示都改成中文了，测试也补上了。", "final_answer")], { output: 120 }));
+  fixture.settle();
+  for (const detail of ["normal", "concise"]) {
+    const view = await newPage(WIDE, label, detail);
+    try {
+      await openChat(view.page, baseUrl, workspace.id, session.id);
+      await view.page.locator(".message-row.assistant").last().waitFor();
+      await sleep(400);
+      await shot(view.page, `desktop-manyfiles-${detail}`);
+      if (detail === "normal") {
+        const more = view.page.locator(".turn-changes-more");
+        if (await more.count() > 0) await more.first().click();
+        else await view.page.locator(".turn-changes-summary").first().click();
+        await sleep(300);
+        await shot(view.page, `desktop-manyfiles-expanded`);
+      }
+    } finally {
+      await view.context.close();
+    }
+  }
+}
+
+const extraDirs = [];
 try {
   process.env.JARVIS_HOME = home;
   process.env.PI_CODING_AGENT_DIR = join(home, "agent");
@@ -389,10 +480,10 @@ try {
   const { workspace } = await api(baseUrl, "/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: workspacePath, label: "登录页" }) });
   browser = await chromium.launch({ headless: true });
   const only = process.env["JARVIS_COMPARE_ONLY"]?.split(",");
-  const scenarios = { coding: scenarioCoding, long: scenarioLongAnswer, failure: scenarioFailure, running: scenarioRunning };
+  const scenarios = { coding: scenarioCoding, long: scenarioLongAnswer, failure: scenarioFailure, running: scenarioRunning, sidebar: scenarioSidebar, manyfiles: scenarioManyFiles };
   for (const [label, viewport] of [["desktop", { width: 1280, height: 860 }], ["mobile", { width: 390, height: 844 }]]) {
     for (const [name, run] of Object.entries(scenarios)) {
-      if (only !== undefined && !only.includes(name)) continue;
+      if (only !== undefined ? !only.includes(name) : ["sidebar", "manyfiles"].includes(name)) continue;
       await run(baseUrl, workspace, viewport, label);
     }
   }
@@ -404,4 +495,5 @@ try {
   restoreEnv();
   await rm(home, { recursive: true, force: true });
   await rm(workspacePath, { recursive: true, force: true });
+  for (const dir of extraDirs) await rm(dir, { recursive: true, force: true });
 }
