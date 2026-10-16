@@ -161,6 +161,15 @@ function parseValidationDetails(message: string): string | undefined {
   }
 }
 
+export interface SystemInfo {
+  logDirectory: string;
+  logRetentionDays: number;
+  snapshotDirectory?: string;
+  snapshotKeep?: number;
+  snapshots?: Array<{ name: string; size: number }>;
+  warnings?: string[];
+}
+
 export const api = {
   /** 登录状态：assistantName 也一并返回，登录页与欢迎页用同一名字。 */
   authStatus: async (): Promise<{ auth: AuthStatus; assistantName: string }> => request<{ auth: AuthStatus; assistantName: string }>("/api/auth/status"),
@@ -323,7 +332,7 @@ export const api = {
   },
   takeRestoredQueue: async (ref: SessionRef): Promise<string[]> => (await request<{ texts: string[] }>(`${sessionPath(ref)}/restored-queue`, { method: "POST", body: "{}" })).texts,
   selfRestart: async (): Promise<{ restarting: boolean }> => request("/api/self/restart", { method: "POST" }),
-  systemInfo: async (): Promise<{ logDirectory: string; logRetentionDays: number }> => request("/api/system/info"),
+  systemInfo: async (): Promise<SystemInfo> => request("/api/system/info"),
   recoveries: async (): Promise<RecoveryNotice[]> => (await request<{ recoveries: RecoveryNotice[] }>("/api/system/recoveries")).recoveries,
   trash: async (): Promise<TrashListing> => request("/api/trash"),
   restoreTrash: async (id: string): Promise<{ entry: TrashEntry; restoredPath: string }> => request(`/api/trash/${encodeURIComponent(id)}/restore`, { method: "POST" }),

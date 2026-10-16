@@ -18,6 +18,7 @@ import { AppError, asMessage, errorStatusCode } from "./errors.js";
 import { EventHub } from "./event-hub.js";
 import { TrashService } from "./trash.js";
 import { registerSystemRoutes } from "./system-routes.js";
+import { DailySnapshots } from "./snapshot.js";
 import { teeLogStream, type DailyLogFile } from "./log-files.js";
 import { takeUndeliveredStartupMessages } from "./fs.js";
 import { applyAuthCookie, authorizeSocket, clearAuthCookie, readAuthCookie } from "./http-auth.js";
@@ -163,6 +164,7 @@ export async function buildApp(options: {
   await plugins.initialize();
   const modelGroups = new ModelGroupsService(getAgentDir(), () => plugins.isBundledEnabled(MODEL_GROUPS_PLUGIN_ID), pluginLifecycle);
   const skills = new SkillService(getAgentDir(), undefined, () => workspaces.list().map((workspace) => ({ id: workspace.id, label: workspace.label, cwd: workspace.cwd })), (message) => app.log.warn(message));
+  skills.useTrash(trash);
   await skills.initialize();
   const services: JarvisServices = { workspaces, sessions, backgroundTasks, events, tunnel, auth, plugins, modelGroups, skills };
   await app.register(cors, { origin: production ? [/^http:\/\/127\.0\.0\.1(?::\d+)?$/, /^http:\/\/localhost(?::\d+)?$/] : true });
@@ -247,9 +249,11 @@ export async function buildApp(options: {
   });
 
   registerSelfRestart(app, events);
-  registerSystemRoutes(app, { trash, logDirectory: options.logFile?.directory, runningCount: () => sessions.runningCount() });
+  const snapshots = new DailySnapshots({ agentDir: getAgentDir() });
+  registerSystemRoutes(app, { trash, snapshots, logDirectory: options.logFile?.directory, runningCount: () => sessions.runningCount() });
   const stopTrashPurge = trash.startAutoPurge((message) => app.log.info(message));
-  app.addHook("onClose", async () => { stopTrashPurge(); });
+  const stopSnapshots = snapshots.start((message) => app.log.info(message));
+  app.addHook("onClose", async () => { stopTrashPurge(); await stopSnapshots(); });
 
   const tunnelMethodInput = z.enum(TUNNEL_METHODS);
   const tunnelSishInput = z.object({ server: z.string().min(1).max(500), subdomain: z.string().max(200).optional(), sshPort: z.number().int().min(1).max(65535).optional() }).strict();
