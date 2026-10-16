@@ -11,6 +11,8 @@
       #progress { width: 220px; height: 4px; overflow: hidden; border-radius: 99px; background: #1c2230; }
       #progress-fill { display: block; height: 100%; width: 0; background: #6b8afd; }
       #progress.unknown #progress-fill { width: 32%; animation: indeterminate 1.2s ease-in-out infinite; }
+      #check-update { padding: 6px 16px; border: 1px solid #2c3550; border-radius: 6px; background: #1c2230; color: inherit; font: inherit; cursor: pointer; }
+      #check-update:hover { background: #262e42; }
       @keyframes indeterminate { 0% { transform: translateX(-140%); } 100% { transform: translateX(380%); } }
     </style>
   </head>
@@ -19,7 +21,15 @@
       <div class="panel">
         <span id="status">正在启动</span>
         <div id="progress" hidden><i id="progress-fill"></i></div>
+        <button id="check-update" type="button" hidden>检查更新</button>
       </div>
     </main>
+    <script>
+      // 服务启动失败时也能更新：由桌面程序直接检查、下载并安装。
+      document.getElementById("check-update").addEventListener("click", function () {
+        var tauri = window.__TAURI_INTERNALS__;
+        if (tauri) tauri.invoke("check_desktop_update");
+      });
+    </script>
   </body>
 </html>

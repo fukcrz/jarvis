@@ -1,5 +1,6 @@
 mod node;
 mod sidecar;
+mod update;
 
 use serde::Serialize;
 use sidecar::DesktopEvent;
@@ -26,6 +27,10 @@ struct AppState {
   last_session: Mutex<Option<(String, String)>>,
   quitting: AtomicBool,
   update_check_requested: AtomicBool,
+  /// 最近一次启动状态文字，更新流程结束后恢复。
+  splash: Mutex<String>,
+  startup_failed: AtomicBool,
+  updating: AtomicBool,
 }
 
 #[derive(Clone, Serialize)]
@@ -54,8 +59,11 @@ pub fn run() {
       last_session: Mutex::new(None),
       quitting: AtomicBool::new(false),
       update_check_requested: AtomicBool::new(false),
+      splash: Mutex::new(String::new()),
+      startup_failed: AtomicBool::new(false),
+      updating: AtomicBool::new(false),
     })
-    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, take_update_check])
+    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, take_update_check, check_desktop_update])
     .setup(|app| {
       app.resources_table().add(sidecar::SidecarCleanup(Arc::clone(&app.state::<AppState>().sidecar)));
       let handle = app.handle().clone();
@@ -107,10 +115,36 @@ fn take_update_check(state: State<AppState>) -> bool {
   state.update_check_requested.swap(false, Ordering::Relaxed)
 }
 
+/// 启动页“检查更新”按钮：服务没起来时也能更新。
+#[tauri::command]
+fn check_desktop_update(app: AppHandle) {
+  update::spawn_manual_check(&app);
+}
+
 fn request_update_check(app: &AppHandle) {
-  app.state::<AppState>().update_check_requested.store(true, Ordering::Relaxed);
   show_main(app);
-  let _ = app.emit("jarvis://check-update", ());
+  if backend_ready(app) {
+    // 网页界面在线：沿用它的流程（会先确认没有正在运行的会话）。
+    app.state::<AppState>().update_check_requested.store(true, Ordering::Relaxed);
+    let _ = app.emit("jarvis://check-update", ());
+  } else {
+    update::spawn_manual_check(app);
+  }
+}
+
+fn backend_ready(app: &AppHandle) -> bool {
+  app.state::<AppState>().port.lock().map(|slot| slot.is_some()).unwrap_or(false)
+}
+
+/// 显示启动失败；`offer_update` 时先自动检查更新，有新版本就直接提示安装。
+fn report_startup_failure(app: &AppHandle, error: &str, offer_update: bool) {
+  app.state::<AppState>().startup_failed.store(true, Ordering::Relaxed);
+  set_splash(app, "启动失败");
+  if offer_update && !error.is_empty() {
+    update::offer_after_startup_failure(app, error);
+  } else if !error.is_empty() {
+    show_alert(app, error);
+  }
 }
 
 fn open_http_url(url: &str) -> Result<(), String> {
@@ -132,6 +166,7 @@ mod open_url_tests {
 }
 
 fn start_backend(app: AppHandle) {
+  app.state::<AppState>().startup_failed.store(false, Ordering::Relaxed);
   set_splash(&app, "正在启动");
   let port = desktop_port();
   if let Ok(mut slot) = app.state::<AppState>().port.lock() {
@@ -143,8 +178,7 @@ fn start_backend(app: AppHandle) {
       return;
     }
     Some(false) => {
-      set_splash(&app, "启动失败");
-      let _ = app.dialog_message(&format!("端口 {port} 已被其他程序占用"));
+      report_startup_failure(&app, &format!("端口 {port} 已被其他程序占用"), false);
       return;
     }
     None => {}
@@ -155,10 +189,8 @@ fn start_backend(app: AppHandle) {
     Err(_) => match download_runtime_node(&app) {
       Ok(path) => path,
       Err(error) => {
-        set_splash(&app, "启动失败");
-        if !error.is_empty() {
-          let _ = app.dialog_message(&error);
-        }
+        // 空字符串表示用户取消了 Node 下载，不再弹窗。
+        report_startup_failure(&app, &error, true);
         return;
       }
     },
@@ -169,15 +201,13 @@ fn start_backend(app: AppHandle) {
     Ok(true) => {}
     Ok(false) => return,
     Err(error) => {
-      set_splash(&app, "启动失败");
-      let _ = app.dialog_message(&error);
+      report_startup_failure(&app, &error, true);
       return;
     }
   }
   if let Err(error) = wait_for_backend(&app, port, Duration::from_secs(STARTUP_TIMEOUT_SECS)) {
-    set_splash(&app, "启动失败");
     stop_current_sidecar(&app);
-    let _ = app.dialog_message(&error);
+    report_startup_failure(&app, &error, true);
   }
 }
 
@@ -412,24 +442,51 @@ fn confirm_node_download(app: &AppHandle) -> bool {
     .blocking_show()
 }
 
+/// 设置启动状态并记住它；启动失败时同时显示“检查更新”按钮。
 fn set_splash(app: &AppHandle, text: &str) {
-  set_splash_state(app, text, "hidden", 0);
+  let state = app.state::<AppState>();
+  if let Ok(mut slot) = state.splash.lock() {
+    *slot = text.to_string();
+  }
+  set_splash_state(app, text, "hidden", 0, state.startup_failed.load(Ordering::Relaxed));
+}
+
+/// 恢复更新流程之前的启动状态。
+fn restore_splash(app: &AppHandle) {
+  let text = app.state::<AppState>().splash.lock().map(|slot| slot.clone()).unwrap_or_default();
+  set_splash(app, &text);
+}
+
+/// 临时状态（检查、安装更新），不覆盖记住的启动状态。
+fn show_status(app: &AppHandle, text: &str) {
+  set_splash_state(app, text, "hidden", 0, false);
+}
+
+fn show_progress(app: &AppHandle, text: &str, percent: Option<u8>) {
+  match percent {
+    Some(value) => set_splash_state(app, text, "percent", value, false),
+    None => set_splash_state(app, text, "unknown", 0, false),
+  }
 }
 
 fn set_download_progress(app: &AppHandle, done: u64, total: Option<u64>) {
   match total {
     Some(size) if size > 0 => {
       let percent = ((done.saturating_mul(100)) / size).min(100) as u8;
-      set_splash_state(app, &format!("正在下载 Node {percent}%"), "percent", percent);
+      show_progress(app, &format!("正在下载 Node {percent}%"), Some(percent));
     }
-    _ => set_splash_state(app, "正在下载 Node", "unknown", 0),
+    _ => show_progress(app, "正在下载 Node", None),
   }
 }
 
-fn set_splash_state(app: &AppHandle, text: &str, mode: &str, percent: u8) {
+fn set_splash_state(app: &AppHandle, text: &str, mode: &str, percent: u8, show_update: bool) {
+  // 服务已就绪时窗口显示的是网页界面，不再改写启动页。
+  if backend_ready(app) {
+    return;
+  }
   if let Some(window) = app.get_webview_window("main") {
     let _ = window.eval(&format!(
-      "(function(text,mode,percent){{\n        var n=document.getElementById('status');\n        if(n) n.textContent=text;\n        var bar=document.getElementById('progress');\n        var fill=document.getElementById('progress-fill');\n        if(!bar||!fill) return;\n        if(mode==='hidden'){{\n          bar.hidden=true;\n          bar.classList.remove('unknown');\n          fill.style.width='0%';\n          return;\n        }}\n        bar.hidden=false;\n        if(mode==='unknown'){{\n          bar.classList.add('unknown');\n          fill.style.width='32%';\n          return;\n        }}\n        bar.classList.remove('unknown');\n        fill.style.width=Math.max(0,Math.min(100,percent))+'%';\n      }})({text:?},{mode:?},{percent})"
+      "(function(text,mode,percent,showUpdate){{\n        var n=document.getElementById('status');\n        if(n) n.textContent=text;\n        var update=document.getElementById('check-update');\n        if(update) update.hidden=!showUpdate;\n        var bar=document.getElementById('progress');\n        var fill=document.getElementById('progress-fill');\n        if(!bar||!fill) return;\n        if(mode==='hidden'){{\n          bar.hidden=true;\n          bar.classList.remove('unknown');\n          fill.style.width='0%';\n          return;\n        }}\n        bar.hidden=false;\n        if(mode==='unknown'){{\n          bar.classList.add('unknown');\n          fill.style.width='32%';\n          return;\n        }}\n        bar.classList.remove('unknown');\n        fill.style.width=Math.max(0,Math.min(100,percent))+'%';\n      }})({text:?},{mode:?},{percent},{show_update})"
     ));
   }
 }
@@ -471,16 +528,9 @@ fn save_notifications_enabled(enabled: bool) {
   let _ = fs::write(path, format!("{{\"notificationsEnabled\":{enabled}}}"));
 }
 
-trait DialogMessage {
-  fn dialog_message(&self, message: &str) -> Result<(), tauri::Error>;
-}
-
-impl DialogMessage for AppHandle {
-  fn dialog_message(&self, message: &str) -> Result<(), tauri::Error> {
-    if let Some(window) = self.get_webview_window("main") {
-      let _ = window.eval(&format!("alert({message:?})"));
-    }
-    Ok(())
+fn show_alert(app: &AppHandle, message: &str) {
+  if let Some(window) = app.get_webview_window("main") {
+    let _ = window.eval(&format!("alert({message:?})"));
   }
 }
 
