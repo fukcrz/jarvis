@@ -330,7 +330,9 @@ async function exercise(baseUrl, workspace, viewport, label) {
     assert.equal(await page.locator(".timeline-error-attempt").count(), 2);
     await page.locator(".turn-process-summary").last().click();
     await page.locator(".command-summary").filter({ hasText: "npm run failing-check" }).click();
-    await page.getByText("1 failed\n完整工具失败输出。", { exact: true }).waitFor();
+    // The merged failure card's raw section also shows the tool error; check the process row itself.
+    await page.locator(".turn-process .tool-error-output").getByText("1 failed\n完整工具失败输出。", { exact: true }).waitFor();
+    assert.equal(await page.locator(".turn-failure").count(), 1, `${label}: failure card was not merged`);
 
     // A real bridge dialog pins the process and can be cancelled in the browser.
     fixture.start();
