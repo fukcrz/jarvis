@@ -1,4 +1,4 @@
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { DefaultPackageManager, getAgentDir, SettingsManager, type PackageManager } from "@earendil-works/pi-coding-agent";
@@ -238,7 +238,7 @@ export class PluginService {
     for (const [file, content] of files) {
       const path = join(this.agentDir, "extensions", file);
       if (content === undefined) await rm(path, { force: true });
-      else await writeFile(path, content, "utf8");
+      else await atomicWrite(path, content);
     }
   }
 
