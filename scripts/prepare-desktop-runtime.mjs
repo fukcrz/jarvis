@@ -20,6 +20,7 @@ cpSync(join(root, "package-lock.json"), join(staging, "package-lock.json"));
 cpSync(join(root, "scripts"), join(staging, "scripts"), { recursive: true });
 cpSync(join(root, "plugins"), join(staging, "plugins"), { recursive: true });
 cpSync(join(root, "skills"), join(staging, "skills"), { recursive: true });
+cpSync(join(root, "vendor"), join(staging, "vendor"), { recursive: true });
 
 const install = spawnSync("npm", ["ci", "--omit=dev"], {
   cwd: staging,

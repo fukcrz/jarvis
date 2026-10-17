@@ -314,14 +314,14 @@ function attachGeneration(items: Array<MessageTimelineItem | ThinkingTimelineIte
     items[index] = { ...item, generation };
     return items;
   }
-  // A provider can finish after reasoning without emitting visible text. Keep
-  // its exact usage available on the final thinking card rather than dropping
-  // it solely because there is no answer bubble to own the metric.
+  // A provider can finish after reasoning or tool calls without emitting visible text.
+  // Keep exact usage on the last available block so the turn can still aggregate it.
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item?.kind !== "thinking") continue;
-    items[index] = { ...item, generation };
-    break;
+    if (item?.kind === "thinking" || item?.kind === "tool") {
+      items[index] = { ...item, generation };
+      break;
+    }
   }
   return items;
 }

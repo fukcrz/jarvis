@@ -4,7 +4,6 @@ import { canPopHistory, categoryRoute, isSettingsPath, legacySettingsRedirect, n
 const routes: SettingsRoute[] = [
   { page: "home" },
   { page: "general" },
-  { page: "appearance" },
   { page: "notifications" },
   { page: "models" },
   { page: "provider-new" },
@@ -42,6 +41,7 @@ describe("settings routes", () => {
 
   it("redirects every pre-redesign settings address to its new home", () => {
     expect(legacySettingsRedirect("/settings/assistant-name")).toEqual({ route: { page: "general" }, focus: "assistant-name" });
+    expect(legacySettingsRedirect("/settings/appearance")).toEqual({ route: { page: "general" } });
     expect(legacySettingsRedirect("/settings/providers")).toEqual({ route: { page: "models" } });
     expect(legacySettingsRedirect("/settings/providers/new")).toEqual({ route: { page: "provider-new" } });
     expect(legacySettingsRedirect("/settings/providers/openai")).toEqual({ route: { page: "provider", providerId: "openai" } });

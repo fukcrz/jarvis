@@ -4,7 +4,8 @@ import type { AuthLoginOperation, EnabledModelsStatus, FetchedModel, ManagedApi,
 import { ApiError, api } from "../api";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
 import { displayModelName } from "../model-display";
-import { DirtyBar, SaveState, useDirtyRegistration, useSaveStatus, useSettingsToast } from "./settings-feedback";
+import { useIsMobile } from "../hooks/use-is-mobile";
+import { DirtyBar, SaveState, SettingsConfirm, useDirtyRegistration, useSaveStatus, useSettingsToast } from "./settings-feedback";
 import {
   SectionAction,
   Segmented,
@@ -519,6 +520,7 @@ export function useProviderSettings(refreshKey: number): ProviderSettings {
  * ------------------------------------------------------------------ */
 
 export function ModelsPage({ ps, onOpenProvider, onAddProvider }: { ps: ProviderSettings; onOpenProvider: (providerId: string) => void; onAddProvider: () => void }) {
+  const isMobile = useIsMobile();
   const [search, setSearch] = useState("");
   const enabledCount = [...ps.enabled].filter((key) => ps.allModelKeys.has(key)).length;
   const models = useMemo(() => {
@@ -530,15 +532,14 @@ export function ModelsPage({ ps, onOpenProvider, onAddProvider }: { ps: Provider
   const empty = ps.visibleProviders.length === 0 && ps.orphanedProviders.length === 0;
 
   return <>
-    <SettingsPageHead title="模型与供应商" description={ps.loading ? "正在读取…" : `已连接 ${String(ps.connectedCount)} 个供应商，启用 ${String(enabledCount)} 个模型。开关立即生效，新开会话可用。`} />
+    <SettingsPageHead title={isMobile ? "供应商" : "模型与供应商"} description={ps.loading ? "正在读取…" : isMobile ? `已连接 ${String(ps.connectedCount)} 个供应商` : `已连接 ${String(ps.connectedCount)} 个供应商，启用 ${String(enabledCount)} 个模型。开关立即生效，新开会话可用。`} />
     <SettingsSection id="providers" title="供应商" action={<SectionAction label="添加供应商" onClick={onAddProvider} />}>
       {ps.loading ? <SettingsLoading /> : <SettingsCard>
         {empty ? <SettingsEmptyLine>还没有供应商。添加一个供应商，填上 API Key 就能开始用。</SettingsEmptyLine> : null}
         {ps.visibleProviders.map((provider) => {
           const custom = ps.customById.get(provider.id);
           const status = providerStatusLabel(provider, custom);
-          const key = maskApiKey(provider.apiKey);
-          const parts = [hostLabel(custom?.baseUrl ?? provider.override?.baseUrl) ?? (custom === undefined ? "官方接口" : undefined), key === undefined ? undefined : `API Key ${key}`, providerModelSummary(provider.models.length, enabledIn(provider))].filter((part): part is string => part !== undefined);
+          const parts = [hostLabel(custom?.baseUrl ?? provider.override?.baseUrl) ?? (custom === undefined ? "官方接口" : undefined), providerModelSummary(provider.models.length, enabledIn(provider))].filter((part): part is string => part !== undefined);
           return <SettingRow key={provider.id} id={`provider-${provider.id}`} leading={<ProviderAvatar id={provider.id} name={providerDisplayName(provider, custom)} />} title={providerDisplayName(provider, custom)} description={parts.join(" · ")}
             control={<SettingsTag tone={status.tone === "ready" ? "ok" : "warn"}>{status.tone === "ready" ? <Check size={11} /> : null}{status.label}</SettingsTag>} onClick={() => onOpenProvider(provider.id)} />;
         })}
@@ -546,7 +547,7 @@ export function ModelsPage({ ps, onOpenProvider, onAddProvider }: { ps: Provider
           description={`${String(provider.models.length)} 个模型 · 还没加载出来，检查连接设置`} control={<SettingsTag tone="warn">未加载</SettingsTag>} onClick={() => onOpenProvider(provider.id)} />)}
       </SettingsCard>}
     </SettingsSection>
-    {ps.loading || ps.allModelKeys.size === 0 ? null : <SettingsSection id="enabled-models" title="启用的模型" hint={ps.unrestricted ? "全部可用" : `${String(enabledCount)} / ${String(ps.allModelKeys.size)}`}
+    {!isMobile && (ps.loading || ps.allModelKeys.size === 0 ? null : <SettingsSection id="enabled-models" title="启用的模型" hint={ps.unrestricted ? "全部可用" : `${String(enabledCount)} / ${String(ps.allModelKeys.size)}`}
       action={<span className="st-inline"><SaveState k="enabled-models" />{ps.unrestricted ? null : <SectionAction label="全部启用" icon={null} onClick={ps.enableAll} />}</span>}>
       <SettingsCard>
         <div className="st-search-row"><Search size={14} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="筛选模型或供应商" aria-label="筛选模型" /></div>
@@ -556,7 +557,7 @@ export function ModelsPage({ ps, onOpenProvider, onAddProvider }: { ps: Provider
             control={<><SaveState k={`model:${key}`} /><SettingsSwitch checked={ps.enabled.has(key)} onChange={() => ps.toggleModel(provider.id, model.id)} label={`启用 ${model.id}`} /></>} />;
         })}
       </SettingsCard>
-    </SettingsSection>}
+    </SettingsSection>)}
     {ps.overlay}
   </>;
 }
@@ -580,11 +581,16 @@ function connectionDraftOf(provider: ProviderStatus | undefined, custom: Managed
 }
 
 type ProviderView = { kind: "main" } | { kind: "add" } | { kind: "edit"; model: ManagedModel };
+type ProviderDangerConfirm =
+  | { kind: "clear"; provider: ProviderStatus }
+  | { kind: "restore"; provider: ProviderStatus }
+  | { kind: "delete"; provider: ManagedProvider };
 
 export function ProviderPage({ ps, providerId, onBack }: { ps: ProviderSettings; providerId: string; onBack: () => void }) {
   const provider = ps.providers.find((item) => item.id === providerId);
   const custom = ps.customById.get(providerId);
   const [view, setView] = useState<ProviderView>({ kind: "main" });
+  const [dangerPending, setDangerPending] = useState<ProviderDangerConfirm>();
   useHistoryBackTrap(view.kind !== "main", () => setView({ kind: "main" }));
   const crumb = { label: "模型与供应商", onClick: onBack };
   if (ps.loading && provider === undefined && custom === undefined) return <><SettingsPageHead crumb={crumb} title="供应商" /><SettingsLoading /></>;
@@ -613,8 +619,9 @@ export function ProviderPage({ ps, providerId, onBack }: { ps: ProviderSettings;
         {!provider.authConfigured && provider.supportsOAuth ? <SettingRow title="账号授权登录" description="在浏览器里完成授权，不需要 API Key" control={<StButton variant="primary" onClick={() => { void ps.startLogin(provider, "oauth"); }}><ExternalLink size={13} />去授权</StButton>} /> : null}
       </SettingsCard>
     </SettingsSection> : null}
-    <ConnectionSection ps={ps} provider={provider} custom={custom} />
-    <SettingsSection id="provider-models" title="模型" hint={providerModelSummary(models.length, enabledCount)} action={custom === undefined ? undefined : <SectionAction label="添加模型" onClick={() => setView({ kind: "add" })} />}>
+    <div className="st-provider-detail">
+      <ConnectionSection ps={ps} provider={provider} custom={custom} />
+      <SettingsSection id="provider-models" title="模型" hint={providerModelSummary(models.length, enabledCount)} action={custom === undefined ? undefined : <SectionAction label="添加模型" onClick={() => setView({ kind: "add" })} />}>
       <SettingsCard>
         {models.length === 0 ? <SettingsEmptyLine>{usable ? "还没有模型" : "登录或填上 API Key 后会自动列出可用模型"}</SettingsEmptyLine> : models.map((model) => {
           const key = modelKey(providerId, model.id);
@@ -628,18 +635,35 @@ export function ProviderPage({ ps, providerId, onBack }: { ps: ProviderSettings;
             </>} />;
         })}
       </SettingsCard>
-    </SettingsSection>
+      </SettingsSection>
+    </div>
     {canClear || custom !== undefined || provider?.override !== undefined ? <SettingsSection id="provider-danger" title="危险操作">
       <SettingsCard>
         {canClear ? <SettingRow danger title={provider.credentialType === "oauth" ? "退出账号" : "清除密钥"} description={provider.credentialType === "oauth" ? "退出后需要重新授权才能使用" : "清除后可以在提示条里撤销"}
-          control={<StButton variant="danger" onClick={() => { void ps.clearCredential(provider); }}><LogOut size={13} />{provider.credentialType === "oauth" ? "退出" : "清除"}</StButton>} /> : null}
+          control={<StButton variant="danger" onClick={() => { setDangerPending({ kind: "clear", provider }); }}><LogOut size={13} />{provider.credentialType === "oauth" ? "退出" : "清除"}</StButton>} /> : null}
         {custom === undefined && provider?.override !== undefined ? <SettingRow danger title="恢复官方连接" description="去掉自定义的接口地址和请求头，可以撤销"
-          control={<StButton variant="danger" onClick={() => { void ps.restoreOfficial(provider); }}>恢复</StButton>} /> : null}
+          control={<StButton variant="danger" onClick={() => { setDangerPending({ kind: "restore", provider }); }}>恢复</StButton>} /> : null}
         {custom !== undefined ? <SettingRow danger title="删除供应商" description="连同它的模型一起删除，8 秒内可以撤销"
-          control={<StButton variant="danger" onClick={() => { ps.deleteProvider(custom); onBack(); }}><Trash2 size={13} />删除</StButton>} /> : null}
+          control={<StButton variant="danger" onClick={() => { setDangerPending({ kind: "delete", provider: custom }); }}><Trash2 size={13} />删除</StButton>} /> : null}
       </SettingsCard>
     </SettingsSection> : null}
     {ps.overlay}
+    <SettingsConfirm open={dangerPending !== undefined} busy={false}
+      danger
+      title={dangerPending?.kind === "delete" ? "删除供应商？" : dangerPending?.kind === "restore" ? "恢复官方连接？" : dangerPending?.provider.credentialType === "oauth" ? "退出账号？" : "清除密钥？"}
+      confirmLabel={dangerPending?.kind === "delete" ? "删除" : dangerPending?.kind === "restore" ? "恢复" : dangerPending?.provider.credentialType === "oauth" ? "退出" : "清除"}
+      onCancel={() => setDangerPending(undefined)} onConfirm={() => {
+        if (dangerPending === undefined) return;
+        const pending = dangerPending;
+        setDangerPending(undefined);
+        if (pending.kind === "clear") void ps.clearCredential(pending.provider);
+        else if (pending.kind === "restore") void ps.restoreOfficial(pending.provider);
+        else { ps.deleteProvider(pending.provider); onBack(); }
+      }}>
+      {dangerPending?.kind === "delete" ? <p><b>{dangerPending.provider.name ?? dangerPending.provider.id}</b> 及其自定义模型将被删除，原有撤销逻辑仍然保留。</p>
+        : dangerPending?.kind === "restore" ? <p>自定义接口地址和请求头将被移除，恢复为官方连接，原有撤销逻辑仍然保留。</p>
+          : <p>{dangerPending?.provider.credentialType === "oauth" ? "退出后需要重新授权才能使用这个供应商。" : "清除后需要重新设置密钥，原有撤销逻辑仍然保留。"}</p>}
+    </SettingsConfirm>
   </>;
 }
 
@@ -651,10 +675,10 @@ function ConnectionSection({ ps, provider, custom }: { ps: ProviderSettings; pro
   const keyEditable = custom !== undefined || (provider?.supportsApiKey === true && provider.apiKeyLogin !== "login" && !isEnvironmentAuth(provider) && provider.authSource !== "runtime");
   const initialKey = provider?.apiKey ?? "";
   const [draft, setDraft] = useState(initial);
-  const [apiKey, setApiKey] = useState(initialKey);
+  const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [check, setCheck] = useState<{ running: boolean; result?: { ok: boolean; text: string } }>({ running: false });
-  const dirty = JSON.stringify(draft) !== initialJson || (keyEditable && apiKey !== initialKey);
+  const dirty = JSON.stringify(draft) !== initialJson || (keyEditable && apiKey.trim() !== "");
   const forceSync = useRef(false);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
@@ -663,7 +687,7 @@ function ConnectionSection({ ps, provider, custom }: { ps: ProviderSettings; pro
     if (!dirtyRef.current || forceSync.current) {
       forceSync.current = false;
       setDraft(JSON.parse(initialJson) as ConnectionDraft);
-      setApiKey(initialKey);
+      setApiKey("");
     }
   }, [initialJson, initialKey]);
   const id = custom?.id ?? provider?.id ?? "";
@@ -672,7 +696,7 @@ function ConnectionSection({ ps, provider, custom }: { ps: ProviderSettings; pro
   const save = async () => {
     setSaving(true);
     try {
-      const keyChanged = keyEditable && apiKey !== initialKey ? apiKey.trim() : undefined;
+      const keyChanged = keyEditable && apiKey.trim() !== "" ? apiKey.trim() : undefined;
       if (custom !== undefined) {
         await ps.saveCustomConnection({ ...custom, name: draft.name.trim() === "" ? undefined : draft.name.trim(), baseUrl: draft.baseUrl.trim(), api: draft.api, authHeader: draft.authHeader, headers: draft.headers, compat: draft.compat }, keyChanged);
       } else if (provider !== undefined) {
@@ -701,7 +725,7 @@ function ConnectionSection({ ps, provider, custom }: { ps: ProviderSettings; pro
       <SettingsField id="base-url" label="Base URL（接口地址）" warn={urlWarning(draft.baseUrl)} hint={custom === undefined ? "留空就用官方地址" : undefined}>
         <input value={draft.baseUrl} placeholder={custom === undefined ? "官方默认" : "https://api.example.com/v1"} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} spellCheck={false} />
       </SettingsField>
-      {keyEditable ? <ApiKeyField value={apiKey} onChange={setApiKey} placeholder={custom === undefined ? "sk-…" : "没有可以留空"} /> : null}
+      {keyEditable ? <ApiKeyField value={apiKey} onChange={setApiKey} placeholder={initialKey === "" ? (custom === undefined ? "sk-…" : "没有可以留空") : `已设置 ${maskApiKey(initialKey) ?? ""}，留空不变`} /> : null}
       {environmentKey ? <SettingsField label="API Key" hint="这里改不了：改环境变量后重启服务"><input value={`来自${authSourceLabel(provider) ?? "环境变量"}`} readOnly /></SettingsField> : null}
       {!keyEditable && !environmentKey && provider?.apiKeyLogin === "login" && (provider.apiKey ?? "") !== "" ? <SettingsField label="API Key" hint="通过上面的「登录」修改"><input value={maskApiKey(provider.apiKey) ?? ""} readOnly /></SettingsField> : null}
       {custom === undefined ? null : <>

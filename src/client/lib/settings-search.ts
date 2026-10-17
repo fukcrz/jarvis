@@ -28,7 +28,6 @@ export const SETTINGS_SYNONYMS: readonly (readonly string[])[] = [
   ["工作区", "项目", "文件夹", "目录", "workspace", "project"],
   ["通知", "提醒", "notification", "notify"],
   ["名字", "名称", "昵称", "称呼", "name"],
-  ["详细程度", "过程", "档位", "时间线", "简洁", "详细", "detail", "verbose"],
   ["恢复", "备份", "restore", "backup"],
   ["日志", "诊断", "log", "logs", "debug", "排查"],
   ["更新", "升级", "版本", "update", "upgrade", "version"],
@@ -80,7 +79,6 @@ export function searchSettings(entries: readonly SettingsSearchEntry[], query: s
 export const STATIC_SETTINGS_ENTRIES: readonly SettingsSearchEntry[] = [
   { key: "assistant-name", title: "助手名称", description: "通用 · 会话里 AI 的称呼", keywords: "名字 jarvis", category: "general", route: { page: "general" }, focus: "assistant-name" },
   { key: "shortcuts", title: "快捷键", description: "通用 · Ctrl+, 打开设置，Ctrl+K 搜索设置", keywords: "ctrl k 逗号", category: "general", route: { page: "general" }, focus: "shortcuts" },
-  { key: "detail-level", title: "过程显示默认档位", description: "外观与显示 · 简洁 / 普通 / 详细", keywords: "详细程度 时间线", category: "appearance", route: { page: "appearance" }, focus: "detail-level" },
   { key: "notify", title: "运行结束通知", description: "通知 · 跑完一轮时提醒", category: "notifications", route: { page: "notifications" }, focus: "notify-run-finished" },
   { key: "providers", title: "供应商", description: "模型与供应商 · 添加、登录、API Key", category: "models", route: { page: "models" }, focus: "providers" },
   { key: "provider-new", title: "添加供应商", description: "模型与供应商 · 官方接口或自定义 OpenAI 兼容接口", keywords: "新建 自定义 base url", category: "models", route: { page: "provider-new" } },

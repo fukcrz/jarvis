@@ -6,14 +6,13 @@ import type { Workspace } from "../../shared/protocol";
 import type { SkillSnapshot } from "../../shared/skills";
 import { api } from "../api";
 import { useIsMobile } from "../hooks/use-is-mobile";
-import { DETAIL_LEVELS, type DetailLevel } from "../lib/detail-level";
 import { SETTINGS_CATEGORIES, SETTINGS_GROUPS, settingsCategory } from "../lib/settings-registry";
 import { APP_VERSION } from "../lib/app-version";
 import { STATIC_SETTINGS_ENTRIES, type SettingsSearchEntry } from "../lib/settings-search";
 import { categoryRoute, isSettingsPath, legacySettingsRedirect, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsCategoryOf, settingsPath, type SettingsCategoryId, type SettingsRoute } from "../lib/settings-routes";
-import { AboutPage, AppearancePage, GeneralPage, NotificationsPage, WorkspacesPage, initialNotificationsEnabled } from "./settings-app-pages";
+import { AboutPage, GeneralPage, NotificationsPage, WorkspacesPage, initialNotificationsEnabled } from "./settings-app-pages";
 import { ExtensionsPage, SkillFilesPage, extensionsSummary } from "./settings-extensions";
-import { LeaveGuardProvider, SaveStatusProvider, SettingsToastProvider, useLeaveGuard, useSettingsToast } from "./settings-feedback";
+import { LeaveGuardProvider, SaveStatusProvider, SettingsToastProvider, useLeaveGuard } from "./settings-feedback";
 import { ModelGroupsPage } from "./settings-model-groups";
 import { ModelsPage, ProviderNewPage, ProviderPage, providerDisplayName, useProviderSettings } from "./settings-providers";
 import { RemotePage, type RemoteSummary } from "./settings-remote";
@@ -29,8 +28,6 @@ export interface SettingsPageProps {
   onWorkspacesChange: (workspaces: Workspace[]) => void;
   onAddWorkspace: (path: string, label?: string) => Promise<void>;
   onRemoveWorkspace: (workspace: Workspace) => Promise<void>;
-  detailLevel: DetailLevel;
-  onDetailLevelChange: (level: DetailLevel) => void;
   onBack: () => void;
 }
 
@@ -53,12 +50,11 @@ export function SettingsPage(props: SettingsPageProps) {
   </SaveStatusProvider>;
 }
 
-function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, detailLevel, onDetailLevelChange, onBack }: SettingsPageProps) {
+function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, workspaces, onWorkspacesChange, onAddWorkspace, onRemoveWorkspace, onBack }: SettingsPageProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const leave = useLeaveGuard();
-  const toast = useSettingsToast();
   const parsed = parseSettingsPath(location.pathname);
   const route: SettingsRoute = parsed ?? { page: "home" };
   const state = (location.state ?? {}) as SettingsLocationState;
@@ -189,7 +185,6 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
   const remoteWarn = remote !== undefined && remote.running > 0 && remote.authRequired === false;
   const meta = useMemo<Record<SettingsCategoryId, string | undefined>>(() => ({
     general: assistantName,
-    appearance: DETAIL_LEVELS.find((item) => item.value === detailLevel)?.label,
     notifications: notificationsEnabled ? "开" : "关",
     models: ps.loading ? undefined : ps.connectedCount === 0 ? "未配置" : `${String(ps.connectedCount)} 已连接 · ${String(enabledModelCount)} 模型`,
     "model-groups": groupCount === undefined ? undefined : groupCount.enabled ? `${String(groupCount.count)} 个` : "插件未启用",
@@ -197,14 +192,9 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
     workspaces: `${String(workspaces.length)} 个`,
     remote: remote === undefined ? undefined : remote.running > 0 ? `${String(remote.running)} 运行中` : remote.total > 0 ? "已停止" : "未设置",
     about: APP_VERSION === undefined ? undefined : `v${APP_VERSION}`,
-  }), [assistantName, detailLevel, enabledModelCount, groupCount, notificationsEnabled, plugins, ps.connectedCount, ps.loading, remote, skills, workspaces.length]);
+  }), [assistantName, enabledModelCount, groupCount, notificationsEnabled, plugins, ps.connectedCount, ps.loading, remote, skills, workspaces.length]);
 
   const activeCategory = settingsCategoryOf(route);
-  const changeDetailLevel = (level: DetailLevel) => {
-    onDetailLevelChange(level);
-    toast.notify(`默认详细程度：${DETAIL_LEVELS.find((item) => item.value === level)?.label ?? level}`);
-  };
-
   let page: ReactNode = null;
   switch (route.page) {
     case "home":
@@ -212,9 +202,6 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
       break;
     case "general":
       page = <GeneralPage assistantName={assistantName} onAssistantNameChange={onAssistantNameChange} />;
-      break;
-    case "appearance":
-      page = <AppearancePage detailLevel={detailLevel} onDetailLevelChange={changeDetailLevel} />;
       break;
     case "notifications":
       page = <NotificationsPage enabled={notificationsEnabled} onEnabledChange={setNotificationsEnabled} />;

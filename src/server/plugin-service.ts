@@ -12,7 +12,7 @@ import { jarvisHome } from "./jarvis-home.js";
 export const RECOMMENDED_PACKAGES: readonly { name: string; source: string }[] = [
   { name: "pi-web-access", source: "npm:pi-web-access" },
   { name: "@juicesharp/rpiv-ask-user-question", source: "npm:@juicesharp/rpiv-ask-user-question" },
-  { name: "@mjakl/pi-subagent", source: "npm:@mjakl/pi-subagent" },
+  { name: "@mjakl/pi-subagent", source: "./vendor/pi-subagent" },
   { name: "pi-playwright", source: "npm:pi-playwright" },
 ];
 

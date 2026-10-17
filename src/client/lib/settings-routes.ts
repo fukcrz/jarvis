@@ -1,7 +1,6 @@
 /** 设置页一级分类；电脑端左侧导航、手机端首页列表、搜索结果共用。 */
 export type SettingsCategoryId =
   | "general"
-  | "appearance"
   | "notifications"
   | "models"
   | "model-groups"
@@ -13,7 +12,6 @@ export type SettingsCategoryId =
 export type SettingsRoute =
   | { page: "home" }
   | { page: "general" }
-  | { page: "appearance" }
   | { page: "notifications" }
   | { page: "models" }
   | { page: "provider-new" }
@@ -44,7 +42,6 @@ export function settingsPath(route: SettingsRoute): string {
   switch (route.page) {
     case "home": return SETTINGS_ROOT;
     case "general": return `${SETTINGS_ROOT}/general`;
-    case "appearance": return `${SETTINGS_ROOT}/appearance`;
     case "notifications": return `${SETTINGS_ROOT}/notifications`;
     case "models": return `${SETTINGS_ROOT}/models`;
     case "provider-new": return `${SETTINGS_ROOT}/models/new`;
@@ -61,7 +58,6 @@ export function settingsPath(route: SettingsRoute): string {
 
 const SIMPLE_PAGES: Record<string, SettingsRoute> = {
   general: { page: "general" },
-  appearance: { page: "appearance" },
   notifications: { page: "notifications" },
   models: { page: "models" },
   "model-groups": { page: "model-groups" },
@@ -93,6 +89,7 @@ export function legacySettingsRedirect(pathname: string): SettingsRedirect | und
   switch (first) {
     case "data": return segments.length === 1 ? { route: { page: "about" }, focus: "diagnostics" } : undefined;
     case "assistant-name": return segments.length === 1 ? { route: { page: "general" }, focus: "assistant-name" } : undefined;
+    case "appearance": return segments.length === 1 ? { route: { page: "general" } } : undefined;
     case "model-scope": return segments.length === 1 ? { route: { page: "models" }, focus: "enabled-models" } : undefined;
     case "tunnel": return segments.length === 1 ? { route: { page: "remote" }, focus: "tunnels" } : undefined;
     case "security": return segments.length === 1 ? { route: { page: "remote" }, focus: "password" } : undefined;

@@ -562,6 +562,7 @@ function recordTool(value: unknown): ToolTimelineItem | undefined {
   if (typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["name"] !== "string" || typeof value["title"] !== "string") return undefined;
   const state = value["state"];
   if (state !== "queued" && state !== "running" && state !== "completed" && state !== "failed" && state !== "cancelled") return undefined;
+  const generation = recordGeneration(value["generation"]);
   return {
     kind: "tool",
     id: value["id"],
@@ -579,6 +580,7 @@ function recordTool(value: unknown): ToolTimelineItem | undefined {
     ...(value["excludeFromContext"] === true ? { excludeFromContext: true } : {}),
     ...(typeof value["output"] === "string" ? { output: value["output"] } : {}),
     ...(typeof value["error"] === "string" ? { error: value["error"] } : {}),
+    ...(generation === undefined ? {} : { generation }),
     ...toolImagesFromValue(value["images"]),
     ...recordSubagentView(value["subagent"]),
     ...recordFileChange(value["fileChange"]),
