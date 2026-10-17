@@ -15,7 +15,6 @@ const envKeys = ["JARVIS_HOME", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_
 const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 const home = await mkdtemp(join(tmpdir(), "jarvis-compare-home-"));
 const workspacePath = await mkdtemp(join(tmpdir(), "jarvis-compare-ws-"));
-const DETAIL_KEY = "jarvis.timeline.detailLevel";
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 let app;
 let browser;
@@ -190,16 +189,15 @@ async function newSession(baseUrl, workspace) {
   return { session, fixture: createFixture(app.jarvis, { workspaceId: workspace.id, sessionId: session.id }) };
 }
 
-async function newPage(viewport, label, detail) {
+async function newPage(viewport, label) {
   const context = await browser.newContext({ viewport, deviceScaleFactor: 1, ...(label === "mobile" ? { isMobile: true, hasTouch: true } : {}) });
-  await context.addInitScript(({ key, value }) => {
+  await context.addInitScript(() => {
     const NativeWebSocket = window.WebSocket;
     window.__jarvisSockets = [];
     window.WebSocket = class extends NativeWebSocket {
       constructor(...args) { super(...args); window.__jarvisSockets.push(this); }
     };
-    if (value !== undefined) window.localStorage.setItem(key, value);
-  }, { key: DETAIL_KEY, value: detail });
+  });
   const page = await context.newPage();
   page.on("pageerror", (error) => console.error(`${label}: page error: ${error.message}`));
   return { context, page };
@@ -274,17 +272,6 @@ async function scenarioCoding(baseUrl, workspace, viewport, label) {
     await shot(page, `${label}-turn-changes`);
   } finally {
     await context.close();
-  }
-  for (const detail of ["concise", "verbose"]) {
-    const view = await newPage(viewport, label, detail);
-    try {
-      await openChat(view.page, baseUrl, workspace.id, session.id);
-      await view.page.locator(".message-row.assistant").last().waitFor();
-      await sleep(300);
-      await shot(view.page, `${label}-detail-${detail}`);
-    } finally {
-      await view.context.close();
-    }
   }
 }
 
@@ -425,7 +412,7 @@ async function scenarioSidebar(baseUrl, workspace, viewport, label) {
   }
 }
 
-/** 一轮改了 7 个文件：看文件名小标签是否截断为 3 个 + "等 N 个"，以及简洁档是否隐藏。 */
+/** 一轮改了 7 个文件：看文件名小标签是否截断为 3 个 + "等 N 个"。 */
 async function scenarioManyFiles(baseUrl, workspace, viewport, label) {
   if (label !== "desktop") return;
   const { session, fixture } = await newSession(baseUrl, workspace);
@@ -440,23 +427,19 @@ async function scenarioManyFiles(baseUrl, workspace, viewport, label) {
   for (const call of calls) { fixture.toolStart(call); fixture.toolEnd(call, `Successfully wrote 40 bytes to ${call.arguments.path}`); }
   fixture.end(fixture.assistant([fixture.text("7 个文件的错误提示都改成中文了，测试也补上了。", "final_answer")], { output: 120 }));
   fixture.settle();
-  for (const detail of ["normal", "concise"]) {
-    const view = await newPage(WIDE, label, detail);
-    try {
-      await openChat(view.page, baseUrl, workspace.id, session.id);
-      await view.page.locator(".message-row.assistant").last().waitFor();
-      await sleep(400);
-      await shot(view.page, `desktop-manyfiles-${detail}`);
-      if (detail === "normal") {
-        const more = view.page.locator(".turn-changes-more");
-        if (await more.count() > 0) await more.first().click();
-        else await view.page.locator(".turn-changes-summary").first().click();
-        await sleep(300);
-        await shot(view.page, `desktop-manyfiles-expanded`);
-      }
-    } finally {
-      await view.context.close();
-    }
+  const view = await newPage(WIDE, label);
+  try {
+    await openChat(view.page, baseUrl, workspace.id, session.id);
+    await view.page.locator(".message-row.assistant").last().waitFor();
+    await sleep(400);
+    await shot(view.page, "desktop-manyfiles");
+    const more = view.page.locator(".turn-changes-more");
+    if (await more.count() > 0) await more.first().click();
+    else await view.page.locator(".turn-changes-summary").first().click();
+    await sleep(300);
+    await shot(view.page, "desktop-manyfiles-expanded");
+  } finally {
+    await view.context.close();
   }
 }
 

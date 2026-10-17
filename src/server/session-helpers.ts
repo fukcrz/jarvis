@@ -60,8 +60,8 @@ export function expandToUserBoundary(items: TimelineItem[], start: number): numb
 export function findVisibleMessageEntryId(entries: readonly unknown[], messageId: string): string | undefined {
   for (const entry of entries) {
     if (!isRecord(entry) || entry["type"] !== "message") continue;
-    const projected = projectHistory([entry]).find((item): item is MessageTimelineItem => item.kind === "message");
-    if (projected?.id === messageId) return stringValue(entry["id"]) || undefined;
+    const projected = projectHistory([entry]);
+    if (projected.some((item): item is MessageTimelineItem => item.kind === "message" && (item.id === messageId || item.assistantMessageId === messageId))) return stringValue(entry["id"]) || undefined;
   }
   return undefined;
 }

@@ -38,6 +38,7 @@ export interface BundledSkillSpec {
 
 export const BUNDLED_SKILLS: readonly BundledSkillSpec[] = [
   { id: "browser-qa", label: "浏览器联调" },
+  { id: "panel1", label: "1Panel 管理" },
   { id: "ui-prototype", label: "界面原型" },
   { id: "web-research", label: "联网调研" },
 ];

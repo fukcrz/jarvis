@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowUp, Copy, Download, FolderPlus, GripVertical, Info, RefreshCw, RotateCw, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Copy, Download, FolderPlus, GripVertical, Info, MoreVertical, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import type { AppSettings, Workspace } from "../../shared/protocol";
 import type { RecoveryNotice } from "../../shared/system";
 import { api, type SystemInfo } from "../api";
 import { getDesktopUpdateChannel, setDesktopNotificationEnabled, setDesktopUpdateChannel, type DesktopUpdateChannel } from "../desktop";
 import { APP_VERSION, CHECK_UPDATE_EVENT } from "../lib/app-version";
-import { DETAIL_LEVELS, type DetailLevel } from "../lib/detail-level";
 import { isDesktopShell } from "../lib/desktop-shell";
 import { isNotificationEnabled, notificationPermission, requestNotificationPermission, setNotificationEnabled } from "../notifications";
 import { SaveState, SettingsConfirm, useDebouncedSave, useSaveStatus, useSettingsToast } from "./settings-feedback";
@@ -56,21 +55,6 @@ export function GeneralPage({ assistantName, onAssistantNameChange, extra }: { a
       </SettingsCard>
     </SettingsSection>}
     {extra}
-  </>;
-}
-
-/* ------------------------------ 外观 ------------------------------ */
-
-export function AppearancePage({ detailLevel, onDetailLevelChange }: { detailLevel: DetailLevel; onDetailLevelChange: (level: DetailLevel) => void }) {
-  const hint = DETAIL_LEVELS.find((item) => item.value === detailLevel)?.hint;
-  return <>
-    <SettingsPageHead title="外观与显示" description="时间线的显示方式，只保存在这台设备上。" />
-    <SettingsSection id="timeline" title="时间线">
-      <SettingsCard>
-        <SettingRow id="detail-level" title="默认详细程度" description={`${hint ?? ""}。会话顶栏也能临时切换`}
-          control={<><SaveState k="detail-level" /><Segmented label="默认详细程度" value={detailLevel} options={DETAIL_LEVELS.map((item) => ({ value: item.value, label: item.label }))} onChange={onDetailLevelChange} /></>} />
-      </SettingsCard>
-    </SettingsSection>
   </>;
 }
 
@@ -210,9 +194,11 @@ export function WorkspacesPage({ workspaces, onWorkspacesChange, onAddWorkspace,
   const saveStatus = useSaveStatus();
   const toast = useSettingsToast();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [removePending, setRemovePending] = useState<Workspace>();
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [dragId, setDragId] = useState<string>();
   const [overId, setOverId] = useState<string>();
+  const [mobileMenuId, setMobileMenuId] = useState<string>();
   const visible = workspaces.filter((workspace) => !hidden.has(workspace.id));
   const latest = useRef(workspaces);
   latest.current = workspaces;
@@ -267,16 +253,34 @@ export function WorkspacesPage({ workspaces, onWorkspacesChange, onAddWorkspace,
           onDragEnd={() => { setDragId(undefined); setOverId(undefined); }}>
           <span className="st-grip" title="拖动排序" aria-hidden onPointerDown={() => setDragId(workspace.id)} onPointerUp={() => { if (overId === undefined) setDragId(undefined); }}><GripVertical size={15} /></span>
           <WorkspaceName workspace={workspace} onRename={rename} />
-          <span className="st-ctl">
+          <span className="st-ctl st-ws-actions">
             <SaveState k={`workspace:${workspace.id}`} />
-            <StButton variant="ghost" icon aria-label={`上移 ${workspace.label}`} title="上移" disabled={index === 0} onClick={() => shift(index, -1)}><ArrowUp size={14} /></StButton>
-            <StButton variant="ghost" icon aria-label={`下移 ${workspace.label}`} title="下移" disabled={index === visible.length - 1} onClick={() => shift(index, 1)}><ArrowDown size={14} /></StButton>
-            <StButton variant="ghost" icon aria-label={`移除 ${workspace.label}`} title="移除（不删文件）" onClick={() => remove(workspace)}><Trash2 size={14} /></StButton>
+            <span className="st-ws-desktop-actions">
+              <StButton variant="ghost" icon aria-label={`上移 ${workspace.label}`} title="上移" disabled={index === 0} onClick={() => shift(index, -1)}><ArrowUp size={14} /></StButton>
+              <StButton variant="ghost" icon aria-label={`下移 ${workspace.label}`} title="下移" disabled={index === visible.length - 1} onClick={() => shift(index, 1)}><ArrowDown size={14} /></StButton>
+              <StButton variant="ghost" icon aria-label={`移除 ${workspace.label}`} title="移除（不删文件）" onClick={() => setRemovePending(workspace)}><Trash2 size={14} /></StButton>
+            </span>
+            <span className="st-ws-mobile-actions">
+              <StButton variant="ghost" icon aria-label={`打开 ${workspace.label} 操作`} title="更多操作" onClick={() => setMobileMenuId((current) => current === workspace.id ? undefined : workspace.id)}><MoreVertical size={16} /></StButton>
+              {mobileMenuId === workspace.id ? <span className="st-ws-menu">
+                <button type="button" disabled={index === 0} onClick={() => { shift(index, -1); setMobileMenuId(undefined); }}><ArrowUp size={14} />上移</button>
+                <button type="button" disabled={index === visible.length - 1} onClick={() => { shift(index, 1); setMobileMenuId(undefined); }}><ArrowDown size={14} />下移</button>
+                <button type="button" className="danger" onClick={() => { setRemovePending(workspace); setMobileMenuId(undefined); }}><Trash2 size={14} />移除</button>
+              </span> : null}
+            </span>
           </span>
         </div>)}
       </SettingsCard>
     </SettingsSection>
     <WorkspaceDialog open={dialogOpen} onOpenChange={setDialogOpen} onAdd={onAddWorkspace} />
+    <SettingsConfirm open={removePending !== undefined} busy={false} danger title="移除工作区？" confirmLabel="移除" onCancel={() => setRemovePending(undefined)} onConfirm={() => {
+      if (removePending === undefined) return;
+      const workspace = removePending;
+      setRemovePending(undefined);
+      remove(workspace);
+    }}>
+      <p><b>{removePending?.label}</b> 将从工作区列表移除，文件和会话记录仍保留在磁盘上。</p>
+    </SettingsConfirm>
   </>;
 }
 

@@ -1,8 +1,8 @@
-import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronLeft, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ModelGroup, ModelGroupRoute, ModelGroupsConfig, ModelGroupsSnapshot } from "../../shared/plugins";
 import { api } from "../api";
-import { DirtyBar, useDirtyRegistration, useSettingsToast } from "./settings-feedback";
+import { DirtyBar, SettingsConfirm, useDirtyRegistration, useSettingsToast } from "./settings-feedback";
 import type { ProviderSettings } from "./settings-providers";
 import { SectionAction, SettingRow, SettingsBanner, SettingsCard, SettingsEmptyLine, SettingsField, SettingsFormSwitch, SettingsLoading, SettingsPageHead, SettingsSection, SettingsTag, StButton } from "./settings-ui";
 
@@ -68,8 +68,10 @@ export function ModelGroupsPage({ ps, refreshKey, onOpenPlugins, onSnapshot, foc
   const [saved, setSaved] = useState<Draft>();
   const [draft, setDraft] = useState<Draft>();
   const [selectedKey, setSelectedKey] = useState<string>();
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [enabling, setEnabling] = useState(false);
+  const [removePending, setRemovePending] = useState<GroupEntry>();
   const [customLevels, setCustomLevels] = useState<Record<string, true>>({});
   const dirty = draft !== undefined && saved !== undefined && comparable(draft) !== comparable(saved);
   const dirtyRef = useRef(dirty);
@@ -86,6 +88,7 @@ export function ModelGroupsPage({ ps, refreshKey, onOpenPlugins, onSnapshot, foc
     if (focusTargetKey === undefined || appliedFocusRef.current === focusToken) return;
     appliedFocusRef.current = focusToken;
     setSelectedKey(focusTargetKey);
+    setMobileDetailOpen(true);
   }, [focusTargetKey, focusToken]);
 
   const onSnapshotRef = useRef(onSnapshot);
@@ -142,6 +145,7 @@ export function ModelGroupsPage({ ps, refreshKey, onOpenPlugins, onSnapshot, foc
     const created: GroupEntry = { key: `g${String(++entrySeed)}`, id, group: newGroup() };
     updateDraft((current) => ({ ...current, entries: [...current.entries, created] }));
     setSelectedKey(created.key);
+    setMobileDetailOpen(true);
   };
   const removeGroup = (target: GroupEntry) => {
     if (draft === undefined) return;
@@ -222,11 +226,12 @@ export function ModelGroupsPage({ ps, refreshKey, onOpenPlugins, onSnapshot, foc
       <SettingsSection id="model-group-list" title="模型组" hint={`${String(draft.entries.length)} 个`} action={<SectionAction label="新建" onClick={addGroup} />}>
         <SettingsCard>
           {draft.entries.length === 0 ? <SettingsEmptyLine>还没有模型组</SettingsEmptyLine> : draft.entries.map((item) => <SettingRow key={item.key} id={`model-group-${item.id}`} className={item.key === selectedKey ? "selected" : undefined}
-            title={item.group.name || item.id} description={`${item.id} · ${String(item.group.routes.length)} 条路由`} onClick={() => { setSelectedKey(item.key); setCustomLevels({}); }} />)}
+            title={item.group.name || item.id} description={`${item.id} · ${String(item.group.routes.length)} 条路由`} onClick={() => { setSelectedKey(item.key); setCustomLevels({}); setMobileDetailOpen(true); }} />)}
         </SettingsCard>
       </SettingsSection>
-      {entry === undefined ? <SettingsSection><SettingsEmptyLine>新建一个模型组开始配置</SettingsEmptyLine></SettingsSection> : <div className="st-detail">
-        <SettingsSection title={entry.group.name || entry.id} action={<StButton variant="ghost" className="danger" onClick={() => removeGroup(entry)}><Trash2 size={13} />删除</StButton>}>
+      {entry === undefined ? <SettingsSection><SettingsEmptyLine>新建一个模型组开始配置</SettingsEmptyLine></SettingsSection> : <div className={`st-detail${mobileDetailOpen ? " mobile-open" : ""}`}>
+        <button type="button" className="st-mobile-detail-back" onClick={() => setMobileDetailOpen(false)}><ChevronLeft size={16} />模型组列表</button>
+        <SettingsSection title={entry.group.name || entry.id} action={<StButton variant="ghost" className="danger" onClick={() => setRemovePending(entry)}><Trash2 size={13} />删除</StButton>}>
           <SettingsCard className="st-form st-form-grid">
             <SettingsField label="名称" hint="显示在模型选择器里"><input value={entry.group.name} onChange={(event) => updateGroup((current) => ({ ...current, name: event.target.value }))} /></SettingsField>
             <SettingsField label="ID" error={idProblem(draft, entry)} hint="会话里引用的模型 ID"><input value={entry.id} spellCheck={false} onChange={(event) => updateEntry(entry.key, (current) => ({ ...current, id: event.target.value }))} /></SettingsField>
@@ -291,6 +296,14 @@ export function ModelGroupsPage({ ps, refreshKey, onOpenPlugins, onSnapshot, foc
     <DirtyBar show={dirty} saving={saving} saveDisabled={problems.length > 0} message={problems.length > 0 ? `有未保存的修改 · ${problems[0] ?? ""}` : "模型组有未保存的修改"}
       onDiscard={() => { if (saved !== undefined) { setDraft(saved); setSelectedKey((current) => saved.entries.find((item) => item.key === current)?.key ?? saved.entries[0]?.key); } }}
       onSave={() => { void save(); }} />
+    <SettingsConfirm open={removePending !== undefined} busy={false} danger title="删除模型组？" confirmLabel="删除" onCancel={() => setRemovePending(undefined)} onConfirm={() => {
+      if (removePending === undefined) return;
+      const target = removePending;
+      setRemovePending(undefined);
+      removeGroup(target);
+    }}>
+      <p><b>{removePending?.group.name || removePending?.id}</b> 将从当前配置草稿移除，保存后不再参与模型路由。</p>
+    </SettingsConfirm>
   </>;
 }
 

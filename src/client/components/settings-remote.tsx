@@ -70,6 +70,7 @@ export function RemotePage({ refreshKeys, onSummary }: { refreshKeys: { tunnel: 
   const [openId, setOpenId] = useState<string>();
   const [editor, setEditor] = useState<{ open: boolean; tunnel?: TunnelSnapshot }>({ open: false });
   const [editorBusy, setEditorBusy] = useState(false);
+  const [removePending, setRemovePending] = useState<TunnelSnapshot>();
   const [copied, setCopied] = useState<string>();
   const toastRef = useRef(toast);
   toastRef.current = toast;
@@ -173,8 +174,8 @@ export function RemotePage({ refreshKeys, onSummary }: { refreshKeys: { tunnel: 
             {primary === undefined ? <><b>未开启</b><small>只能在这台电脑上访问</small></> : <><b>运行中 · {tunnelLabel(primary)}{runningCount > 1 ? ` 等 ${String(runningCount)} 条` : ""}</b>{primary.url === undefined ? <small>正在获取公网地址…</small> : <span className="st-url">{primary.url}</span>}</>}
           </div>
           {primary?.url === undefined ? null : <>
-            <StButton onClick={() => { void copyValue(primary.url as string, "status"); }}>{copied === "status" ? <Check size={13} /> : <Copy size={13} />}{copied === "status" ? "已复制" : "复制"}</StButton>
-            <a className="st-btn" href={primary.url} target="_blank" rel="noreferrer"><ExternalLink size={13} />打开</a>
+            <StButton className="st-status-copy" onClick={() => { void copyValue(primary.url as string, "status"); }}>{copied === "status" ? <Check size={13} /> : <Copy size={13} />}{copied === "status" ? "已复制" : "复制"}</StButton>
+            <a className="st-btn st-status-open" href={primary.url} target="_blank" rel="noreferrer"><ExternalLink size={13} />打开</a>
           </>}
           {auth === undefined ? null : auth.required ? <SettingsTag tone="ok">有密码</SettingsTag> : <SettingsTag tone="warn">没有密码</SettingsTag>}
         </div>
@@ -194,7 +195,7 @@ export function RemotePage({ refreshKeys, onSummary }: { refreshKeys: { tunnel: 
               control={<>
                 <StButton variant="ghost" icon aria-label={open ? "收起详情" : "展开详情"} title={open ? "收起" : "详情与日志"} onClick={() => setOpenId(open ? undefined : tunnel.id)}><ChevronDown size={14} className="st-rot" /></StButton>
                 <StButton variant="ghost" icon aria-label={`编辑 ${tunnelLabel(tunnel)}`} title="编辑" onClick={() => setEditor({ open: true, tunnel })}><Pencil size={14} /></StButton>
-                <StButton variant="ghost" icon aria-label={`删除 ${tunnelLabel(tunnel)}`} title="删除" onClick={() => remove(tunnel)}><Trash2 size={14} /></StButton>
+                <StButton variant="ghost" className="danger" icon aria-label={`删除 ${tunnelLabel(tunnel)}`} title="删除" onClick={() => setRemovePending(tunnel)}><Trash2 size={14} /></StButton>
                 <SaveState k={`tunnel:${tunnel.id}`} />
                 <SettingsSwitch checked={on} disabled={meta.busy === true} label={on ? `停止 ${tunnelLabel(tunnel)}` : `启动 ${tunnelLabel(tunnel)}`} onChange={(next) => toggleRunning(tunnel, next)} />
               </>} />
@@ -228,6 +229,14 @@ export function RemotePage({ refreshKeys, onSummary }: { refreshKeys: { tunnel: 
     </SettingsSection>
     <PasswordSection auth={auth} onAuth={setAuth} />
     <TunnelEditor open={editor.open} tunnel={editor.tunnel} busy={editorBusy} onClose={() => setEditor({ open: false })} onSave={(input, id) => { void saveEditor(input, id); }} />
+    <SettingsConfirm open={removePending !== undefined} busy={false} danger title="删除穿透？" confirmLabel="删除" onCancel={() => setRemovePending(undefined)} onConfirm={() => {
+      if (removePending === undefined) return;
+      const tunnel = removePending;
+      setRemovePending(undefined);
+      remove(tunnel);
+    }}>
+      <p><b>{removePending === undefined ? "" : tunnelLabel(removePending)}</b> 将被删除{removePending?.state === "running" ? "，删除前会先停止" : ""}，原有撤销窗口仍然保留。</p>
+    </SettingsConfirm>
   </>;
 }
 

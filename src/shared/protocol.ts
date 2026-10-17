@@ -481,6 +481,8 @@ export interface ToolTimelineItem {
   images?: ImageAttachment[];
   /** Compact @mjakl/pi-subagent snapshot. Never includes child message trees. */
   subagent?: SubagentView;
+  /** Exact usage and duration when this response only contains tool calls. */
+  generation?: AssistantGenerationStats;
   /** edit/write 对文件的改动：行数统计和用于展示的 diff（"@@"/" "/"-"/"+" 前缀的行）。 */
   fileChange?: FileChange;
 }

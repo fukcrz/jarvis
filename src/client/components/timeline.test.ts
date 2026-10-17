@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, thinkingFoldPreview, thinkingTextIsLong, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
+import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, thinkingFoldPreview, thinkingTextIsLong, timelineProcessId, turnEndedInFailure, turnFinalReplyPending, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -137,10 +137,10 @@ describe("isFollowingLatest", () => {
 });
 
 describe("shouldShowJumpLatest", () => {
-  it("hides the button while the viewport is at most 160px from the bottom", () => {
+  it("hides the button while the viewport is at most 300px from the bottom", () => {
     const viewport = { scrollHeight: 1_200, clientHeight: 600 };
-    expect(shouldShowJumpLatest({ ...viewport, scrollTop: 440 })).toBe(false);
-    expect(shouldShowJumpLatest({ ...viewport, scrollTop: 439 })).toBe(true);
+    expect(shouldShowJumpLatest({ ...viewport, scrollTop: 300 })).toBe(false);
+    expect(shouldShowJumpLatest({ ...viewport, scrollTop: 299 })).toBe(true);
   });
 
   it("hides the button at the latest content", () => {
@@ -239,12 +239,12 @@ describe("groupTimelineTurns", () => {
     ]);
   });
 
-  it("keeps text that is followed by later work inside the process", () => {
-    const narration = { ...message("m1"), phase: "commentary" as const };
-    const [turn] = groupTimelineTurns([user("u1"), narration, tool("a")]);
+  it("uses the last normal assistant text when no final output exists", () => {
+    const fallback = { ...message("m1"), phase: undefined };
+    const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), fallback, tool("a")]);
 
-    expect(turn?.final).toBeUndefined();
-    expect(turn?.process).toEqual([{ kind: "message", item: narration }, { kind: "activity", items: [tool("a")] }]);
+    expect(turn?.final).toEqual(fallback);
+    expect(turn?.process).toEqual([{ kind: "thinking", item: thinking("t1") }]);
   });
 
   it("collects leading entries that precede any user message into their own turn", () => {
@@ -343,7 +343,7 @@ describe("structured text phases", () => {
     ]);
   });
 
-  it("keeps one process identity for a response that continues after text", () => {
+  it("keeps the process before the fallback final text", () => {
     const first = { ...message("first"), assistantMessageId: "response", contentIndex: 0 };
     const second = { ...message("second"), assistantMessageId: "response", contentIndex: 2 };
     const between = { ...tool("between"), assistantMessageId: "response", contentIndex: 1 };
@@ -351,8 +351,8 @@ describe("structured text phases", () => {
     const turns = groupTimelineTurns([user("u"), first, between, second, after]);
     expect(turns).toHaveLength(1);
     expect(timelineProcessId(turns[0])).toBe("process:response");
-    expect(turns[0]?.final).toBeUndefined();
-    expect(turns[0]?.process.map((entry) => "items" in entry ? entry.items[0]?.id : entry.item.id)).toEqual(["first", "between", "second", "after"]);
+    expect(turns[0]?.final).toEqual(second);
+    expect(turns[0]?.process.map((entry) => "items" in entry ? entry.items[0]?.id : entry.item.id)).toEqual(["first", "between"]);
   });
 
   it("keeps a leading process identity stable when a user message is paged in", () => {
@@ -489,19 +489,19 @@ describe("shouldFoldTurnProcess", () => {
 });
 
 describe("isTurnProcessOpen", () => {
-  const untouched = { openProcessIds: new Set<string>(), touchedProcessIds: new Set<string>() };
-
-  it("opens a live process by default and collapses it after the run ends", () => {
-    expect(isTurnProcessOpen(untouched, "p", true)).toBe(true);
-    expect(isTurnProcessOpen(untouched, "p", false)).toBe(false);
-    expect(isTurnProcessOpen(untouched, undefined, true)).toBe(false);
+  it("stays collapsed until the user opens it", () => {
+    expect(isTurnProcessOpen({ openProcessIds: new Set<string>() }, "p")).toBe(false);
+    expect(isTurnProcessOpen({ openProcessIds: new Set<string>() }, undefined)).toBe(false);
+    expect(isTurnProcessOpen({ openProcessIds: new Set(["p"]) }, "p")).toBe(true);
   });
+});
 
-  it("respects a manual toggle while live and after settlement", () => {
-    const closed = { openProcessIds: new Set<string>(), touchedProcessIds: new Set(["p"]) };
-    expect(isTurnProcessOpen(closed, "p", true)).toBe(false);
-    const opened = { openProcessIds: new Set(["p"]), touchedProcessIds: new Set(["p"]) };
-    expect(isTurnProcessOpen(opened, "p", false)).toBe(true);
+describe("turnFinalReplyPending", () => {
+  it("hides the process until the final reply finishes", () => {
+    expect(turnFinalReplyPending({}, true, undefined)).toBe(true);
+    expect(turnFinalReplyPending({ final: { id: "m" } }, true, "m")).toBe(true);
+    expect(turnFinalReplyPending({ final: { id: "m" } }, true, undefined)).toBe(false);
+    expect(turnFinalReplyPending({}, false, undefined)).toBe(false);
   });
 });
 
