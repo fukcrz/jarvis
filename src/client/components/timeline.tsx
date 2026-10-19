@@ -1606,9 +1606,11 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   </div>);
   const processBlock = displayTurn.process.length === 0 ? null : live
     ? <div className="turn-process-stack">
-      <div className="turn-process-summary turn-process-live-label">
-        <span className="turn-process-label">执行操作</span>
+      <div className={`turn-process-summary turn-process-live-label${context.status.runState === "stopping" ? " stopping" : ""}`} role="status" aria-live="polite" aria-label={context.status.runState === "stopping" ? "正在停止" : "执行中"}>
+        <LoaderCircle className="spin turn-process-live-icon" size={13} aria-hidden="true" />
+        <span className="turn-process-label">{context.status.runState === "stopping" ? "正在停止" : "执行中"}</span>
         {categories === "" ? null : <span className="turn-process-count">{categories}</span>}
+        <ElapsedClock startedAt={context.status.activeRun?.startedAt} />
       </div>
       {processEntries}
     </div>

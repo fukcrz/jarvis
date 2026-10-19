@@ -430,6 +430,10 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .turn-process-chevron { flex: 0 0 auto; transition: transform .14s ease; }
 .turn-process-chevron.expanded { transform: rotate(90deg); }
 .turn-process-label, .turn-process-count, .turn-process-elapsed, .turn-process-changes { flex: 0 0 auto; color: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.turn-process-live-label { color: var(--muted); }
+.turn-process-live-icon { flex: 0 0 auto; color: var(--accent); }
+.turn-process-live-label.stopping .turn-process-live-icon { color: var(--warm); }
+.turn-process-live-label .run-elapsed { margin-left: 1px; }
 .turn-process-elapsed { font-variant-numeric: tabular-nums; }
 .turn-process-count { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 400; }
 .turn-process-changes { font-weight: 400; }

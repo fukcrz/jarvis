@@ -29,5 +29,5 @@ const escaped = current.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 replaceOnce("package.json", new RegExp(`("version": ")${escaped}(")`), (_m, a, b) => `${a}${next}${b}`);
 replaceOnce("package-lock.json", new RegExp(`("name": "jarvis",\\s*"version": ")${escaped}(")`, "g"), (_m, a, b) => `${a}${next}${b}`, 2);
 replaceOnce("src-tauri/Cargo.toml", new RegExp(`^(version = ")${escaped}(")`, "m"), (_m, a, b) => `${a}${next}${b}`);
-replaceOnce("src-tauri/Cargo.lock", new RegExp(`(name = "jarvis-desktop"\\nversion = ")${escaped}(")`), (_m, a, b) => `${a}${next}${b}`);
+replaceOnce("src-tauri/Cargo.lock", new RegExp(`(name = "jarvis-desktop"\\r?\\nversion = ")${escaped}(")`), (_m, a, b) => `${a}${next}${b}`);
 console.log(`${current} → ${next}`);
