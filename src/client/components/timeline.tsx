@@ -5,7 +5,7 @@ import { Archive, ArrowDown, Bell, Check, ChevronRight, CircleAlert, Clock3, Cop
 import type { AssistantGenerationStats, ContextSummaryTimelineItem, FileChange, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
 import { userMessageOutline as outlineFromItems } from "../../shared/user-message";
 import { plainErrorReason } from "../lib/error-reason";
-import { formatRunElapsed, getRunFeedback, getRunStatusActivity, type RunFeedback, type RunStatusActivity } from "../run-feedback";
+import { formatRunElapsed, getRunStatusActivity, type RunStatusActivity } from "../run-feedback";
 import { copyText } from "../lib/clipboard";
 import { imageDataUrl } from "../lib/image";
 import { LocalMediaVersionContext } from "../lib/local-media";
@@ -205,7 +205,6 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
     return userMessageAnchors(items);
   }, [outline, outlineLoading, items]);
   const userMessageKey = userMessages.map((item) => item.id).join(":");
-  const feedback = getRunFeedback(status, items, streamingMessageId);
   const runActivity = getRunStatusActivity(status, items, streamingMessageId);
   // 点过「知道了」的被中断卡片先在本地藏起来；服务端清标记失败也不再打扰。
   const [dismissedFailureKey, setDismissedFailureKey] = useState<string>();
@@ -337,7 +336,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
     }
     element.scrollTop = element.scrollHeight;
     setShowJumpLatest(false);
-  }, [items, streamingMessageId, feedback?.label, statusIndicatorKey]);
+  }, [items, streamingMessageId, runActivity?.label, statusIndicatorKey]);
 
   const loadEarlier = async () => {
     if (!hasMore || loadingEarlierRef.current) return;
@@ -476,16 +475,13 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
             <LocalMediaVersionContext.Provider value={localMediaVersion}>
               {renderTimelineTurns(turns, streamingMessageId, liveGeneration, status, foldStateForRender, toggleProcess, toggleDetail, toggleGroup, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, workspaceCwd, highlightedMessageId, status.runState === "idle" ? onRetryTurn : undefined, status.runState === "idle" ? onContinue : undefined)}
             </LocalMediaVersionContext.Provider>
-            {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
-            {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
             {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
             {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
             {status.lastError === undefined || hasMatchingTimelineFailure || failureDismissed ? null : <RunFailureCard failure={status.lastError} onRetryCompaction={onRetryCompaction} onDismiss={status.lastError.code !== "RUN_INTERRUPTED" ? undefined : () => { setDismissedFailureKey(failureKey); onDismissInterrupted?.(); }} onRetry={status.runState !== "idle" || onRetryTurn === undefined || turns.at(-1)?.user === undefined ? undefined : () => onRetryTurn(turns.at(-1)!.user!)} onContinue={status.runState === "idle" ? onContinue : undefined} />}
-            {feedback === undefined || hasActiveActivity(items, status) ? null : <WorkingIndicator feedback={feedback} />}
           </div>
         </div>
       </div>
-      {runActivity !== undefined && showJumpLatest && !hideJumpLatestForComposer ? <RunStatusBar activity={runActivity} startedAt={status.activeRun?.startedAt} bottom={jumpLatestBottom} onJump={() => {
+      {runActivity !== undefined ? <RunStatusBar activity={runActivity} startedAt={status.activeRun?.startedAt} bottom={jumpLatestBottom} onJump={() => {
         const element = scrollRef.current;
         if (element === null) return;
         const target = runActivityElement(element, runActivity);
@@ -557,53 +553,6 @@ function RunStatusBar({ activity, startedAt, bottom, onJump }: { activity: RunSt
     <span className="run-status-label">{activity.label}</span>
     <ElapsedClock startedAt={startedAt} />
   </button>;
-}
-
-function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
-  return <div className={`working-indicator ${feedback.tone}`} role="status" aria-live="polite">
-    <LoaderCircle className="spin" size={15} />
-    <span>{feedback.label}</span>
-    <ElapsedClock startedAt={feedback.startedAt} />
-  </div>;
-}
-
-function RetryingIndicator({ retrying }: { retrying: NonNullable<SessionStatus["retrying"]> }) {
-  return <RunStatusIndicator className="retrying-indicator" icon={<LoaderCircle className="spin" size={15} />} label={`模型响应失败，正在重试（${String(retrying.attempt)}/${String(retrying.maxAttempts)}）`} detail={retrying.errorMessage} retrying={retrying} />;
-}
-
-function CompactingIndicator({ compacting }: { compacting: NonNullable<SessionStatus["compacting"]> }) {
-  const label = compacting.reason === "manual"
-    ? "正在压缩上下文"
-    : compacting.reason === "overflow"
-      ? "上下文已满，正在压缩后重试"
-      : "上下文接近上限，正在自动压缩";
-  const retrying = compacting.retrying;
-  return <RunStatusIndicator className="compacting-indicator" icon={<LoaderCircle className="spin" size={15} />} label={label} startedAt={compacting.startedAt} detail={retrying === undefined ? undefined : `摘要生成失败，正在重试（${String(retrying.attempt)}/${String(retrying.maxAttempts)}）：${retrying.errorMessage}`} retrying={retrying} />;
-}
-
-function RunStatusIndicator({ className, icon, label, startedAt, detail, retrying }: { className: string; icon: ReactNode; label: string; startedAt?: string; detail?: string; retrying?: NonNullable<SessionStatus["retrying"]> }) {
-  return <div className={className} role="status" aria-live="polite">
-    <span className="run-status-icon">{icon}</span>
-    <span className="run-status-copy">
-      <span className="run-status-heading"><strong>{label}</strong>{startedAt === undefined ? null : <ElapsedClock startedAt={startedAt} />}</span>
-      {detail === undefined ? null : <span className="run-status-detail">{detail}</span>}
-    </span>
-    {retrying === undefined ? null : <RetryCountdown retrying={retrying} />}
-  </div>;
-}
-
-function RetryCountdown({ retrying }: { retrying: NonNullable<SessionStatus["retrying"]> }) {
-  const [now, setNow] = useState(() => Date.now());
-  const endsAt = Date.parse(retrying.retryAt);
-
-  useEffect(() => {
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [retrying.retryAt]);
-
-  const secondsLeft = Number.isFinite(endsAt) ? Math.max(0, Math.ceil((endsAt - now) / 1_000)) : 0;
-  return <time aria-live="off" aria-hidden="true">{secondsLeft}s</time>;
 }
 
 function RunFailureCard({ failure, onRetryCompaction, onRetry, onContinue, onDismiss }: { failure: NonNullable<SessionStatus["lastError"]>; onRetryCompaction: TimelineProps["onRetryCompaction"]; onRetry?: () => void; onContinue?: () => void; onDismiss?: () => void }) {
@@ -1211,13 +1160,6 @@ function isPendingToolItem(item: TimelineItem): boolean {
   return item.kind === "tool" && (item.state === "queued" || item.state === "running");
 }
 
-function hasActiveActivity(items: TimelineItem[], status: SessionStatus): boolean {
-  if (status.runState === "idle") return false;
-  const last = items.at(-1);
-  if (last?.kind === "thinking" && last.state === "running") return true;
-  return isToolActivityRunning(items, status);
-}
-
 /** 尾部工具组里还有未完成的工具才算执行中；思考已开始或工具都结束则停转圈。 */
 export function isToolActivityRunning(items: TimelineItem[], status: SessionStatus): boolean {
   if (status.runState === "idle" || items.at(-1)?.kind !== "tool") return false;
@@ -1604,16 +1546,7 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   const processEntries = displayTurn.process.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
     {renderTimelineEntry(entry, processContext, true, !touched)}
   </div>);
-  const processBlock = displayTurn.process.length === 0 ? null : live
-    ? <div className="turn-process-stack">
-      <div className={`turn-process-summary turn-process-live-label${context.status.runState === "stopping" ? " stopping" : ""}`} role="status" aria-live="polite" aria-label={context.status.runState === "stopping" ? "正在停止" : "执行中"}>
-        <LoaderCircle className="spin turn-process-live-icon" size={13} aria-hidden="true" />
-        <span className="turn-process-label">{context.status.runState === "stopping" ? "正在停止" : "执行中"}</span>
-        {categories === "" ? null : <span className="turn-process-count">{categories}</span>}
-        <ElapsedClock startedAt={context.status.activeRun?.startedAt} />
-      </div>
-      {processEntries}
-    </div>
+  const processBlock = displayTurn.process.length === 0 ? null
     : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
       {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary, categories, changes.length)} onClick={() => onToggleProcess(processId, open)}>
         <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />

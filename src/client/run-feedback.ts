@@ -1,25 +1,5 @@
 import type { SessionStatus, TimelineItem, ToolTimelineItem } from "../shared/protocol";
 
-export interface RunFeedback {
-  label: string;
-  tone: "working" | "stopping";
-  startedAt?: string;
-}
-
-export function getRunFeedback(status: SessionStatus, items: TimelineItem[], streamingMessageId?: string): RunFeedback | undefined {
-  if (status.runState === "idle") return undefined;
-  if (status.runState === "stopping") return { label: "正在停止…", tone: "stopping", startedAt: status.activeRun?.startedAt };
-  if (status.compacting !== undefined || status.retrying !== undefined) return undefined;
-
-  const activeTool = [...items].reverse().find(isPendingTool);
-  if (activeTool !== undefined) {
-    const verb = activeTool.state === "queued" ? "准备中" : "执行中";
-    return { label: `${verb} ${activeTool.title}`, tone: "working", startedAt: status.activeRun?.startedAt };
-  }
-  if (streamingMessageId !== undefined) return { label: "正在回复…", tone: "working", startedAt: status.activeRun?.startedAt };
-  return { label: "执行中…", tone: "working", startedAt: status.activeRun?.startedAt };
-}
-
 export function formatRunElapsed(startedAt: string | undefined, now = Date.now()): string | undefined {
   if (startedAt === undefined) return undefined;
   const started = Date.parse(startedAt);
@@ -53,7 +33,7 @@ export function getRunStatusActivity(status: SessionStatus, items: TimelineItem[
     if (item.kind === "message" && item.role === "user") break;
   }
   if (streamingMessageId !== undefined) return { label: "正在回复", target: "message" };
-  return { label: "处理中", target: "bottom" };
+  return { label: "执行中", target: "bottom" };
 }
 
 function toolStep(tool: ToolTimelineItem): string {
