@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, thinkingFoldPreview, thinkingTextIsLong, timelineProcessId, turnEndedInFailure, turnFinalReplyPending, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds } from "./timeline";
+import { activeTimelineTurn, activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, thinkingFoldPreview, thinkingTextIsLong, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -254,10 +254,33 @@ describe("groupTimelineTurns", () => {
 
   it("uses the last normal assistant text when no final output exists", () => {
     const fallback = { ...message("m1"), phase: undefined };
-    const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), fallback, tool("a")]);
+    const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), fallback]);
 
     expect(turn?.final).toEqual(fallback);
     expect(turn?.process).toEqual([{ kind: "thinking", item: thinking("t1") }]);
+  });
+
+  it.each(["running", "completed"] as const)("retains tools and thinking after the latest text when %s", (state) => {
+    const entries = [user("u1"), thinking("t1"), message("m1"), { ...tool("a"), state }, { ...thinking("t2"), state }];
+    const [turn] = groupTimelineTurns(entries);
+    expect(turn?.final).toBeUndefined();
+    expect(turn?.process.map((entry) => "items" in entry ? entry.items[0]?.id : entry.item.id)).toEqual(["t1", "m1", "a", "t2"]);
+    expect(groupTimelineTurns([...entries, message("m2")])[0]?.final?.id).toBe("m2");
+  });
+
+  it("keeps an error after commentary outside the process", () => {
+    const [turn] = groupTimelineTurns([user("u1"), message("m1"), tool("a"), error("e1")]);
+    expect(turn?.final).toBeUndefined();
+    expect(turn?.finalError).toEqual([error("e1")]);
+    expect(turn?.process).toEqual([{ kind: "message", item: message("m1") }, { kind: "activity", items: [tool("a")] }]);
+  });
+
+  it("keeps standalone user commands after a completed reply in their own turn", () => {
+    const command = tool("bash:command", "bash");
+    const [reply, commandTurn] = groupTimelineTurns([user("u1"), thinking("t1"), tool("a"), message("m1"), command]);
+    expect(reply?.final?.id).toBe("m1");
+    expect(reply?.process).toEqual([{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }]);
+    expect(commandTurn?.process).toEqual([{ kind: "activity", items: [command] }]);
   });
 
   it("collects leading entries that precede any user message into their own turn", () => {
@@ -356,7 +379,7 @@ describe("structured text phases", () => {
     ]);
   });
 
-  it("keeps the process before the fallback final text", () => {
+  it("retains all source blocks when tools follow a final text block", () => {
     const first = { ...message("first"), assistantMessageId: "response", contentIndex: 0 };
     const second = { ...message("second"), assistantMessageId: "response", contentIndex: 2 };
     const between = { ...tool("between"), assistantMessageId: "response", contentIndex: 1 };
@@ -364,8 +387,8 @@ describe("structured text phases", () => {
     const turns = groupTimelineTurns([user("u"), first, between, second, after]);
     expect(turns).toHaveLength(1);
     expect(timelineProcessId(turns[0])).toBe("process:response");
-    expect(turns[0]?.final).toEqual(second);
-    expect(turns[0]?.process.map((entry) => "items" in entry ? entry.items[0]?.id : entry.item.id)).toEqual(["first", "between"]);
+    expect(turns[0]?.final).toBeUndefined();
+    expect(turns[0]?.process.map((entry) => "items" in entry ? entry.items[0]?.id : entry.item.id)).toEqual(["first", "between", "second", "after"]);
   });
 
   it("keeps a leading process identity stable when a user message is paged in", () => {
@@ -494,10 +517,28 @@ describe("shouldFoldTurnProcess", () => {
     expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }], finalError: [error("e1")] })).toBe(true);
   });
 
+  it("waits for the whole run to settle before folding its process", () => {
+    const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), tool("a"), message("m1")]);
+    expect(shouldFoldTurnProcess(turn!, true)).toBe(false);
+    expect(shouldFoldTurnProcess(turn!, false)).toBe(true);
+  });
+
   it("folds a single row and leaves an empty process unfolded", () => {
     expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }] })).toBe(true);
     expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "activity", items: [tool("a")] }] })).toBe(true);
     expect(shouldFoldTurnProcess({ key: "t", process: [] })).toBe(false);
+  });
+});
+
+describe("activeTimelineTurn", () => {
+  it("keeps previous replies completed during manual compaction and standalone commands", () => {
+    const turns = groupTimelineTurns([user("u1"), thinking("t1"), message("m1")]);
+    const status: SessionStatus = { sessionId: "s", runState: "running", activeRun: { id: "run", startedAt: "2026-01-01T00:01:00.000Z", kind: "llm" } };
+    expect(activeTimelineTurn(turns, status)).toBe(turns[0]);
+    expect(activeTimelineTurn(turns, { ...status, compacting: { reason: "overflow", startedAt: status.activeRun!.startedAt } })).toBe(turns[0]);
+    expect(activeTimelineTurn(turns, { ...status, activeRun: { ...status.activeRun!, kind: "compaction" } })).toBeUndefined();
+    expect(activeTimelineTurn(turns, { ...status, activeRun: { ...status.activeRun!, kind: "bash" } })).toBeUndefined();
+    expect(activeTimelineTurn(turns, { sessionId: "s", runState: "idle" })).toBeUndefined();
   });
 });
 
@@ -506,15 +547,6 @@ describe("isTurnProcessOpen", () => {
     expect(isTurnProcessOpen({ openProcessIds: new Set<string>() }, "p")).toBe(false);
     expect(isTurnProcessOpen({ openProcessIds: new Set<string>() }, undefined)).toBe(false);
     expect(isTurnProcessOpen({ openProcessIds: new Set(["p"]) }, "p")).toBe(true);
-  });
-});
-
-describe("turnFinalReplyPending", () => {
-  it("hides the process until the final reply finishes", () => {
-    expect(turnFinalReplyPending({}, true, undefined)).toBe(true);
-    expect(turnFinalReplyPending({ final: { id: "m" } }, true, "m")).toBe(true);
-    expect(turnFinalReplyPending({ final: { id: "m" } }, true, undefined)).toBe(false);
-    expect(turnFinalReplyPending({}, false, undefined)).toBe(false);
   });
 });
 

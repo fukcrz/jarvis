@@ -439,10 +439,13 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .turn-process-body .message-content { font-size: 12px; line-height: 1.6; }
 .thinking-item { min-width: 0; max-width: 100%; overflow: hidden; }
 .thinking-item.running, .thinking-item.completed { border: 0; background: transparent; }
-.thinking-summary { display: flex; align-items: center; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; gap: 6px; border: 0; background: transparent; padding: 2px 0; color: var(--subtle); text-align: left; cursor: pointer; }
-.thinking-summary:focus-visible { color: var(--ink); }
-.thinking-item.expanded { display: grid; grid-template-columns: 13px minmax(0, 1fr); column-gap: 6px; align-items: start; }
-.thinking-item.expanded .thinking-summary { grid-column: 1; grid-row: 1; width: 13px; padding: 3px 0 0; }
+.thinking-summary { display: flex; align-items: center; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; gap: 6px; border: 0; border-radius: 4px; background: transparent; padding: 4px 2px; color: var(--subtle); text-align: left; cursor: pointer; }
+.thinking-summary:hover, .thinking-summary:focus-visible { color: var(--ink); background: rgb(255 255 255 / .035); outline: none; }
+.thinking-label { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-weight: 600; }
+.thinking-item.running .thinking-label { color: var(--accent-strong); }
+.thinking-item.expanded .thinking-summary { align-items: flex-start; width: 22px; min-height: 24px; margin-left: -4px; padding: 5px 4px; }
+.thinking-item.expanded { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: 5px; align-items: start; }
+.thinking-item.expanded .thinking-summary { grid-column: 1; grid-row: 1; }
 .thinking-item.expanded .thinking-body { grid-column: 2; grid-row: 1; }
 .thinking-preview { display: block; flex: 1 1 0; width: 0; min-width: 0; overflow: hidden; color: var(--subtle); font-size: 12px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .run-elapsed { flex: 0 0 auto; color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -1003,16 +1006,22 @@ button.turn-failure-raw.timeline-event-summary { display: inline-flex; align-ite
 .run-failure .run-failure-copy > span { color: var(--muted); font-family: inherit; font-size: 12px; line-height: 1.5; }
 .turn-failure { border: 1px solid rgb(255 107 115 / .22); border-radius: 8px; background: rgb(120 30 40 / .12); }
 .timeline-error-header.turn-failure-raw > svg { margin-top: 0; color: inherit; }
-/* 运行中状态条：贴在输入框上方，说明当前在做什么、已用时长，点击跳到那一步 */
+/* 运行状态跟随消息滚动；离开最新内容后，悬浮状态条提供跳回入口。 */
+.working-indicator { display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 28px; color: var(--muted); font-size: 12px; }
+.working-indicator > svg { flex: 0 0 auto; color: var(--accent-strong); }
+.working-indicator > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.working-indicator .run-elapsed { margin-left: 1px; }
 .run-status-bar { position: absolute; z-index: 3; left: 50%; bottom: 17px; translate: -50% 0; grid-column: 1; grid-row: 1; display: inline-flex; align-items: center; gap: 7px; max-width: min(560px, calc(100% - 32px)); min-height: 30px; border: 1px solid var(--glass-border); border-radius: 999px; background: var(--surface-raised); box-shadow: 0 8px 22px rgb(0 0 0 / .32), var(--glass-highlight); padding: 4px 12px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .run-status-bar:hover { color: var(--ink); }
 .run-status-bar > svg { flex: 0 0 auto; color: var(--accent-strong); }
 .run-status-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-status-bar .run-elapsed { flex: 0 0 auto; color: var(--subtle); font-variant-numeric: tabular-nums; }
 .chat-stage .run-status-bar { bottom: 204px; }
-.chat-stage .timeline-shell.has-run-status .timeline-inner { padding-bottom: calc(var(--chat-dock-space, 216px) + 40px); }
 html.text-selecting .run-status-bar { pointer-events: none !important; }
 @media (max-width: 760px) { .chat-stage .run-status-bar { bottom: 168px; } .run-status-bar { max-width: calc(100% - 24px); } }
+/* 正文后的过程和文件变更在操作统计之前。 */
+.turn-details { display: grid; min-width: 0; gap: 6px; margin-top: 10px; }
+.turn-details .turn-changes { margin: 0; }
 /* 长回答：最终回答下的复制按钮和统计放一行；表格横向滚动不再挤成窄列；标题旁的 # 锚点 */
 .assistant-message-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .assistant-message-footer .message-actions, .assistant-message-footer .message-generation-meta { margin-top: 0; }

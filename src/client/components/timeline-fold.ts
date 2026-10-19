@@ -4,6 +4,8 @@ export interface TimelineFoldState {
   sessionKey?: string;
   openProcessIds: ReadonlySet<string>;
   openDetailIds: ReadonlySet<string>;
+  closedDetailIds: ReadonlySet<string>;
+  openThinkingIds: ReadonlySet<string>;
   openGroupIds: ReadonlySet<string>;
   touchedProcessIds: ReadonlySet<string>;
 }
@@ -13,6 +15,8 @@ export function emptyTimelineFoldState(sessionKey?: string): TimelineFoldState {
     sessionKey,
     openProcessIds: new Set(),
     openDetailIds: new Set(),
+    closedDetailIds: new Set(),
+    openThinkingIds: new Set(),
     openGroupIds: new Set(),
     touchedProcessIds: new Set(),
   };
@@ -37,6 +41,20 @@ export function toggleTimelineDetail(state: TimelineFoldState, processId: string
 
 export function activityGroupId(itemId: string): string {
   return `group:${itemId}`;
+}
+
+/** Thinking blocks start open while streaming, but a manual close must survive new tokens. */
+export function toggleTimelineThinking(state: TimelineFoldState, detailId: string, currentlyOpen: boolean): TimelineFoldState {
+  const closedDetailIds = new Set(state.closedDetailIds);
+  const openThinkingIds = new Set(state.openThinkingIds);
+  if (currentlyOpen) {
+    closedDetailIds.add(detailId);
+    openThinkingIds.delete(detailId);
+  } else {
+    closedDetailIds.delete(detailId);
+    openThinkingIds.add(detailId);
+  }
+  return { ...state, closedDetailIds, openThinkingIds };
 }
 
 export function toggleTimelineGroup(state: TimelineFoldState, processId: string, groupId: string): TimelineFoldState {

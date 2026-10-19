@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentCallView, ToolTimelineItem } from "../../shared/protocol";
-import { activityGroupId, collapseUntouchedTimelineProcess, collapsedToolActivityItems, emptyTimelineFoldState, subagentCallDetailId, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, visibleToolActivityItemIds } from "./timeline-fold";
+import { activityGroupId, collapseUntouchedTimelineProcess, collapsedToolActivityItems, emptyTimelineFoldState, subagentCallDetailId, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, toggleTimelineThinking, visibleToolActivityItemIds } from "./timeline-fold";
 
 function item(id: string, state: ToolTimelineItem["state"] = "completed"): ToolTimelineItem {
   return { kind: "tool", id, createdAt: "", name: "read", title: "Read file", state };
 }
 
 describe("timeline fold state", () => {
+  it("keeps a manual thinking fold through later tokens and lets it reopen", () => {
+    const closed = toggleTimelineThinking(emptyTimelineFoldState(), "thinking-1", true);
+    expect(closed.closedDetailIds.has("thinking-1")).toBe(true);
+    expect(closed.openThinkingIds.has("thinking-1")).toBe(false);
+    const reopened = toggleTimelineThinking(closed, "thinking-1", false);
+    expect(reopened.closedDetailIds.has("thinking-1")).toBe(false);
+    expect(reopened.openThinkingIds.has("thinking-1")).toBe(true);
+  });
+
   it("toggles a detail without opening the process", () => {
     const opened = toggleTimelineDetail(emptyTimelineFoldState("session"), "process-1", "detail-1", true);
     expect(opened.openProcessIds.has("process-1")).toBe(false);

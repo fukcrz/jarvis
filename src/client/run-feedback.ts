@@ -19,7 +19,7 @@ export interface RunStatusActivity {
   target: "tool" | "thinking" | "message" | "bottom";
 }
 
-/** One-line description of what the agent is doing now, for the status bar above the composer. */
+/** Current activity shared by the inline run indicator and the scrolled-away jump control. */
 export function getRunStatusActivity(status: SessionStatus, items: TimelineItem[], streamingMessageId?: string): RunStatusActivity | undefined {
   if (status.runState === "idle") return undefined;
   if (status.runState === "stopping") return { label: "正在停止", target: "bottom" };
