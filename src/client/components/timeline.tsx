@@ -134,6 +134,14 @@ export function formatUserMessageIndex(index: number): string {
   return String(index).padStart(2, "0");
 }
 
+export function visibleNavigatorAnchorIds(anchors: UserMessageAnchor[], activeId: string | undefined, radius = 2): Set<string> {
+  if (anchors.length <= radius * 2 + 3) return new Set(anchors.map((anchor) => anchor.id));
+  const activeIndex = Math.max(0, anchors.findIndex((anchor) => anchor.id === activeId));
+  const visible = new Set([anchors[0]!.id, anchors.at(-1)!.id]);
+  for (let index = Math.max(0, activeIndex - radius); index <= Math.min(anchors.length - 1, activeIndex + radius); index += 1) visible.add(anchors[index]!.id);
+  return visible;
+}
+
 export function Timeline({ sessionKey, localMediaVersion, items, streamingMessageId, liveGeneration, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onRetryTurn, onContinue, onDismissInterrupted, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage }: TimelineProps) {
   const [foldState, setFoldState] = useState<TimelineFoldState>(() => emptyTimelineFoldState(sessionKey));
   const foldStateForRender = foldState.sessionKey === sessionKey ? foldState : emptyTimelineFoldState(sessionKey);
@@ -298,6 +306,8 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
       stage.style.setProperty("--chat-dock-space", `${String(Math.ceil(dockRect.height + 18))}px`);
       if (followingRef.current) element.scrollTop = element.scrollHeight;
       const composerEditor = dock.querySelector<HTMLElement>(".composer-editor");
+      const composerTop = composerEditor?.getBoundingClientRect().top ?? dockRect.top;
+      stage.style.setProperty("--timeline-navigator-bottom", `${String(Math.max(42, Math.ceil(shellRect.bottom - composerTop + 28)))}px`);
       const nextBottom = jumpLatestBottomForDock(shellRect.bottom, dockRect.top);
       const nextHide = shouldHideJumpLatestForComposer(isMobile, composerEditor?.getBoundingClientRect().height ?? 0);
       setJumpLatestBottom((current) => current === nextBottom ? current : nextBottom);
@@ -312,6 +322,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
       observer.disconnect();
       window.removeEventListener("resize", updateDockLayout);
       stage.style.removeProperty("--chat-dock-space");
+      stage.style.removeProperty("--timeline-navigator-bottom");
     };
   }, [isMobile]);
 
@@ -500,9 +511,10 @@ function TurnNavigator({ mobile, anchors, activeId, markerPositions, loadingAll,
   }, [activeId, anchors.length, mobile, open]);
   if (!mobile) {
     if (anchors.length === 0) return null;
+    const visibleIds = visibleNavigatorAnchorIds(anchors, activeId);
     return <nav className="timeline-desktop-navigator" aria-label="用户消息导航">
       <span className="timeline-navigator-track" aria-hidden="true" />
-      {anchors.map((anchor, index) => <button key={anchor.id} type="button" className={`timeline-navigator-marker${anchor.id === activeId ? " active" : ""}`} style={{ top: `${String((markerPositions[anchor.id] ?? index / Math.max(1, anchors.length - 1)) * 100)}%` }} aria-label={`跳转到第 ${String(anchor.index)} 条用户消息：${anchor.preview}`} aria-current={anchor.id === activeId ? "step" : undefined} onClick={() => onJump(anchor.id)}><span className="timeline-navigator-marker-dot" /><span className="timeline-navigator-preview"><small>第 {String(anchor.index)} 条用户消息</small><strong>{anchor.preview}</strong></span></button>)}
+      {anchors.map((anchor, index) => visibleIds.has(anchor.id) ? <button key={anchor.id} type="button" className={`timeline-navigator-marker${anchor.id === activeId ? " active" : ""}`} style={{ top: `calc(${String((markerPositions[anchor.id] ?? index / Math.max(1, anchors.length - 1)) * 100)}% - 14px)` }} aria-label={`跳转到第 ${String(anchor.index)} 条用户消息：${anchor.preview}`} aria-current={anchor.id === activeId ? "step" : undefined} onClick={() => onJump(anchor.id)}><span className="timeline-navigator-marker-dot" /><span className="timeline-navigator-preview"><small>第 {String(anchor.index)} 条用户消息</small><strong>{anchor.preview}</strong></span></button> : null)}
     </nav>;
   }
   return <Dialog open={open} onOpenChange={onOpenChange}>
@@ -724,9 +736,13 @@ function errorSummary(message: string): string {
 }
 
 const MessageItem = memo(function MessageItem({ item, streaming, live, highlighted, onEdit, onFork, baseDir, showMeta = false, generationSummary }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; live?: LiveGenerationStats; highlighted: boolean; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string; showMeta?: boolean; generationSummary?: GenerationSummary }) {
+  const [showTimestamp, setShowTimestamp] = useState(false);
   const images = item.images ?? [];
+  const toggleTimestampOnTouch = (event: React.PointerEvent) => {
+    if (item.role === "user" && event.pointerType === "touch") setShowTimestamp((value) => !value);
+  };
   return (
-    <article data-user-message-id={item.role === "user" ? item.id : undefined} className={`message-row ${item.role} ${streaming ? "streaming" : ""} ${highlighted ? "navigator-highlight" : ""}`}>
+    <article data-user-message-id={item.role === "user" ? item.id : undefined} className={`message-row ${item.role} ${showTimestamp ? "timestamp-visible" : ""} ${streaming ? "streaming" : ""} ${highlighted ? "navigator-highlight" : ""}`}>
       <div className={`message-body ${item.role}`}>
         {images.length === 0 ? null : <div className="message-images" aria-label="消息图片">
           {images.map((image, index) => {
@@ -734,7 +750,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, live, highlight
             return <ImagePreview key={`${image.mimeType}:${index}`} className="message-image-thumb" src={src} alt={`图片 ${String(index + 1)}`}><img src={src} alt={`图片 ${String(index + 1)}`} loading="lazy" /></ImagePreview>;
           })}
         </div>}
-        {item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`}>
+        {item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`} onPointerDown={toggleTimestampOnTouch}>
           <MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} interactiveFiles={item.role === "assistant" && !streaming} />
         </div>}
         {item.role === "assistant" && showMeta && !streaming && item.text !== "" ? <div className="assistant-message-footer">
@@ -742,7 +758,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, live, highlight
           <AssistantGenerationMeta generation={item.generation} summary={generationSummary} />
         </div> : <>
           {showMeta && item.role === "assistant" && (live !== undefined || item.generation !== undefined) ? <AssistantGenerationMeta live={live} generation={item.generation} /> : null}
-          <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : () => onEdit(item)} onFork={onFork} />
+          <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : () => onEdit(item)} onFork={item.role === "assistant" && !showMeta ? undefined : onFork} showTimestamp={item.role === "user"} createdAt={item.createdAt} />
         </>}
       </div>
     </article>
@@ -790,7 +806,17 @@ function formatDuration(durationMs: number): string {
   return `${String(Math.floor(seconds / 60))}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function MessageActions({ item, streaming, onEdit, onFork, copyable = false }: { item: MessageTimelineItem; streaming: boolean; onEdit?: () => void; onFork?: (item: MessageTimelineItem) => void; copyable?: boolean }) {
+function formatMessageTime(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "";
+  const date = new Date(timestamp);
+  const now = new Date();
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate()) return time;
+  return `${String(date.getMonth() + 1)}月${String(date.getDate())}日 ${time}`;
+}
+
+function MessageActions({ item, streaming, onEdit, onFork, copyable = false, showTimestamp = false, createdAt }: { item: MessageTimelineItem; streaming: boolean; onEdit?: () => void; onFork?: (item: MessageTimelineItem) => void; copyable?: boolean; showTimestamp?: boolean; createdAt?: string }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   if (streaming || (item.role !== "user" && !copyable)) return null;
   const canCopy = item.text !== "";
@@ -807,6 +833,7 @@ function MessageActions({ item, streaming, onEdit, onFork, copyable = false }: {
   const noun = item.role === "user" ? "消息" : "整段回答";
   const copyLabel = copyState === "copied" ? `已复制${noun}` : copyState === "failed" ? "复制失败" : `复制${noun}`;
   return <div className="message-actions">
+    {showTimestamp && createdAt !== undefined ? <time className="message-time" dateTime={createdAt} title={createdAt}>{formatMessageTime(createdAt)}</time> : null}
     {!canCopy ? null : <Tooltip label={copyLabel}>
       <button type="button" className={`message-action-button${copyState === "copied" ? " copied" : copyState === "failed" ? " failed" : ""}`} aria-label={copyLabel} onClick={handleCopy}>{copyState === "copied" ? <Check size={14} /> : copyState === "failed" ? <CircleAlert size={14} /> : <Copy size={14} />}</button>
     </Tooltip>}
@@ -1473,11 +1500,17 @@ function liveGenerationForBlock(item: MessageTimelineItem | ThinkingTimelineItem
 }
 
 function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, showAll = true, showActivePreview = true): ReactNode {
-  if (entry.kind === "message") return <MessageItem key={entry.item.id} item={entry.item} streaming={entry.item.id === context.streamingMessageId} live={liveGenerationForBlock(entry.item, context.liveGeneration, "text")} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={context.onForkMessage} baseDir={context.workspaceCwd} showMeta={context.showGenerationMeta === true} generationSummary={context.generationSummary} />;
+  if (entry.kind === "message") {
+    const streaming = entry.item.id === context.streamingMessageId && context.liveGeneration?.activeBlockKind !== "thinking";
+    return <MessageItem key={entry.item.id} item={entry.item} streaming={streaming} live={liveGenerationForBlock(entry.item, context.liveGeneration, "text")} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={context.onForkMessage} baseDir={context.workspaceCwd} showMeta={context.showGenerationMeta === true} generationSummary={context.generationSummary} />;
+  }
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} customText={context.customAnswers?.get(entry.item.id)} />;
-  if (entry.kind === "thinking") return <ThinkingItem key={entry.item.id} item={entry.item} live={liveGenerationForBlock(entry.item, context.liveGeneration, "thinking")} baseDir={context.workspaceCwd} open={context.inlineProcess === true || context.openDetailIds.has(entry.item.id)} showDetails={showAll} onToggle={() => context.onToggleDetail(entry.item.id)} />;
+  if (entry.kind === "thinking") {
+    const streaming = entry.item.state === "running" && context.liveGeneration?.activeBlockKind === "thinking";
+    return <ThinkingItem key={entry.item.id} item={entry.item} streaming={streaming} live={liveGenerationForBlock(entry.item, context.liveGeneration, "thinking")} baseDir={context.workspaceCwd} open={context.inlineProcess === true || context.openDetailIds.has(entry.item.id)} showDetails={showAll} onToggle={() => context.onToggleDetail(entry.item.id)} />;
+  }
   const active = context.status.runState !== "idle" && entry.items.some((item) => item.state === "queued" || item.state === "running");
   const groupId = activityGroupId(entry.items[0]?.id ?? "empty");
   const pending = entry.items.some((item) => item.state === "running" || item.state === "queued");
@@ -1558,7 +1591,6 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   const showAll = inline || !collapsible || open;
   const processContext: TurnRenderContext = {
     ...context,
-    inlineProcess: inline,
     openDetailIds: foldState.openDetailIds,
     openGroupIds: foldState.openGroupIds,
     onToggleDetail: (detailId) => { if (processId !== undefined) onToggleProcessDetail(processId, detailId, showAll); },
@@ -1572,21 +1604,29 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   const processEntries = displayTurn.process.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
     {renderTimelineEntry(entry, processContext, true, !touched)}
   </div>);
-  const processBlock = displayTurn.process.length === 0 ? null : inline ? <div className="turn-process-stack">{processEntries}</div> : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
-    {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary, categories, changes.length)} onClick={() => onToggleProcess(processId, open)}>
-      <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
-      <span className="turn-process-label">过程</span>
-      {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
-      {categories === "" ? null : <span className="turn-process-count">{categories}</span>}
-      {changes.length === 0 ? null : <span className="turn-process-changes">改了 {changes.length} 个文件</span>}
-    </button>}
-    {showAll ? <div className={!collapsible ? "turn-process-stack" : "turn-process-body"}>{processEntries}</div> : null}
-  </section>;
+  const processBlock = displayTurn.process.length === 0 ? null : live
+    ? <div className="turn-process-stack">
+      <div className="turn-process-summary turn-process-live-label">
+        <span className="turn-process-label">执行操作</span>
+        {categories === "" ? null : <span className="turn-process-count">{categories}</span>}
+      </div>
+      {processEntries}
+    </div>
+    : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
+      {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary, categories, changes.length)} onClick={() => onToggleProcess(processId, open)}>
+        <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
+        <span className="turn-process-label">过程</span>
+        {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
+        {categories === "" ? null : <span className="turn-process-count">{categories}</span>}
+        {changes.length === 0 ? null : <span className="turn-process-changes">改了 {changes.length} 个文件</span>}
+      </button>}
+      {showAll ? <div className={!collapsible ? "turn-process-stack" : "turn-process-body"}>{processEntries}</div> : null}
+    </section>;
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
     {processBlock}
     {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, true), onToggleCall: (_toolId, callId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, callId, true) }, true, false)}</div>)}
-    {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: true, generationSummary: summarizeTurnGeneration(turn) })}
+    {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: !live, generationSummary: summarizeTurnGeneration(turn), onForkMessage: live ? undefined : context.onForkMessage })}
     {live || changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />}
     {turn.finalError === undefined ? null : <TurnFailureCard items={turn.finalError} failedTool={lastFailedTool(split.process)} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} />}
   </>;
@@ -1614,13 +1654,13 @@ export function thinkingFoldPreview(text: string): string {
   return line.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/^#{1,6}\s+/, "");
 }
 
-/** 过程里的思考不标「思考」。正在生成或较短的直接出正文；较长的收成一行预览，点开看全文。 */
-function ThinkingItem({ item, baseDir, open, showDetails, onToggle }: { item: ThinkingTimelineItem; live?: LiveGenerationStats; baseDir?: string; open: boolean; showDetails: boolean; onToggle: () => void }) {
+/** 过程里的思考不标「思考」。生成期间始终展开；完成后，较长内容收成一行预览。 */
+function ThinkingItem({ item, streaming = false, baseDir, open, showDetails, onToggle }: { item: ThinkingTimelineItem; streaming?: boolean; live?: LiveGenerationStats; baseDir?: string; open: boolean; showDetails: boolean; onToggle: () => void }) {
   const running = item.state === "running";
   if (item.text.trim() === "") return null;
-  const foldable = !running && thinkingTextIsLong(item.text);
-  const expanded = !foldable || (open && showDetails);
-  const body = <div className="thinking-body"><div className="message-content"><MarkdownMessage text={item.text} streaming={running} baseDir={baseDir} /></div></div>;
+  const foldable = thinkingTextIsLong(item.text);
+  const expanded = !foldable || running || (open && showDetails);
+  const body = <div className="thinking-body"><div className="message-content"><MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} /></div></div>;
   if (!foldable) return <article className={`thinking-item ${item.state}`}>{body}</article>;
   const preview = thinkingFoldPreview(item.text);
   return (

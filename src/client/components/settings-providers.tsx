@@ -521,13 +521,7 @@ export function useProviderSettings(refreshKey: number): ProviderSettings {
 
 export function ModelsPage({ ps, onOpenProvider, onAddProvider }: { ps: ProviderSettings; onOpenProvider: (providerId: string) => void; onAddProvider: () => void }) {
   const isMobile = useIsMobile();
-  const [search, setSearch] = useState("");
   const enabledCount = [...ps.enabled].filter((key) => ps.allModelKeys.has(key)).length;
-  const models = useMemo(() => {
-    const needle = search.trim().toLocaleLowerCase();
-    return ps.visibleProviders.flatMap((provider) => provider.models.map((model) => ({ provider, model })))
-      .filter(({ provider, model }) => needle === "" || `${model.name ?? ""}\n${model.id}\n${provider.name}\n${provider.id}`.toLocaleLowerCase().includes(needle));
-  }, [ps.visibleProviders, search]);
   const enabledIn = (provider: ProviderStatus) => provider.models.filter((model) => ps.enabled.has(modelKey(provider.id, model.id))).length;
   const empty = ps.visibleProviders.length === 0 && ps.orphanedProviders.length === 0;
 
@@ -547,17 +541,6 @@ export function ModelsPage({ ps, onOpenProvider, onAddProvider }: { ps: Provider
           description={`${String(provider.models.length)} 个模型 · 还没加载出来，检查连接设置`} control={<SettingsTag tone="warn">未加载</SettingsTag>} onClick={() => onOpenProvider(provider.id)} />)}
       </SettingsCard>}
     </SettingsSection>
-    {!isMobile && (ps.loading || ps.allModelKeys.size === 0 ? null : <SettingsSection id="enabled-models" title="启用的模型" hint={ps.unrestricted ? "全部可用" : `${String(enabledCount)} / ${String(ps.allModelKeys.size)}`}
-      action={<span className="st-inline"><SaveState k="enabled-models" />{ps.unrestricted ? null : <SectionAction label="全部启用" icon={null} onClick={ps.enableAll} />}</span>}>
-      <SettingsCard>
-        <div className="st-search-row"><Search size={14} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="筛选模型或供应商" aria-label="筛选模型" /></div>
-        {models.length === 0 ? <SettingsEmptyLine>没有匹配的模型</SettingsEmptyLine> : models.map(({ provider, model }) => {
-          const key = modelKey(provider.id, model.id);
-          return <SettingRow key={key} id={`model-${provider.id}-${model.id}`} title={displayModelName(model.name ?? model.id)} mono description={modelDetail(model, providerDisplayName(provider, ps.customById.get(provider.id)))}
-            control={<><SaveState k={`model:${key}`} /><SettingsSwitch checked={ps.enabled.has(key)} onChange={() => ps.toggleModel(provider.id, model.id)} label={`启用 ${model.id}`} /></>} />;
-        })}
-      </SettingsCard>
-    </SettingsSection>)}
     {ps.overlay}
   </>;
 }

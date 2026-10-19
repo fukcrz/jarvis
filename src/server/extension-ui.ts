@@ -74,6 +74,8 @@ export class ExtensionUiBridge {
 
   get context(): ExtensionUIContext {
     return {
+      // RPC hosts need the mode marker so extensions choose select/input instead of TUI custom().
+      mode: "rpc",
       select: (title, options, opts) => this.dialog({ method: "select", title, options, timeout: opts?.timeout }, opts, undefined),
       confirm: (title, message, opts) => this.dialog({ method: "confirm", title, message, timeout: opts?.timeout }, opts, false),
       input: (title, placeholder, opts) => this.dialog({ method: "input", title, placeholder, timeout: opts?.timeout }, opts, undefined),

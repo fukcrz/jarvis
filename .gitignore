@@ -34,3 +34,4 @@ src-tauri/gen/
 /uninstall.exe
 /jarvis/
 logs/
+artifacts/

@@ -50,11 +50,11 @@ describe("settings routes", () => {
     expect(legacySettingsRedirect("/settings/model-scope")).toEqual({ route: { page: "models" }, focus: "enabled-models" });
     expect(legacySettingsRedirect("/settings/tunnel")).toEqual({ route: { page: "remote" }, focus: "tunnels" });
     expect(legacySettingsRedirect("/settings/security")).toEqual({ route: { page: "remote" }, focus: "password" });
-    expect(legacySettingsRedirect("/settings/plugins")).toEqual({ route: { page: "plugins" } });
+    expect(parseSettingsPath("/settings/plugins")).toEqual({ page: "plugins" });
+    expect(parseSettingsPath("/settings/skills")).toEqual({ page: "skills" });
+    expect(parseSettingsPath("/settings/skills/browser-qa")).toEqual({ page: "skill-files", skillId: "browser-qa" });
     expect(legacySettingsRedirect("/settings/plugins/install")).toEqual({ route: { page: "plugins" }, openInstall: true });
     expect(legacySettingsRedirect("/settings/plugins/model-groups")).toEqual({ route: { page: "model-groups" } });
-    expect(legacySettingsRedirect("/settings/skills")).toEqual({ route: { page: "skills" } });
-    expect(legacySettingsRedirect("/settings/skills/browser-qa")).toEqual({ route: { page: "skill-files", skillId: "browser-qa" } });
     expect(legacySettingsRedirect("/settings/data")).toEqual({ route: { page: "about" }, focus: "diagnostics" });
     expect(legacySettingsRedirect("/settings/workspaces")).toBeUndefined();
     expect(legacySettingsRedirect("/settings/nope")).toBeUndefined();
@@ -62,9 +62,11 @@ describe("settings routes", () => {
 
   it("maps pages to their category and back", () => {
     expect(settingsCategoryOf({ page: "provider", providerId: "x" })).toBe("models");
-    expect(settingsCategoryOf({ page: "skill-files", skillId: "x" })).toBe("extensions");
+    expect(settingsCategoryOf({ page: "plugins" })).toBe("plugins");
+    expect(settingsCategoryOf({ page: "skill-files", skillId: "x" })).toBe("skills");
     expect(settingsCategoryOf({ page: "home" })).toBeUndefined();
-    expect(categoryRoute("extensions")).toEqual({ page: "plugins" });
+    expect(categoryRoute("plugins")).toEqual({ page: "plugins" });
+    expect(categoryRoute("skills")).toEqual({ page: "skills" });
     expect(categoryRoute("remote")).toEqual({ page: "remote" });
   });
 

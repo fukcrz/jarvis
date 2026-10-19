@@ -198,6 +198,7 @@ export function WorkspacesPage({ workspaces, onWorkspacesChange, onAddWorkspace,
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [dragId, setDragId] = useState<string>();
   const [overId, setOverId] = useState<string>();
+  const dragRef = useRef<{ id: string; pointerId: number; startY: number; moved: boolean } | undefined>(undefined);
   const [mobileMenuId, setMobileMenuId] = useState<string>();
   const visible = workspaces.filter((workspace) => !hidden.has(workspace.id));
   const latest = useRef(workspaces);
@@ -223,6 +224,42 @@ export function WorkspacesPage({ workspaces, onWorkspacesChange, onAddWorkspace,
     const current = visible[index];
     if (target !== undefined && current !== undefined) move(current.id, target.id);
   };
+  const finishDrag = (commit: boolean) => {
+    const drag = dragRef.current;
+    dragRef.current = undefined;
+    setDragId(undefined);
+    setOverId(undefined);
+    document.body.classList.remove("workspace-reordering");
+    if (commit && drag?.moved && overId !== undefined) move(drag.id, overId);
+  };
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (drag === undefined || drag.pointerId !== event.pointerId) return;
+      if (!drag.moved && Math.abs(event.clientY - drag.startY) < 6) return;
+      drag.moved = true;
+      event.preventDefault();
+      setDragId(drag.id);
+      document.body.classList.add("workspace-reordering");
+      const rows = [...document.querySelectorAll<HTMLElement>(".st-ws-row")];
+      const target = rows.find((row) => {
+        const bounds = row.getBoundingClientRect();
+        return event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+      });
+      if (target !== undefined) setOverId(target.id.replace("setting-workspace-", ""));
+    };
+    const onUp = (event: PointerEvent) => { if (dragRef.current?.pointerId === event.pointerId) finishDrag(true); };
+    const onCancel = (event: PointerEvent) => { if (dragRef.current?.pointerId === event.pointerId) finishDrag(false); };
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      document.body.classList.remove("workspace-reordering");
+    };
+  }, [overId]);
   const remove = (workspace: Workspace) => {
     const setHide = (value: boolean) => setHidden((current) => { const next = new Set(current); if (value) next.add(workspace.id); else next.delete(workspace.id); return next; });
     setHide(true);
@@ -246,12 +283,12 @@ export function WorkspacesPage({ workspaces, onWorkspacesChange, onAddWorkspace,
       <SettingsCard>
         {visible.length === 0 ? <SettingsEmptyLine>还没有工作区。添加一个项目文件夹，就能在里面开会话。</SettingsEmptyLine> : visible.map((workspace, index) => <div key={workspace.id}
           className={`st-row st-ws-row${dragId === workspace.id ? " dragging" : ""}${overId === workspace.id && dragId !== workspace.id ? " drop" : ""}`} id={`setting-workspace-${workspace.id}`}
-          draggable={dragId === workspace.id}
-          onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", workspace.id); }}
-          onDragOver={(event) => { if (dragId === undefined) return; event.preventDefault(); setOverId(workspace.id); }}
-          onDrop={(event) => { event.preventDefault(); if (dragId !== undefined) move(dragId, workspace.id); setDragId(undefined); setOverId(undefined); }}
-          onDragEnd={() => { setDragId(undefined); setOverId(undefined); }}>
-          <span className="st-grip" title="拖动排序" aria-hidden onPointerDown={() => setDragId(workspace.id)} onPointerUp={() => { if (overId === undefined) setDragId(undefined); }}><GripVertical size={15} /></span>
+          >
+          <span className="st-grip" title="拖动排序" aria-hidden onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            dragRef.current = { id: workspace.id, pointerId: event.pointerId, startY: event.clientY, moved: false };
+          }}><GripVertical size={15} /></span>
           <WorkspaceName workspace={workspace} onRename={rename} />
           <span className="st-ctl st-ws-actions">
             <SaveState k={`workspace:${workspace.id}`} />

@@ -11,7 +11,7 @@ import { APP_VERSION } from "../lib/app-version";
 import { STATIC_SETTINGS_ENTRIES, type SettingsSearchEntry } from "../lib/settings-search";
 import { categoryRoute, isSettingsPath, legacySettingsRedirect, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsCategoryOf, settingsPath, type SettingsCategoryId, type SettingsRoute } from "../lib/settings-routes";
 import { AboutPage, GeneralPage, NotificationsPage, WorkspacesPage, initialNotificationsEnabled } from "./settings-app-pages";
-import { ExtensionsPage, SkillFilesPage, extensionsSummary } from "./settings-extensions";
+import { ExtensionsPage, SkillFilesPage } from "./settings-extensions";
 import { LeaveGuardProvider, SaveStatusProvider, SettingsToastProvider, useLeaveGuard } from "./settings-feedback";
 import { ModelGroupsPage } from "./settings-model-groups";
 import { ModelsPage, ProviderNewPage, ProviderPage, providerDisplayName, useProviderSettings } from "./settings-providers";
@@ -161,16 +161,16 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
       for (const model of provider.models) entries.push({ key: `model:${provider.id}/${model.id}`, title: displayModelName(model.name ?? model.id), description: `模型 · ${name} · ${model.id}`, keywords: "模型 model", category: "models", route: { page: "provider", providerId: provider.id }, focus: `model-${provider.id}-${model.id}` });
     }
     for (const id of groupCount?.ids ?? []) entries.push({ key: `group:${id}`, title: id, description: "模型组", keywords: "模型组 路由 group", category: "model-groups", route: { page: "model-groups" }, focus: `model-group-${id}` });
-    for (const plugin of plugins?.bundled ?? []) entries.push({ key: `plugin:${plugin.id}`, title: plugin.label, description: "自带插件", keywords: `插件 plugin ${plugin.id}`, category: "extensions", route: { page: "plugins" }, focus: `plugin-${plugin.id}` });
+    for (const plugin of plugins?.bundled ?? []) entries.push({ key: `plugin:${plugin.id}`, title: plugin.label, description: "自带插件", keywords: `插件 plugin ${plugin.id}`, category: "plugins", route: { page: "plugins" }, focus: `plugin-${plugin.id}` });
     const seenPlugins = new Set<string>();
     for (const plugin of [...(plugins?.recommended ?? []), ...(plugins?.installed ?? [])]) {
       if (seenPlugins.has(plugin.name)) continue;
       seenPlugins.add(plugin.name);
       const recommended = plugins?.recommended.some((item) => item.name === plugin.name) ?? false;
-      entries.push({ key: `plugin:${plugin.name}`, title: plugin.name, description: recommended ? "推荐插件" : "已安装插件", keywords: "插件 plugin npm", category: "extensions", route: { page: "plugins" }, focus: `plugin-${plugin.name}` });
+      entries.push({ key: `plugin:${plugin.name}`, title: plugin.name, description: recommended ? "推荐插件" : "已安装插件", keywords: "插件 plugin npm", category: "plugins", route: { page: "plugins" }, focus: `plugin-${plugin.name}` });
     }
     for (const skill of [...(skills?.bundled ?? []), ...(skills?.installed ?? [])]) {
-      entries.push({ key: `skill:${skill.id}`, title: skill.label || skill.name, description: `技能 · ${skill.id}`, keywords: `技能 skill ${skill.name} ${skill.description ?? ""}`, category: "extensions", route: { page: "skills" }, focus: `skill-${skill.id}` });
+      entries.push({ key: `skill:${skill.id}`, title: skill.label || skill.name, description: `技能 · ${skill.id}`, keywords: `技能 skill ${skill.name} ${skill.description ?? ""}`, category: "skills", route: { page: "skills" }, focus: `skill-${skill.id}` });
     }
     for (const workspace of workspaces) entries.push({ key: `workspace:${workspace.id}`, title: workspace.label, description: `工作区 · ${workspace.cwd}`, keywords: "工作区 项目 文件夹 workspace", category: "workspaces", route: { page: "workspaces" }, focus: `workspace-${workspace.id}` });
     return entries;
@@ -188,7 +188,8 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
     notifications: notificationsEnabled ? "开" : "关",
     models: ps.loading ? undefined : ps.connectedCount === 0 ? "未配置" : `${String(ps.connectedCount)} 已连接 · ${String(enabledModelCount)} 模型`,
     "model-groups": groupCount === undefined ? undefined : groupCount.enabled ? `${String(groupCount.count)} 个` : "插件未启用",
-    extensions: extensionsSummary(plugins, skills),
+    plugins: plugins === undefined ? undefined : `${String(plugins.bundled.filter((item) => item.enabled).length + plugins.recommended.filter((item) => item.installed && item.enabled).length + plugins.installed.filter((item) => !plugins.recommended.some((recommended) => recommended.name === item.name)).length)} 个`,
+    skills: skills === undefined ? undefined : `${String(skills.bundled.filter((item) => item.enabled).length + skills.installed.length)} 个`,
     workspaces: `${String(workspaces.length)} 个`,
     remote: remote === undefined ? undefined : remote.running > 0 ? `${String(remote.running)} 运行中` : remote.total > 0 ? "已停止" : "未设置",
     about: APP_VERSION === undefined ? undefined : `v${APP_VERSION}`,
@@ -221,7 +222,7 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
       break;
     case "plugins":
     case "skills":
-      page = <ExtensionsPage tab={route.page === "skills" ? "skills" : "plugins"} onTab={(tab) => go({ page: tab === "skills" ? "skills" : "plugins" }, { replace: true })}
+      page = <ExtensionsPage tab={route.page === "skills" ? "skills" : "plugins"}
         plugins={plugins} onPlugins={setPlugins} skills={skills} onSkills={setSkills} openInstall={state.openInstall}
         onOpenModelGroups={() => go({ page: "model-groups" })} onOpenSkillFiles={(skillId) => go({ page: "skill-files", skillId })} />;
       break;

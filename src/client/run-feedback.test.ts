@@ -9,9 +9,9 @@ const running = {
 };
 
 describe("run feedback", () => {
-  it("shows Pi-style working feedback before the first assistant delta", () => {
+  it("keeps working feedback visible while an intermediate assistant reply streams", () => {
     expect(getRunFeedback(running, [])).toEqual({ label: "执行中…", tone: "working", startedAt: running.activeRun.startedAt });
-    expect(getRunFeedback(running, [], "assistant-message")).toBeUndefined();
+    expect(getRunFeedback(running, [], "assistant-message")).toEqual({ label: "正在回复…", tone: "working", startedAt: running.activeRun.startedAt });
   });
 
   it("describes pending tools and stopping runs", () => {

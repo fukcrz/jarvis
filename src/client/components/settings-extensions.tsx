@@ -24,28 +24,14 @@ export const PLUGIN_DESCRIPTIONS: Record<string, string> = {
 
 export type ExtensionsTab = "plugins" | "skills";
 
-/** 导航摘要：启用的插件数 · 启用的技能数。 */
-export function extensionsSummary(plugins: PluginSnapshot | undefined, skills: SkillSnapshot | undefined): string | undefined {
-  if (plugins === undefined && skills === undefined) return undefined;
-  const parts: string[] = [];
-  if (plugins !== undefined) {
-    const recommendedNames = new Set(plugins.recommended.map((item) => item.name));
-    const others = plugins.installed.filter((item) => !recommendedNames.has(item.name)).length;
-    parts.push(`${String(plugins.bundled.filter((item) => item.enabled).length + plugins.recommended.filter((item) => item.installed && item.enabled).length + others)} 插件`);
-  }
-  if (skills !== undefined) parts.push(`${String(skills.bundled.filter((item) => item.enabled).length + skills.installed.length)} 技能`);
-  return parts.join(" · ");
-}
-
 type Confirm =
   | { kind: "plugin-overwrite"; id: string; label: string }
   | { kind: "plugin-disable-modified"; id: string; label: string }
   | { kind: "skill-overwrite"; id: string; label: string }
   | { kind: "skill-disable-modified"; id: string; label: string };
 
-export function ExtensionsPage({ tab, onTab, plugins, onPlugins, skills, onSkills, openInstall, onOpenModelGroups, onOpenSkillFiles }: {
+export function ExtensionsPage({ tab, plugins, onPlugins, skills, onSkills, openInstall, onOpenModelGroups, onOpenSkillFiles }: {
   tab: ExtensionsTab;
-  onTab: (tab: ExtensionsTab) => void;
   plugins?: PluginSnapshot;
   onPlugins: (snapshot: PluginSnapshot) => void;
   skills?: SkillSnapshot;
@@ -145,11 +131,7 @@ export function ExtensionsPage({ tab, onTab, plugins, onPlugins, skills, onSkill
   const others = plugins?.installed.filter((item) => !recommendedNames.has(item.name) && !hiddenPlugins.has(item.source)) ?? [];
 
   return <>
-    <SettingsPageHead title="插件与技能" description="扩展 AI 能做的事。开关从下一次新开的会话开始生效。" />
-    <div className="st-tabs" role="tablist" aria-label="插件与技能">
-      <button type="button" role="tab" aria-selected={tab === "plugins"} className={tab === "plugins" ? "on" : undefined} onClick={() => onTab("plugins")}>插件</button>
-      <button type="button" role="tab" aria-selected={tab === "skills"} className={tab === "skills" ? "on" : undefined} onClick={() => onTab("skills")}>技能</button>
-    </div>
+    <SettingsPageHead title={tab === "plugins" ? "插件" : "技能"} description={tab === "plugins" ? "管理插件。" : "管理技能。"} />
     {tab === "plugins" ? <>
       <SettingsSection id="bundled-plugins" title="自带">
         {plugins === undefined ? <SettingsLoading /> : <SettingsCard>
@@ -299,7 +281,7 @@ export function SkillFilesPage({ skillId, label, onBack }: { skillId: string; la
   const sorted = useMemo(() => listing === undefined ? [] : [...listing.entries].sort((left, right) => left.kind === right.kind ? left.name.localeCompare(right.name) : left.kind === "directory" ? -1 : 1), [listing]);
 
   return <>
-    <SettingsPageHead crumb={{ label: "插件与技能", onClick: onBack }} title={label ?? skillId} description={listing === undefined || listing.path === "" ? "技能文件（只读）" : listing.path} />
+    <SettingsPageHead crumb={{ label: "技能", onClick: onBack }} title={label ?? skillId} description={listing === undefined || listing.path === "" ? "技能文件（只读）" : listing.path} />
     <SettingsSection>
       {listing === undefined ? <SettingsLoading /> : <SettingsCard>
         {listing.parent === undefined ? null : <SettingRow leading={<Folder size={15} className="st-row-glyph" />} title="上一级" onClick={() => open(listing.parent ?? "")} />}

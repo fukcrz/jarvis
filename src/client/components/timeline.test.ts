@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, thinkingFoldPreview, thinkingTextIsLong, timelineProcessId, turnEndedInFailure, turnFinalReplyPending, userMessageAnchors, userMessageAnchorsFromOutline } from "./timeline";
+import { activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, thinkingFoldPreview, thinkingTextIsLong, timelineProcessId, turnEndedInFailure, turnFinalReplyPending, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -109,6 +109,19 @@ describe("formatUserMessageIndex", () => {
   it("pads chronological indexes to two digits", () => {
     expect(formatUserMessageIndex(1)).toBe("01");
     expect(formatUserMessageIndex(12)).toBe("12");
+  });
+});
+
+describe("visibleNavigatorAnchorIds", () => {
+  it("keeps the endpoints and a small window around the active message", () => {
+    const anchors = userMessageAnchors(Array.from({ length: 12 }, (_, index) => user(`u${String(index)}`)));
+    expect([...visibleNavigatorAnchorIds(anchors, "u6")]).toEqual(expect.arrayContaining(["u0", "u4", "u5", "u6", "u7", "u8", "u11"]));
+    expect(visibleNavigatorAnchorIds(anchors, "u6").size).toBe(7);
+  });
+
+  it("keeps every node when the session is short", () => {
+    const anchors = userMessageAnchors([user("u1"), user("u2"), user("u3"), user("u4")]);
+    expect(visibleNavigatorAnchorIds(anchors, "u2").size).toBe(4);
   });
 });
 

@@ -4,7 +4,8 @@ export type SettingsCategoryId =
   | "notifications"
   | "models"
   | "model-groups"
-  | "extensions"
+  | "plugins"
+  | "skills"
   | "workspaces"
   | "remote"
   | "about";
@@ -47,9 +48,9 @@ export function settingsPath(route: SettingsRoute): string {
     case "provider-new": return `${SETTINGS_ROOT}/models/new`;
     case "provider": return `${SETTINGS_ROOT}/models/${encodeURIComponent(route.providerId)}`;
     case "model-groups": return `${SETTINGS_ROOT}/model-groups`;
-    case "plugins": return `${SETTINGS_ROOT}/extensions`;
-    case "skills": return `${SETTINGS_ROOT}/extensions/skills`;
-    case "skill-files": return `${SETTINGS_ROOT}/extensions/skills/${encodeURIComponent(route.skillId)}`;
+    case "plugins": return `${SETTINGS_ROOT}/plugins`;
+    case "skills": return `${SETTINGS_ROOT}/skills`;
+    case "skill-files": return `${SETTINGS_ROOT}/skills/${encodeURIComponent(route.skillId)}`;
     case "workspaces": return `${SETTINGS_ROOT}/workspaces`;
     case "remote": return `${SETTINGS_ROOT}/remote`;
     case "about": return `${SETTINGS_ROOT}/about`;
@@ -62,6 +63,8 @@ const SIMPLE_PAGES: Record<string, SettingsRoute> = {
   models: { page: "models" },
   "model-groups": { page: "model-groups" },
   extensions: { page: "plugins" },
+  plugins: { page: "plugins" },
+  skills: { page: "skills" },
   workspaces: { page: "workspaces" },
   remote: { page: "remote" },
   about: { page: "about" },
@@ -74,6 +77,10 @@ export function parseSettingsPath(pathname: string): SettingsRoute | undefined {
   const [first, second, third] = segments;
   if (segments.length === 1 && first !== undefined) return SIMPLE_PAGES[first];
   if (first === "models" && segments.length === 2 && second !== undefined) return second === "new" ? { page: "provider-new" } : { page: "provider", providerId: second };
+  if (first === "skills") {
+    if (segments.length === 1) return { page: "skills" };
+    if (segments.length === 2 && second !== undefined) return { page: "skill-files", skillId: second };
+  }
   if (first === "extensions" && second === "skills") {
     if (segments.length === 2) return { page: "skills" };
     if (segments.length === 3 && third !== undefined) return { page: "skill-files", skillId: third };
@@ -120,16 +127,17 @@ export function settingsCategoryOf(route: SettingsRoute): SettingsCategoryId | u
     case "provider-new":
       return "models";
     case "plugins":
+      return "plugins";
     case "skills":
     case "skill-files":
-      return "extensions";
+      return "skills";
     default:
       return route.page;
   }
 }
 
 export function categoryRoute(category: SettingsCategoryId): SettingsRoute {
-  return category === "extensions" ? { page: "plugins" } : { page: category };
+  return { page: category };
 }
 
 /** 没有应用内历史可退时的上一级：详情页回到分类页，分类页回到首页（手机）。 */

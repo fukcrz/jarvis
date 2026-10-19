@@ -245,9 +245,9 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.aut
 .empty-workspace h2 { margin: 0; color: var(--ink); font-size: var(--ui-title); }
 .timeline-shell { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; }
 .timeline-shell > .timeline, .timeline-desktop-navigator, .jump-latest { grid-column: 1; grid-row: 1; }
-.timeline-desktop-navigator { position: absolute; z-index: 2; top: 34px; right: max(8px, calc((100% - 870px) / 2 - 18px)); bottom: 42px; display: none; width: 22px; pointer-events: none; }
+.timeline-desktop-navigator { position: absolute; z-index: 2; top: 34px; right: max(8px, calc((100% - 870px) / 2 - 18px)); bottom: var(--timeline-navigator-bottom, 42px); display: none; width: 22px; pointer-events: none; }
 .timeline-navigator-track { position: absolute; top: 5px; bottom: 5px; left: 10px; width: 1px; background: linear-gradient(to bottom, transparent, var(--line-strong) 8%, var(--line-strong) 92%, transparent); }
-.timeline-navigator-marker { position: absolute; left: 0; display: grid; place-items: center; width: 22px; height: 20px; transform: translateY(-50%); border: 0; background: transparent; padding: 0; pointer-events: auto; }
+.timeline-navigator-marker { position: absolute; left: 0; display: grid; place-items: center; width: 22px; height: 28px; transform: translateY(-50%); border: 0; background: transparent; padding: 0; pointer-events: auto; }
 .timeline-navigator-marker-dot { display: block; width: 6px; height: 6px; border: 1px solid var(--subtle); border-radius: 50%; background: var(--canvas); transition: width .14s ease, height .14s ease, border-color .14s ease, background .14s ease; }
 .timeline-navigator-marker:focus-visible .timeline-navigator-marker-dot, .timeline-navigator-marker.active .timeline-navigator-marker-dot { width: 9px; height: 9px; border-color: var(--accent-strong); background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
 .timeline-navigator-marker:focus-visible { outline: none; }
@@ -267,8 +267,11 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.aut
 @media (max-width: 760px) { .timeline-load-earlier { min-height: 36px; } }
 /* 操作行随消息占位（气泡下方固定一行），不悬浮在消息间隙里压住下一条消息 */
 .message-row { position: relative; display: flex; min-width: 0; scroll-margin-top: 112px; }.message-actions { display: flex; align-items: center; justify-content: flex-start; min-height: 18px; gap: 1px; margin-top: 2px; }.message-action-button { display: grid; place-items: center; width: 21px; height: 18px; border: 0; border-radius: 3px; background: transparent; padding: 0; color: #686772; cursor: pointer; }.message-action-button:focus-visible { background: rgb(255 255 255 / .035); color: #9b9aa5; outline: none; }.message-action-button.copied { color: var(--success); }.message-action-button.failed { color: var(--danger); }
-.message-body.user .message-actions { justify-content: flex-end; }
-@media (max-width: 760px) { .message-body.user .message-actions { margin-top: 4px; }.message-action-button { width: 30px; height: 28px; } }
+.message-body.user .message-actions { position: relative; justify-content: flex-end; }
+.message-time { position: absolute; right: 100%; margin-right: 4px; color: var(--subtle); font-size: 10px; line-height: 18px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+@media (hover: hover) and (pointer: fine) { .message-row.user:hover .message-time, .message-row.user:focus-within .message-time { opacity: 1; } }
+.message-row.user.timestamp-visible .message-time { opacity: 1; }
+@media (max-width: 760px) { .message-body.user .message-actions { margin-top: 4px; }.message-action-button { width: 30px; height: 28px; }.message-time { line-height: 28px; } }
 .message-row.assistant { justify-content: flex-start; }
 .message-row.user { justify-content: flex-end; }
 .message-body { min-width: 0; max-width: 760px; }

@@ -30,6 +30,11 @@ describe("ExtensionUiBridge", () => {
     return request?.request;
   }
 
+  it("advertises the RPC host mode to extensions", () => {
+    const { bridge } = setup();
+    expect((bridge.context as { mode?: string }).mode).toBe("rpc");
+  });
+
   it("publishes select requests and resolves the pending promise on respond", async () => {
     const { bridge, messages } = setup();
     const promise = bridge.context.select("Choose", ["one", "two"]);
