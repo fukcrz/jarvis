@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type AssistantGenerationStats, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type FileChange, type ImageAttachment, type LiveGenerationStats, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type TokenUsage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol.js";
+import { THINKING_LEVELS, type AssistantGenerationStats, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type FileChange, type ImageAttachment, type LiveGenerationStats, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type RunOutcomeTimelineItem, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type TokenUsage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol.js";
 import { isRecord } from "../shared/protocol.js";
 
 export interface TranscriptState {
@@ -235,6 +235,11 @@ export function applySessionEvent(state: TranscriptState, event: SessionEvent): 
     const items = recordTimelineItem(payload?.["item"]);
     return items.length === 0 ? next : { ...next, items: mergeTimeline(next.items, items) };
   }
+  if (event.type === "timeline.remove") {
+    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const id = typeof payload?.["id"] === "string" ? payload["id"] : undefined;
+    return id === undefined ? next : { ...next, items: next.items.filter((item) => item.id !== id) };
+  }
   if (event.type === "extension.uiRequest") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const request = recordExtensionUiRequest(payload?.["request"]);
@@ -402,7 +407,9 @@ function recordTimelineItem(value: unknown): TimelineItem[] {
   const thinking = recordThinkingItem(value);
   if (thinking !== undefined) return [thinking];
   const summary = recordContextSummary(value);
-  return summary === undefined ? [] : [summary];
+  if (summary !== undefined) return [summary];
+  const outcome = recordRunOutcome(value);
+  return outcome === undefined ? [] : [outcome];
 }
 
 function optimisticUserMessage(id: string, text: string, images: MessageTimelineItem["images"] = []): MessageTimelineItem {
@@ -677,6 +684,22 @@ function recordExtensionUiRequest(value: unknown): ExtensionUiRequest | undefine
   return undefined;
 }
 
+function recordRunOutcome(value: unknown): RunOutcomeTimelineItem | undefined {
+  if (!isRecord(value) || value["kind"] !== "run-outcome") return undefined;
+  if (typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["runId"] !== "string") return undefined;
+  const outcome = value["outcome"];
+  if (outcome !== "completed" && outcome !== "stopped" && outcome !== "failed" && outcome !== "interrupted") return undefined;
+  return {
+    kind: "run-outcome",
+    id: value["id"],
+    createdAt: value["createdAt"],
+    runId: value["runId"],
+    outcome,
+    ...(typeof value["code"] === "string" ? { code: value["code"] } : {}),
+    ...(typeof value["message"] === "string" ? { message: value["message"] } : {}),
+  };
+}
+
 function recordContextSummary(value: unknown): ContextSummaryTimelineItem | undefined {
   if (!isRecord(value) || value["kind"] !== "context-summary") return undefined;
   if (typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["summary"] !== "string") return undefined;
@@ -739,7 +762,7 @@ function recordStatus(value: unknown): SessionStatus | undefined {
         ...(compactionRetrying === undefined ? {} : { retrying: compactionRetrying }),
       }
     : undefined;
-  return { sessionId: value["sessionId"], runState, ...(activeRun === undefined ? {} : { activeRun }), ...(retrying === undefined ? {} : { retrying }), ...(compacting === undefined ? {} : { compacting }), ...(lastError === undefined ? {} : { lastError }) };
+  return { sessionId: value["sessionId"], runState, ...(activeRun === undefined ? {} : { activeRun }), ...(retrying === undefined ? {} : { retrying }), ...(compacting === undefined ? {} : { compacting }), ...(lastError === undefined ? {} : { lastError }), ...(value["stopUnconfirmed"] === true ? { stopUnconfirmed: true } : {}) };
 }
 
 function isCompactionReason(value: unknown): value is CompactionReason {

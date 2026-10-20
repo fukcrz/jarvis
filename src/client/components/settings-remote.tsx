@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Copy, ExternalLink, Globe, Loader2, LogOut, Pencil, ShieldCheck, Trash2 } from "lucide-react";
 import type { AuthStatus, TunnelInput, TunnelLogEntry, TunnelMethod, TunnelSnapshot, TunnelState } from "../../shared/protocol";
 import { api, notifyUnauthorized } from "../api";
+import { safeHttpUrl } from "../lib/safe-link";
 import { copyText } from "../lib/clipboard";
 import { SaveState, SettingsConfirm, useSaveStatus, useSettingsToast } from "./settings-feedback";
 import { SectionAction, SettingRow, SettingsBanner, SettingsCard, SettingsEmptyLine, SettingsField, SettingsFormSwitch, SettingsLoading, SettingsPageHead, SettingsSection, SettingsSwitch, SettingsTag, StButton, settingAnchorId } from "./settings-ui";
@@ -161,6 +162,7 @@ export function RemotePage({ refreshKeys, onSummary }: { refreshKeys: { tunnel: 
   };
 
   const primary = running[0];
+  const primaryUrl = safeHttpUrl(primary?.url);
   return <>
     <SettingsPageHead title="远程访问" description="用内网穿透从手机或外网打开这台电脑上的 Jarvis。对外开放时建议设置访问密码。" />
     {runningCount > 0 && auth !== undefined && !auth.required ? <SettingsBanner id="remote-warn" action={<StButton onClick={focusPassword}>设置密码</StButton>}>
@@ -175,7 +177,7 @@ export function RemotePage({ refreshKeys, onSummary }: { refreshKeys: { tunnel: 
           </div>
           {primary?.url === undefined ? null : <>
             <StButton className="st-status-copy" onClick={() => { void copyValue(primary.url as string, "status"); }}>{copied === "status" ? <Check size={13} /> : <Copy size={13} />}{copied === "status" ? "已复制" : "复制"}</StButton>
-            <a className="st-btn st-status-open" href={primary.url} target="_blank" rel="noreferrer"><ExternalLink size={13} />打开</a>
+            {primaryUrl === undefined ? null : <a className="st-btn st-status-open" href={primaryUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} />打开</a>}
           </>}
           {auth === undefined ? null : auth.required ? <SettingsTag tone="ok">有密码</SettingsTag> : <SettingsTag tone="warn">没有密码</SettingsTag>}
         </div>

@@ -407,6 +407,16 @@ describe("transcript reducer", () => {
     expect(updated.items).toEqual([expect.objectContaining({ id: "error:attempt-1", state: "recovered" })]);
   });
 
+  it("removes a dismissed run outcome from the live timeline", () => {
+    const outcome = { kind: "run-outcome" as const, id: "run-outcome:interrupted:session:time", createdAt: "2026-08-09T00:00:00.000Z", runId: "interrupted:session:time", outcome: "interrupted" as const };
+    const initial = { ...emptyTranscript, items: [outcome] };
+    const result = applySessionEvents(initial, [{
+      version: 1, sessionId: "session", seq: 1, emittedAt: "2026-08-09T00:00:01.000Z", type: "timeline.remove", payload: { id: outcome.id },
+    }]);
+
+    expect(result.items).toEqual([]);
+  });
+
   it("adds a live context summary only once by its persisted entry id", () => {
     const item = { kind: "context-summary" as const, id: "context-summary:compact", createdAt: "2026-08-09T00:00:00.000Z", summaryType: "compaction" as const, summary: "Summary", tokensBefore: 90_000 };
     const result = applySessionEvents(emptyTranscript, [

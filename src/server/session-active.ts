@@ -76,6 +76,10 @@ export interface ActiveSession {
   activeBash?: ToolTimelineItem;
   /** Retains a stop click that arrives before Pi installs its compaction abort controller. */
   compactionAbortRequested: boolean;
+  /** Distinguishes a user stop from Pi's internal aborts (such as compaction handoff). */
+  stopRequested: boolean;
+  /** Session replacement or shutdown must not publish a user-visible run outcome. */
+  suppressRunOutcome: boolean;
   extensionFailure?: { code: string; message: string };
   /** 扩展 ctx.ui 请求桥（对话框待浏览器响应）。 */
   extensionUi: ExtensionUiBridge;

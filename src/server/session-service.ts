@@ -144,14 +144,22 @@ export class SessionService {
     return listWorkspaceSessions(this.catalogDeps(), workspaceId, query);
   }
 
-  /** 关掉"被中断"卡片：清掉持久化的标记，已打开的会话也去掉这条错误。 */
+  /** 关掉"被中断"卡片，并将该条结果的隐藏状态写进会话历史。 */
   async dismissInterrupted(ref: SessionRef): Promise<void> {
-    await this.attention.clearInterrupted(ref);
     const active = this.active.get(activeKey(ref));
-    if (active?.state.lastError?.code !== "RUN_INTERRUPTED") return;
+    if (active === undefined || active.state.lastError?.code !== "RUN_INTERRUPTED") {
+      await this.attention.clearInterrupted(ref);
+      return;
+    }
+    const failure = active.state.lastError;
+    const runId = `interrupted:${active.ref.sessionId}:${failure.occurredAt}`;
+    active.session.sessionManager.appendCustomEntry("jarvis.run-outcome-dismissed", { runId });
+    await this.attention.clearInterrupted(ref);
     const status = { ...active.state };
     delete status.lastError;
     active.state = status;
+    active.timelineCache = undefined;
+    this.events.publishSession(active.ref, { type: "timeline.remove", payload: { id: `run-outcome:${runId}` } });
     this.events.publishSession(active.ref, { type: "session.updated", payload: { status: active.state } });
   }
 
@@ -618,12 +626,14 @@ export class SessionService {
    */
   private async disposeActive(active: ActiveSession, reason: "quit" | "resume" | "fork", targetSessionFile?: string): Promise<void> {
     this.clearSettlementTimer(active);
+    active.suppressRunOutcome = true;
     if (this.isBusy(active)) {
       active.session.abortCompaction();
       active.session.abortRetry();
       active.session.abortBranchSummary();
       active.session.abortBash();
       await this.abortPiWithTimeout(active.session).catch(() => false);
+      this.clearSettlementTimer(active);
     }
     // A startup extension dialog can keep bindExtensions() pending. Close the
     // browser bridge first so session_start can unwind before session_shutdown;
@@ -796,6 +806,7 @@ export class SessionService {
       return accepted;
     }
 
+    this.preserveInterruptedOutcome(active);
     const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "llm" };
     active.state = { sessionId: ref.sessionId, runState: "running", activeRun: run };
     this.setAttention(active, "running", run.startedAt);
@@ -911,6 +922,7 @@ export class SessionService {
       throw new AppError("SESSION_BUSY", "This session is already running", 409);
     }
 
+    this.preserveInterruptedOutcome(active);
     const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "bash" };
     const item: ToolTimelineItem = {
       kind: "tool",
@@ -973,6 +985,7 @@ export class SessionService {
       throw new AppError("SESSION_BUSY", "Stop the current run before compacting this session", 409);
     }
 
+    this.preserveInterruptedOutcome(active);
     const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "compaction" };
     active.state = {
       sessionId: active.ref.sessionId,
@@ -1009,6 +1022,7 @@ export class SessionService {
       throw new AppError("SESSION_BUSY", "Stop the current run before reloading resources", 409);
     }
 
+    this.preserveInterruptedOutcome(active);
     const run: ActiveRun = { id: randomUUID(), startedAt: new Date().toISOString(), kind: "reload" };
     active.state = {
       sessionId: active.ref.sessionId,
@@ -1070,7 +1084,9 @@ export class SessionService {
     // 停止前取回排队消息（对齐 Pi TUI Escape：清队列并把消息恢复到编辑器），
     // 避免 agent 空闲后 follow-up 自动触发新 run 继续执行。
     const dequeued = active.messageQueue.takeAll();
-    active.state = { ...active.state, runState: "stopping" };
+    active.stopRequested = true;
+    active.pendingRunError = undefined;
+    active.state = { ...active.state, runState: "stopping", stopUnconfirmed: undefined };
     this.events.publishSession(active.ref, { type: "run.stopping", ...(activeRun === undefined ? {} : { runId: activeRun.id }), payload: { status: active.state } });
     this.publishSummary(active);
 
@@ -1087,10 +1103,22 @@ export class SessionService {
     }
 
     try {
-      await this.abortPiWithTimeout(active.session);
-      if (activeRun !== undefined && active.state.activeRun?.id === activeRun.id) this.settleRun(active, activeRun.id);
+      const confirmed = await this.abortPiWithTimeout(active.session);
+      if ((confirmed || active.session.isIdle) && activeRun !== undefined && active.state.activeRun?.id === activeRun.id) this.settleRun(active, activeRun.id);
+      else if (activeRun !== undefined && active.state.activeRun?.id === activeRun.id) {
+        this.markStopUnconfirmed(active, activeRun.id);
+        this.scheduleStopFallback(active, activeRun.id, 1_000);
+      }
       return { aborted: true, ...(dequeued.steering.length > 0 || dequeued.followUp.length > 0 ? { dequeued } : {}) };
     } catch (error) {
+      if (active.stopRequested && active.state.activeRun !== undefined) {
+        if (active.session.isIdle) this.settleRun(active, active.state.activeRun.id);
+        else {
+          this.markStopUnconfirmed(active, active.state.activeRun.id);
+          this.scheduleStopFallback(active, active.state.activeRun.id, 1_000);
+        }
+        return { aborted: true, ...(dequeued.steering.length > 0 || dequeued.followUp.length > 0 ? { dequeued } : {}) };
+      }
       this.failRun(active, active.state.activeRun?.id, "PI_RUNTIME_ERROR", asMessage(error));
       throw error;
     }
@@ -1334,6 +1362,11 @@ export class SessionService {
     const cached = active.timelineCache;
     if (cached?.leafId === leafId) return cached.items;
     const items = projectHistory(active.session.sessionManager.getBranch());
+    const interruption = active.state.lastError;
+    if (interruption?.code === "RUN_INTERRUPTED") {
+      const runId = `interrupted:${active.ref.sessionId}:${interruption.occurredAt}`;
+      items.push({ kind: "run-outcome", id: `run-outcome:${runId}`, createdAt: interruption.occurredAt, runId, outcome: "interrupted", code: interruption.code, message: interruption.message });
+    }
     active.timelineCache = { leafId, items };
     return items;
   }
@@ -1492,6 +1525,8 @@ export class SessionService {
     active.activeTools.clear();
     active.extensionFailure = undefined;
     active.pendingRunError = undefined;
+    active.stopRequested = false;
+    active.suppressRunOutcome = false;
   }
 
   private publishTool(active: ActiveSession, tool: ToolTimelineItem, runId?: string): void {
@@ -1501,7 +1536,9 @@ export class SessionService {
   }
 
   private settleRun(active: ActiveSession, runId: string | undefined): void {
-    if (runId === undefined || active.state.activeRun?.id !== runId) return;
+    if (runId === undefined || active.state.activeRun?.id !== runId || active.suppressRunOutcome === true) return;
+    const outcome = active.stopRequested ? "stopped" as const : "completed" as const;
+    const runKind = active.state.activeRun.kind ?? "llm";
     const replyEndedAt = this.stampLlmReplyEnd(active);
     for (const tool of active.activeTools.values()) {
       if (tool.state !== "queued" && tool.state !== "running") continue;
@@ -1515,6 +1552,7 @@ export class SessionService {
       runState: "idle",
       ...(lastError === undefined ? {} : { lastError }),
     };
+    if (runKind === "llm") this.recordRunOutcome(active, runId, outcome);
     this.setAttention(active, "completed_unread", replyEndedAt);
     this.resetLiveStream(active);
     active.activeBash = undefined;
@@ -1528,20 +1566,28 @@ export class SessionService {
       active.queue = emptySessionQueue;
       this.publishQueue(active);
     }
-    this.events.publishSession(active.ref, { type: "run.settled", runId, payload: { status: active.state } });
+    this.events.publishSession(active.ref, { type: "run.settled", runId, payload: { status: active.state, outcome } });
     this.publishSummary(active);
     this.persistListCopy(active, this.summaryFromActive(active));
-    this.emitDesktopRun(active, runId, false);
+    if (outcome !== "stopped") this.emitDesktopRun(active, runId, false);
   }
 
   private failRun(active: ActiveSession, runId: string | undefined, code: string, message: string): void {
-    if (runId === undefined || active.state.activeRun?.id !== runId) return;
+    if (runId === undefined || active.state.activeRun?.id !== runId || active.suppressRunOutcome === true) return;
+    if (active.stopRequested) {
+      if (active.session.isIdle) this.settleRun(active, runId);
+      else this.markStopUnconfirmed(active, runId);
+      return;
+    }
+    const runKind = active.state.activeRun.kind ?? "llm";
     const replyEndedAt = this.stampLlmReplyEnd(active);
+    const occurredAt = new Date().toISOString();
     active.state = {
       sessionId: active.ref.sessionId,
       runState: "idle",
-      lastError: { code, message, occurredAt: new Date().toISOString() },
+      lastError: { code, message, occurredAt },
     };
+    if (runKind === "llm") this.recordRunOutcome(active, runId, "failed", { code, message, createdAt: occurredAt });
     this.setAttention(active, "failed", replyEndedAt);
     for (const tool of active.activeTools.values()) {
       if (tool.state !== "queued" && tool.state !== "running") continue;
@@ -1560,7 +1606,7 @@ export class SessionService {
       active.queue = emptySessionQueue;
       this.publishQueue(active);
     }
-    this.events.publishSession(active.ref, { type: "run.failed", runId, payload: { status: active.state } });
+    this.events.publishSession(active.ref, { type: "run.failed", runId, payload: { status: active.state, outcome: "failed" } });
     this.persistListCopy(active, this.summaryFromActive(active));
     this.publishSummary(active);
     this.emitDesktopRun(active, runId, true, message);
@@ -1595,11 +1641,13 @@ export class SessionService {
         }
         // A missing agent_settled/queue_update must not leave the external run
         // alive forever. At the deadline, settle and clear stale queued UI state.
-        if (active.pendingRunError !== undefined) {
+        if (active.stopRequested && active.session.isStreaming) {
+          this.markStopUnconfirmed(active, active.state.activeRun.id);
+        } else if (active.pendingRunError !== undefined && !active.stopRequested) {
           const failure = active.pendingRunError;
           active.pendingRunError = undefined;
           this.failRun(active, active.state.activeRun.id, failure.code, failure.message);
-        } else if (active.extensionFailure !== undefined) {
+        } else if (active.extensionFailure !== undefined && !active.stopRequested) {
           this.failRun(active, active.state.activeRun.id, active.extensionFailure.code, active.extensionFailure.message);
         } else {
           this.settleRun(active, active.state.activeRun.id);
@@ -1610,13 +1658,22 @@ export class SessionService {
     attempt();
   }
 
-  private scheduleStopFallback(active: ActiveSession, runId: string | undefined): void {
+  private scheduleStopFallback(active: ActiveSession, runId: string | undefined, delayMs = PI_ABORT_TIMEOUT_MS): void {
     if (runId === undefined) return;
     this.clearSettlementTimer(active);
     active.settlementTimer = setTimeout(() => {
       active.settlementTimer = undefined;
-      if (active.state.runState === "stopping" && active.state.activeRun?.id === runId) this.settleRun(active, runId);
-    }, PI_ABORT_TIMEOUT_MS);
+      if (active.state.runState !== "stopping" || active.state.activeRun?.id !== runId) return;
+      const runKind = active.state.activeRun.kind ?? "llm";
+      const stopped = runKind === "bash" ? active.activeBash === undefined
+        : runKind === "compaction" ? active.state.compacting === undefined && active.session.isIdle
+          : active.session.isIdle;
+      if (stopped) this.settleRun(active, runId);
+      else {
+        this.markStopUnconfirmed(active, runId);
+        this.scheduleStopFallback(active, runId, 1_000);
+      }
+    }, delayMs);
   }
 
   private async abortPiWithTimeout(session: AgentSession): Promise<boolean> {
@@ -1634,6 +1691,37 @@ export class SessionService {
     }
   }
 
+  private markStopUnconfirmed(active: ActiveSession, runId: string): void {
+    if (active.state.activeRun?.id !== runId || active.state.runState !== "stopping" || active.state.stopUnconfirmed === true) return;
+    active.state = { ...active.state, stopUnconfirmed: true };
+    this.events.publishSession(active.ref, { type: "run.stopping", runId, payload: { status: active.state } });
+    this.publishSummary(active);
+  }
+
+  private preserveInterruptedOutcome(active: ActiveSession): void {
+    const failure = active.state.lastError;
+    if (failure?.code !== "RUN_INTERRUPTED") return;
+    const runId = `interrupted:${active.ref.sessionId}:${failure.occurredAt}`;
+    if (projectHistory(active.session.sessionManager.getBranch()).some((item) => item.kind === "run-outcome" && item.runId === runId)) return;
+    this.recordRunOutcome(active, runId, "interrupted", { code: failure.code, message: failure.message, createdAt: failure.occurredAt });
+  }
+
+  private recordRunOutcome(active: ActiveSession, runId: string, outcome: "completed" | "stopped" | "failed" | "interrupted", failure?: { code: string; message: string; createdAt: string }): void {
+    const createdAt = failure?.createdAt ?? new Date().toISOString();
+    const data = { runId, outcome, createdAt, ...(failure === undefined ? {} : { code: failure.code, message: failure.message }) };
+    try {
+      active.session.sessionManager.appendCustomEntry("jarvis.run-outcome", data);
+      active.timelineCache = undefined;
+    } catch (error) {
+      console.warn("Failed to persist run outcome", error);
+    }
+    this.events.publishSession(active.ref, {
+      type: "timeline.upsert",
+      runId,
+      payload: { item: { kind: "run-outcome", id: `run-outcome:${runId}`, createdAt, runId, outcome, ...(failure === undefined ? {} : { code: failure.code, message: failure.message }) } },
+    });
+  }
+
   private clearSettlementTimer(active: ActiveSession): void {
     if (active.settlementTimer === undefined) return;
     clearTimeout(active.settlementTimer);
@@ -1642,6 +1730,7 @@ export class SessionService {
 
   private setAttention(active: ActiveSession, state: SessionAttentionState, at?: string): void {
     const when = at ?? new Date().toISOString();
+    if (state === "running") active.timelineCache = undefined;
     if (active.attentionState === state) return;
     active.attentionState = state;
     if (state === "idle") delete active.attentionAt;

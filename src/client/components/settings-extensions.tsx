@@ -5,6 +5,7 @@ import type { PluginCatalogItem, PluginSnapshot } from "../../shared/plugins";
 import type { SkillEntry, SkillFileContent, SkillFileListing, SkillSnapshot } from "../../shared/skills";
 import { api } from "../api";
 import { previewKindForPath } from "../lib/file-preview";
+import { safeHttpUrl } from "../lib/safe-link";
 import { CodePreview } from "./code-preview";
 import { MarkdownMessage } from "./markdown-message";
 import { SaveState, SettingsConfirm, useSaveStatus, useSettingsToast } from "./settings-feedback";
@@ -247,7 +248,7 @@ function PluginInstallDialog({ open, onOpenChange, busy, onInstall }: { open: bo
         {searching && results === undefined ? <SettingsLoading label="搜索中…" /> : null}
         {results?.length === 0 ? <SettingsEmptyLine>没有找到相关插件</SettingsEmptyLine> : null}
         {results?.map((item) => <div key={item.name} className="st-install-item">
-          <div><b className="mono">{item.name}</b><small>v{item.version}</small>{item.description === "" ? null : <p>{item.description}</p>}<a href={item.url} target="_blank" rel="noreferrer">{item.url}</a></div>
+          <div><b className="mono">{item.name}</b><small>v{item.version}</small>{item.description === "" ? null : <p>{item.description}</p>}{safeHttpUrl(item.url) === undefined ? <span>{item.url}</span> : <a href={safeHttpUrl(item.url)} target="_blank" rel="noreferrer">{item.url}</a>}</div>
           {item.installed ? <SettingsTag tone="ok">已安装</SettingsTag> : <StButton disabled={busy !== undefined} onClick={() => onInstall(item.source, item.name)}>安装</StButton>}
         </div>)}
       </div>

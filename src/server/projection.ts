@@ -1,12 +1,13 @@
-import { isRecord, type AssistantGenerationStats, type AssistantTextPhase, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type TokenUsage, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
+import { isRecord, type AssistantGenerationStats, type AssistantTextPhase, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type RunOutcomeTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type TokenUsage, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
 import { fileChangeFromCall, fileChangeFromPatch } from "../shared/file-change.js";
 import { attachSubagentView, subagentViewFromArgs } from "./subagent-view.js";
-import { numberValue, stringValue, toIso } from "./values.js";
+import { isAbortErrorMessage, numberValue, stringValue, toIso } from "./values.js";
 
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
 
 export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
   const items: TimelineItem[] = [];
+  const dismissedRunOutcomes = new Set<string>();
   const generations = generationEntries(entries);
   const thinkingDurations = thinkingDurationEntries(entries);
   const toolIndex = new Map<string, number>();
@@ -15,6 +16,16 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
   let pendingErrorIndexes: number[] = [];
 
   for (const entry of entries) {
+    const dismissedRunId = dismissedRunOutcomeFromEntry(entry);
+    if (dismissedRunId !== undefined) {
+      dismissedRunOutcomes.add(dismissedRunId);
+      continue;
+    }
+    const runOutcome = runOutcomeFromEntry(entry);
+    if (runOutcome !== undefined) {
+      items.push(runOutcome);
+      continue;
+    }
     const contextSummary = contextSummaryFromEntry(entry);
     if (contextSummary !== undefined) {
       items.push(contextSummary);
@@ -48,12 +59,14 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
         if (item.kind === "tool") toolIndex.set(item.id, items.length);
         items.push(item);
       }
-      if (stringValue(message["stopReason"]) === "error") {
+      const stopReason = stringValue(message["stopReason"]);
+      const abortedError = stopReason === "error" && isAbortErrorMessage(stringValue(message["errorMessage"]));
+      if (stopReason === "error" && !abortedError) {
         const projected = errorFromPi(message, createdAt, entryId);
         const error = { ...projected, groupId: stringValue(entry["parentId"]) || projected.groupId };
         pendingErrorIndexes.push(items.length);
         items.push(error);
-      } else if (stringValue(message["stopReason"]) !== "aborted") {
+      } else if (stopReason !== "aborted" && !abortedError) {
         // Pi retains earlier failed attempts in history after a successful retry.
         // Keep those diagnostics, but mark attempts from this user turn recovered.
         for (const index of pendingErrorIndexes) {
@@ -94,7 +107,7 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
     }
   }
 
-  return items;
+  return items.filter((item) => item.kind !== "run-outcome" || !dismissedRunOutcomes.has(item.runId));
 }
 
 /**
@@ -124,6 +137,28 @@ export function bashExecutionItem(entryId: string, createdAt: string, message: R
     ...(state === "failed"
       ? (output === "" ? {} : { error: truncate(output) })
       : (output === "" ? {} : { output: truncate(output) })),
+  };
+}
+
+function dismissedRunOutcomeFromEntry(entry: unknown): string | undefined {
+  if (!isRecord(entry) || entry["type"] !== "custom" || entry["customType"] !== "jarvis.run-outcome-dismissed" || !isRecord(entry["data"])) return undefined;
+  return stringValue(entry["data"]["runId"]) || undefined;
+}
+
+function runOutcomeFromEntry(entry: unknown): RunOutcomeTimelineItem | undefined {
+  if (!isRecord(entry) || entry["type"] !== "custom" || entry["customType"] !== "jarvis.run-outcome" || !isRecord(entry["data"])) return undefined;
+  const data = entry["data"];
+  const runId = stringValue(data["runId"]);
+  const outcome = data["outcome"];
+  if (runId === "" || (outcome !== "completed" && outcome !== "stopped" && outcome !== "failed" && outcome !== "interrupted")) return undefined;
+  return {
+    kind: "run-outcome",
+    id: `run-outcome:${runId}`,
+    createdAt: toIso(data["createdAt"] ?? entry["timestamp"]),
+    runId,
+    outcome,
+    ...(typeof data["code"] === "string" ? { code: data["code"] } : {}),
+    ...(typeof data["message"] === "string" ? { message: data["message"] } : {}),
   };
 }
 

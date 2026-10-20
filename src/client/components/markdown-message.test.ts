@@ -1,8 +1,11 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import { MarkdownMessage, headingSlug, imageFallbackTarget, mediaKindForSource, rewriteLocalImageUrls, separateAdjacentBoldTitles } from "./markdown-message";
+import { describe, expect, it, vi } from "vitest";
+import { MarkdownMessage, headingSlug, imageFallbackTarget, localFileDownloadHref, mediaKindForSource, rewriteLocalImageUrls, separateAdjacentBoldTitles } from "./markdown-message";
 import { LocalMediaVersionContext } from "../lib/local-media";
+
+const desktopShell = vi.hoisted(() => ({ enabled: false }));
+vi.mock("../lib/desktop-shell", () => ({ isDesktopShell: () => desktopShell.enabled }));
 
 describe("MarkdownMessage", () => {
   it("renders Markdown while a message is still streaming", () => {
@@ -67,13 +70,21 @@ describe("MarkdownMessage", () => {
     expect(markup).not.toContain("image-lightbox");
   });
 
-  it("still strips javascript: URLs from image src", () => {
-    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+  it("strips executable protocols from images and data URLs from links", () => {
+    const javascript = renderToStaticMarkup(createElement(MarkdownMessage, {
       text: "![x](javascript:alert(1))",
     }));
+    const svgImage = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "![x](data:image/svg+xml;base64,PHN2Zy8+)",
+    }));
+    const svgLink = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "[open](data:image/svg+xml;base64,PHN2Zy8+)",
+    }));
 
-    expect(markup).not.toContain("javascript:");
-    expect(markup).not.toContain('src="javascript');
+    expect(javascript).not.toContain("javascript:");
+    expect(javascript).not.toContain('src="javascript');
+    expect(svgImage).not.toContain('src="data:image/svg+xml');
+    expect(svgLink).not.toContain('href="data:image/svg+xml');
   });
 
   it("still allows normal http(s) image URLs", () => {
@@ -202,17 +213,32 @@ describe("MarkdownMessage", () => {
     expect(markup).not.toContain("v=settled");
   });
 
-  it("rewrites local file links to the /api/files endpoint and opens them in a new tab", () => {
+  it("rewrites local file links to same-origin downloads", () => {
     const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
       text: "下载 [设计稿](docs/design.pdf) 和 [打包件](/tmp/archive.zip)",
       baseDir: "/ws",
     }));
 
-    expect(markup).toContain('href="/api/files?path=docs%2Fdesign.pdf&amp;cwd=%2Fws"');
-    expect(markup).toContain('href="/api/files?path=%2Ftmp%2Farchive.zip"');
-    // 本地文件链接标类名，站外链接靠 CSS 的 [href^="http"] 区分。
+    expect(markup).toContain('href="/api/files?path=docs%2Fdesign.pdf&amp;cwd=%2Fws&amp;download=1"');
+    expect(markup).toContain('href="/api/files?path=%2Ftmp%2Farchive.zip&amp;download=1"');
     expect(markup.match(/class="local-file-link"/g)).toHaveLength(2);
-    expect(markup.match(/target="_blank" rel="noreferrer"/g)).toHaveLength(2);
+    expect(markup.match(/download=""/g)).toHaveLength(2);
+  });
+
+  it("uses the same authenticated download URL in the desktop shell", () => {
+    desktopShell.enabled = true;
+    try {
+      const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+        text: "[首页截图](01-APP首页-1080x1920.jpg)",
+        baseDir: "D:\\projects\\app",
+      }));
+
+      expect(markup).toContain('href="/api/files?path=01-APP%E9%A6%96%E9%A1%B5-1080x1920.jpg&amp;cwd=D%3A%5Cprojects%5Capp&amp;download=1"');
+      expect(markup).toContain('download=""');
+      expect(markup).not.toContain('target="_blank"');
+    } finally {
+      desktopShell.enabled = false;
+    }
   });
 
   it("keeps non-text local links as downloads when interactive previews are enabled", () => {
@@ -222,12 +248,28 @@ describe("MarkdownMessage", () => {
       interactiveFiles: true,
     }));
 
-    // 文本引用先走资格探测，静态渲染时尚未确认可预览。
-    expect(markup).toContain('class="local-file-reference"');
+    // 静态渲染时尚未确认可预览，使用附件下载回退链接。
+    expect(markup).toContain('href="/api/files?path=src%2Fapp.ts&amp;cwd=%2Fws&amp;download=1"');
+    expect(markup).toContain('download=""');
     expect(markup).toContain(">源码<");
-    expect(markup).not.toContain('href="/api/files?path=src%2Fapp.ts');
-    expect(markup).toContain('href="/api/files?path=docs%2Fdesign.pdf&amp;cwd=%2Fws"');
+    expect(markup).toContain('href="/api/files?path=docs%2Fdesign.pdf&amp;cwd=%2Fws&amp;download=1"');
     expect(markup).toContain('class="local-file-link"');
+    expect(markup).toContain('download=""');
+  });
+
+  it("builds a download URL without dropping existing query parameters", () => {
+    expect(localFileDownloadHref("/api/files?path=a%20b.pdf&cwd=C%3A%5Cws&v=1")).toBe("/api/files?path=a+b.pdf&cwd=C%3A%5Cws&v=1&download=1");
+    expect(localFileDownloadHref("/api/files?path=a.pdf&download=0")).toBe("/api/files?path=a.pdf&download=1");
+    expect(localFileDownloadHref("/api/other")).toBe("/api/other");
+  });
+
+  it("turns direct local file API links into downloads", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "[文件](/api/files?path=docs%2Fdesign.pdf&cwd=%2Fws)",
+    }));
+
+    expect(markup).toContain('href="/api/files?path=docs%2Fdesign.pdf&amp;cwd=%2Fws&amp;download=1"');
+    expect(markup).toContain('download=""');
   });
 
   it("leaves remote, anchor, mailto, and existing /api/ links untouched", () => {
@@ -239,8 +281,8 @@ describe("MarkdownMessage", () => {
     expect(markup).toContain('<a href="https://example.com">官网</a>');
     expect(markup).toContain('<a href="#section">锚点</a>');
     expect(markup).toContain('<a href="mailto:a@b.c">邮件</a>');
-    expect(markup).toContain('<a href="/api/files?path=z.png">已服务</a>');
-    expect(markup).not.toContain("local-file-link");
+    expect(markup).toContain('<a href="/api/files?path=z.png&amp;download=1" class="local-file-link" download="">已服务</a>');
+    expect(markup.match(/class="local-file-link"/g)).toHaveLength(1);
   });
 
   it("renders video and audio targets as inline players instead of images", () => {

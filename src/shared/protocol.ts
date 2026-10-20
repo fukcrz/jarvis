@@ -319,9 +319,13 @@ export interface CompactionStatus {
   retrying?: RetryStatus;
 }
 
+export type RunOutcome = "completed" | "stopped" | "failed" | "interrupted";
+
 export interface SessionStatus {
   sessionId: string;
   runState: RunState;
+  /** Stop was requested, but Pi has not confirmed that the run is idle yet. */
+  stopUnconfirmed?: boolean;
   activeRun?: {
     id: string;
     startedAt: string;
@@ -548,7 +552,17 @@ export interface ContextSummaryTimelineItem {
   tokensBefore?: number;
 }
 
-export type TimelineItem = MessageTimelineItem | ErrorTimelineItem | ToolTimelineItem | ThinkingTimelineItem | ContextSummaryTimelineItem | ExtensionUiTimelineItem;
+export interface RunOutcomeTimelineItem {
+  kind: "run-outcome";
+  id: string;
+  createdAt: string;
+  runId: string;
+  outcome: RunOutcome;
+  code?: string;
+  message?: string;
+}
+
+export type TimelineItem = MessageTimelineItem | ErrorTimelineItem | ToolTimelineItem | ThinkingTimelineItem | ContextSummaryTimelineItem | RunOutcomeTimelineItem | ExtensionUiTimelineItem;
 
 export interface TimelinePage {
   items: TimelineItem[];
@@ -670,6 +684,7 @@ export type SessionEventType =
   | "thinking.completed"
   | "tool.upsert"
   | "timeline.upsert"
+  | "timeline.remove"
   | "bash.delta"
   | "bash.settled"
   | "extension.uiRequest"
@@ -761,6 +776,7 @@ export const sessionEventSchema = z.object({
     "thinking.completed",
     "tool.upsert",
     "timeline.upsert",
+    "timeline.remove",
     "bash.delta",
     "bash.settled",
     "extension.uiRequest",

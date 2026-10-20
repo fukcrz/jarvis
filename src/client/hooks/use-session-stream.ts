@@ -638,9 +638,10 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   return { ...state, localMediaVersion: `${mediaSeed}-${String(state.mediaRevision)}`, refresh, loadEarlier, loadUntilMessage, loadingEarlier, userMessages, userMessagesLoading, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
 }
 
-function runNotificationFor(event: SessionEvent, items: TimelineItem[]): RunNotificationInfo | undefined {
+export function runNotificationFor(event: SessionEvent, items: TimelineItem[]): RunNotificationInfo | undefined {
   if (event.runId === undefined || (event.type !== "run.settled" && event.type !== "run.failed")) return undefined;
   const payload = isRecord(event.payload) ? event.payload : undefined;
+  if (payload?.["outcome"] === "stopped") return undefined;
   const status = isRecord(payload?.["status"]) ? payload["status"] : undefined;
   const lastError = isRecord(status?.["lastError"]) ? status["lastError"] : undefined;
   return {

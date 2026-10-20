@@ -3,6 +3,7 @@ import { Check, ExternalLink, Eye, EyeOff, KeyRound, LogOut, Pencil, Plus, Searc
 import type { AuthLoginOperation, EnabledModelsStatus, FetchedModel, ManagedApi, ManagedCompat, ManagedMaxTokensField, ManagedModel, ManagedProvider, ManagedThinkingFormat, ProviderOverride, ProviderStatus } from "../../shared/protocol";
 import { ApiError, api } from "../api";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
+import { safeHttpUrl } from "../lib/safe-link";
 import { displayModelName } from "../model-display";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { DirtyBar, SaveState, SettingsConfirm, useDirtyRegistration, useSaveStatus, useSettingsToast } from "./settings-feedback";
@@ -1007,10 +1008,11 @@ export function ProviderNewPage({ ps, onBack, onCreated }: { ps: ProviderSetting
 export function AuthOperation({ operation, prompt, event, onRespond, onCancel, onClose }: { operation: AuthLoginOperation; prompt: AuthLoginOperation["prompt"]; event: AuthLoginOperation["event"]; onRespond: (value: string) => void; onCancel: () => void; onClose: () => void }) {
   const [value, setValue] = useState("");
   const options = useMemo(() => prompt?.options ?? [], [prompt?.options]);
+  const authUrl = safeHttpUrl(event?.url);
   return <div className="auth-operation-overlay"><div className="auth-operation">
     <div className="st-sec-head"><h2>{operation.state === "completed" ? "登录完成" : operation.state === "failed" ? "登录失败" : operation.state === "cancelled" ? "登录已取消" : "正在登录"}</h2><StButton variant="ghost" icon aria-label="取消登录" title="取消登录" onClick={operation.state === "running" ? onCancel : onClose}><X size={15} /></StButton></div>
     {event?.message ? <p className="auth-event">{event.message}</p> : null}
-    {event?.url ? <a className="auth-link" href={event.url} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开授权页面</a> : null}
+    {authUrl === undefined ? null : <a className="auth-link" href={authUrl} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开授权页面</a>}
     {operation.error ? <SettingsBanner>{operation.error}</SettingsBanner> : null}
     {operation.state === "running" && prompt ? <form className="auth-prompt" onSubmit={(submitEvent) => {
       submitEvent.preventDefault();

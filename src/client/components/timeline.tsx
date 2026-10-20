@@ -2,10 +2,10 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { KeyboardEvent, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import { Archive, ArrowDown, Bell, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
-import type { AssistantGenerationStats, ContextSummaryTimelineItem, FileChange, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
+import type { AssistantGenerationStats, ContextSummaryTimelineItem, FileChange, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, RunOutcomeTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
 import { userMessageOutline as outlineFromItems } from "../../shared/user-message";
 import { plainErrorReason } from "../lib/error-reason";
-import { formatRunElapsed, getRunFeedback, getRunStatusActivity, type RunFeedback, type RunStatusActivity } from "../run-feedback";
+import { formatRunElapsed, getRunStatusActivity, type RunStatusActivity } from "../run-feedback";
 import { copyText } from "../lib/clipboard";
 import { imageDataUrl } from "../lib/image";
 import { LocalMediaVersionContext } from "../lib/local-media";
@@ -16,7 +16,7 @@ import { commandHeadline, summarizeToolActivity, ToolActivity } from "./tool-act
 import { DiffStat, DiffView } from "./diff-view";
 import { LocalTextFileLink } from "./text-file-preview";
 import { mergeFileChanges } from "../../shared/file-change";
-import { activityGroupId, collapseUntouchedTimelineProcess, emptyTimelineFoldState, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, visibleToolActivityItemIds, type TimelineFoldState } from "./timeline-fold";
+import { activityGroupId, collapseUntouchedTimelineProcess, emptyTimelineFoldState, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, toggleTimelineThinking, visibleToolActivityItemIds, type TimelineFoldState } from "./timeline-fold";
 import { Dialog, DialogContent } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
@@ -154,6 +154,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   const activeNavigationIdRef = useRef<string | undefined>(undefined);
   const [following, setFollowing] = useState(true);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
+  const [showRunStatusBar, setShowRunStatusBar] = useState(false);
   const [jumpLatestBottom, setJumpLatestBottom] = useState<number>();
   const [hideJumpLatestForComposer, setHideJumpLatestForComposer] = useState(false);
   const followingRef = useRef(following);
@@ -179,7 +180,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   const [fillingViewport, setFillingViewport] = useState(false);
   const [fillViewportRevision, setFillViewportRevision] = useState(0);
   const isMobile = useIsMobile();
-  const activeProcessId = status.runState === "idle" ? undefined : timelineProcessId(turns.at(-1));
+  const activeProcessId = timelineProcessId(activeTimelineTurn(turns, status));
   const previousActiveProcessRef = useRef<{ sessionKey?: string; processId?: string }>({ sessionKey, processId: activeProcessId });
   const toggleProcess = useCallback((processId: string, open: boolean) => {
     setFoldState((current) => toggleTimelineProcess(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), processId, open));
@@ -189,6 +190,9 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   }, [sessionKey]);
   const toggleGroup = useCallback((processId: string, groupId: string) => {
     setFoldState((current) => toggleTimelineGroup(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), processId, groupId));
+  }, [sessionKey]);
+  const toggleThinking = useCallback((detailId: string, currentlyOpen: boolean) => {
+    setFoldState((current) => toggleTimelineThinking(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), detailId, currentlyOpen));
   }, [sessionKey]);
   useEffect(() => {
     setFoldState((current) => current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey));
@@ -205,13 +209,19 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
     return userMessageAnchors(items);
   }, [outline, outlineLoading, items]);
   const userMessageKey = userMessages.map((item) => item.id).join(":");
-  const feedback = getRunFeedback(status, items, streamingMessageId);
   const runActivity = getRunStatusActivity(status, items, streamingMessageId);
+  const activeTurn = activeTimelineTurn(turns, status);
+  const hasVisibleLiveProcess = (activeTurn !== undefined && hasVisibleLiveProcessEntry(activeTurn, streamingMessageId, foldStateForRender.closedDetailIds))
+    || (status.activeRun?.kind === "bash" && items.some((item) => item.kind === "tool" && item.name !== "ask_user_question" && (item.state === "queued" || item.state === "running")));
+  const showInlineRunStatus = runActivity !== undefined && (runActivity.target === "bottom" || status.runState !== "running" || !hasVisibleLiveProcess);
+  const statusAtComposer = status.compacting !== undefined || status.retrying !== undefined || status.runState === "stopping";
+  const runStatusTurnKey = showInlineRunStatus && !statusAtComposer ? activeTurn?.key : undefined;
+  const showComposerStatusCapsule = runActivity !== undefined && (showRunStatusBar || statusAtComposer || (showInlineRunStatus && runStatusTurnKey === undefined));
   // 点过「知道了」的被中断卡片先在本地藏起来；服务端清标记失败也不再打扰。
   const [dismissedFailureKey, setDismissedFailureKey] = useState<string>();
   const failureKey = status.lastError === undefined ? undefined : `${sessionKey}:${status.lastError.code}:${status.lastError.occurredAt}`;
   const failureDismissed = failureKey !== undefined && failureKey === dismissedFailureKey;
-  const hasMatchingTimelineFailure = status.lastError !== undefined && (turns.at(-1)?.finalError !== undefined || items.some((item) => item.kind === "error" && item.state === "failed" && item.code === status.lastError!.code && item.message === status.lastError!.message));
+  const hasMatchingTimelineFailure = status.lastError !== undefined && (turns.at(-1)?.finalError !== undefined || turns.some((turn) => turn.outcome?.outcome === "interrupted" || (turn.outcome?.outcome === "failed" && turn.outcome.code === status.lastError!.code && turn.outcome.message === status.lastError!.message)) || items.some((item) => item.kind === "error" && item.state === "failed" && item.code === status.lastError!.code && item.message === status.lastError!.message));
   const statusIndicatorKey = `${status.runState}:${status.compacting?.reason ?? ""}:${status.compacting?.retrying?.retryAt ?? ""}:${status.retrying?.retryAt ?? ""}:${status.lastError?.occurredAt ?? ""}:${error ?? ""}:${notice ?? ""}`;
 
   useLayoutEffect(() => {
@@ -226,6 +236,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
     if (scrollRef.current !== null) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     setFollowing(true);
     setShowJumpLatest(false);
+    setShowRunStatusBar(false);
     setHighlightedMessageId(undefined);
     setActiveUserMessageId(undefined);
     setMarkerPositions({});
@@ -308,7 +319,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
       const composerEditor = dock.querySelector<HTMLElement>(".composer-editor");
       const composerTop = composerEditor?.getBoundingClientRect().top ?? dockRect.top;
       stage.style.setProperty("--timeline-navigator-bottom", `${String(Math.max(42, Math.ceil(shellRect.bottom - composerTop + 28)))}px`);
-      const nextBottom = jumpLatestBottomForDock(shellRect.bottom, dockRect.top);
+      const nextBottom = jumpLatestBottomForDock(shellRect.bottom, composerTop);
       const nextHide = shouldHideJumpLatestForComposer(isMobile, composerEditor?.getBoundingClientRect().height ?? 0);
       setJumpLatestBottom((current) => current === nextBottom ? current : nextBottom);
       setHideJumpLatestForComposer((current) => current === nextHide ? current : nextHide);
@@ -333,11 +344,13 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
     if (element === null) return;
     if (!followingRef.current) {
       setShowJumpLatest(shouldShowJumpLatest(element));
+      setShowRunStatusBar(shouldShowRunStatusBarForElement(element, runActivity));
       return;
     }
     element.scrollTop = element.scrollHeight;
     setShowJumpLatest(false);
-  }, [items, streamingMessageId, feedback?.label, statusIndicatorKey]);
+    setShowRunStatusBar(false);
+  }, [items, streamingMessageId, runActivity?.label, statusIndicatorKey]);
 
   const loadEarlier = async () => {
     if (!hasMore || loadingEarlierRef.current) return;
@@ -447,12 +460,13 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   };
 
   return (
-    <section className={`timeline-shell${runActivity === undefined ? "" : " has-run-status"}`}>
+    <section className="timeline-shell">
       <TurnNavigator mobile={isMobile} anchors={userMessages} activeId={activeUserMessageId} markerPositions={markerPositions} loadingAll={(outlineLoading && userMessages.length === 0) || pendingJumpId !== undefined} open={navigatorOpen} onOpenChange={(open) => { if (open) onNavigatorOpenChange?.(true); else closeNavigator(); }} onJump={jumpToUserMessage} />
       <div className="timeline" ref={scrollRef} onScroll={(event) => {
         const element = event.currentTarget;
         setFollowing(isFollowingLatest(element));
         setShowJumpLatest(shouldShowJumpLatest(element));
+        setShowRunStatusBar(shouldShowRunStatusBarForElement(element, runActivity));
         updateActiveUserMessage();
         loadWhenNearTop(element);
       }} onWheel={(event) => {
@@ -466,26 +480,24 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
         touchYRef.current = currentY;
         if (previousY !== undefined && currentY !== undefined) {
           const deltaY = currentY - previousY;
-          stopFollowingOnGesture(event.currentTarget, setFollowing, deltaY);
-          if (deltaY < 0) loadWhenNearTop(event.currentTarget);
+          const scrollDeltaY = -deltaY;
+          stopFollowingOnGesture(event.currentTarget, setFollowing, scrollDeltaY);
+          if (scrollDeltaY < 0) loadWhenNearTop(event.currentTarget);
         }
       }}>
         <div className="timeline-inner">
           <div className="timeline-feed">
             {hasMore ? <button type="button" className="timeline-load-earlier" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "加载中" : "更早"}</button> : null}
             <LocalMediaVersionContext.Provider value={localMediaVersion}>
-              {renderTimelineTurns(turns, streamingMessageId, liveGeneration, status, foldStateForRender, toggleProcess, toggleDetail, toggleGroup, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, workspaceCwd, highlightedMessageId, status.runState === "idle" ? onRetryTurn : undefined, status.runState === "idle" ? onContinue : undefined)}
+              {renderTimelineTurns(turns, streamingMessageId, liveGeneration, status, foldStateForRender, toggleProcess, toggleDetail, toggleGroup, toggleThinking, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, workspaceCwd, highlightedMessageId, status.runState === "idle" ? onRetryTurn : undefined, status.runState === "idle" ? onContinue : undefined, onRetryCompaction, onDismissInterrupted, showInlineRunStatus ? runActivity : undefined, runStatusTurnKey)}
             </LocalMediaVersionContext.Provider>
-            {status.compacting === undefined ? null : <CompactingIndicator compacting={status.compacting} />}
-            {status.retrying === undefined ? null : <RetryingIndicator retrying={status.retrying} />}
             {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
             {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
             {status.lastError === undefined || hasMatchingTimelineFailure || failureDismissed ? null : <RunFailureCard failure={status.lastError} onRetryCompaction={onRetryCompaction} onDismiss={status.lastError.code !== "RUN_INTERRUPTED" ? undefined : () => { setDismissedFailureKey(failureKey); onDismissInterrupted?.(); }} onRetry={status.runState !== "idle" || onRetryTurn === undefined || turns.at(-1)?.user === undefined ? undefined : () => onRetryTurn(turns.at(-1)!.user!)} onContinue={status.runState === "idle" ? onContinue : undefined} />}
-            {feedback === undefined || hasActiveActivity(items, status) ? null : <WorkingIndicator feedback={feedback} />}
           </div>
         </div>
       </div>
-      {runActivity !== undefined && showJumpLatest && !hideJumpLatestForComposer ? <RunStatusBar activity={runActivity} startedAt={status.activeRun?.startedAt} bottom={jumpLatestBottom} onJump={() => {
+      {runActivity !== undefined && showComposerStatusCapsule ? <RunStatusBar activity={runActivity} startedAt={status.activeRun?.startedAt} bottom={jumpLatestBottom} onJump={() => {
         const element = scrollRef.current;
         if (element === null) return;
         const target = runActivityElement(element, runActivity);
@@ -551,59 +563,41 @@ function runActivityElement(root: HTMLElement, activity: RunStatusActivity): HTM
   return found.length === 0 ? undefined : found[found.length - 1];
 }
 
+function shouldShowRunStatusBarForElement(root: HTMLElement | null, activity: RunStatusActivity | undefined): boolean {
+  if (root === null || activity === undefined) return false;
+  const target = activity.target === "bottom" ? root.querySelector<HTMLElement>(".message-run-status, .turn-live-status .working-indicator") : runActivityElement(root, activity);
+  if (target === null || target === undefined || target.getClientRects().length === 0) return true;
+  const rootRect = root.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  return targetRect.bottom <= rootRect.top || targetRect.top >= rootRect.bottom;
+}
+
+function hasVisibleLiveProcessEntry(turn: TimelineTurn, streamingMessageId: string | undefined, closedThinkingIds: ReadonlySet<string>): boolean {
+  const presented = presentTurnProcess(turn.process).entries;
+  const visibleEntries = splitVisibleTurnEntries(presented).process;
+  const final = turn.final;
+  if (final !== undefined && final.id === streamingMessageId && final.text !== "") return true;
+  return visibleEntries.some((entry) => {
+    if (entry.kind === "activity") return entry.items.some((item) => item.state === "queued" || item.state === "running");
+    if (entry.kind === "thinking") return entry.item.state === "running" && entry.item.text.trim() !== "" && !closedThinkingIds.has(entry.item.id);
+    return entry.kind === "message" && entry.item.id === streamingMessageId && entry.item.text !== "";
+  });
+}
+
+function WorkingIndicator({ activity, startedAt, className = "working-indicator" }: { activity: RunStatusActivity; startedAt?: string; className?: string }) {
+  return <div className={className} role="status" aria-live="polite">
+    <LoaderCircle className="spin" size={13} aria-hidden="true" />
+    <span>{activity.label}</span>
+    <ElapsedClock startedAt={startedAt} />
+  </div>;
+}
+
 function RunStatusBar({ activity, startedAt, bottom, onJump }: { activity: RunStatusActivity; startedAt?: string; bottom?: number; onJump: () => void }) {
   return <button type="button" className="run-status-bar" style={bottom === undefined ? undefined : { bottom: `${String(bottom)}px` }} onClick={onJump} title="跳到当前步骤">
     <LoaderCircle className="spin" size={13} aria-hidden="true" />
     <span className="run-status-label">{activity.label}</span>
     <ElapsedClock startedAt={startedAt} />
   </button>;
-}
-
-function WorkingIndicator({ feedback }: { feedback: RunFeedback }) {
-  return <div className={`working-indicator ${feedback.tone}`} role="status" aria-live="polite">
-    <LoaderCircle className="spin" size={15} />
-    <span>{feedback.label}</span>
-    <ElapsedClock startedAt={feedback.startedAt} />
-  </div>;
-}
-
-function RetryingIndicator({ retrying }: { retrying: NonNullable<SessionStatus["retrying"]> }) {
-  return <RunStatusIndicator className="retrying-indicator" icon={<LoaderCircle className="spin" size={15} />} label={`模型响应失败，正在重试（${String(retrying.attempt)}/${String(retrying.maxAttempts)}）`} detail={retrying.errorMessage} retrying={retrying} />;
-}
-
-function CompactingIndicator({ compacting }: { compacting: NonNullable<SessionStatus["compacting"]> }) {
-  const label = compacting.reason === "manual"
-    ? "正在压缩上下文"
-    : compacting.reason === "overflow"
-      ? "上下文已满，正在压缩后重试"
-      : "上下文接近上限，正在自动压缩";
-  const retrying = compacting.retrying;
-  return <RunStatusIndicator className="compacting-indicator" icon={<LoaderCircle className="spin" size={15} />} label={label} startedAt={compacting.startedAt} detail={retrying === undefined ? undefined : `摘要生成失败，正在重试（${String(retrying.attempt)}/${String(retrying.maxAttempts)}）：${retrying.errorMessage}`} retrying={retrying} />;
-}
-
-function RunStatusIndicator({ className, icon, label, startedAt, detail, retrying }: { className: string; icon: ReactNode; label: string; startedAt?: string; detail?: string; retrying?: NonNullable<SessionStatus["retrying"]> }) {
-  return <div className={className} role="status" aria-live="polite">
-    <span className="run-status-icon">{icon}</span>
-    <span className="run-status-copy">
-      <span className="run-status-heading"><strong>{label}</strong>{startedAt === undefined ? null : <ElapsedClock startedAt={startedAt} />}</span>
-      {detail === undefined ? null : <span className="run-status-detail">{detail}</span>}
-    </span>
-    {retrying === undefined ? null : <RetryCountdown retrying={retrying} />}
-  </div>;
-}
-
-function RetryCountdown({ retrying }: { retrying: NonNullable<SessionStatus["retrying"]> }) {
-  const [now, setNow] = useState(() => Date.now());
-  const endsAt = Date.parse(retrying.retryAt);
-
-  useEffect(() => {
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [retrying.retryAt]);
-
-  const secondsLeft = Number.isFinite(endsAt) ? Math.max(0, Math.ceil((endsAt - now) / 1_000)) : 0;
-  return <time aria-live="off" aria-hidden="true">{secondsLeft}s</time>;
 }
 
 function RunFailureCard({ failure, onRetryCompaction, onRetry, onContinue, onDismiss }: { failure: NonNullable<SessionStatus["lastError"]>; onRetryCompaction: TimelineProps["onRetryCompaction"]; onRetry?: () => void; onContinue?: () => void; onDismiss?: () => void }) {
@@ -735,7 +729,7 @@ function errorSummary(message: string): string {
   return `${firstLine.slice(0, 177)}…`;
 }
 
-const MessageItem = memo(function MessageItem({ item, streaming, live, highlighted, onEdit, onFork, baseDir, showMeta = false, generationSummary }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; live?: LiveGenerationStats; highlighted: boolean; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string; showMeta?: boolean; generationSummary?: GenerationSummary }) {
+const MessageItem = memo(function MessageItem({ item, streaming, live, highlighted, onEdit, onFork, baseDir, showMeta = false, generationSummary, afterContent, runIndicator }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; live?: LiveGenerationStats; highlighted: boolean; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string; showMeta?: boolean; generationSummary?: GenerationSummary; afterContent?: ReactNode; runIndicator?: ReactNode }) {
   const [showTimestamp, setShowTimestamp] = useState(false);
   const images = item.images ?? [];
   const toggleTimestampOnTouch = (event: React.PointerEvent) => {
@@ -753,6 +747,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, live, highlight
         {item.text === "" ? null : <div className={`message-content ${streaming ? "streaming" : ""}`} onPointerDown={toggleTimestampOnTouch}>
           <MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} interactiveFiles={item.role === "assistant" && !streaming} />
         </div>}
+        {afterContent}
         {item.role === "assistant" && showMeta && !streaming && item.text !== "" ? <div className="assistant-message-footer">
           <MessageActions item={item} streaming={false} onFork={onFork} copyable />
           <AssistantGenerationMeta generation={item.generation} summary={generationSummary} />
@@ -760,6 +755,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, live, highlight
           {showMeta && item.role === "assistant" && (live !== undefined || item.generation !== undefined) ? <AssistantGenerationMeta live={live} generation={item.generation} /> : null}
           <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : () => onEdit(item)} onFork={item.role === "assistant" && !showMeta ? undefined : onFork} showTimestamp={item.role === "user"} createdAt={item.createdAt} />
         </>}
+        {runIndicator}
       </div>
     </article>
   );
@@ -1159,6 +1155,14 @@ function ExtensionTimeout({ timeout, createdAt }: { timeout?: number; createdAt:
   return <span className={`extension-operation-state ${seconds <= 30 ? "urgent" : ""}`}>{seconds === 0 ? "即将超时" : `${seconds}s`}</span>;
 }
 
+function RunStoppedItem() {
+  return <div className="timeline-run-outcome stopped" role="status"><XCircle size={14} /><span>已停止</span></div>;
+}
+
+function RunCompletedItem() {
+  return <div className="timeline-run-outcome completed" role="status"><Check size={14} /><span>已完成</span></div>;
+}
+
 const ContextSummaryItem = memo(function ContextSummaryItem({ item, baseDir }: { item: ContextSummaryTimelineItem; baseDir?: string }) {
   const [expanded, setExpanded] = useState(false);
   const isCompaction = item.summaryType === "compaction";
@@ -1176,11 +1180,16 @@ export type TimelineRenderItem =
   | { kind: "message"; item: MessageTimelineItem }
   | { kind: "error"; items: ErrorTimelineItem[] }
   | { kind: "context-summary"; item: ContextSummaryTimelineItem }
+  | { kind: "run-outcome"; item: RunOutcomeTimelineItem }
   | { kind: "extension-ui"; item: ExtensionUiTimelineItem }
   | { kind: "thinking"; item: ThinkingTimelineItem }
   | { kind: "activity"; items: ToolTimelineItem[] };
 
 export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] {
+  return groupTimelineItemsInternal(items, false);
+}
+
+function groupTimelineItemsInternal(items: TimelineItem[], includeRunOutcomes: boolean): TimelineRenderItem[] {
   const result: TimelineRenderItem[] = [];
   let tools: ToolTimelineItem[] = [];
   const flushTools = () => {
@@ -1190,6 +1199,7 @@ export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] 
 
   for (const item of items) {
     if (item.kind === "tool") {
+      if (tools.length > 0 && isUserCommand(tools[0]!) !== isUserCommand(item)) flushTools();
       tools.push(item);
     } else {
       flushTools();
@@ -1200,7 +1210,8 @@ export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] 
         else result.push({ kind: "error", items: [item] });
       } else if (item.kind === "extension-ui") result.push({ kind: "extension-ui", item });
       else if (item.kind === "thinking") result.push({ kind: "thinking", item });
-      else result.push({ kind: "context-summary", item });
+      else if (item.kind === "context-summary") result.push({ kind: "context-summary", item });
+      else if (item.kind === "run-outcome" && includeRunOutcomes) result.push({ kind: "run-outcome", item });
     }
   }
   flushTools();
@@ -1209,13 +1220,6 @@ export function groupTimelineItems(items: TimelineItem[]): TimelineRenderItem[] 
 
 function isPendingToolItem(item: TimelineItem): boolean {
   return item.kind === "tool" && (item.state === "queued" || item.state === "running");
-}
-
-function hasActiveActivity(items: TimelineItem[], status: SessionStatus): boolean {
-  if (status.runState === "idle") return false;
-  const last = items.at(-1);
-  if (last?.kind === "thinking" && last.state === "running") return true;
-  return isToolActivityRunning(items, status);
 }
 
 /** 尾部工具组里还有未完成的工具才算执行中；思考已开始或工具都结束则停转圈。 */
@@ -1240,9 +1244,10 @@ export interface TimelineTurn {
   final?: MessageTimelineItem;
   /** 回合末尾未恢复的错误，留在过程折叠外。 */
   finalError?: ErrorTimelineItem[];
+  outcome?: RunOutcomeTimelineItem;
 }
 
-/** 以用户消息为界组成回合。最终输出及其之后的内容不进过程；没有明确最终输出时回退到最后一条 assistant 文本。 */
+/** 以用户消息为界组成回合；只有末尾的 assistant 文本提到过程外。 */
 export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
   const turns: TimelineTurn[] = [];
   let current: TimelineTurn | undefined;
@@ -1253,32 +1258,39 @@ export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
     return turn;
   };
 
-  for (const entry of groupTimelineItems(items)) {
+  for (const entry of groupTimelineItemsInternal(items, true)) {
     if (entry.kind === "message" && entry.item.role === "user") {
       openTurn(`turn:${entry.item.id}`).user = entry.item;
+      continue;
+    }
+    if (entry.kind === "run-outcome") {
+      (current ?? openTurn(`turn:run:${entry.item.runId}`)).outcome = entry.item;
+      continue;
+    }
+    if (entry.kind === "activity" && entry.items.every(isUserCommand)) {
+      openTurn(`turn:${renderItemKey(entry)}`).process.push(entry);
+      current = undefined;
       continue;
     }
     const sourceMessageId = renderItemSourceMessageId(entry);
     (current ?? openTurn(`turn:${sourceMessageId ?? renderItemKey(entry)}`)).process.push(entry);
   }
   for (const turn of turns) {
-    const candidates = turn.process
-      .map((entry, index) => ({ entry, index }))
-      .filter(({ entry }) => entry.kind === "message" && entry.item.role === "assistant");
-    const finalCandidate = [...candidates].reverse().find(({ entry }) => entry.kind === "message" && entry.item.phase === "final_answer")
-      ?? candidates.at(-1);
-    if (finalCandidate !== undefined && finalCandidate.entry.kind === "message") {
-      turn.final = finalCandidate.entry.item;
-      turn.process = turn.process.slice(0, finalCandidate.index);
-      continue;
-    }
     const last = turn.process.at(-1);
-    if (last?.kind === "error" && last.items.some((item) => item.state === "failed")) {
+    if (last?.kind === "message" && last.item.role === "assistant") {
+      turn.final = last.item;
+      turn.process.pop();
+    } else if (last?.kind === "error" && last.items.some((item) => item.state === "failed")) {
       turn.finalError = last.items;
       turn.process.pop();
     }
   }
   return turns;
+}
+
+/** 独立命令和手动压缩不重新打开上一轮回复。 */
+export function activeTimelineTurn(turns: TimelineTurn[], status: SessionStatus): TimelineTurn | undefined {
+  return status.runState !== "idle" && (status.activeRun?.kind ?? "llm") === "llm" ? turns.at(-1) : undefined;
 }
 
 function renderItemKey(entry: TimelineRenderItem): string {
@@ -1350,15 +1362,9 @@ export function turnProcessCategories(entries: TimelineRenderItem[]): string {
   return summarizeToolActivity(entries.flatMap((entry) => entry.kind === "activity" ? entry.items : []));
 }
 
-/** 过程里只要还有内容就值得折进「过程」，单条也算。 */
-export function shouldFoldTurnProcess(turn: TimelineTurn): boolean {
-  return turn.process.length > 0;
-}
-
-/** 最终回复还没写完时不出现「过程」。这一轮已结束，或最终回复已不在流式输出，才收进过程。 */
-export function turnFinalReplyPending(turn: { final?: { id: string } }, live: boolean, streamingMessageId: string | undefined): boolean {
-  if (!live) return false;
-  return turn.final === undefined || turn.final.id === streamingMessageId;
+/** 整轮结束后才收进「过程」，单条内容也算。 */
+export function shouldFoldTurnProcess(turn: TimelineTurn, live = false): boolean {
+  return !live && turn.process.length > 0;
 }
 
 /** 过程默认收起；用户手动打开过才展开。 */
@@ -1426,6 +1432,9 @@ interface TurnRenderContext {
   liveGeneration?: LiveGenerationStats;
   status: SessionStatus;
   openDetailIds: ReadonlySet<string>;
+  closedDetailIds: ReadonlySet<string>;
+  openThinkingIds: ReadonlySet<string>;
+  onToggleThinking: (detailId: string, currentlyOpen: boolean) => void;
   openGroupIds: ReadonlySet<string>;
   onToggleDetail: (id: string) => void;
   onToggleGroup?: (groupId: string) => void;
@@ -1439,9 +1448,18 @@ interface TurnRenderContext {
   /** 只有回合的最终回答显示 token/速度/用时。 */
   showGenerationMeta?: boolean;
   generationSummary?: GenerationSummary;
+  /** 最终回答正文后的过程与文件变更，排在操作和统计前。 */
+  afterContent?: ReactNode;
+  runIndicator?: ReactNode;
+  runStatusActivity?: RunStatusActivity;
+  runStatusStartedAt?: string;
+  runStatusTurnKey?: string;
+  runStatusMessageId?: string;
   onRetryTurn?: TimelineProps["onRetryTurn"];
   onContinue?: TimelineProps["onContinue"];
-  /** 最终回复完成前：思考和工具组不收起。 */
+  onRetryCompaction?: TimelineProps["onRetryCompaction"];
+  onDismissInterrupted?: TimelineProps["onDismissInterrupted"];
+  /** 整轮运行结束前：思考和工具组不自动收起。 */
   inlineProcess?: boolean;
 }
 
@@ -1502,14 +1520,15 @@ function liveGenerationForBlock(item: MessageTimelineItem | ThinkingTimelineItem
 function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, showAll = true, showActivePreview = true): ReactNode {
   if (entry.kind === "message") {
     const streaming = entry.item.id === context.streamingMessageId && context.liveGeneration?.activeBlockKind !== "thinking";
-    return <MessageItem key={entry.item.id} item={entry.item} streaming={streaming} live={liveGenerationForBlock(entry.item, context.liveGeneration, "text")} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={context.onForkMessage} baseDir={context.workspaceCwd} showMeta={context.showGenerationMeta === true} generationSummary={context.generationSummary} />;
+    return <MessageItem key={entry.item.id} item={entry.item} streaming={streaming} live={liveGenerationForBlock(entry.item, context.liveGeneration, "text")} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={context.onForkMessage} baseDir={context.workspaceCwd} showMeta={context.showGenerationMeta === true} generationSummary={context.generationSummary} afterContent={context.afterContent} runIndicator={context.runStatusMessageId === entry.item.id ? context.runIndicator : undefined} />;
   }
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
+  if (entry.kind === "run-outcome") return null;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} customText={context.customAnswers?.get(entry.item.id)} />;
   if (entry.kind === "thinking") {
     const streaming = entry.item.state === "running" && context.liveGeneration?.activeBlockKind === "thinking";
-    return <ThinkingItem key={entry.item.id} item={entry.item} streaming={streaming} live={liveGenerationForBlock(entry.item, context.liveGeneration, "thinking")} baseDir={context.workspaceCwd} open={context.inlineProcess === true || context.openDetailIds.has(entry.item.id)} showDetails={showAll} onToggle={() => context.onToggleDetail(entry.item.id)} />;
+    return <ThinkingItem key={entry.item.id} item={entry.item} streaming={streaming} live={liveGenerationForBlock(entry.item, context.liveGeneration, "thinking")} baseDir={context.workspaceCwd} open={context.inlineProcess === true || context.openThinkingIds.has(entry.item.id)} closed={context.closedDetailIds.has(entry.item.id)} showDetails={showAll} onToggleThinking={context.onToggleThinking} />;
   }
   const active = context.status.runState !== "idle" && entry.items.some((item) => item.state === "queued" || item.state === "running");
   const groupId = activityGroupId(entry.items[0]?.id ?? "empty");
@@ -1583,15 +1602,18 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   const split = useMemo(() => splitVisibleTurnEntries(presented.entries), [presented.entries]);
   const displayTurn = { ...turn, process: split.process };
   const summary = summarizeTurnProcess(displayTurn);
-  const collapsible = shouldFoldTurnProcess(displayTurn);
+  const collapsible = shouldFoldTurnProcess(displayTurn, live);
   const processId = timelineProcessId(turn);
-  const inline = turnFinalReplyPending(turn, live, context.streamingMessageId);
-  const open = !collapsible || (!inline && isTurnProcessOpen(foldState, processId));
   const touched = processId !== undefined && foldState.touchedProcessIds.has(processId);
-  const showAll = inline || !collapsible || open;
-  const processContext: TurnRenderContext = {
+  const open = !collapsible || isTurnProcessOpen(foldState, processId);
+  const showAll = open;
+  const processBaseContext: TurnRenderContext = {
     ...context,
+    inlineProcess: live,
     openDetailIds: foldState.openDetailIds,
+    closedDetailIds: foldState.closedDetailIds,
+    openThinkingIds: foldState.openThinkingIds,
+    onToggleThinking: (detailId, currentlyOpen) => { if (processId !== undefined) context.onToggleThinking(detailId, currentlyOpen); },
     openGroupIds: foldState.openGroupIds,
     onToggleDetail: (detailId) => { if (processId !== undefined) onToggleProcessDetail(processId, detailId, showAll); },
     onToggleGroup: (groupId) => { if (processId !== undefined) onToggleProcessGroup(processId, groupId); },
@@ -1601,19 +1623,20 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
   const changes = useMemo(() => turnFileChanges(split.process), [split.process]);
   const categories = useMemo(() => turnProcessCategories(split.process), [split.process]);
+  const runIndicator = context.runStatusTurnKey === turn.key && context.runStatusActivity !== undefined
+    ? <WorkingIndicator className="working-indicator message-run-status" activity={context.runStatusActivity} startedAt={context.runStatusStartedAt} />
+    : undefined;
+  const runStatusMessage = runIndicator === undefined || turn.final !== undefined ? undefined : [...displayTurn.process].reverse().find((entry): entry is Extract<TimelineRenderItem, { kind: "message" }> => entry.kind === "message" && entry.item.role === "assistant");
+  const runStatusMessageId = runStatusMessage?.item.id;
+  const processContext: TurnRenderContext = {
+    ...processBaseContext,
+    runIndicator,
+    runStatusMessageId,
+  };
   const processEntries = displayTurn.process.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
     {renderTimelineEntry(entry, processContext, true, !touched)}
   </div>);
-  const processBlock = displayTurn.process.length === 0 ? null : live
-    ? <div className="turn-process-stack">
-      <div className={`turn-process-summary turn-process-live-label${context.status.runState === "stopping" ? " stopping" : ""}`} role="status" aria-live="polite" aria-label={context.status.runState === "stopping" ? "正在停止" : "执行中"}>
-        <LoaderCircle className="spin turn-process-live-icon" size={13} aria-hidden="true" />
-        <span className="turn-process-label">{context.status.runState === "stopping" ? "正在停止" : "执行中"}</span>
-        {categories === "" ? null : <span className="turn-process-count">{categories}</span>}
-        <ElapsedClock startedAt={context.status.activeRun?.startedAt} />
-      </div>
-      {processEntries}
-    </div>
+  const processBlock = displayTurn.process.length === 0 ? null
     : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
       {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary, categories, changes.length)} onClick={() => onToggleProcess(processId, open)}>
         <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
@@ -1624,19 +1647,27 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
       </button>}
       {showAll ? <div className={!collapsible ? "turn-process-stack" : "turn-process-body"}>{processEntries}</div> : null}
     </section>;
+  const completedDetails = live || (processBlock === null && changes.length === 0) ? undefined : <div className="turn-details">
+    {processBlock}
+    {changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />}
+  </div>;
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
-    {processBlock}
+    {live && turn.final !== undefined ? processBlock : null}
     {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, true), onToggleCall: (_toolId, callId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, callId, true) }, true, false)}</div>)}
-    {turn.final === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: !live, generationSummary: summarizeTurnGeneration(turn), onForkMessage: live ? undefined : context.onForkMessage })}
-    {live || changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />}
+    {turn.final === undefined ? <>{live ? processBlock : completedDetails}{runIndicator === undefined || runStatusMessageId !== undefined ? null : <div className="turn-live-status">{runIndicator}</div>}</> : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: !live, generationSummary: summarizeTurnGeneration(turn), onForkMessage: live ? undefined : context.onForkMessage, afterContent: completedDetails, runIndicator, runStatusMessageId: turn.final.id })}
     {turn.finalError === undefined ? null : <TurnFailureCard items={turn.finalError} failedTool={lastFailedTool(split.process)} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} />}
+    {turn.outcome?.outcome === "completed" ? <RunCompletedItem /> : null}
+    {turn.outcome?.outcome === "stopped" ? <RunStoppedItem /> : null}
+    {turn.outcome?.outcome === "interrupted" || (turn.outcome?.outcome === "failed" && turn.finalError === undefined && !turnEndedInFailure(turn))
+      ? <RunFailureCard failure={{ code: turn.outcome.code ?? "RUN_FAILED", message: turn.outcome.message ?? "This run did not complete.", occurredAt: turn.outcome.createdAt }} onRetryCompaction={turn.outcome.code === "PI_COMPACTION_FAILED" ? context.onRetryCompaction : undefined} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} onDismiss={turn.outcome.outcome === "interrupted" ? context.onDismissInterrupted : undefined} />
+      : null}
   </>;
 }
 
-function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string, open: boolean) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined, onRetryTurn?: TimelineProps["onRetryTurn"], onContinue?: TimelineProps["onContinue"]): ReactNode[] {
-  const context: TurnRenderContext = { streamingMessageId, liveGeneration, status, openDetailIds: foldState.openDetailIds, openGroupIds: foldState.openGroupIds, onToggleDetail: () => undefined, onToggleCall: () => undefined, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage, onRetryTurn, onContinue };
-  const liveTurnKey = status.runState === "idle" ? undefined : turns.at(-1)?.key;
+function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string, open: boolean) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string) => void, onToggleThinking: (detailId: string, currentlyOpen: boolean) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined, onRetryTurn?: TimelineProps["onRetryTurn"], onContinue?: TimelineProps["onContinue"], onRetryCompaction?: TimelineProps["onRetryCompaction"], onDismissInterrupted?: TimelineProps["onDismissInterrupted"], runStatusActivity?: RunStatusActivity, runStatusTurnKey?: string): ReactNode[] {
+  const context: TurnRenderContext = { streamingMessageId, liveGeneration, status, openDetailIds: foldState.openDetailIds, closedDetailIds: foldState.closedDetailIds, openThinkingIds: foldState.openThinkingIds, onToggleThinking, openGroupIds: foldState.openGroupIds, onToggleDetail: () => undefined, onToggleCall: () => undefined, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage, onRetryTurn, onContinue, onRetryCompaction, onDismissInterrupted, runStatusActivity, runStatusStartedAt: status.activeRun?.startedAt, runStatusTurnKey };
+  const liveTurnKey = activeTimelineTurn(turns, status)?.key;
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} live={turn.key === liveTurnKey} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
 }
 
@@ -1656,19 +1687,19 @@ export function thinkingFoldPreview(text: string): string {
   return line.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/^#{1,6}\s+/, "");
 }
 
-/** 过程里的思考不标「思考」。生成期间始终展开；完成后，较长内容收成一行预览。 */
-function ThinkingItem({ item, streaming = false, baseDir, open, showDetails, onToggle }: { item: ThinkingTimelineItem; streaming?: boolean; live?: LiveGenerationStats; baseDir?: string; open: boolean; showDetails: boolean; onToggle: () => void }) {
-  const running = item.state === "running";
+/** 长思考默认展开至整轮结束；手动开合状态优先。 */
+function ThinkingItem({ item, streaming = false, baseDir, open, closed, showDetails, onToggleThinking }: { item: ThinkingTimelineItem; streaming?: boolean; live?: LiveGenerationStats; baseDir?: string; open: boolean; closed: boolean; showDetails: boolean; onToggleThinking: (id: string, currentlyOpen: boolean) => void }) {
   if (item.text.trim() === "") return null;
   const foldable = thinkingTextIsLong(item.text);
-  const expanded = !foldable || running || (open && showDetails);
+  const expanded = !foldable || (!closed && (item.state === "running" || (open && showDetails)));
   const body = <div className="thinking-body"><div className="message-content"><MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} /></div></div>;
   if (!foldable) return <article className={`thinking-item ${item.state}`}>{body}</article>;
   const preview = thinkingFoldPreview(item.text);
   return (
     <article className={`thinking-item ${item.state}${expanded ? " expanded" : ""}`}>
-      <button className="thinking-summary" type="button" onClick={onToggle} aria-expanded={expanded} aria-label={expanded ? "收起" : preview}>
+      <button className="thinking-summary" type="button" onClick={() => onToggleThinking(item.id, expanded)} aria-expanded={expanded} aria-label={expanded ? "收起思考" : `展开思考${preview === "" ? "" : `：${preview}`}`}>
         <ChevronRight size={13} className={`turn-process-chevron${expanded ? " expanded" : ""}`} aria-hidden />
+        <span className="thinking-label">思考</span>
         {expanded || preview === "" ? null : <span className="thinking-preview">{preview}</span>}
       </button>
       {expanded ? body : null}

@@ -5,7 +5,7 @@ import type { EventHub } from "./event-hub.js";
 import { assistantTextBlockId, assistantTextPhaseFromContent, assistantThinkingBlockId, assistantTimelineItemsFromPi, contextSummaryFromEntry, errorFromPi, messageFromPi, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import type { ActiveRun, ActiveSession, PiEvent } from "./session-active.js";
 import { firstUserMessage, isAssistantMessage, isUserMessage, retryStatus } from "./session-helpers.js";
-import { stringValue } from "./values.js";
+import { isAbortErrorMessage, stringValue } from "./values.js";
 
 export interface SessionPiHost {
   events: EventHub;
@@ -262,7 +262,7 @@ export class SessionPiEvents {
     } else {
       this.host.publishUsage(active, runId);
     }
-    if (stopReason === "error") {
+    if (stopReason === "error" && !isAbortErrorMessage(stringValue((message as Record<string, unknown>)["errorMessage"]))) {
       this.markAssistantAttemptFailed(active, message, identity.createdAt, assistantId, runId);
     } else if (stopReason !== "aborted") {
       this.markAssistantAttemptsRecovered(active, runId);

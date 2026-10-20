@@ -4,13 +4,14 @@ import { HashRouter } from "react-router";
 import { App } from "./app";
 import { AuthGate } from "./components/auth-gate";
 import { DesktopUpdatePrompt } from "./components/update-prompt";
+import { isDesktopShell } from "./lib/desktop-shell";
 import { openExternalUrl } from "./desktop";
 import { installExternalLinkHandler } from "./lib/external-links";
 import "./styles.css";
 
 installExternalLinkHandler((url) => {
-  void openExternalUrl(url);
-});
+  void openExternalUrl(url).catch(() => window.alert("无法打开链接"));
+}, isDesktopShell());
 
 let lastCoarseAt = 0;
 

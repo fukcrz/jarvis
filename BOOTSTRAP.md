@@ -21,7 +21,8 @@
 - `npm run build`（tsc + vite）
 - `node scripts/ui-smoke.mjs`（Playwright UI 冒烟）
 - `node scripts/ui-extension-smoke.mjs`（扩展选择/输入卡片冒烟，不依赖 ui-smoke 流水线，可单独跑）
-- `node scripts/ui-fold-smoke.mjs`（隔离临时环境与随机端口；bash/PowerShell 在桌面 1440 与移动 390 视口检查过程/命令组默认实时预览、手动收起后隐藏 queued/running/completed 行、失败异常保留、后续更新和重新展开，以及内容块原序、刷新/重连、失败、待交互和 `!cmd`；设置 `JARVIS_FOLD_SMOKE_FOCUSED=1` 只跑折叠矩阵）
+- `node scripts/ui-fold-smoke.mjs`（隔离临时环境与随机端口；桌面 1440 与移动 390 视口检查实时步骤、bash/PowerShell 明细与分组开合、整轮结束后的过程折叠，以及内容块原序、刷新/重连、失败、待交互和 `!cmd`；设置 `JARVIS_FOLD_SMOKE_FOCUSED=1` 只跑命令折叠矩阵）
+- `node scripts/ui-run-status-smoke.mjs`（隔离临时环境与随机端口；检查消息下方运行状态、离开底部 300px 后的悬浮入口，以及完成后正文、过程、文件变更、操作统计的顺序；输出桌面与手机截图）
 - `node scripts/ui-mobile-session-enter-smoke.mjs`（移动端跨项目第一次点会话/新建会话应留在聊天页，不弹回列表）
 
 ## 会话内命令

@@ -59,6 +59,15 @@ function setup() {
 }
 
 describe("Pi assistant block streaming", () => {
+  it("does not turn an aborted assistant attempt into a model failure", () => {
+    const fixture = setup();
+    try {
+      fixture.handler.handle(fixture.active, { type: "message_end", message: { ...message([]), stopReason: "error", errorMessage: "This operation was aborted" } });
+      expect(fixture.active.liveErrors.size).toBe(0);
+      expect(fixture.active.pendingRunError).toBeUndefined();
+    } finally { fixture.close(); }
+  });
+
   it("reconciles mixed blocks in source order across end, refresh and later tool execution", () => {
     const fixture = setup();
     try {

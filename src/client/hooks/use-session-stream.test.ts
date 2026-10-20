@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEvent, SessionStreamSnapshot, TimelinePage } from "../../shared/protocol";
 import { emptyTranscript } from "../transcript";
-import { applyOutlineEvents, reduceSessionStream, shouldApplySessionRefresh, type StreamState } from "./use-session-stream";
+import { applyOutlineEvents, reduceSessionStream, runNotificationFor, shouldApplySessionRefresh, type StreamState } from "./use-session-stream";
 
 function page(text: string): TimelinePage {
   return {
@@ -33,6 +33,18 @@ function hydrated(sessionKey: string, text: string): StreamState {
     connection: "live",
   });
 }
+
+describe("runNotificationFor", () => {
+  it("skips completion notifications for a user-stopped run", () => {
+    expect(runNotificationFor({ version: 1, sessionId: "session", runId: "run", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z", type: "run.settled", payload: { outcome: "stopped" } }, [])).toBeUndefined();
+  });
+
+  it("retains completion and failure notifications", () => {
+    const base = { version: 1 as const, sessionId: "session", runId: "run", seq: 1, emittedAt: "2026-08-09T00:00:00.000Z" };
+    expect(runNotificationFor({ ...base, type: "run.settled", payload: { outcome: "completed" } }, [])).toMatchObject({ runId: "run", failed: false });
+    expect(runNotificationFor({ ...base, type: "run.failed", payload: { outcome: "failed", status: { lastError: { message: "failed" } } } }, [])).toMatchObject({ runId: "run", failed: true, errorMessage: "failed" });
+  });
+});
 
 describe("session stream reducer", () => {
   it("clears the previous transcript as soon as another session is selected", () => {

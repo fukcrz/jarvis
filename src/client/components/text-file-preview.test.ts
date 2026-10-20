@@ -19,9 +19,10 @@ describe("local text file preview trigger", () => {
     }));
 
     expect(markup).toContain("<a ");
-    expect(markup).toContain('href="/api/files?path=src%2Fapp.ts&amp;cwd=%2Fws"');
+    expect(markup).toContain('href="/api/files?path=src%2Fapp.ts&amp;cwd=%2Fws&amp;download=1"');
+    expect(markup).toContain('download=""');
     expect(markup).toContain('class="local-file-preview-trigger"');
-    expect(markup).toContain('target="_blank"');
+    expect(markup).not.toContain('target="_blank"');
     expect(markup).not.toContain("<button");
   });
 

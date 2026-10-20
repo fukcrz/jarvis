@@ -4,6 +4,10 @@ export function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+export function isAbortErrorMessage(message: string): boolean {
+  return /^(?:this )?(?:operation|request) (?:was )?aborted\.?$|^(?:compaction|operation|request) (?:was )?cancelled\.?$|^(?:compaction|operation|request) (?:was )?canceled\.?$/i.test(message.trim());
+}
+
 export function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

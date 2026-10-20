@@ -329,6 +329,16 @@ describe("projectHistory", () => {
     expect(items).not.toEqual([expect.objectContaining({ kind: "message" })]);
   });
 
+  it("projects persisted run outcomes, filters dismissed runs, and excludes cancelled assistant attempts from errors", () => {
+    const items = projectHistory([
+      { type: "message", id: "cancelled", timestamp: "2026-08-09T00:00:01.000Z", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "This operation was aborted" } },
+      { type: "custom", id: "outcome", timestamp: "2026-08-09T00:00:02.000Z", customType: "jarvis.run-outcome", data: { runId: "run-1", outcome: "stopped", createdAt: "2026-08-09T00:00:02.000Z" } },
+      { type: "custom", id: "dismissed", timestamp: "2026-08-09T00:00:03.000Z", customType: "jarvis.run-outcome-dismissed", data: { runId: "run-1" } },
+    ]);
+
+    expect(items).toEqual([]);
+  });
+
   it("retains failed retry diagnostics but marks them recovered after a successful continuation", () => {
     const items = projectHistory([
       {

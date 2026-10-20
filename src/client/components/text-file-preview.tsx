@@ -51,12 +51,18 @@ interface LocalTextFileLinkProps {
   cwd?: string;
   children: ReactNode;
   line?: number;
+  column?: number;
   className?: string;
+  fallbackHref?: string;
 }
 
-/** 预览入口的下载/新标签回退地址，与消息里其它本地文件链接一致。 */
+/** 预览入口的下载回退地址。 */
 export function localTextFilePreviewHref(path: string, cwd?: string): string {
   return workspaceFileUrl(cwd ?? "", path);
+}
+
+export function localTextFileDownloadHref(path: string, cwd?: string): string {
+  return workspaceFileUrl(cwd ?? "", path, { download: true });
 }
 
 /**
@@ -88,22 +94,22 @@ interface LocalTextFilePreviewAnchorProps {
 /** 可预览的本地文本入口：用 a 保证划选，单击仍打开预览。 */
 export function LocalTextFilePreviewAnchor({ path, cwd, className, loading = false, children, onOpen }: LocalTextFilePreviewAnchorProps) {
   return <a
-    href={localTextFilePreviewHref(path, cwd)}
+    href={localTextFileDownloadHref(path, cwd)}
+    download
     className={className === undefined ? "local-file-preview-trigger" : `local-file-preview-trigger ${className}`}
-    target="_blank"
-    rel="noreferrer"
     aria-busy={loading || undefined}
     aria-disabled={loading || undefined}
     onClick={(event) => {
       if (!shouldOpenLocalTextFilePreview(event)) return;
       event.preventDefault();
-      if (!loading) onOpen();
+      if (loading) return;
+      onOpen();
     }}
   >{children}</a>;
 }
 
 /** 只有服务端确认是可读取文本文件后，才把普通文本显示成可点击入口。 */
-export function LocalTextFileLink({ path, cwd, line, children, className }: LocalTextFileLinkProps) {
+export function LocalTextFileLink({ path, cwd, line, column, children, className, fallbackHref }: LocalTextFileLinkProps) {
   const [available, setAvailable] = useState<boolean>();
   const [loading, setLoading] = useState(false);
   const [file, setFile] = useState<WorkspaceFileContent>();
@@ -122,7 +128,7 @@ export function LocalTextFileLink({ path, cwd, line, children, className }: Loca
   }, [cwd, path]);
 
   const openPreview = () => {
-    if (available !== true || loading) return;
+    if (loading) return;
     setLoading(true);
     void api.textFile(path, cwd)
       .then((result) => {
@@ -133,14 +139,14 @@ export function LocalTextFileLink({ path, cwd, line, children, className }: Loca
       .finally(() => { setLoading(false); });
   };
 
-  if (available !== true) return <span className="local-file-reference">{children}</span>;
+  if (available === false) return <a href={fallbackHref ?? localTextFileDownloadHref(path, cwd)} className={className === undefined ? "local-file-link" : `local-file-link ${className}`} download>{children}</a>;
   return <>
-    <LocalTextFilePreviewAnchor path={path} cwd={cwd} className={className} loading={loading} onOpen={openPreview}>{children}</LocalTextFilePreviewAnchor>
-    {file === undefined ? null : <TextFilePreviewDialog file={file} line={line} open={open} onClose={() => setOpen(false)} />}
+    <LocalTextFilePreviewAnchor path={path} cwd={cwd} className={className} loading={loading || available === undefined} onOpen={openPreview}>{children}</LocalTextFilePreviewAnchor>
+    {file === undefined ? null : <TextFilePreviewDialog file={file} line={line} column={column} open={open} onClose={() => setOpen(false)} />}
   </>;
 }
 
-export function TextFilePreviewDialog({ file, line, open = true, onClose }: { file: WorkspaceFileContent; line?: number; open?: boolean; onClose: () => void }) {
+export function TextFilePreviewDialog({ file, line, column, open = true, onClose }: { file: WorkspaceFileContent; line?: number; column?: number; open?: boolean; onClose: () => void }) {
   const codeRef = useRef<HTMLPreElement>(null);
   useHistoryBackTrap(open, onClose);
   useEffect(() => {
@@ -152,7 +158,7 @@ export function TextFilePreviewDialog({ file, line, open = true, onClose }: { fi
     <DialogContent className="text-file-preview-dialog" title={file.name}>
       <div className="text-file-preview-shell">
         {file.truncated ? <div className="text-file-preview-notice" role="status">文件较大，仅显示前 512 KB。</div> : null}
-        <CodePreview ref={codeRef} text={file.content} path={file.path} className="text-file-preview-code" lineClassName="text-file-preview-line" />
+        <CodePreview ref={codeRef} text={file.content} path={file.path} line={line} column={column} className="text-file-preview-code" lineClassName="text-file-preview-line" />
       </div>
     </DialogContent>
   </Dialog>;

@@ -37,8 +37,12 @@ const rehypePluginsComplete: PluggableList = [[rehypeSanitize, sanitizeSchema], 
 const rehypePluginsStreaming: PluggableList = [[rehypeSanitize, sanitizeSchema]];
 // react-markdown 默认的 urlTransform 只放行 http/https 等协议，data URI 会被替换成空串；
 // 这里只放行 data:image/*（base64 内嵌图），其余 URL 行为保持默认（javascript: 等仍被拦截）。
-const urlTransform = (url: string): string =>
-  /^data:image\//i.test(url) || localFilePathFromHref(url) !== undefined ? url : defaultUrlTransform(url);
+const urlTransform = (url: string, key?: string): string => {
+  if (key === "src" && /^data:image\/(?:png|jpeg|gif|webp|bmp|avif);/i.test(url)) return url;
+  if (key === "href" && localFilePathFromHref(url) !== undefined) return url;
+  if (key === "href" && /^[a-z]:[\\/]/i.test(url)) return url;
+  return defaultUrlTransform(url);
+};
 
 import { DiagramLightbox, ImagePreview, MermaidScaledSvg } from "./image-lightbox";
 import { LocalTextFileLink } from "./text-file-preview";
@@ -129,6 +133,13 @@ export function rewriteLocalLinkHref(href: string | undefined, cwd: string | und
   return `/api/files?${query}`;
 }
 
+export function localFileDownloadHref(href: string | undefined): string | undefined {
+  if (href === undefined || !href.startsWith("/api/files?")) return href;
+  const url = new URL(href, "http://jarvis.local");
+  url.searchParams.set("download", "1");
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 const LocalFileCwdContext = createContext<string | undefined>(undefined);
 const InteractiveFilesContext = createContext(false);
 const CodeBlockContext = createContext(false);
@@ -141,12 +152,25 @@ function LocalLink({ node: _node, href, className, children, ...rest }: Componen
   const interactive = useContext(InteractiveFilesContext);
   const reference = interactive ? localFileReferenceFromHref(href) : undefined;
   if (reference !== undefined && isTextFilePreviewPath(reference.path)) {
-    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line} className={className}>{children}</LocalTextFileLink>;
+    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line} column={reference.column} className={className} fallbackHref={localFileDownloadHref(rewriteLocalLinkHref(href, cwd))}>{children}</LocalTextFileLink>;
+  }
+  if (href?.startsWith("#") && !href.startsWith("#/")) {
+    return <a href={href} className={className} {...rest} onClick={(event) => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      let id = href.slice(1);
+      try { id = decodeURIComponent(id); } catch { id = href.slice(1); }
+      if (id === "") return;
+      const message = event.currentTarget.closest(".message-content");
+      const target = message?.querySelector<HTMLElement>(`#${CSS.escape(id)}`)
+        ?? message?.querySelector<HTMLElement>(`#${CSS.escape(`md-${headingSlug(id)}`)}`);
+      target?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }}>{children}</a>;
   }
   const resolved = rewriteLocalLinkHref(href, cwd);
-  if (resolved === href) return <a href={href} className={className} {...rest}>{children}</a>;
-  // 媒体、压缩包和未开启交互预览时保留现有行为：本地文件链接在新标签打开。
-  return <a href={resolved} className={className === undefined ? "local-file-link" : `local-file-link ${className}`} target="_blank" rel="noreferrer" {...rest}>{children}</a>;
+  if (resolved === href && !href?.startsWith("/api/files?")) return <a href={href} className={className} {...rest}>{children}</a>;
+  const downloadHref = localFileDownloadHref(resolved);
+  return <a {...rest} href={downloadHref} className={className === undefined ? "local-file-link" : `local-file-link ${className}`} download>{children}</a>;
 }
 
 /**
@@ -198,7 +222,9 @@ function MediaFallback({ label, src }: { label: string; src: string | undefined 
   return <span className="message-image-fallback" role="img" aria-label={label}>
     <ImageOff size={15} aria-hidden />
     <span className="message-image-fallback-path" title={src}>{imageFallbackTarget(src)}</span>
-    {src === undefined ? null : <a href={src} target="_blank" rel="noreferrer">打开</a>}
+    {src === undefined ? null : src.startsWith("/api/files?")
+      ? <a href={localFileDownloadHref(src)} download>下载</a>
+      : <a href={src} target="_blank" rel="noreferrer">打开</a>}
   </span>;
 }
 
@@ -256,7 +282,7 @@ function MarkdownCode({ node: _node, children, className, ...rest }: ComponentPr
   const text = textFromReactNode(children).trim();
   const reference = localFileReferenceFromHref(text);
   if (interactive && !isBlock && reference !== undefined && looksLikeFileReference(text) && isTextFilePreviewPath(reference.path)) {
-    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line}><code className={className} {...rest}>{children}</code></LocalTextFileLink>;
+    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line} column={reference.column}><code className={className} {...rest}>{children}</code></LocalTextFileLink>;
   }
   return <code className={className} {...rest}>{children}</code>;
 }

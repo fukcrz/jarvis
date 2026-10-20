@@ -162,6 +162,8 @@ export async function createActiveSession(
     queue: emptySessionQueue,
     messageQueue,
     compactionAbortRequested: false,
+    stopRequested: false,
+    suppressRunOutcome: false,
     pendingRunError: undefined,
     settlementTimer: undefined,
     compactionHandoff: false,
