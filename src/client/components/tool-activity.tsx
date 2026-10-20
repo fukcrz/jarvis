@@ -16,13 +16,13 @@ interface ToolActivityProps {
   showActivePreview?: boolean;
   /** IDs selected by the timeline fold state. */
   openItems?: ReadonlySet<string>;
-  onToggleItem?: (id: string) => void;
+  onToggleItem?: (id: string, currentlyOpen: boolean) => void;
   openCallIds?: ReadonlySet<string>;
-  onToggleCall?: (toolId: string, callId: string) => void;
+  onToggleCall?: (toolId: string, callId: string, currentlyOpen: boolean) => void;
   visibleItemIds?: ReadonlySet<string>;
   /** Hide this group's rows while the enclosing process stays open. */
   groupCollapsed?: boolean;
-  onToggleGroup?: () => void;
+  onToggleGroup?: (currentlyCollapsed: boolean) => void;
 }
 
 /** Consecutive tool rows fold under their count heading. */
@@ -35,12 +35,12 @@ export function ToolActivity({ items, active, showAll = true, showActivePreview 
 
   return (
     <article className={`activity-group ${state}`}>
-      {!grouped ? null : groupToggle ? <button type="button" className="activity-group-label" aria-expanded={!groupCollapsed} onClick={onToggleGroup}>
+      {!grouped ? null : groupToggle ? <button type="button" className="activity-group-label" aria-expanded={!groupCollapsed} onClick={() => onToggleGroup(groupCollapsed)}>
         <ChevronRight size={13} className={`turn-process-chevron${groupCollapsed ? "" : " expanded"}`} aria-hidden />
         <span className="activity-group-label-text">{summary}</span>
       </button> : <div className="activity-group-label"><span className="activity-group-label-text">{summary}</span></div>}
       <div className="activity-items" hidden={groupCollapsed || visibleIds.size === 0}>{items.map((item) => <div key={item.id} hidden={!visibleIds.has(item.id)}>
-        <ToolRow item={item} pending={active && (item.state === "running" || item.state === "queued")} grouped={grouped} open={openItems?.has(item.id) === true} showDetails={showAll} openCallIds={openCallIds} onToggle={() => onToggleItem?.(item.id)} onToggleCall={onToggleCall} />
+        <ToolRow item={item} pending={active && (item.state === "running" || item.state === "queued")} grouped={grouped} open={openItems?.has(item.id) === true} showDetails={showAll} openCallIds={openCallIds} onToggle={() => onToggleItem?.(item.id, openItems?.has(item.id) === true && showAll)} onToggleCall={onToggleCall} />
       </div>)}</div>
     </article>
   );
@@ -69,8 +69,8 @@ function formatActivityChunk(key: string, count: number): string {
   return `${key} ${String(count)}`;
 }
 
-function ToolRow({ item, pending, open, showDetails, grouped, openCallIds, onToggle, onToggleCall }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; grouped: boolean; openCallIds?: ReadonlySet<string>; onToggle: () => void; onToggleCall?: (toolId: string, callId: string) => void }) {
-  if (item.name === "bash") return <CommandToolRow item={item} pending={pending} open={open} showDetails={showDetails} onToggle={onToggle} />;
+function ToolRow({ item, pending, open, showDetails, grouped, openCallIds, onToggle, onToggleCall }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; grouped: boolean; openCallIds?: ReadonlySet<string>; onToggle: () => void; onToggleCall?: (toolId: string, callId: string, currentlyOpen: boolean) => void }) {
+  if (item.name === "bash" || item.name === "powershell") return <CommandToolRow item={item} pending={pending} open={open} showDetails={showDetails} onToggle={onToggle} />;
   if (item.subagent !== undefined) return <SubagentToolRow item={item} view={item.subagent} pending={pending} grouped={grouped} open={open} showDetails={showDetails} openCallIds={openCallIds} onToggle={onToggle} onToggleCall={onToggleCall} />;
   return <GenericToolRow item={item} pending={pending} open={open} showDetails={showDetails} onToggle={onToggle} />;
 }
@@ -160,6 +160,7 @@ function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: 
   return (
     <article className={`tool-item tool-list-item ${item.state}`}>
       <button className={`tool-summary${change === undefined ? "" : " has-diff"}`} type="button" onClick={onToggle} aria-expanded={open && showDetails}>
+        <ChevronRight size={13} className={`turn-process-chevron${open && showDetails ? " expanded" : ""}`} aria-hidden />
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
         <span className="tool-title">{toolActivityLabel(item)}</span>
         {change === undefined ? null : <DiffStat added={change.added} removed={change.removed} />}
@@ -175,13 +176,14 @@ function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: 
   );
 }
 
-function SubagentToolRow({ item, view, pending, grouped, open, showDetails, openCallIds, onToggle, onToggleCall }: { item: ToolTimelineItem; view: SubagentView; pending: boolean; grouped: boolean; open: boolean; showDetails: boolean; openCallIds?: ReadonlySet<string>; onToggle: () => void; onToggleCall?: (toolId: string, callId: string) => void }) {
+function SubagentToolRow({ item, view, pending, grouped, open, showDetails, openCallIds, onToggle, onToggleCall }: { item: ToolTimelineItem; view: SubagentView; pending: boolean; grouped: boolean; open: boolean; showDetails: boolean; openCallIds?: ReadonlySet<string>; onToggle: () => void; onToggleCall?: (toolId: string, callId: string, currentlyOpen: boolean) => void }) {
   const stateIcon = compactToolStateIcon(item.state, pending);
   const preview = open && showDetails ? "" : subagentLivePreview(view);
   const single = view.results.length === 1 ? view.results[0] : undefined;
   return (
     <article className={`tool-item tool-list-item subagent-item ${item.state}`}>
       <button className="tool-summary subagent-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
+        <ChevronRight size={13} className={`turn-process-chevron${open && showDetails ? " expanded" : ""}`} aria-hidden />
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
         <span className="subagent-summary-copy">
           <span className="tool-title">{subagentRowLabel(view, grouped)}</span>
@@ -196,7 +198,7 @@ function SubagentToolRow({ item, view, pending, grouped, open, showDetails, open
   );
 }
 
-export function SubagentCallList({ results, toolId = "subagent", openCallIds, onToggleCall }: { results: SubagentCallView[]; toolId?: string; openCallIds?: ReadonlySet<string>; onToggleCall?: (toolId: string, callId: string) => void }) {
+export function SubagentCallList({ results, toolId = "subagent", openCallIds, onToggleCall }: { results: SubagentCallView[]; toolId?: string; openCallIds?: ReadonlySet<string>; onToggleCall?: (toolId: string, callId: string, currentlyOpen: boolean) => void }) {
   return (
     <div className="subagent-calls">
       {results.map((call, index) => {
@@ -206,7 +208,7 @@ export function SubagentCallList({ results, toolId = "subagent", openCallIds, on
         const preview = callOpen || call.state !== "running" ? "" : subagentStatusLine(call.output ?? "");
         return (
           <div className={`subagent-call ${call.state}`} key={callId}>
-            <button className="subagent-call-summary" type="button" aria-expanded={callOpen} onClick={() => onToggleCall?.(toolId, callId)}>
+            <button className="subagent-call-summary" type="button" aria-expanded={callOpen} onClick={() => onToggleCall?.(toolId, callId, callOpen)}>
               {call.state === "failed" ? <CircleAlert size={13} aria-label="失败" /> : null}
               <span>{call.agent} · {subagentCallStateLabel(call.state)}</span>
             </button>
@@ -294,8 +296,9 @@ function CommandToolRow({ item, pending, open, showDetails, onToggle }: { item: 
   return (
     <article className={`tool-item tool-list-item command-item ${item.state}`}>
       <button className="tool-summary command-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
+        <ChevronRight size={13} className={`turn-process-chevron${open && showDetails ? " expanded" : ""}`} aria-hidden />
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
-        <span className="tool-target">{headline === "" ? "命令" : headline}</span>
+        <span className="tool-target">{open && showDetails ? "命令" : headline === "" ? "命令" : headline}</span>
         {item.excludeFromContext === true ? <span className="command-excluded" title="输出不会发送给模型">不进上下文</span> : null}
       </button>
       {open ? <div className="tool-details command-details inline-details" hidden={!showDetails}>

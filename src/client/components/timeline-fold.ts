@@ -7,6 +7,7 @@ export interface TimelineFoldState {
   closedDetailIds: ReadonlySet<string>;
   openThinkingIds: ReadonlySet<string>;
   openGroupIds: ReadonlySet<string>;
+  closedGroupIds: ReadonlySet<string>;
   touchedProcessIds: ReadonlySet<string>;
 }
 
@@ -18,6 +19,7 @@ export function emptyTimelineFoldState(sessionKey?: string): TimelineFoldState {
     closedDetailIds: new Set(),
     openThinkingIds: new Set(),
     openGroupIds: new Set(),
+    closedGroupIds: new Set(),
     touchedProcessIds: new Set(),
   };
 }
@@ -32,11 +34,17 @@ export function toggleTimelineProcess(state: TimelineFoldState, processId: strin
   return { ...state, openProcessIds, touchedProcessIds };
 }
 
-export function toggleTimelineDetail(state: TimelineFoldState, processId: string, detailId: string, parentShowingAll: boolean): TimelineFoldState {
+export function toggleTimelineDetail(state: TimelineFoldState, processId: string, detailId: string, currentlyOpen: boolean): TimelineFoldState {
   const openDetailIds = new Set(state.openDetailIds);
-  if (!parentShowingAll || !openDetailIds.has(detailId)) openDetailIds.add(detailId);
-  else openDetailIds.delete(detailId);
-  return { ...state, openDetailIds };
+  const closedDetailIds = new Set(state.closedDetailIds);
+  if (currentlyOpen) {
+    openDetailIds.delete(detailId);
+    closedDetailIds.add(detailId);
+  } else {
+    openDetailIds.add(detailId);
+    closedDetailIds.delete(detailId);
+  }
+  return { ...state, openDetailIds, closedDetailIds };
 }
 
 export function activityGroupId(itemId: string): string {
@@ -57,11 +65,17 @@ export function toggleTimelineThinking(state: TimelineFoldState, detailId: strin
   return { ...state, closedDetailIds, openThinkingIds };
 }
 
-export function toggleTimelineGroup(state: TimelineFoldState, processId: string, groupId: string): TimelineFoldState {
+export function toggleTimelineGroup(state: TimelineFoldState, processId: string, groupId: string, currentlyCollapsed: boolean): TimelineFoldState {
   const openGroupIds = new Set(state.openGroupIds);
-  if (openGroupIds.has(groupId)) openGroupIds.delete(groupId);
-  else openGroupIds.add(groupId);
-  return { ...state, openGroupIds };
+  const closedGroupIds = new Set(state.closedGroupIds);
+  if (currentlyCollapsed) {
+    openGroupIds.add(groupId);
+    closedGroupIds.delete(groupId);
+  } else {
+    openGroupIds.delete(groupId);
+    closedGroupIds.add(groupId);
+  }
+  return { ...state, openGroupIds, closedGroupIds };
 }
 
 export function collapseUntouchedTimelineProcess(state: TimelineFoldState, processId: string): TimelineFoldState {

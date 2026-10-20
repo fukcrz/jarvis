@@ -37,7 +37,8 @@ describe("ToolActivity summaries", () => {
     expect(compact).toContain("读取 3 · 命令 1");
     expect(compact).toContain('<div><article class="tool-item tool-list-item running"');
     expect(compact).toContain("npm test");
-    expect(compact).toContain('<div hidden=""><article class="tool-item tool-list-item completed"><button class="tool-summary" type="button" aria-expanded="false"><span class="tool-title">读取了 a.ts</span></button></article></div>');
+    expect(compact).toContain('<div hidden=""><article class="tool-item tool-list-item completed"><button class="tool-summary" type="button" aria-expanded="false"><svg');
+    expect(compact).toContain('<span class="tool-title">读取了 a.ts</span>');
     const processCollapsed = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, showAll: false, showActivePreview: false }));
     expect(processCollapsed).toContain('<div hidden=""><article class="tool-item tool-list-item running"');
     expect(processCollapsed).toContain("npm test");
@@ -53,6 +54,9 @@ describe("ToolActivity summaries", () => {
     const folded = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, showAll: true, groupCollapsed: true, onToggleGroup: () => undefined }));
     expect(folded).toContain('aria-expanded="false"');
     expect(folded).toContain('class="activity-items" hidden=""');
+    const activeFoldable = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, showAll: true, groupCollapsed: true, onToggleGroup: () => undefined }));
+    expect(activeFoldable).toContain('aria-expanded="false"');
+    expect(activeFoldable).toContain('class="activity-items" hidden=""');
     const preview = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, showAll: false, onToggleGroup: () => undefined }));
     expect(preview).toContain('<button type="button" class="activity-group-label" aria-expanded="true">');
   });
@@ -65,6 +69,18 @@ describe("ToolActivity command rows", () => {
     const markup = renderToStaticMarkup(createElement(ToolActivity, { items: [item], active: false }));
     expect(markup).toContain("export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL=&quot;*&quot; node &quot;c:/tools/example-skill/scripts/client.mjs&quot; api list");
     expect(markup).not.toContain("…");
+    const opened = renderToStaticMarkup(createElement(ToolActivity, { items: [item], active: false, openItems: new Set(["cmd-1"]) }));
+    expect(opened).toContain('<span class="tool-target">命令</span>');
+    expect(opened.match(/export MSYS_NO_PATHCONV=1/g)).toHaveLength(1);
+  });
+
+  it("uses the single-command row for PowerShell tools too", () => {
+    const command = "node validate-site.mjs prototypes/site --json";
+    const item: ToolTimelineItem = { kind: "tool", id: "powershell-1", createdAt: "", name: "powershell", title: "Run PowerShell", state: "completed", inputPreview: command };
+    const markup = renderToStaticMarkup(createElement(ToolActivity, { items: [item], active: false, openItems: new Set([item.id]) }));
+    expect(markup).toContain('class="tool-summary command-summary"');
+    expect(markup).toContain('<span class="tool-target">命令</span>');
+    expect(markup.match(/node validate-site\.mjs/g)).toHaveLength(1);
   });
 
   it("shows only the first line of a multi-line command and keeps the full command in the details", () => {
@@ -72,10 +88,15 @@ describe("ToolActivity command rows", () => {
     const item: ToolTimelineItem = { kind: "tool", id: "cmd-2", createdAt: "", name: "bash", title: "Run command", state: "completed", inputPreview: command };
     const collapsed = renderToStaticMarkup(createElement(ToolActivity, { items: [item], active: false }));
     expect(collapsed).toContain('<span class="tool-target">python - &lt;&lt; &#x27;PY&#x27; …</span>');
+    expect(collapsed).toMatch(/class="[^"]*turn-process-chevron/);
     expect(collapsed).not.toContain("import json");
     const opened = renderToStaticMarkup(createElement(ToolActivity, { items: [item], active: false, openItems: new Set(["cmd-2"]) }));
+    expect(opened).toContain('<span class="tool-target">命令</span>');
     expect(opened).toContain("print(json.dumps");
     expect(opened.indexOf("import json")).toBeGreaterThan(opened.indexOf("detail-command-line"));
+    const commandLine = "$ python - &lt;&lt; &#x27;PY&#x27;\nimport json\nprint(json.dumps({&#x27;ok&#x27;: True}))\nPY";
+    expect(opened.match(/python - &lt;&lt; &#x27;PY&#x27;/g)).toHaveLength(1);
+    expect(opened).toContain(commandLine);
   });
 
   it("builds a one-line headline from the first non-empty line", () => {

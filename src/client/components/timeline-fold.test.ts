@@ -16,18 +16,29 @@ describe("timeline fold state", () => {
     expect(reopened.openThinkingIds.has("thinking-1")).toBe(true);
   });
 
-  it("toggles a detail without opening the process", () => {
-    const opened = toggleTimelineDetail(emptyTimelineFoldState("session"), "process-1", "detail-1", true);
+  it("keeps a manual tool detail choice across automatic completion folding", () => {
+    const opened = toggleTimelineDetail(emptyTimelineFoldState("session"), "process-1", "detail-1", false);
     expect(opened.openProcessIds.has("process-1")).toBe(false);
     expect(opened.openDetailIds.has("detail-1")).toBe(true);
-    expect(toggleTimelineDetail(opened, "process-1", "detail-1", true).openDetailIds.has("detail-1")).toBe(false);
+
+    const closedByUser = toggleTimelineDetail(opened, "process-1", "detail-1", true);
+    expect(closedByUser.closedDetailIds.has("detail-1")).toBe(true);
+    expect(toggleTimelineDetail(closedByUser, "process-1", "detail-1", false).closedDetailIds.has("detail-1")).toBe(false);
   });
 
-  it("toggles a tool group without opening the process", () => {
-    const collapsed = toggleTimelineGroup(emptyTimelineFoldState(), "process-1", activityGroupId("tool-1"));
-    expect(collapsed.openGroupIds.has("group:tool-1")).toBe(true);
-    expect(collapsed.openProcessIds.has("process-1")).toBe(false);
-    expect(toggleTimelineGroup(collapsed, "process-1", activityGroupId("tool-1")).openGroupIds.has("group:tool-1")).toBe(false);
+  it("preserves manual group folds across active and settled defaults", () => {
+    const groupId = activityGroupId("tool-1");
+    const activeCollapsed = toggleTimelineGroup(emptyTimelineFoldState(), "process-1", groupId, false);
+    expect(activeCollapsed.closedGroupIds.has(groupId)).toBe(true);
+    expect(activeCollapsed.openProcessIds.has("process-1")).toBe(false);
+
+    const reopened = toggleTimelineGroup(activeCollapsed, "process-1", groupId, true);
+    expect(reopened.openGroupIds.has(groupId)).toBe(true);
+    expect(reopened.closedGroupIds.has(groupId)).toBe(false);
+
+    const settledCollapsed = toggleTimelineGroup(reopened, "process-1", groupId, false);
+    expect(settledCollapsed.openGroupIds.has(groupId)).toBe(false);
+    expect(settledCollapsed.closedGroupIds.has(groupId)).toBe(true);
   });
 
   it("auto-collapses only an untouched open process", () => {

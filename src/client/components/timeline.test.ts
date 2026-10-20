@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeTimelineTurn, activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, thinkingFoldPreview, thinkingTextIsLong, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds } from "./timeline";
+import { activeTimelineTurn, activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, thinkingFoldPreview, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -260,6 +260,20 @@ describe("groupTimelineTurns", () => {
     ]);
   });
 
+  it("does not lift assistant text from the active run, even when it is currently last", () => {
+    const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), message("m1")], true);
+
+    expect(turn?.final).toBeUndefined();
+    expect(turn?.process).toEqual([{ kind: "thinking", item: thinking("t1") }, { kind: "message", item: message("m1") }]);
+  });
+
+  it("keeps the last assistant text inline when a run ends with an error", () => {
+    const [turn] = groupTimelineTurns([user("u1"), message("m1")], false, false);
+
+    expect(turn?.final).toBeUndefined();
+    expect(turn?.process).toEqual([{ kind: "message", item: message("m1") }]);
+  });
+
   it("uses the last normal assistant text when no final output exists", () => {
     const fallback = { ...message("m1"), phase: undefined };
     const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), fallback]);
@@ -336,12 +350,8 @@ describe("groupTimelineTurns", () => {
   });
 });
 
-describe("thinkingTextIsLong", () => {
-  it("shows a short thought and folds a long one", () => {
-    expect(thinkingTextIsLong("正在核对相邻路径。")).toBe(false);
-    expect(thinkingTextIsLong("第一行\n第二行\n第三行")).toBe(false);
-    expect(thinkingTextIsLong("第一行\n第二行\n第三行\n第四行")).toBe(true);
-    expect(thinkingTextIsLong("字".repeat(161))).toBe(true);
+describe("thinkingFoldPreview", () => {
+  it("keeps a useful one-line preview", () => {
     expect(thinkingFoldPreview("**先看** `refund`\n后面还有很长的内容")).toBe("先看 refund");
   });
 });

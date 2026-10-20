@@ -167,24 +167,32 @@ async function assertFloating(page, label) {
 async function assertCompleted(page, label, finalText) {
   await waitForCount(page, ".working-indicator, .run-status-bar", 0);
   await page.locator(".turn-process-summary[aria-expanded='false']").waitFor();
-  const body = page.locator(".message-body.assistant").filter({ has: page.locator(".turn-changes") });
-  assert.equal(await body.count(), 1, `${label}: completed details must belong to final reply`);
+  const finalRow = page.locator(".message-row.assistant").filter({ has: page.getByText(finalText.split("\n\n")[0], { exact: true }) });
+  assert.equal(await finalRow.count(), 1, `${label}: final reply row missing or duplicated`);
+  const body = finalRow.locator(".message-body.assistant");
   assert.equal(await body.locator(":scope > .message-content").innerText(), finalText);
-  const layout = await body.evaluate((node) => {
-    const content = node.querySelector(":scope > .message-content");
-    const process = node.querySelector(".turn-process");
-    const changes = node.querySelector(".turn-changes");
-    const footer = node.querySelector(":scope > .assistant-message-footer");
-    const nodes = [content, process, changes, footer];
+  const layout = await page.evaluate((finalText) => {
+    const feed = document.querySelector(".timeline-feed");
+    const finalRow = [...document.querySelectorAll(".timeline-feed > .message-row.assistant")].findLast((row) => row.querySelector(":scope .message-content")?.innerText?.trim() === finalText);
+    const details = feed === null || finalRow === undefined ? undefined : [...feed.children]
+      .filter((child) => child.classList.contains("turn-details") && !!(child.compareDocumentPosition(finalRow) & Node.DOCUMENT_POSITION_FOLLOWING))
+      .at(-1);
+    const process = details?.querySelector(".turn-process");
+    const content = finalRow?.querySelector(":scope .message-content");
+    const changes = finalRow?.querySelector(":scope .message-body > .turn-changes");
+    const footer = finalRow?.querySelector(":scope .assistant-message-footer");
+    const nodes = [process, content, changes, footer];
     return {
       present: nodes.every(Boolean),
-      order: nodes.every((node, index) => index === 0 || !!(nodes[index - 1].compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)),
-      boxes: nodes.map((node) => { const box = node.getBoundingClientRect(); return { top: box.top, bottom: box.bottom, height: box.height, position: getComputedStyle(node).position }; }),
+      order: nodes.every((node, index) => index === 0 || nodes[index - 1] !== undefined && node !== undefined && !!(nodes[index - 1].compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      processBeforeReply: details !== undefined && details.parentElement === feed && !!(details.compareDocumentPosition(finalRow) & Node.DOCUMENT_POSITION_FOLLOWING),
+      changesAfterReplyText: changes !== undefined && content !== undefined && !!(content.compareDocumentPosition(changes) & Node.DOCUMENT_POSITION_FOLLOWING),
+      boxes: nodes.filter((node) => node !== undefined).map((node) => { const box = node.getBoundingClientRect(); return { top: box.top, bottom: box.bottom, height: box.height, position: getComputedStyle(node).position }; }),
       footerActions: footer?.querySelectorAll(".message-action-button").length,
       footerMeta: footer?.querySelectorAll(".message-generation-meta").length,
     };
-  });
-  assert.ok(layout.present && layout.order, `${label}: expected content → process → file changes → footer inside assistant body`);
+  }, finalText);
+  assert.ok(layout.present && layout.order && layout.processBeforeReply && layout.changesAfterReplyText, `${label}: expected process → final reply → file changes → copy/fork/token`);
   for (const [index, box] of layout.boxes.entries()) {
     assert.ok(box.height > 0 && !["absolute", "fixed"].includes(box.position), `${label}: completed section is outside normal flow`);
     if (index > 0) assert.ok(box.top >= layout.boxes[index - 1].bottom - 1, `${label}: completed sections visually overlap or reorder`);
@@ -192,7 +200,7 @@ async function assertCompleted(page, label, finalText) {
   assert.ok(layout.footerActions >= 2 && layout.footerMeta === 1, `${label}: copy/fork/tokens footer missing`);
   await body.getByRole("button", { name: "复制整段回答", exact: true }).waitFor();
   await body.getByRole("button", { name: "从此处分支", exact: true }).waitFor();
-  assert.equal(await body.locator(".turn-process-body").count(), 0, `${label}: completed process is not collapsed`);
+  assert.equal(await page.locator(".turn-process-body").count(), 0, `${label}: completed process is not collapsed`);
   return layout;
 }
 
@@ -357,7 +365,7 @@ async function exercise(baseUrl, workspace, label, viewport) {
     await scrollDistance(page, 0);
     report.completed = await assertCompleted(page, label, finalText);
     await screenshot(page, `${label}-completed`);
-    await page.locator(".message-body.assistant").filter({ has: page.locator(".turn-changes") }).screenshot({ path: join(shotDir, `${label}-completed-reply.png`) });
+    await page.locator(".timeline").screenshot({ path: join(shotDir, `${label}-completed-reply.png`) });
 
     const process = page.locator(".turn-process");
     await process.locator(".turn-process-summary").click();

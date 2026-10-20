@@ -16,7 +16,7 @@ import { commandHeadline, summarizeToolActivity, ToolActivity } from "./tool-act
 import { DiffStat, DiffView } from "./diff-view";
 import { LocalTextFileLink } from "./text-file-preview";
 import { mergeFileChanges } from "../../shared/file-change";
-import { activityGroupId, collapseUntouchedTimelineProcess, emptyTimelineFoldState, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, toggleTimelineThinking, visibleToolActivityItemIds, type TimelineFoldState } from "./timeline-fold";
+import { activityGroupId, collapseUntouchedTimelineProcess, emptyTimelineFoldState, subagentCallDetailId, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, toggleTimelineThinking, visibleToolActivityItemIds, type TimelineFoldState } from "./timeline-fold";
 import { Dialog, DialogContent } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
@@ -145,7 +145,9 @@ export function visibleNavigatorAnchorIds(anchors: UserMessageAnchor[], activeId
 export function Timeline({ sessionKey, localMediaVersion, items, streamingMessageId, liveGeneration, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onRetryTurn, onContinue, onDismissInterrupted, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage }: TimelineProps) {
   const [foldState, setFoldState] = useState<TimelineFoldState>(() => emptyTimelineFoldState(sessionKey));
   const foldStateForRender = foldState.sessionKey === sessionKey ? foldState : emptyTimelineFoldState(sessionKey);
-  const turns = useMemo(() => groupTimelineTurns(items), [items]);
+  const liveLlmRun = status.runState !== "idle" && (status.activeRun?.kind ?? "llm") === "llm";
+  const allowFinalReply = !liveLlmRun && status.lastError === undefined;
+  const turns = useMemo(() => groupTimelineTurns(items, liveLlmRun, allowFinalReply), [items, liveLlmRun, allowFinalReply]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const touchYRef = useRef<number | undefined>(undefined);
   const loadingEarlierRef = useRef(false);
@@ -185,11 +187,11 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   const toggleProcess = useCallback((processId: string, open: boolean) => {
     setFoldState((current) => toggleTimelineProcess(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), processId, open));
   }, [sessionKey]);
-  const toggleDetail = useCallback((processId: string, detailId: string, parentShowingAll: boolean) => {
-    setFoldState((current) => toggleTimelineDetail(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), processId, detailId, parentShowingAll));
+  const toggleDetail = useCallback((processId: string, detailId: string, currentlyOpen: boolean) => {
+    setFoldState((current) => toggleTimelineDetail(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), processId, detailId, currentlyOpen));
   }, [sessionKey]);
-  const toggleGroup = useCallback((processId: string, groupId: string) => {
-    setFoldState((current) => toggleTimelineGroup(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), processId, groupId));
+  const toggleGroup = useCallback((processId: string, groupId: string, currentlyCollapsed: boolean) => {
+    setFoldState((current) => toggleTimelineGroup(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), processId, groupId, currentlyCollapsed));
   }, [sessionKey]);
   const toggleThinking = useCallback((detailId: string, currentlyOpen: boolean) => {
     setFoldState((current) => toggleTimelineThinking(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), detailId, currentlyOpen));
@@ -1247,8 +1249,8 @@ export interface TimelineTurn {
   outcome?: RunOutcomeTimelineItem;
 }
 
-/** 以用户消息为界组成回合；只有末尾的 assistant 文本提到过程外。 */
-export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
+/** 以用户消息为界组成回合；只有运行成功结束后才提升末尾助手文本。 */
+export function groupTimelineTurns(items: TimelineItem[], live = false, allowFinalReply = true): TimelineTurn[] {
   const turns: TimelineTurn[] = [];
   let current: TimelineTurn | undefined;
   const openTurn = (key: string): TimelineTurn => {
@@ -1275,8 +1277,10 @@ export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
     const sourceMessageId = renderItemSourceMessageId(entry);
     (current ?? openTurn(`turn:${sourceMessageId ?? renderItemKey(entry)}`)).process.push(entry);
   }
-  for (const turn of turns) {
+  for (const [index, turn] of turns.entries()) {
+    if (live && index === turns.length - 1) continue;
     const last = turn.process.at(-1);
+    if (!allowFinalReply && index === turns.length - 1 && last?.kind === "message" && last.item.role === "assistant") continue;
     if (last?.kind === "message" && last.item.role === "assistant") {
       turn.final = last.item;
       turn.process.pop();
@@ -1436,9 +1440,10 @@ interface TurnRenderContext {
   openThinkingIds: ReadonlySet<string>;
   onToggleThinking: (detailId: string, currentlyOpen: boolean) => void;
   openGroupIds: ReadonlySet<string>;
-  onToggleDetail: (id: string) => void;
-  onToggleGroup?: (groupId: string) => void;
-  onToggleCall?: (toolId: string, callId: string) => void;
+  closedGroupIds: ReadonlySet<string>;
+  onToggleDetail: (id: string, currentlyOpen: boolean) => void;
+  onToggleGroup?: (groupId: string, currentlyCollapsed: boolean) => void;
+  onToggleCall?: (toolId: string, callId: string, currentlyOpen: boolean) => void;
   highlightedMessageId?: string;
   workspaceCwd?: string;
   onExtensionUiRespond?: TimelineProps["onExtensionUiRespond"];
@@ -1448,7 +1453,6 @@ interface TurnRenderContext {
   /** 只有回合的最终回答显示 token/速度/用时。 */
   showGenerationMeta?: boolean;
   generationSummary?: GenerationSummary;
-  /** 最终回答正文后的过程与文件变更，排在操作和统计前。 */
   afterContent?: ReactNode;
   runIndicator?: ReactNode;
   runStatusActivity?: RunStatusActivity;
@@ -1528,13 +1532,23 @@ function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderConte
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} customText={context.customAnswers?.get(entry.item.id)} />;
   if (entry.kind === "thinking") {
     const streaming = entry.item.state === "running" && context.liveGeneration?.activeBlockKind === "thinking";
-    return <ThinkingItem key={entry.item.id} item={entry.item} streaming={streaming} live={liveGenerationForBlock(entry.item, context.liveGeneration, "thinking")} baseDir={context.workspaceCwd} open={context.inlineProcess === true || context.openThinkingIds.has(entry.item.id)} closed={context.closedDetailIds.has(entry.item.id)} showDetails={showAll} onToggleThinking={context.onToggleThinking} />;
+    return <ThinkingItem key={entry.item.id} item={entry.item} streaming={streaming} live={liveGenerationForBlock(entry.item, context.liveGeneration, "thinking")} baseDir={context.workspaceCwd} open={context.openThinkingIds.has(entry.item.id)} closed={context.closedDetailIds.has(entry.item.id)} showDetails={showAll} onToggleThinking={context.onToggleThinking} />;
   }
   const active = context.status.runState !== "idle" && entry.items.some((item) => item.state === "queued" || item.state === "running");
   const groupId = activityGroupId(entry.items[0]?.id ?? "empty");
   const pending = entry.items.some((item) => item.state === "running" || item.state === "queued");
   const grouped = entry.items.length > 1 && !entry.items.some((item) => item.id.startsWith("bash:"));
-  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={active} showAll={showAll} showActivePreview={showActivePreview} visibleItemIds={showAll ? undefined : visibleToolActivityItemIds(entry.items, active, showActivePreview)} openItems={context.openDetailIds} onToggleItem={context.onToggleDetail} openCallIds={context.openDetailIds} onToggleCall={context.onToggleCall} groupCollapsed={grouped && !pending && context.inlineProcess !== true && !context.openGroupIds.has(groupId)} onToggleGroup={context.onToggleGroup === undefined ? undefined : () => context.onToggleGroup?.(groupId)} />;
+  const groupCollapsed = grouped && (context.closedGroupIds.has(groupId) || (!pending && context.inlineProcess !== true && !context.openGroupIds.has(groupId)));
+  const openItems = new Set(entry.items.filter((item) => !context.closedDetailIds.has(item.id) && (context.openDetailIds.has(item.id) || (context.inlineProcess === true && item.state === "running"))).map((item) => item.id));
+  const openCallIds = new Set(context.openDetailIds);
+  for (const item of entry.items) {
+    for (const [index, call] of (item.subagent?.results ?? []).entries()) {
+      const duplicateIndex = item.subagent!.results.slice(0, index).filter((prior) => subagentCallDetailId(item.id, prior) === subagentCallDetailId(item.id, call)).length;
+      const callId = subagentCallDetailId(item.id, call, duplicateIndex);
+      if (call.state === "running" && !context.closedDetailIds.has(callId)) openCallIds.add(callId);
+    }
+  }
+  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={active} showAll={showAll} showActivePreview={showActivePreview} visibleItemIds={showAll ? undefined : visibleToolActivityItemIds(entry.items, active, showActivePreview)} openItems={openItems} onToggleItem={(id, currentlyOpen) => context.onToggleDetail(id, currentlyOpen)} openCallIds={openCallIds} onToggleCall={context.onToggleCall} groupCollapsed={groupCollapsed} onToggleGroup={context.onToggleGroup === undefined ? undefined : (currentlyCollapsed) => context.onToggleGroup?.(groupId, currentlyCollapsed)} />;
 }
 
 export function processTextPreview(text: string): string {
@@ -1597,7 +1611,7 @@ function TurnChanges({ changes, cwd }: { changes: FileChange[]; cwd?: string }) 
   </section>;
 }
 
-function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; live: boolean; foldState: TimelineFoldState; onToggleProcess: (id: string, open: boolean) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string) => void }) {
+function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; live: boolean; foldState: TimelineFoldState; onToggleProcess: (id: string, open: boolean) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string, currentlyCollapsed: boolean) => void }) {
   const presented = useMemo(() => presentTurnProcess(turn.process), [turn.process]);
   const split = useMemo(() => splitVisibleTurnEntries(presented.entries), [presented.entries]);
   const displayTurn = { ...turn, process: split.process };
@@ -1615,9 +1629,10 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
     openThinkingIds: foldState.openThinkingIds,
     onToggleThinking: (detailId, currentlyOpen) => { if (processId !== undefined) context.onToggleThinking(detailId, currentlyOpen); },
     openGroupIds: foldState.openGroupIds,
-    onToggleDetail: (detailId) => { if (processId !== undefined) onToggleProcessDetail(processId, detailId, showAll); },
-    onToggleGroup: (groupId) => { if (processId !== undefined) onToggleProcessGroup(processId, groupId); },
-    onToggleCall: (toolId, callId) => { if (processId !== undefined) onToggleProcessDetail(processId, callId, showAll); },
+    closedGroupIds: foldState.closedGroupIds,
+    onToggleDetail: (detailId, currentlyOpen) => { if (processId !== undefined) onToggleProcessDetail(processId, detailId, currentlyOpen); },
+    onToggleGroup: (groupId, currentlyCollapsed) => { if (processId !== undefined) onToggleProcessGroup(processId, groupId, currentlyCollapsed); },
+    onToggleCall: (toolId, callId, currentlyOpen) => { if (processId !== undefined) onToggleProcessDetail(processId, callId, currentlyOpen); },
     customAnswers: presented.customAnswers,
   };
   const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
@@ -1647,15 +1662,14 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
       </button>}
       {showAll ? <div className={!collapsible ? "turn-process-stack" : "turn-process-body"}>{processEntries}</div> : null}
     </section>;
-  const completedDetails = live || (processBlock === null && changes.length === 0) ? undefined : <div className="turn-details">
-    {processBlock}
-    {changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />}
-  </div>;
+  const completedProcess = live || processBlock === null ? undefined : <div className="turn-details">{processBlock}</div>;
+  const completedChanges = changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />;
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
     {live && turn.final !== undefined ? processBlock : null}
-    {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, true), onToggleCall: (_toolId, callId) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, callId, true) }, true, false)}</div>)}
-    {turn.final === undefined ? <>{live ? processBlock : completedDetails}{runIndicator === undefined || runStatusMessageId !== undefined ? null : <div className="turn-live-status">{runIndicator}</div>}</> : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: !live, generationSummary: summarizeTurnGeneration(turn), onForkMessage: live ? undefined : context.onForkMessage, afterContent: completedDetails, runIndicator, runStatusMessageId: turn.final.id })}
+    {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId, currentlyOpen) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, currentlyOpen), onToggleCall: (_toolId, callId, currentlyOpen) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, callId, currentlyOpen) }, true, false)}</div>)}
+    {turn.final === undefined ? <>{live ? processBlock : completedProcess}{runIndicator === undefined || runStatusMessageId !== undefined ? null : <div className="turn-live-status">{runIndicator}</div>}</> : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: !live, generationSummary: summarizeTurnGeneration(turn), onForkMessage: live ? undefined : context.onForkMessage, afterContent: live ? undefined : completedChanges, runIndicator, runStatusMessageId: turn.final.id })}
+    {turn.final === undefined && !live ? completedChanges : null}
     {turn.finalError === undefined ? null : <TurnFailureCard items={turn.finalError} failedTool={lastFailedTool(split.process)} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} />}
     {turn.outcome?.outcome === "completed" ? <RunCompletedItem /> : null}
     {turn.outcome?.outcome === "stopped" ? <RunStoppedItem /> : null}
@@ -1665,21 +1679,10 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   </>;
 }
 
-function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string, open: boolean) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string) => void, onToggleThinking: (detailId: string, currentlyOpen: boolean) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined, onRetryTurn?: TimelineProps["onRetryTurn"], onContinue?: TimelineProps["onContinue"], onRetryCompaction?: TimelineProps["onRetryCompaction"], onDismissInterrupted?: TimelineProps["onDismissInterrupted"], runStatusActivity?: RunStatusActivity, runStatusTurnKey?: string): ReactNode[] {
-  const context: TurnRenderContext = { streamingMessageId, liveGeneration, status, openDetailIds: foldState.openDetailIds, closedDetailIds: foldState.closedDetailIds, openThinkingIds: foldState.openThinkingIds, onToggleThinking, openGroupIds: foldState.openGroupIds, onToggleDetail: () => undefined, onToggleCall: () => undefined, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage, onRetryTurn, onContinue, onRetryCompaction, onDismissInterrupted, runStatusActivity, runStatusStartedAt: status.activeRun?.startedAt, runStatusTurnKey };
+function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string, open: boolean) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string, currentlyCollapsed: boolean) => void, onToggleThinking: (detailId: string, currentlyOpen: boolean) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined, onRetryTurn?: TimelineProps["onRetryTurn"], onContinue?: TimelineProps["onContinue"], onRetryCompaction?: TimelineProps["onRetryCompaction"], onDismissInterrupted?: TimelineProps["onDismissInterrupted"], runStatusActivity?: RunStatusActivity, runStatusTurnKey?: string): ReactNode[] {
+  const context: TurnRenderContext = { streamingMessageId, liveGeneration, status, openDetailIds: foldState.openDetailIds, closedDetailIds: foldState.closedDetailIds, openThinkingIds: foldState.openThinkingIds, onToggleThinking, openGroupIds: foldState.openGroupIds, closedGroupIds: foldState.closedGroupIds, onToggleDetail: () => undefined, onToggleCall: () => undefined, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage, onRetryTurn, onContinue, onRetryCompaction, onDismissInterrupted, runStatusActivity, runStatusStartedAt: status.activeRun?.startedAt, runStatusTurnKey };
   const liveTurnKey = activeTimelineTurn(turns, status)?.key;
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} live={turn.key === liveTurnKey} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
-}
-
-/** 超过 3 行或 160 字算较长，默认收成一行；更短的直接展示正文。 */
-export const THINKING_FOLD_MAX_LINES = 3;
-export const THINKING_FOLD_MAX_CHARS = 160;
-
-export function thinkingTextIsLong(text: string): boolean {
-  const trimmed = text.trim();
-  if (trimmed === "") return false;
-  const lines = trimmed.split(/\r?\n/).filter((line) => line.trim() !== "").length;
-  return lines > THINKING_FOLD_MAX_LINES || trimmed.length > THINKING_FOLD_MAX_CHARS;
 }
 
 export function thinkingFoldPreview(text: string): string {
@@ -1687,13 +1690,11 @@ export function thinkingFoldPreview(text: string): string {
   return line.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/^#{1,6}\s+/, "");
 }
 
-/** 长思考默认展开至整轮结束；手动开合状态优先。 */
+/** 思考生成时默认展开，单块完成后收起；手动开合状态优先。 */
 function ThinkingItem({ item, streaming = false, baseDir, open, closed, showDetails, onToggleThinking }: { item: ThinkingTimelineItem; streaming?: boolean; live?: LiveGenerationStats; baseDir?: string; open: boolean; closed: boolean; showDetails: boolean; onToggleThinking: (id: string, currentlyOpen: boolean) => void }) {
   if (item.text.trim() === "") return null;
-  const foldable = thinkingTextIsLong(item.text);
-  const expanded = !foldable || (!closed && (item.state === "running" || (open && showDetails)));
+  const expanded = !closed && (item.state === "running" || (open && showDetails));
   const body = <div className="thinking-body"><div className="message-content"><MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} /></div></div>;
-  if (!foldable) return <article className={`thinking-item ${item.state}`}>{body}</article>;
   const preview = thinkingFoldPreview(item.text);
   return (
     <article className={`thinking-item ${item.state}${expanded ? " expanded" : ""}`}>
