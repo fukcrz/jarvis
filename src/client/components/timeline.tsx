@@ -1666,9 +1666,9 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   const completedChanges = changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />;
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
-    {live && turn.final !== undefined ? processBlock : null}
+    {live ? processBlock : completedProcess}
     {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId, currentlyOpen) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, currentlyOpen), onToggleCall: (_toolId, callId, currentlyOpen) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, callId, currentlyOpen) }, true, false)}</div>)}
-    {turn.final === undefined ? <>{live ? processBlock : completedProcess}{runIndicator === undefined || runStatusMessageId !== undefined ? null : <div className="turn-live-status">{runIndicator}</div>}</> : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: !live, generationSummary: summarizeTurnGeneration(turn), onForkMessage: live ? undefined : context.onForkMessage, afterContent: live ? undefined : completedChanges, runIndicator, runStatusMessageId: turn.final.id })}
+    {turn.final === undefined ? runIndicator === undefined || runStatusMessageId !== undefined ? null : <div className="turn-live-status">{runIndicator}</div> : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: !live, generationSummary: summarizeTurnGeneration(turn), onForkMessage: live ? undefined : context.onForkMessage, afterContent: live ? undefined : completedChanges, runIndicator, runStatusMessageId: turn.final.id })}
     {turn.final === undefined && !live ? completedChanges : null}
     {turn.finalError === undefined ? null : <TurnFailureCard items={turn.finalError} failedTool={lastFailedTool(split.process)} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} />}
     {turn.outcome?.outcome === "completed" ? <RunCompletedItem /> : null}

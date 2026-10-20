@@ -167,7 +167,7 @@ async function assertProcessBeforeFinalReply(page, label) {
 
 async function assertRunningProcess(page, label) {
   await page.locator("section.turn-process-stack").last().waitFor();
-  await page.locator(".working-indicator").waitFor();
+  await page.waitForFunction(() => [...document.querySelectorAll(".working-indicator, .thinking-item.running, .tool-item.running, .tool-item.queued, .message-row.streaming")].some((node) => node.getClientRects().length > 0));
   assert.equal(await page.locator("section.turn-process-stack .turn-process-summary").count(), 0, `${label}: running work exposed a parent fold`);
   assert.equal(await page.locator(".turn-process-current .turn-process-summary").count(), 0, `${label}: running turn exposed a parent fold`);
 }
@@ -238,9 +238,9 @@ async function exercise(baseUrl, workspace, viewport, label) {
     await assertRunningProcess(page, `${label}: tools`);
     assert.equal(await page.locator(".turn-process-stack .tool-item:visible").count(), 3, `${label}: inline process hid tools`);
     assert.ok(await page.locator(".turn-process-stack .message-row.assistant:visible").count() >= 1, `${label}: running commentary was hidden`);
-    // A multi-line command shows only its first line; the full heredoc stays in the row details.
+    // The expanded row keeps its headline compact; the full heredoc stays in details.
     const commandTitle = page.locator(".command-item.running .tool-target");
-    assert.equal(await commandTitle.textContent(), "python - << 'PY' …", `${label}: command title dumped the whole heredoc`);
+    assert.equal(await commandTitle.textContent(), "命令", `${label}: expanded command is repeated in its summary`);
     const titleStyle = await commandTitle.evaluate((node) => ({ whiteSpace: getComputedStyle(node).whiteSpace, height: node.getBoundingClientRect().height }));
     assert.equal(titleStyle.whiteSpace, "nowrap", `${label}: command title wraps`);
     assert.ok(titleStyle.height < 24, `${label}: command title is taller than one line (${String(titleStyle.height)}px)`);
@@ -255,8 +255,11 @@ async function exercise(baseUrl, workspace, viewport, label) {
     await projectionSummary.click();
     await page.getByText("projection source retained", { exact: true }).waitFor();
     fixture.toolEnd(calls[2], "612 passed");
+    const completedCommand = page.locator(".command-item.completed .command-summary");
+    await completedCommand.waitFor();
+    await page.waitForFunction(() => [...document.querySelectorAll(".command-item.completed .command-summary")].some((node) => node.getAttribute("aria-expanded") === "false"));
     await assertRunningProcess(page, `${label}: tool completion`);
-    assert.equal(await page.locator(".command-summary").getAttribute("aria-expanded"), "false", `${label}: completed command details did not auto-collapse`);
+    assert.equal(await completedCommand.getAttribute("aria-expanded"), "false", `${label}: completed command details did not auto-collapse`);
     assert.equal(await projectionSummary.getAttribute("aria-expanded"), "true", `${label}: manual tool expansion did not survive other tool completion`);
 
     const laterThought = "继续核对刷新与重连。\n中英文内容都按 phase 归类，逐行内容保留在原始块中。";
