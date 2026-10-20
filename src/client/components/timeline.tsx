@@ -216,7 +216,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   const hasVisibleLiveProcess = (activeTurn !== undefined && hasVisibleLiveProcessEntry(activeTurn, streamingMessageId, foldStateForRender.closedDetailIds))
     || (status.activeRun?.kind === "bash" && items.some((item) => item.kind === "tool" && item.name !== "ask_user_question" && (item.state === "queued" || item.state === "running")));
   const showInlineRunStatus = runActivity !== undefined && (runActivity.target === "bottom" || status.runState !== "running" || !hasVisibleLiveProcess);
-  const statusAtComposer = status.compacting !== undefined || status.retrying !== undefined || status.runState === "stopping";
+  const statusAtComposer = !hasVisibleLiveProcess && (status.compacting !== undefined || status.retrying !== undefined || status.runState === "stopping");
   const runStatusTurnKey = showInlineRunStatus && !statusAtComposer ? activeTurn?.key : undefined;
   const showComposerStatusCapsule = runActivity !== undefined && (showRunStatusBar || statusAtComposer || (showInlineRunStatus && runStatusTurnKey === undefined));
   // 点过「知道了」的被中断卡片先在本地藏起来；服务端清标记失败也不再打扰。
@@ -1161,10 +1161,6 @@ function RunStoppedItem() {
   return <div className="timeline-run-outcome stopped" role="status"><XCircle size={14} /><span>已停止</span></div>;
 }
 
-function RunCompletedItem() {
-  return <div className="timeline-run-outcome completed" role="status"><Check size={14} /><span>已完成</span></div>;
-}
-
 const ContextSummaryItem = memo(function ContextSummaryItem({ item, baseDir }: { item: ContextSummaryTimelineItem; baseDir?: string }) {
   const [expanded, setExpanded] = useState(false);
   const isCompaction = item.summaryType === "compaction";
@@ -1671,7 +1667,6 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
     {turn.final === undefined ? runIndicator === undefined || runStatusMessageId !== undefined ? null : <div className="turn-live-status">{runIndicator}</div> : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: !live, generationSummary: summarizeTurnGeneration(turn), onForkMessage: live ? undefined : context.onForkMessage, afterContent: live ? undefined : completedChanges, runIndicator, runStatusMessageId: turn.final.id })}
     {turn.final === undefined && !live ? completedChanges : null}
     {turn.finalError === undefined ? null : <TurnFailureCard items={turn.finalError} failedTool={lastFailedTool(split.process)} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} />}
-    {turn.outcome?.outcome === "completed" ? <RunCompletedItem /> : null}
     {turn.outcome?.outcome === "stopped" ? <RunStoppedItem /> : null}
     {turn.outcome?.outcome === "interrupted" || (turn.outcome?.outcome === "failed" && turn.finalError === undefined && !turnEndedInFailure(turn))
       ? <RunFailureCard failure={{ code: turn.outcome.code ?? "RUN_FAILED", message: turn.outcome.message ?? "This run did not complete.", occurredAt: turn.outcome.createdAt }} onRetryCompaction={turn.outcome.code === "PI_COMPACTION_FAILED" ? context.onRetryCompaction : undefined} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} onDismiss={turn.outcome.outcome === "interrupted" ? context.onDismissInterrupted : undefined} />

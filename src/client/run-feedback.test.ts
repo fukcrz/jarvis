@@ -29,6 +29,8 @@ describe("getRunStatusActivity", () => {
     expect(getRunStatusActivity(runningStatus, [hiddenQuestion])).toEqual({ label: "执行中", target: "bottom" });
     expect(getRunStatusActivity(runningStatus, [])).toEqual({ label: "执行中", target: "bottom" });
     expect(getRunStatusActivity({ ...runningStatus, compacting: { reason: "manual", startedAt: "2026-01-01T00:00:00.000Z" } } as SessionStatus, [])?.label).toBe("正在压缩上下文");
+    expect(getRunStatusActivity({ ...runningStatus, compacting: { reason: "manual", startedAt: "2026-01-01T00:00:00.000Z" } } as SessionStatus, [hiddenQuestion])).toEqual({ label: "正在压缩上下文", target: "bottom" });
+    expect(getRunStatusActivity({ ...runningStatus, compacting: { reason: "manual", startedAt: "2026-01-01T00:00:00.000Z" } } as SessionStatus, [{ kind: "tool", id: "tool", createdAt: "", name: "powershell", title: "运行命令", state: "running", inputPreview: "Get-Process" }] as TimelineItem[])).toEqual({ label: "正在执行：Get-Process", target: "tool" });
     expect(getRunStatusActivity({ ...runningStatus, retrying } as SessionStatus, [])?.label).toBe("等待重试");
     expect(getRunStatusActivity({ ...runningStatus, runState: "stopping" } as SessionStatus, [])?.label).toBe("正在停止");
     expect(getRunStatusActivity({ ...runningStatus, runState: "idle" } as SessionStatus, [])).toBeUndefined();

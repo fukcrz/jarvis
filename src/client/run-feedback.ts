@@ -23,8 +23,6 @@ export interface RunStatusActivity {
 export function getRunStatusActivity(status: SessionStatus, items: TimelineItem[], streamingMessageId?: string): RunStatusActivity | undefined {
   if (status.runState === "idle") return undefined;
   if (status.runState === "stopping") return { label: status.stopUnconfirmed ? "停止未确认" : "正在停止", target: "bottom" };
-  if (status.compacting !== undefined) return { label: "正在压缩上下文", target: "bottom" };
-  if (status.retrying !== undefined) return { label: "等待重试", target: "bottom" };
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
     if (isPendingTool(item)) return { label: `${item.state === "queued" ? "准备执行" : "正在执行"}：${toolStep(item)}`, target: "tool" };
@@ -33,6 +31,8 @@ export function getRunStatusActivity(status: SessionStatus, items: TimelineItem[
     if (item.kind === "message" && item.role === "user") break;
   }
   if (streamingMessageId !== undefined) return { label: "正在回复", target: "message" };
+  if (status.compacting !== undefined) return { label: "正在压缩上下文", target: "bottom" };
+  if (status.retrying !== undefined) return { label: "等待重试", target: "bottom" };
   return { label: "执行中", target: "bottom" };
 }
 
