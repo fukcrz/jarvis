@@ -319,9 +319,8 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
       stage.style.setProperty("--chat-dock-space", `${String(Math.ceil(dockRect.height + 18))}px`);
       if (followingRef.current) element.scrollTop = element.scrollHeight;
       const composerEditor = dock.querySelector<HTMLElement>(".composer-editor");
-      const composerTop = composerEditor?.getBoundingClientRect().top ?? dockRect.top;
-      stage.style.setProperty("--timeline-navigator-bottom", `${String(Math.max(42, Math.ceil(shellRect.bottom - composerTop + 28)))}px`);
-      const nextBottom = jumpLatestBottomForDock(shellRect.bottom, composerTop);
+      stage.style.setProperty("--timeline-navigator-bottom", `${String(Math.max(42, Math.ceil(shellRect.bottom - dockRect.top + 28)))}px`);
+      const nextBottom = jumpLatestBottomForDock(shellRect.bottom, dockRect.top);
       const nextHide = shouldHideJumpLatestForComposer(isMobile, composerEditor?.getBoundingClientRect().height ?? 0);
       setJumpLatestBottom((current) => current === nextBottom ? current : nextBottom);
       setHideJumpLatestForComposer((current) => current === nextHide ? current : nextHide);
