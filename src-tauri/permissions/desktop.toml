@@ -1,7 +1,7 @@
 [[permission]]
 identifier = "allow-open-external-url"
 description = "在系统浏览器打开 http(s) 链接"
-commands.allow = ["open_external_url"]
+commands.allow = ["open_external_url", "reveal_file_in_folder"]
 
 [[permission]]
 identifier = "allow-set-notifications-enabled"

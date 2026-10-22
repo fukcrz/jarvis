@@ -76,7 +76,7 @@ pub fn run() {
       restarting: AtomicBool::new(false),
       restart_budget: Mutex::new(supervisor::RestartBudget::default()),
     })
-    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, take_update_check, check_desktop_update, update::get_update_channel, update::set_update_channel, update::check_channel_update])
+    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, reveal_file_in_folder, take_update_check, check_desktop_update, update::get_update_channel, update::set_update_channel, update::check_channel_update])
     .setup(|app| {
       app.resources_table().add(sidecar::SidecarCleanup(Arc::clone(&app.state::<AppState>().sidecar)));
       let handle = app.handle().clone();
@@ -122,6 +122,27 @@ fn set_notifications_enabled(state: State<AppState>, enabled: bool) {
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
   open_http_url(&url)
+}
+
+#[tauri::command]
+fn reveal_file_in_folder(path: String, cwd: Option<String>) -> Result<(), String> {
+  let requested = PathBuf::from(&path);
+  let file = if requested.is_absolute() {
+    requested
+  } else {
+    PathBuf::from(cwd.ok_or_else(|| "缺少工作区路径".to_string())?).join(requested)
+  };
+  if !file.is_file() {
+    return Err("文件不存在".into());
+  }
+  let file = fs::canonicalize(file).map_err(|error| error.to_string())?;
+  let directory = file.parent().ok_or_else(|| "无法获取文件目录".to_string())?;
+  #[cfg(target_os = "windows")]
+  return std::process::Command::new("explorer.exe").arg(directory).spawn().map(|_| ()).map_err(|error| error.to_string());
+  #[cfg(target_os = "macos")]
+  return std::process::Command::new("open").arg("-R").arg(file).spawn().map(|_| ()).map_err(|error| error.to_string());
+  #[cfg(target_os = "linux")]
+  return std::process::Command::new("xdg-open").arg(directory).spawn().map(|_| ()).map_err(|error| error.to_string());
 }
 
 #[tauri::command]

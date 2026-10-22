@@ -46,6 +46,7 @@ const urlTransform = (url: string, key?: string): string => {
 
 import { DiagramLightbox, ImagePreview, MermaidScaledSvg } from "./image-lightbox";
 import { LocalTextFileLink } from "./text-file-preview";
+import { isDesktopShell } from "../lib/desktop-shell";
 
 interface MarkdownMessageProps {
   text: string;
@@ -170,7 +171,12 @@ function LocalLink({ node: _node, href, className, children, ...rest }: Componen
   const resolved = rewriteLocalLinkHref(href, cwd);
   if (resolved === href && !href?.startsWith("/api/files?")) return <a href={href} className={className} {...rest}>{children}</a>;
   const downloadHref = localFileDownloadHref(resolved);
-  return <a {...rest} href={downloadHref} className={className === undefined ? "local-file-link" : `local-file-link ${className}`} download>{children}</a>;
+  return <a {...rest} href={downloadHref} className={className === undefined ? "local-file-link" : `local-file-link ${className}`} download onClick={isDesktopShell() ? (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (reference === undefined) return;
+    void import("@tauri-apps/api/core").then(({ invoke }) => invoke("reveal_file_in_folder", { path: reference.path, cwd })).catch(() => window.alert("无法打开文件所在目录"));
+  } : rest.onClick}>{children}</a>;
 }
 
 /**
