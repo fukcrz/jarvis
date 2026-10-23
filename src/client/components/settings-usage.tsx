@@ -31,15 +31,19 @@ export function UsagePage() {
     {stats === undefined ? null : <>
       <SettingsSection title="合计" hint={loading ? "更新中" : `${String(stats.sessions)} 个会话${stats.unreadable > 0 ? ` · ${String(stats.unreadable)} 个读不了` : ""}`}>
         <div className="usage-totals">
-          <Total label="费用" value={formatCost(stats.totals.cost)} />
-          <Total label="输入" value={formatTokens(stats.totals.input)} />
-          <Total label="输出" value={formatTokens(stats.totals.output)} />
-          <Total label="缓存读取" value={formatTokens(stats.totals.cacheRead)} />
-          <Total label="缓存写入" value={formatTokens(stats.totals.cacheWrite)} />
-          <Total label="推理" value={formatTokens(stats.totals.reasoning)} />
-          <Total label="调用" value={String(stats.totals.calls)} />
+          <div className="usage-totals-row tokens">
+            <Total label="输入" value={formatTokens(stats.totals.input)} />
+            <Total label="输出" value={formatTokens(stats.totals.output)} />
+            <Total label="缓存读取" value={formatTokens(stats.totals.cacheRead)} />
+            <Total label="缓存写入" value={formatTokens(stats.totals.cacheWrite)} />
+            <Total label="推理" value={formatTokens(stats.totals.reasoning)} />
+          </div>
+          <div className="usage-totals-row meta">
+            <Total label="费用" value={formatCost(stats.totals.cost)} />
+            <Total label="调用" value={String(stats.totals.calls)} />
+          </div>
         </div>
-        {stats.totals.calls > 0 && stats.totals.pricedCalls < stats.totals.calls ? <p className="usage-note">{stats.totals.pricedCalls === 0 ? "这些调用没有回报费用。" : `${String(stats.totals.calls - stats.totals.pricedCalls)} 次调用没有回报费用，未计入。`}</p> : null}
+        {stats.totals.calls > 0 && stats.totals.pricedCalls < stats.totals.calls ? <p className="usage-note">{stats.totals.pricedCalls === 0 ? "供应商没有回报费用。" : `${String(stats.totals.calls - stats.totals.pricedCalls)} 次调用没有回报费用，未计入。`}</p> : null}
       </SettingsSection>
       {stats.byDay.length > 1 ? <SettingsSection title="按天"><DayChart rows={stats.byDay} /></SettingsSection> : null}
       <SettingsSection title="供应商">
