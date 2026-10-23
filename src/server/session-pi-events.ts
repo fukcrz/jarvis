@@ -5,6 +5,7 @@ import type { EventHub } from "./event-hub.js";
 import { assistantTextBlockId, assistantTextPhaseFromContent, assistantThinkingBlockId, assistantTimelineItemsFromPi, contextSummaryFromEntry, errorFromPi, messageFromPi, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import type { ActiveRun, ActiveSession, PiEvent } from "./session-active.js";
 import { firstUserMessage, isAssistantMessage, isUserMessage, retryStatus } from "./session-helpers.js";
+import { UsageLedger, usageRecordFrom } from "./usage-ledger.js";
 import { isAbortErrorMessage, stringValue } from "./values.js";
 
 export interface SessionPiHost {
@@ -24,7 +25,7 @@ export interface SessionPiHost {
 }
 
 export class SessionPiEvents {
-  constructor(private readonly host: SessionPiHost) {}
+  constructor(private readonly host: SessionPiHost, private readonly usage = new UsageLedger()) {}
 
   handle(active: ActiveSession, event: AgentSessionEvent): void {
     active.updatedAt = new Date().toISOString();
@@ -218,7 +219,10 @@ export class SessionPiEvents {
     const thinkingDurations = active.thinkingDurations;
     const authoritative = withThinkingDurations(assistantTimelineItemsFromPi(message, identity.createdAt, assistantId, assistantId, generation), thinkingDurations);
     const thinking = thinkingDurations === undefined || thinkingDurations.size === 0 ? undefined : Object.fromEntries([...thinkingDurations].map(([index, ms]) => [String(index), ms]));
-    if (generation !== undefined) active.latestGeneration = generation;
+    if (generation !== undefined) {
+      active.latestGeneration = generation;
+      this.recordUsage(active, message);
+    }
     for (const id of provisionalIds) {
       active.liveMessages.delete(id);
       active.liveThinking.delete(id);
@@ -268,6 +272,23 @@ export class SessionPiEvents {
       this.markAssistantAttemptsRecovered(active, runId);
     }
     active.assistantStreamId = undefined;
+  }
+
+  /** Keep the call in the usage ledger, which outlives the session file. */
+  private recordUsage(active: ActiveSession, message: unknown, modelSuffix = ""): void {
+    if (!isRecord(message)) return;
+    const provider = stringValue(message["provider"]) ?? "";
+    const model = stringValue(message["responseModel"]) ?? stringValue(message["model"]) ?? "";
+    const record = usageRecordFrom({
+      at: new Date().toISOString(),
+      workspaceId: active.ref.workspaceId,
+      sessionId: active.ref.sessionId,
+      provider,
+      model: modelSuffix === "" ? model : `${model === "" ? "unknown" : model} · ${modelSuffix}`,
+      usage: message["usage"],
+    });
+    if (record === undefined) return;
+    void this.usage.record(record).catch((error: unknown) => console.warn("Failed to record usage", error));
   }
 
   private markAssistantAttemptFailed(active: ActiveSession, message: unknown, createdAt: string, assistantId: string, runId: string): void {
@@ -379,6 +400,7 @@ export class SessionPiEvents {
     });
     this.host.publishContextUsage(active, runId);
     this.host.publishUsage(active, runId);
+    if (event.result?.usage !== undefined) this.recordUsage(active, { provider: "", model: "", usage: event.result.usage }, "compaction");
     this.host.publishSummary(active);
     if (handoff) {
       if (event.aborted) active.pendingRunError = undefined;

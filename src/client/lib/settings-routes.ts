@@ -3,6 +3,7 @@ export type SettingsCategoryId =
   | "general"
   | "notifications"
   | "models"
+  | "usage"
   | "model-groups"
   | "plugins"
   | "skills"
@@ -15,6 +16,7 @@ export type SettingsRoute =
   | { page: "general" }
   | { page: "notifications" }
   | { page: "models" }
+  | { page: "usage" }
   | { page: "provider-new" }
   | { page: "provider"; providerId: string }
   | { page: "model-groups" }
@@ -45,6 +47,7 @@ export function settingsPath(route: SettingsRoute): string {
     case "general": return `${SETTINGS_ROOT}/general`;
     case "notifications": return `${SETTINGS_ROOT}/notifications`;
     case "models": return `${SETTINGS_ROOT}/models`;
+    case "usage": return `${SETTINGS_ROOT}/usage`;
     case "provider-new": return `${SETTINGS_ROOT}/models/new`;
     case "provider": return `${SETTINGS_ROOT}/models/${encodeURIComponent(route.providerId)}`;
     case "model-groups": return `${SETTINGS_ROOT}/model-groups`;
@@ -61,6 +64,7 @@ const SIMPLE_PAGES: Record<string, SettingsRoute> = {
   general: { page: "general" },
   notifications: { page: "notifications" },
   models: { page: "models" },
+  usage: { page: "usage" },
   "model-groups": { page: "model-groups" },
   extensions: { page: "plugins" },
   plugins: { page: "plugins" },

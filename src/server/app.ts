@@ -22,6 +22,7 @@ import { teeLogStream, type RecentLogs } from "./recent-logs.js";
 import { takeUndeliveredStartupMessages } from "./fs.js";
 import { applyAuthCookie, authorizeSocket, clearAuthCookie, readAuthCookie } from "./http-auth.js";
 import { SessionService } from "./session-service.js";
+import { collectUsageStats, parseUsageRange } from "./usage-ledger.js";
 import { desktopEnabled } from "./desktop-bridge.js";
 import { registerSelfRestart } from "./self-restart.js";
 import { WorkspaceStore } from "./workspace-store.js";
@@ -430,6 +431,11 @@ export async function buildApp(options: {
       .header("content-range", `bytes ${String(range.start)}-${String(range.end)}/${String(size)}`)
       .header("content-length", String(range.end - range.start + 1))
       .send(createReadStream(resolved, { start: range.start, end: range.end }));
+  });
+
+  app.get("/api/usage", async (request) => {
+    const query = z.object({ range: z.enum(["7d", "30d", "90d", "all"]).optional() }).strict().parse(request.query);
+    return { usage: await collectUsageStats(workspaces.list(), parseUsageRange(query.range)) };
   });
 
   app.get("/api/workspaces", async () => ({ workspaces: workspaces.list() }));

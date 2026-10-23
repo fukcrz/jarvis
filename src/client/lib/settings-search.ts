@@ -83,6 +83,7 @@ export const STATIC_SETTINGS_ENTRIES: readonly SettingsSearchEntry[] = [
   { key: "providers", title: "供应商", description: "模型与供应商 · 添加、登录、API Key", category: "models", route: { page: "models" }, focus: "providers" },
   { key: "provider-new", title: "添加供应商", description: "模型与供应商 · 官方接口或自定义 OpenAI 兼容接口", keywords: "新建 自定义 base url", category: "models", route: { page: "provider-new" } },
   { key: "enabled-models", title: "启用的模型", description: "模型与供应商 · 选择器里出现哪些模型", keywords: "模型范围 选择器", category: "models", route: { page: "models" }, focus: "enabled-models" },
+  { key: "usage", title: "用量统计", description: "用量 · 按供应商、模型汇总 token 和费用", keywords: "token 缓存 cache 费用 cost 价格", category: "usage", route: { page: "usage" } },
   { key: "model-groups", title: "模型组", description: "按顺序路由多个模型，失败自动换下一条", category: "model-groups", route: { page: "model-groups" }, focus: "model-group-list" },
   { key: "model-group-globals", title: "重试等待 / 压缩阈值", description: "模型组 · 所有模型组共用的高级参数", keywords: "重试 压缩 token 阈值 预留 compaction retry", category: "model-groups", route: { page: "model-groups" }, focus: "model-group-globals" },
   { key: "bundled-plugins", title: "自带插件", description: "插件 · 模型组路由、会话互通", category: "plugins", route: { page: "plugins" }, focus: "bundled-plugins" },

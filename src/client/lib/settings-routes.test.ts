@@ -6,6 +6,7 @@ const routes: SettingsRoute[] = [
   { page: "general" },
   { page: "notifications" },
   { page: "models" },
+  { page: "usage" },
   { page: "provider-new" },
   { page: "provider", providerId: "openai" },
   { page: "provider", providerId: "local/custom" },

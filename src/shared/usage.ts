@@ -1,0 +1,44 @@
+/** Aggregated provider-reported usage. `reasoning` is already included in `output`. */
+export interface UsageBucket {
+  calls: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  total: number;
+  cost: number;
+  pricedCalls: number;
+}
+
+export interface UsageModelRow extends UsageBucket {
+  provider: string;
+  model: string;
+}
+
+export interface UsageProviderRow extends UsageBucket {
+  provider: string;
+}
+
+export interface UsageDayRow extends UsageBucket {
+  day: string;
+}
+
+export interface UsageWorkspaceRow extends UsageBucket {
+  workspaceId: string;
+  label: string;
+}
+
+export type UsageRange = "7d" | "30d" | "90d" | "all";
+
+export interface UsageStats {
+  generatedAt: string;
+  range: UsageRange;
+  sessions: number;
+  unreadable: number;
+  totals: UsageBucket;
+  byProvider: UsageProviderRow[];
+  byModel: UsageModelRow[];
+  byDay: UsageDayRow[];
+  byWorkspace: UsageWorkspaceRow[];
+}

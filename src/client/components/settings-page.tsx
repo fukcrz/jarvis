@@ -11,6 +11,7 @@ import { APP_VERSION } from "../lib/app-version";
 import { STATIC_SETTINGS_ENTRIES, type SettingsSearchEntry } from "../lib/settings-search";
 import { categoryRoute, isSettingsPath, legacySettingsRedirect, navigateBackOr, parentSettingsRoute, parseSettingsPath, settingsCategoryOf, settingsPath, type SettingsCategoryId, type SettingsRoute } from "../lib/settings-routes";
 import { AboutPage, GeneralPage, NotificationsPage, WorkspacesPage, initialNotificationsEnabled } from "./settings-app-pages";
+import { UsagePage } from "./settings-usage";
 import { ExtensionsPage, SkillFilesPage } from "./settings-extensions";
 import { LeaveGuardProvider, SaveStatusProvider, SettingsToastProvider, useLeaveGuard } from "./settings-feedback";
 import { ModelGroupsPage } from "./settings-model-groups";
@@ -187,6 +188,7 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
     general: assistantName,
     notifications: notificationsEnabled ? "开" : "关",
     models: ps.loading ? undefined : ps.connectedCount === 0 ? "未配置" : `${String(ps.connectedCount)} 已连接 · ${String(enabledModelCount)} 模型`,
+    usage: undefined,
     "model-groups": groupCount === undefined ? undefined : groupCount.enabled ? `${String(groupCount.count)} 个` : "插件未启用",
     plugins: plugins === undefined ? undefined : `${String(plugins.bundled.filter((item) => item.enabled).length + plugins.recommended.filter((item) => item.installed && item.enabled).length + plugins.installed.filter((item) => !plugins.recommended.some((recommended) => recommended.name === item.name)).length)} 个`,
     skills: skills === undefined ? undefined : `${String(skills.bundled.filter((item) => item.enabled).length + skills.installed.length)} 个`,
@@ -209,6 +211,9 @@ function SettingsShell({ assistantName, refreshKeys, onAssistantNameChange, work
       break;
     case "models":
       page = <ModelsPage ps={ps} onOpenProvider={(providerId) => go({ page: "provider", providerId })} onAddProvider={() => go({ page: "provider-new" })} />;
+      break;
+    case "usage":
+      page = <UsagePage />;
       break;
     case "provider-new":
       page = <ProviderNewPage ps={ps} onBack={() => go({ page: "models" })} onCreated={(providerId) => go({ page: "provider", providerId }, { replace: true, focus: "provider-models" })} />;
