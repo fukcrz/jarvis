@@ -66,11 +66,15 @@ interface UsageSample {
 const EMPTY_BUCKET = (): UsageBucket => ({ calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 0, cost: 0, pricedCalls: 0 });
 
 /** Sum the ledger. Session files are not read; deleted sessions stay in the totals. */
-export async function collectUsageStats(workspaces: readonly Workspace[], range: UsageRange, now = Date.now(), home = jarvisHome()): Promise<UsageStats> {
+export async function collectUsageStats(workspaces: readonly Workspace[], range: UsageRange, now = Date.now(), home = jarvisHome(), workspaceId?: string): Promise<UsageStats> {
   const since = rangeStart(range, now);
   const labels = new Map(workspaces.map((workspace) => [workspace.id, workspace.label]));
-  const samples = (await readLedger(home)).filter((sample) => since === 0 || sample.at >= since);
+  const all = (await readLedger(home)).filter((sample) => since === 0 || sample.at >= since);
+  const knownWorkspaces = groupBy(all, (sample) => sample.workspaceId).map(([id, bucket]) => ({ workspaceId: id, label: labels.get(id) ?? id, ...bucket }));
+  const selected = workspaceId === undefined || workspaceId === "" ? undefined : workspaceId;
+  const samples = selected === undefined ? all : all.filter((sample) => sample.workspaceId === selected);
   return {
+    ...(selected === undefined ? {} : { workspaceId: selected }),
     generatedAt: new Date(now).toISOString(),
     range,
     sessions: new Set(samples.map((sample) => `${sample.workspaceId}/${sample.sessionId}`)).size,
@@ -82,7 +86,7 @@ export async function collectUsageStats(workspaces: readonly Workspace[], range:
       return { provider: key.slice(0, split), model: key.slice(split + 1), ...bucket };
     }),
     byDay: groupBy(samples, (sample) => new Date(sample.at).toISOString().slice(0, 10)).map(([day, bucket]) => ({ day, ...bucket })).sort((a, b) => a.day < b.day ? -1 : 1),
-    byWorkspace: groupBy(samples, (sample) => sample.workspaceId).map(([workspaceId, bucket]) => ({ workspaceId, label: labels.get(workspaceId) ?? workspaceId, ...bucket })),
+    byWorkspace: knownWorkspaces,
   };
 }
 

@@ -12,21 +12,22 @@ const RANGES: { id: UsageRange; label: string }[] = [
 
 export function UsagePage() {
   const [range, setRange] = useState<UsageRange>("30d");
+  const [workspaceId, setWorkspaceId] = useState("");
   const [stats, setStats] = useState<UsageStats | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback((next: UsageRange) => {
+  const load = useCallback((next: UsageRange, workspace: string) => {
     setLoading(true);
     setError(undefined);
-    void api.usage(next).then(setStats, (cause: unknown) => setError(cause instanceof Error ? cause.message : "读取失败")).finally(() => setLoading(false));
+    void api.usage(next, workspace).then(setStats, (cause: unknown) => setError(cause instanceof Error ? cause.message : "读取失败")).finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load(range); }, [load, range]);
+  useEffect(() => { load(range, workspaceId); }, [load, range, workspaceId]);
 
   return <>
     <SettingsPageHead title="用量" description="每次调用结束时记下用量，删除会话后仍然保留。" extra={<RangeSwitch value={range} onChange={setRange} />} />
-    {error !== undefined ? <SettingsCard><div className="usage-empty"><span>{error}</span><StButton onClick={() => load(range)}>重试</StButton></div></SettingsCard> : null}
+    {error !== undefined ? <SettingsCard><div className="usage-empty"><span>{error}</span><StButton onClick={() => load(range, workspaceId)}>重试</StButton></div></SettingsCard> : null}
     {stats === undefined && error === undefined ? <p className="usage-note">读取中…</p> : null}
     {stats === undefined ? null : <>
       <SettingsSection title="合计" hint={loading ? "更新中" : `${String(stats.sessions)} 个会话${stats.unreadable > 0 ? ` · ${String(stats.unreadable)} 个读不了` : ""}`}>
@@ -52,7 +53,9 @@ export function UsagePage() {
       <SettingsSection title="模型">
         {stats.byModel.length === 0 ? null : <UsageTable rows={stats.byModel} name={(row) => row.model} detail={(row) => row.provider} />}
       </SettingsSection>
-      {stats.byWorkspace.length > 1 ? <SettingsSection title="工作区"><UsageTable rows={stats.byWorkspace} name={(row) => row.label} /></SettingsSection> : null}
+      {stats.byWorkspace.length > 0 ? <SettingsSection title="工作区" action={workspaceId === "" ? undefined : <button type="button" className="st-act" onClick={() => setWorkspaceId("")}>全部</button>}>
+        <UsageTable rows={stats.byWorkspace} name={(row) => row.label} onPick={(row) => setWorkspaceId(row.workspaceId === workspaceId ? "" : row.workspaceId)} selected={(row) => row.workspaceId === workspaceId} />
+      </SettingsSection> : null}
     </>}
   </>;
 }
@@ -78,14 +81,15 @@ function DayChart({ rows }: { rows: UsageDayRow[] }) {
 
 const COLUMNS = ["费用", "输入", "输出", "缓存读", "缓存写", "推理", "调用"] as const;
 
-function UsageTable<T extends UsageBucket>({ rows, name, detail }: { rows: T[]; name: (row: T) => string; detail?: (row: T) => string }) {
+function UsageTable<T extends UsageBucket>({ rows, name, detail, onPick, selected }: { rows: T[]; name: (row: T) => string; detail?: (row: T) => string; onPick?: (row: T) => void; selected?: (row: T) => boolean }) {
   return <div className="usage-table-wrap"><table className="usage-table">
     <thead><tr><th>名称</th>{COLUMNS.map((column) => <th key={column}>{column}</th>)}</tr></thead>
     <tbody>
       {rows.map((row) => {
         const label = name(row);
         const extra = detail?.(row);
-        return <tr key={`${extra ?? ""}/${label}`}>
+        const on = selected?.(row) === true;
+        return <tr key={`${extra ?? ""}/${label}`} className={`${onPick === undefined ? "" : "pick"}${on ? " on" : ""}`} aria-current={on ? "true" : undefined} onClick={onPick === undefined ? undefined : () => onPick(row)}>
           <td><b>{label}</b>{extra === undefined ? null : <small>{extra}</small>}</td>
           <td>{formatCost(row.cost)}</td>
           <td>{formatTokens(row.input)}</td>

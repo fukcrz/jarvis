@@ -51,13 +51,26 @@ describe("usage ledger", () => {
     const stats = await collectUsageStats([], "30d", Date.now(), directory);
     expect(stats.totals).toMatchObject({ calls: 1, input: 1 });
   });
+
+  it("limits every breakdown to one workspace while keeping the workspace list", async () => {
+    const directory = await home();
+    const ledger = new UsageLedger(join(directory, "usage.jsonl"));
+    await ledger.record(usageRecordFrom(call({ input: 10, output: 0, cacheRead: 0, cacheWrite: 0, provider: "openai" }))!);
+    await ledger.record(usageRecordFrom(call({ input: 4, output: 0, cacheRead: 0, cacheWrite: 0, provider: "anthropic", workspaceId: "w2", sessionId: "s2" }))!);
+
+    const stats = await collectUsageStats([], "all", Date.now(), directory, "w1");
+    expect(stats.workspaceId).toBe("w1");
+    expect(stats.totals).toMatchObject({ calls: 1, input: 10 });
+    expect(stats.byProvider.map((row) => row.provider)).toEqual(["openai"]);
+    expect(stats.byWorkspace.map((row) => row.workspaceId)).toEqual(["w1", "w2"]);
+  });
 });
 
 function call(overrides: Record<string, unknown>): Parameters<typeof usageRecordFrom>[0] {
-  const { provider, model, sessionId, ...usage } = overrides;
+  const { provider, model, sessionId, workspaceId, ...usage } = overrides;
   return {
     at: "2026-08-02T00:00:00.000Z",
-    workspaceId: "w1",
+    workspaceId: typeof workspaceId === "string" ? workspaceId : "w1",
     sessionId: typeof sessionId === "string" ? sessionId : "s1",
     provider: typeof provider === "string" ? provider : "openai",
     model: typeof model === "string" ? model : "gpt",

@@ -34,6 +34,8 @@ export type UsageRange = "7d" | "30d" | "90d" | "all";
 export interface UsageStats {
   generatedAt: string;
   range: UsageRange;
+  /** Set when the totals, providers, and models cover one workspace. The workspace list stays complete. */
+  workspaceId?: string;
   sessions: number;
   unreadable: number;
   totals: UsageBucket;

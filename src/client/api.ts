@@ -196,7 +196,11 @@ export const api = {
   stopBackgroundTask: async (workspaceId: string, taskId: string): Promise<BackgroundTaskSnapshot> => (await request<{ task: BackgroundTaskSnapshot }>(`/api/workspaces/${workspaceId}/background-tasks/${taskId}/stop`, { method: "POST", body: "{}" })).task,
   restartBackgroundTask: async (workspaceId: string, taskId: string): Promise<BackgroundTaskSnapshot> => (await request<{ task: BackgroundTaskSnapshot }>(`/api/workspaces/${workspaceId}/background-tasks/${taskId}/restart`, { method: "POST", body: "{}" })).task,
   settings: async (): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings")).settings,
-  usage: async (range: UsageRange): Promise<UsageStats> => (await request<{ usage: UsageStats }>(`/api/usage?range=${range}`)).usage,
+  usage: async (range: UsageRange, workspaceId?: string): Promise<UsageStats> => {
+    const params = new URLSearchParams({ range });
+    if (workspaceId !== undefined && workspaceId !== "") params.set("workspaceId", workspaceId);
+    return (await request<{ usage: UsageStats }>(`/api/usage?${params.toString()}`)).usage;
+  },
   updateSettings: async (patch: Partial<Pick<AppSettings, "assistantName">>): Promise<AppSettings> => (await request<{ settings: AppSettings }>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) })).settings,
   plugins: async (): Promise<PluginSnapshot> => (await request<{ plugins: PluginSnapshot }>("/api/plugins")).plugins,
   modelGroups: async (): Promise<ModelGroupsSnapshot> => (await request<{ modelGroups: ModelGroupsSnapshot }>("/api/plugins/model-groups")).modelGroups,

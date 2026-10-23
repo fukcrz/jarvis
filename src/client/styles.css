@@ -1099,6 +1099,9 @@ html.text-selecting .run-status-bar { pointer-events: none !important; }
 .usage-table td:first-child b { font-weight: 600; }
 .usage-table td:first-child small { display: block; color: var(--subtle); font-size: 11px; }
 .usage-table tbody tr + tr td { border-top: 1px solid var(--line); }
+.usage-table tr.pick { cursor: pointer; }
+.usage-table tr.pick:hover td { background: var(--surface-hover); }
+.usage-table tr.on td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 .st-sec-head { display: flex; align-items: center; gap: 8px; margin: 0 2px 8px; }
 .st-sec-head h2 { display: flex; align-items: baseline; gap: 8px; margin: 0; color: var(--subtle); font-size: 12px; font-weight: 600; }
 .st-sec-head h2 small { color: var(--subtle); font-size: 12px; font-weight: 400; }

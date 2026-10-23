@@ -434,8 +434,8 @@ export async function buildApp(options: {
   });
 
   app.get("/api/usage", async (request) => {
-    const query = z.object({ range: z.enum(["7d", "30d", "90d", "all"]).optional() }).strict().parse(request.query);
-    return { usage: await collectUsageStats(workspaces.list(), parseUsageRange(query.range)) };
+    const query = z.object({ range: z.enum(["7d", "30d", "90d", "all"]).optional(), workspaceId: z.string().min(1).max(80).optional() }).strict().parse(request.query);
+    return { usage: await collectUsageStats(workspaces.list(), parseUsageRange(query.range), Date.now(), undefined, query.workspaceId) };
   });
 
   app.get("/api/workspaces", async () => ({ workspaces: workspaces.list() }));
