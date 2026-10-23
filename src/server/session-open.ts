@@ -199,8 +199,8 @@ function backgroundTaskTool(tasks: BackgroundTaskService, workspaceId: string): 
   return {
     name: "background_task",
     label: "Background task",
-    description: "Manage long-running workspace commands. Use start for dev servers instead of a blocking bash command; list, log, stop or restart by task ID. Tasks stop when Jarvis exits.",
-    promptSnippet: "Start and manage long-running workspace commands with logs and explicit stop/restart",
+    description: "Manage long-running workspace commands. Use start for dev servers instead of a blocking bash command. Before start, list and reuse a running task with the same command and directory by calling log with its id; do not start another. list returns only starting, running, and stopping tasks. Tasks stop when Jarvis exits.",
+    promptSnippet: "Start and manage long-running workspace commands; reuse a running task instead of starting it again",
     parameters: backgroundTaskParameters,
     async execute(_toolCallId, { action, command, cwd, taskId }) {
       let result: unknown;
@@ -208,7 +208,7 @@ function backgroundTaskTool(tasks: BackgroundTaskService, workspaceId: string): 
         if (!command?.trim()) throw new Error("start requires command");
         result = await tasks.start(workspaceId, command, cwd);
       } else if (action === "list") {
-        result = tasks.list(workspaceId);
+        result = tasks.list(workspaceId, "live");
       } else {
         if (!taskId) throw new Error(`${action} requires taskId`);
         result = action === "log" ? await tasks.logs(workspaceId, taskId)

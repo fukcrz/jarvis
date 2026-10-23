@@ -24,6 +24,10 @@ const RUNNER_PATH = fileURLToPath(new URL("./background-task-runner.js", import.
 const SOURCE_RUNNER_PATH = fileURLToPath(new URL("./background-task-runner.ts", import.meta.url));
 const LOG_BYTES = 64 * 1024;
 
+function isLive(state: BackgroundTaskSnapshot["state"]): boolean {
+  return state === "starting" || state === "running" || state === "stopping";
+}
+
 function runnerInvocation(cwd: string, command: string): [string, string[]] {
   if (existsSync(RUNNER_PATH)) return [process.execPath, [RUNNER_PATH, cwd, command]];
   if (!existsSync(SOURCE_RUNNER_PATH)) throw new Error("Background task runner is not installed");
@@ -44,9 +48,11 @@ export class BackgroundTaskService {
 
   constructor(private readonly workspaces: WorkspaceStore) {}
 
-  list(workspaceId: string): BackgroundTaskSnapshot[] {
+  list(workspaceId: string, scope: "all" | "live" = "all"): BackgroundTaskSnapshot[] {
     this.workspaces.get(workspaceId);
-    return [...this.tasks.values()].filter((task) => task.workspaceId === workspaceId).map((task) => this.snapshot(task));
+    return [...this.tasks.values()]
+      .filter((task) => task.workspaceId === workspaceId && (scope === "all" || isLive(task.state)))
+      .map((task) => this.snapshot(task));
   }
 
   async start(workspaceId: string, command: string, cwd?: string): Promise<BackgroundTaskSnapshot> {
@@ -63,8 +69,9 @@ export class BackgroundTaskService {
     }
     const logDir = await (this.logDirPromise ??= mkdtemp(join(tmpdir(), "jarvis-background-tasks-")));
     this.assertAcceptingTasks(workspaceId);
-    if ([...this.tasks.values()].some((task) => task.workspaceId === workspaceId && task.cwd === directory && task.command === value && (task.state === "starting" || task.state === "running" || task.state === "stopping"))) {
-      throw new AppError("TASK_ALREADY_RUNNING", "This command is already running in this workspace", 409);
+    const existing = [...this.tasks.values()].find((task) => task.workspaceId === workspaceId && task.cwd === directory && task.command === value && isLive(task.state));
+    if (existing !== undefined) {
+      throw new AppError("TASK_ALREADY_RUNNING", `This command is already running in this workspace: ${JSON.stringify(this.snapshot(existing))}`, 409);
     }
     const id = randomUUID();
     const task: Task = { id, workspaceId, command: value, cwd: directory, state: "starting", startedAt: new Date().toISOString(), logPath: join(logDir, `${id}.log`) };

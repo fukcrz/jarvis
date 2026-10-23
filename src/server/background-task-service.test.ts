@@ -38,7 +38,7 @@ describe("BackgroundTaskService", () => {
     expect(task.workspaceId).toBe(workspaceId);
     expect(task.state).toBe("running");
     expect(service.list(secondWorkspaceId)).toEqual([]);
-    await expect(service.start(workspaceId, command)).rejects.toMatchObject({ code: "TASK_ALREADY_RUNNING" });
+    await expect(service.start(workspaceId, command)).rejects.toThrow(JSON.stringify(service.list(workspaceId)[0]));
 
     await eventually(async () => (await service.logs(workspaceId, task.id)).output.includes("background-task-log") ? true : undefined);
     const stopped = await service.stop(workspaceId, task.id);
@@ -69,6 +69,7 @@ describe("BackgroundTaskService", () => {
     await eventually(() => service.list(workspaceId)[0]?.state === "exited" ? true : undefined);
     const result = service.list(workspaceId)[0];
     expect(result).toMatchObject({ id: task.id, state: "exited", exitCode: 0 });
+    expect(service.list(workspaceId, "live")).toEqual([]);
     await eventually(async () => (await service.logs(workspaceId, task.id)).output.includes(output) ? true : undefined);
   });
 
