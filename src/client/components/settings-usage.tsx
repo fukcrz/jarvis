@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import type { UsageBucket, UsageDayRow, UsageModelRow, UsageProviderRow, UsageRange, UsageStats, UsageWorkspaceRow } from "../../shared/usage";
+import type { UsageBucket, UsageDayRow, UsageRange, UsageStats } from "../../shared/usage";
 import { SettingsCard, SettingsPageHead, SettingsSection, StButton } from "./settings-ui";
 
 const RANGES: { id: UsageRange; label: string }[] = [
