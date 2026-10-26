@@ -208,10 +208,15 @@ const remapMessage = (message: AssistantMessage, model: Model<Api>): AssistantMe
 	model: model.id,
 });
 
-const remapEvent = (event: AssistantMessageEvent, model: Model<Api>): AssistantMessageEvent => {
-	if (event.type === "done") return { ...event, message: remapMessage(event.message, model) };
-	if (event.type === "error") return { ...event, error: remapMessage(event.error, model) };
-	return { ...event, partial: remapMessage(event.partial, model) } as AssistantMessageEvent;
+const remapEvent = (event: AssistantMessageEvent, model: Model<Api>, route: Route): AssistantMessageEvent => {
+	const withRoute = (message: AssistantMessage): AssistantMessage => ({
+		...remapMessage(message, model),
+		routeProvider: route.provider,
+		routeModel: route.model,
+	} as AssistantMessage);
+	if (event.type === "done") return { ...event, message: withRoute(event.message) };
+	if (event.type === "error") return { ...event, error: withRoute(event.error) };
+	return { ...event, partial: withRoute(event.partial) } as AssistantMessageEvent;
 };
 
 const createError = (model: Model<Api>, message: string, aborted = false): AssistantMessageEvent => ({
@@ -703,7 +708,7 @@ export default function (pi: ExtensionAPI) {
 							}
 							if (event.type === "done") markSuccess(groupId, routeIndex);
 							if (event.type !== "done") emitted = true;
-							output.push(remapEvent(event, virtualModel));
+							output.push(remapEvent(event, virtualModel, route));
 							if (event.type === "done") return;
 						}
 						if (retryRoute) continue;

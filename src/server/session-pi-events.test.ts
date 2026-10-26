@@ -6,6 +6,7 @@ import type { ActiveSession } from "./session-active.js";
 import { EventHub } from "./event-hub.js";
 import { projectHistory } from "./projection.js";
 import { SessionPiEvents, type SessionPiHost } from "./session-pi-events.js";
+import type { UsageRecord } from "./usage-ledger.js";
 
 const timestamp = Date.parse("2026-08-09T00:00:01.000Z");
 const signature = (phase: "commentary" | "final_answer") => JSON.stringify({ v: 1, id: phase, phase });
@@ -43,7 +44,8 @@ function setup() {
     },
     publishContextUsage: vi.fn(), publishUsage, publishSummary: vi.fn(),
   } as Pick<SessionPiHost, "events" | "publishTool" | "publishContextUsage" | "publishUsage" | "publishSummary"> as SessionPiHost;
-  const handler = new SessionPiEvents(host);
+  const recordUsage = vi.fn<(entry: UsageRecord) => Promise<void>>().mockResolvedValue(undefined);
+  const handler = new SessionPiEvents(host, { record: recordUsage } as unknown as ConstructorParameters<typeof SessionPiEvents>[1]);
   const update = (partial: AssistantMessage, event: AssistantMessageEvent) => handler.handle(active, { type: "message_update", message: partial, assistantMessageEvent: event });
   const snapshot = () => ({
     seq: hub.currentSeq(active.ref), status: active.state, model: { available: [] },
@@ -55,7 +57,7 @@ function setup() {
     ...(active.partialThinking === undefined ? {} : { partialThinking: active.partialThinking }),
     ...(active.liveGeneration === undefined ? {} : { liveGeneration: active.liveGeneration }),
   });
-  return { active, events, handler, update, snapshot, publishUsage, close: () => hub.terminateAll() };
+  return { active, events, handler, update, snapshot, publishUsage, recordUsage, close: () => hub.terminateAll() };
 }
 
 describe("Pi assistant block streaming", () => {
@@ -183,6 +185,32 @@ describe("Pi assistant block streaming", () => {
       fixture.update(complete, { type: "thinking_end", contentIndex: 0, content: "ab", partial: complete });
       fixture.update(complete, { type: "text_delta", contentIndex: 1, delta: "cd", partial: complete });
       expect(fixture.events.at(-1)?.payload).toMatchObject({ liveGeneration: { estimatedOutputTokens: 1, activeBlockKind: "text", activeContentIndex: 1 } });
+    } finally { fixture.close(); }
+  });
+
+  it("records model-group usage against the actual route", async () => {
+    const fixture = setup();
+    try {
+      const complete = {
+        ...message([]),
+        provider: "model-groups",
+        model: "coding",
+        routeProvider: "openai",
+        routeModel: "gpt-4.1",
+        usage: { input: 12, output: 4, cacheRead: 3, cacheWrite: 1, totalTokens: 20, cost: { input: 0.01, output: 0.01, cacheRead: 0.005, cacheWrite: 0.005, total: 0.03 } },
+      };
+      fixture.handler.handle(fixture.active, { type: "message_end", message: complete });
+      await Promise.resolve();
+      expect(fixture.recordUsage).toHaveBeenCalledWith(expect.objectContaining({
+        provider: "openai",
+        model: "gpt-4.1",
+        input: 12,
+        output: 4,
+        cacheRead: 3,
+        cacheWrite: 1,
+        cost: 0.03,
+      }));
+      expect(fixture.publishUsage).toHaveBeenCalledWith(fixture.active, "run");
     } finally { fixture.close(); }
   });
 

@@ -44,6 +44,7 @@ import { errorMessage, isEmptySession, isSessionInFocusWindow, randomUUID, parse
 import { useIsMobile } from "./hooks/use-is-mobile";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, useSidebarResize } from "./hooks/use-sidebar-resize";
+import { useSideChatResize } from "./hooks/use-side-chat-resize";
 import { useWorkspaceEvents } from "./hooks/use-workspace-events";
 import { useGlobalEvents } from "./hooks/use-global-events";
 import { extensionToastDuration, type ExtensionToast } from "./extension-notifications";
@@ -69,6 +70,7 @@ export function App() {
   const [sessionId, setSessionId] = useState<string | undefined>(() => initialPath.sessionId ?? window.localStorage.getItem("jarvis.session") ?? undefined);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Record<string, boolean>>(() => readExpandedWorkspaces());
   const { sidebarWidth, sidebarResizing, startSidebarResize, resizeSidebarWithKeyboard, stopSidebarResize } = useSidebarResize();
+  const { sideChatWidth, sideChatResizing, startSideChatResize, resizeSideChatWithKeyboard, stopSideChatResize } = useSideChatResize();
   const [focusMode, setFocusMode] = useState(readSessionFocusMode);
   const [focusNow, setFocusNow] = useState(Date.now());
   const [loading, setLoading] = useState(true);
@@ -1345,7 +1347,7 @@ export function App() {
         setProjectRemoveTarget(workspace);
       }} cleanupDisabled={sessionCleanupTargets(sessionsByWorkspace[projectMenu.workspace.id] ?? [], keepSessionIdFor(projectMenu.workspace.id)).length === 0} />}
       <SessionSearchDialog open={searchOpen} onOpenChange={setSearchOpen} workspaces={workspaces} searchSessions={searchSessions} onSelectSession={(workspaceId, sessionId) => { chooseSession(workspaceId, sessionId); }} />
-      {selectedRef === undefined || isSettingsPage || (isMobile && mobilePage !== "chat") ? null : <SideChatPanel open={sideChatOpen} onOpenChange={setSideChatOpen} parentRef={selectedRef} assistantName={assistantName} workspaceCwd={selectedWorkspace?.cwd} isMobile={isMobile} onRunStateChange={setSideChatRunState} />}
+      {selectedRef === undefined || isSettingsPage || (isMobile && mobilePage !== "chat") ? null : <SideChatPanel open={sideChatOpen} onOpenChange={setSideChatOpen} parentRef={selectedRef} assistantName={assistantName} workspaceCwd={selectedWorkspace?.cwd} isMobile={isMobile} sideChatWidth={sideChatWidth} sideChatResizing={sideChatResizing} startSideChatResize={startSideChatResize} resizeSideChatWithKeyboard={resizeSideChatWithKeyboard} stopSideChatResize={stopSideChatResize} onRunStateChange={setSideChatRunState} />}
       {filesWorkspaceId !== undefined ? <FileBrowser key={filesWorkspaceId} workspaceId={filesWorkspaceId} onClose={() => setFilesWorkspaceId(undefined)} /> : null}
       <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onOpenFiles={(targetWorkspaceId) => { setMobileActionTarget(undefined); setSideChatOpen(false); setFilesWorkspaceId(targetWorkspaceId); }} onOpenSideChat={(targetWorkspaceId, session) => { setMobileActionTarget(undefined); setFilesWorkspaceId(undefined); chooseSession(targetWorkspaceId, session.id); setSideChatOpen(true); }} onRenameProject={(workspace) => {
         setMobileActionTarget(undefined);

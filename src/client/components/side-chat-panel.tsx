@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { PanelRight, Puzzle, RotateCcw, X } from "lucide-react";
 import type { ComposerCommand, ImageAttachment, ModelDescriptor, RunState, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, WorkspaceFile } from "../../shared/protocol";
 import { emptySessionQueue } from "../../shared/protocol";
@@ -28,10 +28,15 @@ interface SideChatPanelProps {
   assistantName: string;
   workspaceCwd?: string;
   isMobile: boolean;
+  sideChatWidth?: number;
+  sideChatResizing?: boolean;
+  startSideChatResize?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  resizeSideChatWithKeyboard?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
+  stopSideChatResize?: (pointerId?: number) => void;
   onRunStateChange?: (runState: RunState | undefined) => void;
 }
 
-export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, workspaceCwd, isMobile, onRunStateChange }: SideChatPanelProps) {
+export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, workspaceCwd, isMobile, sideChatWidth, sideChatResizing, startSideChatResize, resizeSideChatWithKeyboard, stopSideChatResize, onRunStateChange }: SideChatPanelProps) {
   const [sideRef, setSideRef] = useState<SessionRef | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [draft, setDraft] = useState("");
@@ -453,7 +458,22 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
     </>;
   }
   if (!open) return dialog;
-  return <><aside className="side-chat-drawer" aria-label="侧聊">{header}{body}</aside>{dialog}</>;
+  return <><aside className={`side-chat-drawer${sideChatResizing ? " side-chat-drawer-resizing" : ""}`} style={sideChatWidth === undefined ? undefined : { width: `${sideChatWidth}px` }} aria-label="侧聊">
+    <div
+      className="side-chat-resizer"
+      role="separator"
+      aria-label="调整侧聊宽度"
+      aria-orientation="vertical"
+      aria-valuemin={280}
+      aria-valuemax={720}
+      aria-valuenow={sideChatWidth}
+      tabIndex={0}
+      onKeyDown={resizeSideChatWithKeyboard}
+      onLostPointerCapture={() => stopSideChatResize?.()}
+      onPointerDown={startSideChatResize}
+    />
+    {header}{body}
+  </aside>{dialog}</>;
 }
 
 function SideChatExtensionPanels({ panels }: { panels: ExtensionPanelState }) {

@@ -16,6 +16,8 @@ use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_notification::NotificationExt;
+#[cfg(windows)]
+use tauri_winrt_notification::Toast;
 
 const DEFAULT_PORT: u16 = 9528;
 const STARTUP_SLOW_AFTER_SECS: u64 = 30;
@@ -403,7 +405,27 @@ fn notify_run(app: &AppHandle, _workspace_id: &str, _session_id: &str, failed: b
   } else {
     body.to_string()
   };
-  let _ = app.notification().builder().title(title).body(body).show();
+  #[cfg(windows)]
+  {
+    let workspace_id = _workspace_id.to_owned();
+    let session_id = _session_id.to_owned();
+    let app = app.clone();
+    let app_id = app.config().identifier.clone();
+    let _ = Toast::new(&app_id)
+      .title(&title)
+      .text1(&body)
+      .on_activated(move |_| {
+        show_main(&app);
+        let _ = app.emit("jarvis://open-session", OpenSessionPayload { workspace_id: workspace_id.clone(), session_id: session_id.clone() });
+        Ok(())
+      })
+      .show();
+    return;
+  }
+  #[cfg(not(windows))]
+  {
+    let _ = app.notification().builder().title(title).body(body).show();
+  }
 }
 
 fn window_is_front(app: &AppHandle) -> bool {
