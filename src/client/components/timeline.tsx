@@ -1458,7 +1458,7 @@ interface TurnRenderContext {
   onContinue?: TimelineProps["onContinue"];
   onRetryCompaction?: TimelineProps["onRetryCompaction"];
   onDismissInterrupted?: TimelineProps["onDismissInterrupted"];
-  /** 整轮运行结束前：思考和工具组不自动收起。 */
+  /** 整轮运行结束前：过程不收进「过程」，进行中的工具组不自动收起。 */
   inlineProcess?: boolean;
 }
 
@@ -1679,25 +1679,39 @@ function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string |
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} live={turn.key === liveTurnKey} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
 }
 
-export function thinkingFoldPreview(text: string): string {
-  const line = text.split(/\r?\n/).find((item) => item.trim() !== "")?.trim() ?? "";
+export function thinkingFoldPreview(text: string, edge: "start" | "end" = "start"): string {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "");
+  const line = (edge === "end" ? lines.at(-1) : lines[0]) ?? "";
   return line.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/^#{1,6}\s+/, "");
 }
 
-/** 思考生成时默认展开，单块完成后收起；手动开合状态优先。 */
+/** 思考耗时写成一句，不跟工具行共用 M:SS。 */
+export function formatThinkingElapsed(durationMs: number | undefined): string | undefined {
+  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 1_000) return undefined;
+  const seconds = Math.floor(durationMs / 1_000);
+  if (seconds > 86_400) return undefined;
+  if (seconds < 60) return `${String(seconds)} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest === 0 ? `${String(minutes)} 分` : `${String(minutes)} 分 ${String(rest)} 秒`;
+}
+
+/** 生成中只显示最新一句，状态行已经写了「思考中」。结束后才标耗时。 */
 function ThinkingItem({ item, streaming = false, baseDir, open, closed, showDetails, onToggleThinking }: { item: ThinkingTimelineItem; streaming?: boolean; live?: LiveGenerationStats; baseDir?: string; open: boolean; closed: boolean; showDetails: boolean; onToggleThinking: (id: string, currentlyOpen: boolean) => void }) {
   if (item.text.trim() === "") return null;
-  const expanded = !closed && (item.state === "running" || (open && showDetails));
-  const body = <div className="thinking-body"><div className="message-content"><MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} /></div></div>;
-  const preview = thinkingFoldPreview(item.text);
+  const expanded = showDetails && open && !closed;
+  const preview = thinkingFoldPreview(item.text, item.state === "running" ? "end" : "start");
+  const elapsed = item.state === "running" ? undefined : formatThinkingElapsed(item.durationMs);
+  const phrase = elapsed === undefined ? "思考" : `思考了 ${elapsed}`;
   return (
     <article className={`thinking-item ${item.state}${expanded ? " expanded" : ""}`}>
-      <button className="thinking-summary" type="button" onClick={() => onToggleThinking(item.id, expanded)} aria-expanded={expanded} aria-label={expanded ? "收起思考" : `展开思考${preview === "" ? "" : `：${preview}`}`}>
-        <ChevronRight size={13} className={`turn-process-chevron${expanded ? " expanded" : ""}`} aria-hidden />
-        <span className="thinking-label">思考</span>
-        {expanded || preview === "" ? null : <span className="thinking-preview">{preview}</span>}
-      </button>
-      {expanded ? body : null}
+      {expanded ? null : <button className="thinking-summary" type="button" onClick={() => onToggleThinking(item.id, false)} aria-expanded={false} aria-label={`展开思考${preview === "" ? "" : `：${preview}`}`}>
+        {item.state === "running" ? <span className="thinking-preview">{preview}</span> : <span className="thinking-label">{phrase}</span>}
+      </button>}
+      {expanded ? <div className="thinking-body">
+        <div className="message-content"><MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} plainHeadings /></div>
+        <button className="thinking-collapse" type="button" onClick={() => onToggleThinking(item.id, true)} aria-expanded>收起</button>
+      </div> : null}
     </article>
   );
 }

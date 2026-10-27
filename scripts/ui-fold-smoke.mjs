@@ -208,8 +208,8 @@ async function exercise(baseUrl, workspace, viewport, label) {
     fixture.update(first, { type: "thinking_start", contentIndex: 0 });
     fixture.update(first, { type: "thinking_delta", contentIndex: 0, delta: initialThought });
     await page.locator(".thinking-item.running").waitFor();
-    await page.getByText("先核对 Pi 的结构化内容块。").waitFor();
-    assert.equal(await page.locator(".thinking-summary").getAttribute("aria-expanded"), "true", `${label}: active thought should start expanded`);
+    await page.locator(".thinking-preview").getByText("Reasoning stays separate from commentary and final replies.").waitFor();
+    assert.equal(await page.locator(".thinking-summary").getAttribute("aria-expanded"), "false", `${label}: active thought should stay a single row`);
     await assertRunningProcess(page, `${label}: thinking`);
     assert.equal(await page.locator(".turn-process-summary").count(), 0, `${label}: running process should stay inline`);
     await snapshot(page, `${label}-thinking-start`);
@@ -218,8 +218,10 @@ async function exercise(baseUrl, workspace, viewport, label) {
     await page.getByText("正在核对投影与渲染逻辑。").waitFor();
     await assertRunningProcess(page, `${label}: commentary`);
     assert.equal(await page.locator(".turn-process-summary").count(), 0, `${label}: commentary introduced a parent fold`);
-    assert.equal(await page.locator(".thinking-body").count(), 1, `${label}: adding commentary remounted the thought`);
+    assert.equal(await page.locator(".thinking-item").count(), 1, `${label}: adding commentary remounted the thought`);
     await page.locator(".thinking-summary").click();
+    assert.equal(await page.locator(".thinking-collapse").getAttribute("aria-expanded"), "true", `${label}: manual thought open did not apply`);
+    await page.locator(".thinking-collapse").click();
     assert.equal(await page.locator(".thinking-summary").getAttribute("aria-expanded"), "false", `${label}: manual thought close did not apply`);
     fixture.update(first, { type: "thinking_end", contentIndex: 0, content: initialThought });
     await page.locator(".thinking-summary").waitFor({ state: "visible" });
@@ -272,7 +274,7 @@ async function exercise(baseUrl, workspace, viewport, label) {
     await page.locator(".thinking-item.running:visible").last().waitFor();
     await assertRunningProcess(page, `${label}: refresh`);
     assert.equal(await page.locator(".thinking-item.running:visible").count(), 1, `${label}: refresh duplicated the running thought`);
-    await page.getByText("继续核对刷新与重连。").waitFor();
+    await page.locator(".thinking-preview").getByText("中英文内容都按 phase 归类，逐行内容保留在原始块中。").waitFor();
     const refreshLayout = await inspectLayout(page);
     assert.ok(refreshLayout.documentWidth <= viewport.width + 1, `${label}: thought text overflows`);
     await snapshot(page, `${label}-refresh-running`);
@@ -281,7 +283,7 @@ async function exercise(baseUrl, workspace, viewport, label) {
     await page.evaluate((id) => window.__jarvisSockets.find((socket) => socket.url.includes(`/sessions/${id}/events`) && socket.readyState === 1)?.close(), session.id);
     fixture.update(second, { type: "thinking_delta", contentIndex: 0, delta: "\n离线期间继续思考。" });
     await waitForSocket(page, session.id, 2);
-    await page.waitForFunction(() => [...document.querySelectorAll(".thinking-item.running .thinking-body")].some((node) => node.textContent?.includes("离线期间继续思考。")), undefined, { timeout: 10_000 });
+    await page.waitForFunction(() => [...document.querySelectorAll(".thinking-item.running .thinking-preview")].some((node) => node.textContent?.includes("离线期间继续思考。")), undefined, { timeout: 10_000 });
     assert.ok(runtimeRequests > requestCount, `${label}: reconnect did not refresh the runtime`);
     await assertRunningProcess(page, `${label}: reconnect`);
     fixture.update(second, { type: "thinking_end", contentIndex: 0, content: laterThought });

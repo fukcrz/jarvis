@@ -55,6 +55,8 @@ interface MarkdownMessageProps {
   baseDir?: string;
   /** 只在完整的 AI 回复中开启文本文件链接预览。 */
   interactiveFiles?: boolean;
+  /** 思考正文不渲染标题。 */
+  plainHeadings?: boolean;
 }
 
 const IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)]+)\)/g;
@@ -519,12 +521,18 @@ function MarkdownTable({ node: _node, ...rest }: ComponentProps<"table"> & { nod
 
 const components = { pre: CodeBlock, code: MarkdownCode, a: LocalLink, img: MarkdownMedia, table: MarkdownTable, h1: headingComponent("h1"), h2: headingComponent("h2"), h3: headingComponent("h3"), h4: headingComponent("h4") };
 
-export const MarkdownMessage = memo(function MarkdownMessage({ text, streaming = false, baseDir, interactiveFiles = false }: MarkdownMessageProps) {
+function PlainHeading({ children }: { children?: ReactNode }) {
+  return <p>{children}</p>;
+}
+
+const plainHeadingComponents = { ...components, h1: PlainHeading, h2: PlainHeading, h3: PlainHeading, h4: PlainHeading, h5: PlainHeading, h6: PlainHeading };
+
+export const MarkdownMessage = memo(function MarkdownMessage({ text, streaming = false, baseDir, interactiveFiles = false, plainHeadings = false }: MarkdownMessageProps) {
   const content = separateAdjacentBoldTitles(baseDir === undefined ? text : rewriteLocalImageUrls(text, baseDir));
   return <LocalFileCwdContext.Provider value={baseDir}>
     <InteractiveFilesContext.Provider value={interactiveFiles}>
       <MarkdownStreamingContext.Provider value={streaming}>
-        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={streaming ? rehypePluginsStreaming : rehypePluginsComplete} urlTransform={urlTransform} components={components}>{content}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={streaming ? rehypePluginsStreaming : rehypePluginsComplete} urlTransform={urlTransform} components={plainHeadings ? plainHeadingComponents : components}>{content}</ReactMarkdown>
         {streaming ? <span className="streaming-cursor" aria-hidden="true" /> : null}
       </MarkdownStreamingContext.Provider>
     </InteractiveFilesContext.Provider>

@@ -51,7 +51,7 @@ export function activityGroupId(itemId: string): string {
   return `group:${itemId}`;
 }
 
-/** Thinking blocks start open while streaming, but a manual close must survive new tokens. */
+/** A manual open or close survives later tokens and completion. */
 export function toggleTimelineThinking(state: TimelineFoldState, detailId: string, currentlyOpen: boolean): TimelineFoldState {
   const closedDetailIds = new Set(state.closedDetailIds);
   const openThinkingIds = new Set(state.openThinkingIds);

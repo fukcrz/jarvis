@@ -266,24 +266,23 @@ async function exercise(baseUrl, workspace, label, viewport) {
     const thought = { thinkingId: `${label}-thought`, createdAt: createdAt(), assistantMessageId: `${label}-response-2`, contentIndex: 0 };
     const thoughtText = "Verify inline status.\nCheck scroll boundaries.\nPreserve thinking controls.\nVerify completed details and file diff.";
     await emit("thinking.delta", { ...thought, delta: thoughtText });
-    await page.locator(".thinking-item.running .thinking-body").waitFor();
+    await page.locator(".thinking-item.running").waitFor();
     await assertVisibleActivity(page, `${label}/thinking`, ".thinking-item.running");
     report.states.push({ state: "thinking", layout: { activity: "thinking" } });
-    // Long thinking stays expanded while generating, and can still be folded manually.
+    // Thinking stays one row while generating, and can still be opened manually.
     const thinking = page.locator(".thinking-item.running");
-    assert.equal(await thinking.locator(".thinking-summary").getAttribute("aria-expanded"), "true");
-    await thinking.locator(".thinking-summary").click();
-    await waitForCount(page, ".thinking-item.running .thinking-body", 0);
     assert.equal(await thinking.locator(".thinking-summary").getAttribute("aria-expanded"), "false");
-    await scrollDistance(page, 0);
-    await recordActive("thinking-folded", "思考中");
+    await thinking.locator(".thinking-preview").getByText("Verify completed details and file diff.").waitFor();
     await thinking.locator(".thinking-summary").click();
     await thinking.locator(".thinking-body").waitFor();
     await scrollDistance(page, 0);
+    await recordActive("thinking-folded", "思考中");
     await assertVisibleActivity(page, `${label}/thinking-reopened`, ".thinking-item.running");
     report.states.push({ state: "thinking-reopened", layout: { activity: "thinking" } });
     // Leave it manually folded so completion also verifies that choice survives.
-    await thinking.locator(".thinking-summary").click();
+    await thinking.locator(".thinking-collapse").click();
+    await waitForCount(page, ".thinking-item.running .thinking-body", 0);
+    assert.equal(await thinking.locator(".thinking-summary").getAttribute("aria-expanded"), "false");
     await scrollDistance(page, 0);
     await emit("thinking.completed", { ...thought, text: thoughtText, durationMs: 1800 });
     await recordActive("thinking-end-gap", "执行中");
@@ -376,7 +375,7 @@ async function exercise(baseUrl, workspace, label, viewport) {
     assert.equal(await completedThinking.locator(".thinking-summary").getAttribute("aria-expanded"), "false", `${label}: completion lost the manually folded thinking state`);
     await completedThinking.locator(".thinking-summary").click();
     await completedThinking.locator(".thinking-body").waitFor();
-    await completedThinking.locator(".thinking-summary").click();
+    await completedThinking.locator(".thinking-collapse").click();
     await process.locator(".turn-process-summary").click();
     await waitForCount(page, ".turn-process-body", 0);
 

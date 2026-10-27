@@ -444,19 +444,16 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .turn-process-entry { min-width: 0; max-width: 100%; overflow: hidden; }
 .turn-process-body .message-body.assistant, .turn-process-body .message-body.assistant .message-content { color: var(--muted); }
 .turn-process-body .message-content { font-size: 12px; line-height: 1.6; }
-.thinking-item { min-width: 0; max-width: 100%; overflow: hidden; }
+.thinking-item { min-width: 0; max-width: min(640px, 100%); overflow: hidden; }
 .thinking-item.running, .thinking-item.completed { border: 0; background: transparent; }
-.thinking-summary { display: flex; align-items: center; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; gap: 6px; border: 0; border-radius: 4px; background: transparent; padding: 4px 2px; color: var(--subtle); text-align: left; cursor: pointer; }
-.thinking-summary:hover, .thinking-summary:focus-visible { color: var(--ink); background: rgb(255 255 255 / .035); outline: none; }
-.thinking-label { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-weight: 600; }
-.thinking-item.running .thinking-label { color: var(--accent-strong); }
-.thinking-item.expanded .thinking-summary { align-items: flex-start; width: 22px; min-height: 24px; margin-left: -4px; padding: 5px 4px; }
-.thinking-item.expanded { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: 5px; align-items: start; }
-.thinking-item.expanded .thinking-summary { grid-column: 1; grid-row: 1; }
-.thinking-item.expanded .thinking-body { grid-column: 2; grid-row: 1; }
-.thinking-preview { display: block; flex: 1 1 0; width: 0; min-width: 0; overflow: hidden; color: var(--subtle); font-size: 12px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.thinking-summary, .thinking-collapse { display: block; width: fit-content; max-width: 100%; border: 0; border-radius: 4px; background: transparent; padding: 1px 0; color: var(--subtle); text-align: left; cursor: pointer; }
+.thinking-summary:hover, .thinking-summary:focus-visible, .thinking-collapse:hover, .thinking-collapse:focus-visible { color: var(--ink); background: transparent; outline: none; }
+.thinking-label { color: var(--muted); font-size: 12px; font-weight: 550; line-height: 1.45; }
+.thinking-collapse { margin-top: 8px; font-size: 12px; }
+.thinking-item.expanded .thinking-body { max-height: min(34vh, 260px); overflow: auto; }
+.thinking-preview { display: -webkit-box; overflow: hidden; max-width: 36em; color: var(--muted); font-size: 13px; font-weight: 400; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .run-elapsed { flex: 0 0 auto; color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.thinking-body .message-content { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.thinking-body .message-content { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .tool-item { margin: 6px 0 18px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .command-item { border-color: #343943; background: #1b1d21; }
 .command-item.running { border-color: #625337; background: #242018; }
@@ -907,6 +904,7 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 /* 触屏设备：可展开的思考/工具卡片不显示 hover 变色（触控点击会把 hover 状态粘住）。focus-visible 保留。 */
 @media (hover: none) {
   .thinking-summary:hover,
+  .thinking-collapse:hover,
   .turn-process-summary:hover,
   .context-summary-toggle:hover,
   .timeline-event-summary:hover,

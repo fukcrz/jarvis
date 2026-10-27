@@ -21,6 +21,17 @@ describe("MarkdownMessage", () => {
     expect(markup).toContain('class="streaming-cursor"');
   });
 
+  it("does not render headings inside thinking", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      plainHeadings: true,
+      text: "# 标题\n\n正文",
+    }));
+    expect(markup).not.toContain("<h1");
+    expect(markup).not.toContain("md-heading");
+    expect(markup).toContain("<p>标题</p>");
+    expect(markup).toContain("<p>正文</p>");
+  });
+
   it("does not highlight fenced code while the message is still streaming", () => {
     const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
       streaming: true,

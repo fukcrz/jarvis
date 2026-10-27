@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeTimelineTurn, activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, thinkingFoldPreview, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds } from "./timeline";
+import { activeTimelineTurn, activeUserMessageAnchor, formatThinkingElapsed, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, thinkingFoldPreview, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -353,6 +353,17 @@ describe("groupTimelineTurns", () => {
 describe("thinkingFoldPreview", () => {
   it("keeps a useful one-line preview", () => {
     expect(thinkingFoldPreview("**先看** `refund`\n后面还有很长的内容")).toBe("先看 refund");
+    expect(thinkingFoldPreview("先看\n**正在核对** `projection`", "end")).toBe("正在核对 projection");
+  });
+});
+
+describe("formatThinkingElapsed", () => {
+  it("hides sub-second durations and uses the process clock format", () => {
+    expect(formatThinkingElapsed(undefined)).toBeUndefined();
+    expect(formatThinkingElapsed(800)).toBeUndefined();
+    expect(formatThinkingElapsed(12_400)).toBe("12 秒");
+    expect(formatThinkingElapsed(75_000)).toBe("1 分 15 秒");
+    expect(formatThinkingElapsed(120_000)).toBe("2 分");
   });
 });
 
