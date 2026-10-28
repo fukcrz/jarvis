@@ -2695,7 +2695,7 @@ describe("side chat", () => {
     expect(sideRuntime.statusCode).toBe(200);
     const sideActive = (server.jarvis.sessions as unknown as { active: Map<string, { session: AgentSession }> }).active.get(`${workspace.id}:${side.id}`);
     expect(sideActive?.session.systemPrompt).toContain(`主会话记录路径：\n${sourcePath}`);
-    expect(sideActive?.session.systemPrompt).toContain("你可以根据当前问题，自行决定是否以及如何参考主会话记录。");
+    expect(sideActive?.session.systemPrompt).toContain("回答前先读这份记录，再根据它回答。");
     expect(sideActive?.session.systemPrompt).not.toContain(sourceReference?.leafId);
 
     const listed = await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` });
@@ -2726,7 +2726,7 @@ describe("side chat", () => {
     expect(restoredRuntime.statusCode).toBe(200);
     const restoredActive = (restarted.jarvis.sessions as unknown as { active: Map<string, { session: AgentSession }> }).active.get(`${workspace.id}:${side.id}`);
     expect(restoredActive?.session.systemPrompt).toContain(`主会话记录路径：\n${sourcePath}`);
-    expect(restoredActive?.session.systemPrompt).toContain("你可以根据当前问题，自行决定是否以及如何参考主会话记录。");
+    expect(restoredActive?.session.systemPrompt).toContain("回答前先读这份记录，再根据它回答。");
     expect(restoredActive?.session.systemPrompt).not.toContain(sourceReference?.leafId);
   });
 

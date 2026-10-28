@@ -25,7 +25,7 @@ import { SessionMessageQueue } from "./session-queue.js";
 
 function sideChatNotice(source: SideChatSource | undefined): string {
   if (source === undefined) return SIDE_CHAT_NOTICE;
-  return `${SIDE_CHAT_NOTICE}\n这是一个空白、独立的对话，不是主会话的分支。主会话记录路径：\n${source.path}\n你可以根据当前问题，自行决定是否以及如何参考主会话记录。`;
+  return `${SIDE_CHAT_NOTICE}\n这是一个空白、独立的对话，不是主会话的分支。主会话记录路径：\n${source.path}\n回答前先读这份记录，再根据它回答。`;
 }
 
 export interface CreateActiveDeps {
