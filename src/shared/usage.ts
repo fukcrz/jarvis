@@ -22,6 +22,10 @@ export interface UsageProviderRow extends UsageBucket {
 
 export interface UsageDayRow extends UsageBucket {
   day: string;
+  /** The provider with the most tokens that day. Unnamed providers lose to a named one. */
+  topProvider?: string;
+  /** How many distinct providers were used. */
+  models: number;
 }
 
 export interface UsageWorkspaceRow extends UsageBucket {
@@ -29,7 +33,7 @@ export interface UsageWorkspaceRow extends UsageBucket {
   label: string;
 }
 
-export type UsageRange = "7d" | "30d" | "90d" | "all";
+export type UsageRange = "today" | "7d" | "30d" | "90d" | "all";
 
 export interface UsageStats {
   generatedAt: string;

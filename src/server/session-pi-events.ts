@@ -277,6 +277,7 @@ export class SessionPiEvents {
   /** Keep the call in the usage ledger, which outlives the session file. */
   private recordUsage(active: ActiveSession, message: unknown, modelSuffix = ""): void {
     if (!isRecord(message)) return;
+    // A model group rewrites provider/model to itself. routeProvider/routeModel name the provider that served the call.
     const provider = stringValue(message["routeProvider"]) ?? stringValue(message["provider"]) ?? "";
     const model = stringValue(message["routeModel"]) ?? stringValue(message["responseModel"]) ?? stringValue(message["model"]) ?? "";
     const record = usageRecordFrom({

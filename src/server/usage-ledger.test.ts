@@ -26,16 +26,21 @@ describe("usage ledger", () => {
     const directory = await home();
     const ledger = new UsageLedger(join(directory, "usage.jsonl"));
     await ledger.record(usageRecordFrom(call({ input: 10, output: 4, cacheRead: 3, cacheWrite: 1, cost: { total: 0.3 } }))!);
-    await ledger.record(usageRecordFrom(call({ input: 2, output: 0, cacheRead: 0, cacheWrite: 0, provider: "anthropic", model: "sonnet", sessionId: "s2" }))!);
+    const earlier = usageRecordFrom(call({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0, provider: "openai", model: "gpt", sessionId: "s3", cost: { total: 1.2 } }))!;
+    earlier.at = "2026-08-01T00:00:00.000Z";
+    await ledger.record(earlier);
+    await ledger.record(usageRecordFrom(call({ input: 2, output: 0, cacheRead: 0, cacheWrite: 0, provider: "anthropic", model: "sonnet", sessionId: "s2", cost: { total: 0.5 } }))!);
     await appendRaw(directory, "{not json\n");
 
     const stats = await collectUsageStats([{ id: "w1", label: "工作区", cwd: "/work", sortOrder: 0, createdAt: "", updatedAt: "", lastOpenedAt: "" }], "all", Date.now(), directory);
-    expect(stats.sessions).toBe(2);
-    expect(stats.totals).toMatchObject({ calls: 2, input: 12, cacheRead: 3, cacheWrite: 1, cost: 0.3, pricedCalls: 1 });
+    expect(stats.sessions).toBe(3);
+    expect(stats.totals).toMatchObject({ calls: 3, input: 13, cacheRead: 3, cacheWrite: 1, cost: 2, pricedCalls: 3 });
     expect(stats.byProvider.map((row) => row.provider)).toEqual(["openai", "anthropic"]);
     expect(stats.byModel[0]).toMatchObject({ provider: "openai", model: "gpt" });
     expect(stats.byWorkspace[0]).toMatchObject({ label: "工作区" });
-    expect(stats.byDay).toHaveLength(1);
+    expect(stats.byDay.map((row) => row.day)).toEqual(["2026-08-02", "2026-08-01"]);
+    expect(stats.byDay[0]).toMatchObject({ topProvider: "openai", models: 2 });
+    expect(stats.byDay[1]).toMatchObject({ topProvider: "openai", models: 1 });
   });
 
   it("limits a range to calls inside it", async () => {
@@ -50,6 +55,22 @@ describe("usage ledger", () => {
 
     const stats = await collectUsageStats([], "30d", Date.now(), directory);
     expect(stats.totals).toMatchObject({ calls: 1, input: 1 });
+  });
+
+  it("keeps today to calls since local midnight", async () => {
+    const directory = await home();
+    const ledger = new UsageLedger(join(directory, "usage.jsonl"));
+    const now = Date.now();
+    const yesterday = usageRecordFrom(call({ input: 9, output: 0, cacheRead: 0, cacheWrite: 0 }))!;
+    yesterday.at = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+    await ledger.record(yesterday);
+    const today = usageRecordFrom(call({ input: 3, output: 0, cacheRead: 0, cacheWrite: 0 }))!;
+    today.at = new Date(now).toISOString();
+    await ledger.record(today);
+
+    const stats = await collectUsageStats([], "today", now, directory);
+    expect(stats.range).toBe("today");
+    expect(stats.totals).toMatchObject({ calls: 1, input: 3 });
   });
 
   it("limits every breakdown to one workspace while keeping the workspace list", async () => {

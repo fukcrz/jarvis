@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Workspace } from "../shared/protocol.js";
 import { isRecord } from "../shared/protocol.js";
-import type { UsageBucket, UsageRange, UsageStats } from "../shared/usage.js";
+import type { UsageBucket, UsageDayRow, UsageRange, UsageStats } from "../shared/usage.js";
 import { isMissingFile } from "./fs.js";
 import { jarvisHome } from "./jarvis-home.js";
 
@@ -85,13 +85,13 @@ export async function collectUsageStats(workspaces: readonly Workspace[], range:
       const split = key.indexOf("\u0000");
       return { provider: key.slice(0, split), model: key.slice(split + 1), ...bucket };
     }),
-    byDay: groupBy(samples, (sample) => new Date(sample.at).toISOString().slice(0, 10)).map(([day, bucket]) => ({ day, ...bucket })).sort((a, b) => a.day < b.day ? -1 : 1),
+    byDay: daysOf(samples),
     byWorkspace: knownWorkspaces,
   };
 }
 
 export function parseUsageRange(value: unknown): UsageRange {
-  return value === "7d" || value === "30d" || value === "90d" || value === "all" ? value : "30d";
+  return value === "today" || value === "7d" || value === "30d" || value === "90d" || value === "all" ? value : "30d";
 }
 
 /** A call worth keeping. Empty usage is dropped. */
@@ -179,8 +179,15 @@ function sampleFrom(value: unknown): UsageSample | undefined {
 
 function rangeStart(range: UsageRange, now: number): number {
   if (range === "all") return 0;
+  if (range === "today") return startOfLocalDay(now);
   const days = range === "7d" ? 7 : range === "90d" ? 90 : 30;
   return now - days * 24 * 60 * 60 * 1000;
+}
+
+function startOfLocalDay(now: number): number {
+  const date = new Date(now);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
 }
 
 function groupBy(samples: readonly UsageSample[], keyOf: (sample: UsageSample) => string): [string, UsageBucket][] {
@@ -191,7 +198,7 @@ function groupBy(samples: readonly UsageSample[], keyOf: (sample: UsageSample) =
     addBucket(bucket, sample.bucket);
     groups.set(key, bucket);
   }
-  return [...groups.entries()].sort((a, b) => b[1].cost - a[1].cost || b[1].total - a[1].total || (a[0] < b[0] ? -1 : 1));
+  return [...groups.entries()].sort((a, b) => b[1].total - a[1].total || b[1].calls - a[1].calls || (a[0] < b[0] ? -1 : 1));
 }
 
 function addBucket(target: UsageBucket, source: UsageBucket): void {
@@ -204,6 +211,25 @@ function addBucket(target: UsageBucket, source: UsageBucket): void {
   target.total += source.total;
   target.cost += source.cost;
   target.pricedCalls += source.pricedCalls;
+}
+
+/** One row per day, newest first. The named source is whoever used the most tokens. */
+function daysOf(samples: readonly UsageSample[]): UsageDayRow[] {
+  const days = new Map<string, { bucket: UsageBucket; providers: Map<string, UsageBucket> }>();
+  for (const sample of samples) {
+    const day = new Date(sample.at).toISOString().slice(0, 10);
+    const entry = days.get(day) ?? { bucket: EMPTY_BUCKET(), providers: new Map<string, UsageBucket>() };
+    addBucket(entry.bucket, sample.bucket);
+    const provider = entry.providers.get(sample.provider) ?? EMPTY_BUCKET();
+    addBucket(provider, sample.bucket);
+    entry.providers.set(sample.provider, provider);
+    days.set(day, entry);
+  }
+  return [...days.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([day, entry]) => {
+    const ranked = [...entry.providers.entries()].sort((a, b) => b[1].total - a[1].total || b[1].calls - a[1].calls);
+    const top = ranked.find(([provider]) => provider !== "unknown" && provider !== "") ?? ranked[0];
+    return { day, ...entry.bucket, ...(top === undefined ? {} : { topProvider: top[0] }), models: entry.providers.size };
+  });
 }
 
 function sumBuckets(buckets: readonly UsageBucket[]): UsageBucket {
