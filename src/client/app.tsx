@@ -97,7 +97,7 @@ export function App() {
   const isChatPage = isChatPath(location.pathname);
   const mobilePage: "sessions" | "chat" | "settings" = isSettingsPage ? "settings" : isChatPage ? "chat" : "sessions";
   const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | undefined>();
-  const [sideChatOpen, setSideChatOpen] = useState(false);
+  const [sideChatOpenBySession, setSideChatOpenBySession] = useState<Record<string, boolean>>({});
   const [sideChatRunState, setSideChatRunState] = useState<RunState | undefined>();
   // Prevent repeated clicks from stacking unused sessions in the same workspace.
   const creatingSessionWorkspacesRef = useRef(new Set<string>());
@@ -177,6 +177,16 @@ export function App() {
     : { workspaceId: selectedWorkspace.id, sessionId: selectedSession.id }, [selectedWorkspace?.id, selectedSession?.id]);
   const selectedSessionId = selectedRef?.sessionId;
   const selectedRefKey = selectedRef === undefined ? undefined : `${selectedRef.workspaceId}:${selectedRef.sessionId}`;
+  const sideChatOpen = selectedRefKey !== undefined && sideChatOpenBySession[selectedRefKey] === true;
+  const setSideChatOpen = useCallback((open: boolean | ((current: boolean) => boolean), ref: SessionRef | undefined = selectedRef) => {
+    if (ref === undefined) return;
+    const key = `${ref.workspaceId}:${ref.sessionId}`;
+    setSideChatOpenBySession((current) => {
+      const nextOpen = typeof open === "function" ? open(current[key] === true) : open;
+      if (current[key] === nextOpen) return current;
+      return { ...current, [key]: nextOpen };
+    });
+  }, [selectedRef]);
   const visibleSessionsByWorkspace = useMemo<Record<string, SessionSummary[]>>(() => {
     if (!focusMode) return sessionsByWorkspace;
     return Object.fromEntries(Object.entries(sessionsByWorkspace).map(([id, sessions]) => [id, sessions.filter((session) => isSessionInFocusWindow(session, focusNow, selectedSessionId))]));
@@ -246,10 +256,6 @@ export function App() {
       setFilesWorkspaceId(undefined);
     }
   }, [filesWorkspaceId, isSettingsPage, workspaces]);
-  useEffect(() => {
-    if (isSettingsPage || selectedRef === undefined) setSideChatOpen(false);
-  }, [isSettingsPage, selectedRef]);
-
   const recoverSessionConflict = useCallback(async (error: unknown): Promise<boolean> => {
     if (!isSessionConflict(error)) return false;
     setSessionNotice("会话状态已同步");
@@ -1347,9 +1353,9 @@ export function App() {
         setProjectRemoveTarget(workspace);
       }} cleanupDisabled={sessionCleanupTargets(sessionsByWorkspace[projectMenu.workspace.id] ?? [], keepSessionIdFor(projectMenu.workspace.id)).length === 0} />}
       <SessionSearchDialog open={searchOpen} onOpenChange={setSearchOpen} workspaces={workspaces} searchSessions={searchSessions} onSelectSession={(workspaceId, sessionId) => { chooseSession(workspaceId, sessionId); }} />
-      {selectedRef === undefined || isSettingsPage || (isMobile && mobilePage !== "chat") ? null : <SideChatPanel open={sideChatOpen} onOpenChange={setSideChatOpen} parentRef={selectedRef} assistantName={assistantName} workspaceCwd={selectedWorkspace?.cwd} isMobile={isMobile} sideChatWidth={sideChatWidth} sideChatResizing={sideChatResizing} startSideChatResize={startSideChatResize} resizeSideChatWithKeyboard={resizeSideChatWithKeyboard} stopSideChatResize={stopSideChatResize} onRunStateChange={setSideChatRunState} />}
+      {selectedRef === undefined || isSettingsPage || (isMobile && mobilePage !== "chat") ? null : <SideChatPanel open={sideChatOpen} onOpenChange={(open) => setSideChatOpen(open, selectedRef)} parentRef={selectedRef} assistantName={assistantName} workspaceCwd={selectedWorkspace?.cwd} isMobile={isMobile} sideChatWidth={sideChatWidth} sideChatResizing={sideChatResizing} startSideChatResize={startSideChatResize} resizeSideChatWithKeyboard={resizeSideChatWithKeyboard} stopSideChatResize={stopSideChatResize} onRunStateChange={setSideChatRunState} />}
       {filesWorkspaceId !== undefined ? <FileBrowser key={filesWorkspaceId} workspaceId={filesWorkspaceId} onClose={() => setFilesWorkspaceId(undefined)} /> : null}
-      <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onOpenFiles={(targetWorkspaceId) => { setMobileActionTarget(undefined); setSideChatOpen(false); setFilesWorkspaceId(targetWorkspaceId); }} onOpenSideChat={(targetWorkspaceId, session) => { setMobileActionTarget(undefined); setFilesWorkspaceId(undefined); chooseSession(targetWorkspaceId, session.id); setSideChatOpen(true); }} onRenameProject={(workspace) => {
+      <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onOpenFiles={(targetWorkspaceId) => { setMobileActionTarget(undefined); setSideChatOpen(false); setFilesWorkspaceId(targetWorkspaceId); }} onOpenSideChat={(targetWorkspaceId, session) => { setMobileActionTarget(undefined); setFilesWorkspaceId(undefined); setSideChatOpen(true, { workspaceId: targetWorkspaceId, sessionId: session.id }); chooseSession(targetWorkspaceId, session.id); }} onRenameProject={(workspace) => {
         setMobileActionTarget(undefined);
         setProjectRenameTarget(workspace);
         setProjectRenameValue(workspace.label);
