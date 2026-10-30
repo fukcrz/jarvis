@@ -33,7 +33,7 @@ export interface UsageWorkspaceRow extends UsageBucket {
   label: string;
 }
 
-export type UsageRange = "today" | "7d" | "30d" | "90d" | "all";
+export type UsageRange = "today" | "thisWeek" | "thisMonth" | "lastWeek" | "lastMonth" | "thisYear" | "all";
 
 export interface UsageStats {
   generatedAt: string;

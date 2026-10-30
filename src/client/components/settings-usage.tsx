@@ -4,15 +4,17 @@ import type { UsageBucket, UsageDayRow, UsageRange, UsageStats } from "../../sha
 import { SettingsCard, SettingsPageHead, SettingsSection, StButton } from "./settings-ui";
 
 const RANGES: { id: UsageRange; label: string }[] = [
-  { id: "today", label: "今天" },
-  { id: "7d", label: "7 天" },
-  { id: "30d", label: "30 天" },
-  { id: "90d", label: "90 天" },
+  { id: "today", label: "本日" },
+  { id: "thisWeek", label: "本周" },
+  { id: "thisMonth", label: "本月" },
+  { id: "lastWeek", label: "上周" },
+  { id: "lastMonth", label: "上月" },
+  { id: "thisYear", label: "本年" },
   { id: "all", label: "全部" },
 ];
 
 export function UsagePage() {
-  const [range, setRange] = useState<UsageRange>("30d");
+  const [range, setRange] = useState<UsageRange>("thisMonth");
   const [workspaceId, setWorkspaceId] = useState("");
   const [stats, setStats] = useState<UsageStats | undefined>();
   const [error, setError] = useState<string | undefined>();

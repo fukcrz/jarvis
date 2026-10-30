@@ -43,18 +43,32 @@ describe("usage ledger", () => {
     expect(stats.byDay[1]).toMatchObject({ topProvider: "openai", models: 1 });
   });
 
-  it("limits a range to calls inside it", async () => {
+  it.each([
+    ["today", "2026-08-02T00:00:00", "2026-08-02T23:59:59"],
+    ["thisWeek", "2026-07-27T00:00:00", "2026-08-02T23:59:59"],
+    ["thisMonth", "2026-08-01T00:00:00", "2026-08-31T23:59:59"],
+    ["lastWeek", "2026-07-20T00:00:00", "2026-07-26T23:59:59"],
+    ["lastMonth", "2026-07-01T00:00:00", "2026-07-31T23:59:59"],
+    ["thisYear", "2026-01-01T00:00:00", "2026-12-31T23:59:59"],
+  ] as const)("limits %s to its calendar period", async (range, firstIncluded, lastIncluded) => {
     const directory = await home();
     const ledger = new UsageLedger(join(directory, "usage.jsonl"));
-    const old = usageRecordFrom(call({ input: 9, output: 0, cacheRead: 0, cacheWrite: 0 }))!;
-    old.at = "2020-01-01T00:00:00.000Z";
-    await ledger.record(old);
-    const recent = usageRecordFrom(call({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0 }))!;
-    recent.at = new Date().toISOString();
-    await ledger.record(recent);
+    for (const [at, input] of [["2026-07-19T23:59:59", 1], [firstIncluded, 2], [lastIncluded, 3], ["2026-08-03T00:00:00", 4]] as const) {
+      const record = usageRecordFrom(call({ input, output: 0, cacheRead: 0, cacheWrite: 0 }))!;
+      record.at = new Date(at).toISOString();
+      await ledger.record(record);
+    }
 
-    const stats = await collectUsageStats([], "30d", Date.now(), directory);
-    expect(stats.totals).toMatchObject({ calls: 1, input: 1 });
+    const stats = await collectUsageStats([], range, new Date("2026-08-02T12:00:00").getTime(), directory);
+    const expected = {
+      today: { calls: 2, input: 5 },
+      thisWeek: { calls: 2, input: 5 },
+      thisMonth: { calls: 3, input: 9 },
+      lastWeek: { calls: 2, input: 5 },
+      lastMonth: { calls: 3, input: 6 },
+      thisYear: { calls: 4, input: 10 },
+    }[range];
+    expect(stats.totals).toMatchObject(expected);
   });
 
   it("keeps today to calls since local midnight", async () => {

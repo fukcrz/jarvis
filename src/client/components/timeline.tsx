@@ -213,11 +213,12 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   const userMessageKey = userMessages.map((item) => item.id).join(":");
   const runActivity = getRunStatusActivity(status, items, streamingMessageId);
   const activeTurn = activeTimelineTurn(turns, status);
+  const statusTurn = turns.at(-1);
   const hasVisibleLiveProcess = (activeTurn !== undefined && hasVisibleLiveProcessEntry(activeTurn, streamingMessageId, foldStateForRender.closedDetailIds))
     || (status.activeRun?.kind === "bash" && items.some((item) => item.kind === "tool" && item.name !== "ask_user_question" && (item.state === "queued" || item.state === "running")));
   const showInlineRunStatus = runActivity !== undefined && (runActivity.target === "bottom" || status.runState !== "running" || !hasVisibleLiveProcess);
   const statusAtComposer = !hasVisibleLiveProcess && (status.compacting !== undefined || status.retrying !== undefined || status.runState === "stopping");
-  const runStatusTurnKey = showInlineRunStatus && !statusAtComposer ? activeTurn?.key : undefined;
+  const runStatusTurnKey = showInlineRunStatus && !statusAtComposer ? statusTurn?.key : undefined;
   const showComposerStatusCapsule = runActivity !== undefined && (showRunStatusBar || statusAtComposer || (showInlineRunStatus && runStatusTurnKey === undefined));
   // 点过「知道了」的被中断卡片先在本地藏起来；服务端清标记失败也不再打扰。
   const [dismissedFailureKey, setDismissedFailureKey] = useState<string>();
@@ -1636,7 +1637,7 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   const runIndicator = context.runStatusTurnKey === turn.key && context.runStatusActivity !== undefined
     ? <WorkingIndicator className="working-indicator message-run-status" activity={context.runStatusActivity} startedAt={context.runStatusStartedAt} />
     : undefined;
-  const runStatusMessage = runIndicator === undefined || turn.final !== undefined ? undefined : [...displayTurn.process].reverse().find((entry): entry is Extract<TimelineRenderItem, { kind: "message" }> => entry.kind === "message" && entry.item.role === "assistant");
+  const runStatusMessage = runIndicator === undefined || turn.final !== undefined || split.visible.length > 0 ? undefined : [...displayTurn.process].reverse().find((entry): entry is Extract<TimelineRenderItem, { kind: "message" }> => entry.kind === "message" && entry.item.role === "assistant");
   const runStatusMessageId = runStatusMessage?.item.id;
   const processContext: TurnRenderContext = {
     ...processBaseContext,
@@ -1663,7 +1664,8 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
     {live ? processBlock : completedProcess}
     {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId, currentlyOpen) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, currentlyOpen), onToggleCall: (_toolId, callId, currentlyOpen) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, callId, currentlyOpen) }, true, false)}</div>)}
-    {turn.final === undefined ? runIndicator === undefined || runStatusMessageId !== undefined ? null : <div className="turn-live-status">{runIndicator}</div> : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: !live, generationSummary: summarizeTurnGeneration(turn), onForkMessage: live ? undefined : context.onForkMessage, afterContent: live ? undefined : completedChanges, runIndicator, runStatusMessageId: turn.final.id })}
+    {turn.final === undefined ? runIndicator === undefined || runStatusMessageId !== undefined || split.visible.length > 0 ? null : <div className="turn-live-status">{runIndicator}</div> : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: !live, generationSummary: summarizeTurnGeneration(turn), onForkMessage: live ? undefined : context.onForkMessage, afterContent: live ? undefined : completedChanges, runIndicator: split.visible.length > 0 ? undefined : runIndicator, runStatusMessageId: turn.final.id })}
+    {runIndicator === undefined || split.visible.length === 0 ? null : <div className="turn-live-status">{runIndicator}</div>}
     {turn.final === undefined && !live ? completedChanges : null}
     {turn.finalError === undefined ? null : <TurnFailureCard items={turn.finalError} failedTool={lastFailedTool(split.process)} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} />}
     {turn.outcome?.outcome === "stopped" ? <RunStoppedItem /> : null}

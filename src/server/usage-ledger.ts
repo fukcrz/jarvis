@@ -67,9 +67,9 @@ const EMPTY_BUCKET = (): UsageBucket => ({ calls: 0, input: 0, output: 0, cacheR
 
 /** Sum the ledger. Session files are not read; deleted sessions stay in the totals. */
 export async function collectUsageStats(workspaces: readonly Workspace[], range: UsageRange, now = Date.now(), home = jarvisHome(), workspaceId?: string): Promise<UsageStats> {
-  const since = rangeStart(range, now);
+  const { since, until } = rangeBounds(range, now);
   const labels = new Map(workspaces.map((workspace) => [workspace.id, workspace.label]));
-  const all = (await readLedger(home)).filter((sample) => since === 0 || sample.at >= since);
+  const all = (await readLedger(home)).filter((sample) => (since === 0 || sample.at >= since) && (until === undefined || sample.at < until));
   const knownWorkspaces = groupBy(all, (sample) => sample.workspaceId).map(([id, bucket]) => ({ workspaceId: id, label: labels.get(id) ?? id, ...bucket }));
   const selected = workspaceId === undefined || workspaceId === "" ? undefined : workspaceId;
   const samples = selected === undefined ? all : all.filter((sample) => sample.workspaceId === selected);
@@ -91,7 +91,7 @@ export async function collectUsageStats(workspaces: readonly Workspace[], range:
 }
 
 export function parseUsageRange(value: unknown): UsageRange {
-  return value === "today" || value === "7d" || value === "30d" || value === "90d" || value === "all" ? value : "30d";
+  return value === "today" || value === "thisWeek" || value === "thisMonth" || value === "lastWeek" || value === "lastMonth" || value === "thisYear" || value === "all" ? value : "thisMonth";
 }
 
 /** A call worth keeping. Empty usage is dropped. */
@@ -177,17 +177,42 @@ function sampleFrom(value: unknown): UsageSample | undefined {
   return { at, workspaceId, sessionId, provider, model, bucket };
 }
 
-function rangeStart(range: UsageRange, now: number): number {
-  if (range === "all") return 0;
-  if (range === "today") return startOfLocalDay(now);
-  const days = range === "7d" ? 7 : range === "90d" ? 90 : 30;
-  return now - days * 24 * 60 * 60 * 1000;
+function rangeBounds(range: UsageRange, now: number): { since: number; until?: number } {
+  if (range === "all") return { since: 0 };
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  if (range === "today") return { since: start.getTime(), until: addDays(start, 1).getTime() };
+  if (range === "thisWeek" || range === "lastWeek") {
+    const day = start.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    start.setDate(start.getDate() + mondayOffset + (range === "lastWeek" ? -7 : 0));
+    return { since: start.getTime(), until: addDays(start, 7).getTime() };
+  }
+  if (range === "thisMonth" || range === "lastMonth") {
+    start.setDate(1);
+    start.setMonth(start.getMonth() + (range === "lastMonth" ? -1 : 0));
+    return { since: start.getTime(), until: addMonths(start, 1).getTime() };
+  }
+  start.setMonth(0, 1);
+  return { since: start.getTime(), until: addYears(start, 1).getTime() };
 }
 
-function startOfLocalDay(now: number): number {
-  const date = new Date(now);
-  date.setHours(0, 0, 0, 0);
-  return date.getTime();
+function addDays(date: Date, days: number): Date {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
+function addMonths(date: Date, months: number): Date {
+  const result = new Date(date);
+  result.setMonth(result.getMonth() + months);
+  return result;
+}
+
+function addYears(date: Date, years: number): Date {
+  const result = new Date(date);
+  result.setFullYear(result.getFullYear() + years);
+  return result;
 }
 
 function groupBy(samples: readonly UsageSample[], keyOf: (sample: UsageSample) => string): [string, UsageBucket][] {
