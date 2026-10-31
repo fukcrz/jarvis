@@ -16,6 +16,13 @@
 - 需要在调用者退出后持续运行的 Windows Node 服务，禁止直接对 Node 使用 `detached: true`：这会创建控制台窗口。必须复用 `scripts/prod-service.mjs` 的隐藏启动器，或采用等效的隐藏启动方案。
 - 后台服务或工具启动路径的改动，必须用非 `9528` 的隔离端口实测：没有控制台弹窗、调用命令返回后进程持续运行、且能够正常停止。
 
+## 桌面壳能力边界
+
+- 浏览器原生能力（下载、外链、新窗口、打开/定位本地文件、拖拽、通知）只能经能力层：`src/client/desktop.ts`、`src/client/lib/download.ts`。组件里不写 `@tauri-apps/*`、不写 `window.open`、不判断 `isDesktopShell()`。
+- 下载统一走 `saveDownload` / `saveBlob`，不要自己拼 `<a download>`：桌面壳由 `on_download` 接管（临时目录 → 原生另存为），自己拼的入口会绕过 401/404 预检。
+- 主窗口在 Rust 里创建（`build_main_window`），`tauri.conf.json` 不得再出现 `app.windows`；否则 label 冲突会让启动直接崩溃。
+- 新增 Rust 命令必须同时改 `generate_handler!`、`permissions/desktop.toml`、`capabilities/default.json`，并补 `docs/desktop-capabilities.md` 的矩阵行；`npm test` 会校验一致性。
+
 ## 其他注意事项
 
 - Pi 嵌在 Jarvis 服务进程里运行：派生 Pi 子进程的扩展（pi-subagent 等）用 `process.argv[1]` 推导子进程入口，会落到 `dist/server/server/index.js`。`src/server/pi-cli-forward.ts` 在启动服务前把这类 Pi CLI 调用（`--mode text|json|rpc`）转发给真正的 Pi CLI；改启动入口时不要绕过它。

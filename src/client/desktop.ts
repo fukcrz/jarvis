@@ -36,6 +36,20 @@ export async function openExternalUrl(url: string): Promise<void> {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+/** 用系统默认程序打开本地文件（桌面壳里唯一的外部打开入口）。 */
+export async function openLocalPath(path: string): Promise<void> {
+  if (!isDesktopShell()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_path", { path });
+}
+
+/** 在资源管理器里定位本地文件。 */
+export async function revealLocalPath(path: string, cwd?: string): Promise<void> {
+  if (!isDesktopShell()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("reveal_file_in_folder", { path, cwd });
+}
+
 export function listenDesktopOpenSession(handler: (workspaceId: string, sessionId: string) => void): () => void {
   if (!isDesktopShell()) return () => undefined;
   let disposed = false;

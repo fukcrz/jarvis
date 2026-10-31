@@ -1,7 +1,12 @@
 [[permission]]
 identifier = "allow-open-external-url"
-description = "在系统浏览器打开 http(s) 链接"
+description = "在系统浏览器打开 http(s) 链接，或在文件管理器定位本地文件"
 commands.allow = ["open_external_url", "reveal_file_in_folder"]
+
+[[permission]]
+identifier = "allow-open-path"
+description = "用系统默认程序打开本地文件"
+commands.allow = ["open_path"]
 
 [[permission]]
 identifier = "allow-set-notifications-enabled"

@@ -8,6 +8,8 @@ import { useIsMobile } from "../hooks/use-is-mobile";
 import { copyText } from "../lib/clipboard";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
 import { isDesktopShell } from "../lib/desktop-shell";
+import { saveDownload } from "../lib/download";
+import { openLocalPath } from "../desktop";
 import { LocalMediaVersionContext, localMediaUrl } from "../lib/local-media";
 import { randomUUID } from "../lib/utils";
 import { MAX_TABLE_ROWS, parseDelimited, previewKindForPath, type PreviewKind } from "../lib/file-preview";
@@ -349,8 +351,8 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
           {preview !== undefined ? <span className="file-browser-chrome-title" title={previewTitle}>{preview.name}</span> : canGoUp ? <span className="file-browser-chrome-title">{directoryTitle}</span> : <span className="file-browser-chrome-title" />}
           <div className="file-preview-actions">
             {copyable ? <Button variant="ghost" size="sm" onClick={() => { void copy(preview.content!.content, "已复制文件内容"); }}>复制</Button> : null}
-            {preview === undefined || previewUrl === undefined ? null : <a className="button button-ghost button-sm" href={previewUrl} target="_blank" rel="noreferrer" onClick={isDesktopShell() ? (event) => { event.preventDefault(); void openFile(preview.path); } : undefined}>打开</a>}
-            {preview === undefined || downloadUrl === undefined ? null : <a className="button button-ghost button-sm" href={downloadUrl} download>下载</a>}
+            {preview === undefined || previewUrl === undefined ? null : <a className="button button-ghost button-sm" href={previewUrl} target="_blank" rel="noreferrer" onClick={isDesktopShell() ? (event) => { event.preventDefault(); void openLocalPath(nativePath(preview.path)).catch(() => setError("无法用系统默认程序打开")); } : undefined}>打开</a>}
+            {preview === undefined || downloadUrl === undefined ? null : <a className="button button-ghost button-sm" href={downloadUrl} download onClick={(event) => { event.preventDefault(); void saveDownload(downloadUrl, preview?.name).catch((error: unknown) => { setError(error instanceof Error ? error.message : "无法下载"); }); }}>下载</a>}
             <DialogPrimitive.Close asChild>
               <Button variant="ghost" size="icon" aria-label="关闭"><X size={16} /></Button>
             </DialogPrimitive.Close>

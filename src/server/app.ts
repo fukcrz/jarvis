@@ -23,6 +23,7 @@ import { takeUndeliveredStartupMessages } from "./fs.js";
 import { applyAuthCookie, authorizeSocket, clearAuthCookie, readAuthCookie } from "./http-auth.js";
 import { SessionService } from "./session-service.js";
 import { collectUsageStats, parseUsageRange } from "./usage-ledger.js";
+import { appVersion } from "./build-info.js";
 import { desktopEnabled } from "./desktop-bridge.js";
 import { registerSelfRestart } from "./self-restart.js";
 import { WorkspaceStore } from "./workspace-store.js";
@@ -197,9 +198,10 @@ export async function buildApp(options: {
     if (state.token !== undefined) applyAuthCookie(reply, state.token, request);
   });
 
+  const health = () => ({ ok: true, version: 1, appVersion: appVersion() });
   app.get("/api/health", async () => desktopEnabled()
-    ? { ok: true, version: 1, desktop: true, running: sessions.runningCount() }
-    : { ok: true, version: 1 });
+    ? { ...health(), desktop: true, running: sessions.runningCount() }
+    : health());
 
   app.get("/api/auth/status", async (request) => ({ auth: auth.status(readAuthCookie(request.headers.cookie)), assistantName: settings.getSettings().assistantName }));
   app.post("/api/auth/login", async (request, reply) => {

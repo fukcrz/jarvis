@@ -28,6 +28,10 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
       - run: npm ci
+      # 桌面壳的守卫测试（能力层边界、命令↔权限一致性）在这里跑，别只靠发版时人工检查。
+      - run: npm test
+      - name: Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - run: npm run build
       - name: Build installer
         env:

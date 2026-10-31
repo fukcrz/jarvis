@@ -11,9 +11,13 @@ Windows 先行的 Tauri 壳。窗口加载本机 Fastify 服务，数据仍在 `
 - 关闭窗口会藏到托盘，进程和会话继续跑
 - 运行结束通知默认开启；窗口在前台时不弹
 - 本机已有 Jarvis 在跑时，窗口直接连上，不另起一份；退出桌面壳也不会关掉那份服务
-- 端口被非 Jarvis 程序占用才启动失败
+- 端口被非 Jarvis 程序占用时自动往后顺延（最多 20 个），启动页会写明换成了哪个；`JARVIS_PORT` 显式指定时不顺延
+- 就绪后比对 `/api/health` 的 `appVersion` 与客户端版本，不一致时提示一次：多半是更新后旧服务没退，托盘「重启服务」可解决
 - 自动更新按设置里的「更新通道」读取清单：正式版读 `releases/latest/download/latest.json`，测试版读 `releases/download/updater-beta/beta.json`（默认正式版，记在 `~/.jarvis/desktop.json` 的 `updateChannel`）。测试版清单读不到时退回正式版清单。网页界面和服务没起来时的桌面端更新走同一个通道。启动后以及每 30 分钟检查一次；有新版本先确认下载，下载完成后再确认安装。下载显示进度，失败可重试。同一版本点过稍后，本次运行不再自动弹。有会话在跑时先提示数量，确认后停止本壳启动的后端，再退出并安装。Windows 更新器的 `cleanup_before_exit` 同样清理后端，避免更新后继续复用旧进程
-- 聊天和设置里的外链用系统浏览器打开，不离开 Jarvis 窗口
+- 主窗口由 Rust 创建（label 仍为 `main`），`on_download` / `on_navigation` / `on_new_window` 三个策略挂在 `WebviewWindowBuilder` 上；`tauri.conf.json` 里不能再写 `app.windows`，否则 label 冲突会让启动直接崩溃（已有测试守着）
+- 下载一律由桌面壳接管：先落 `%TEMP%\jarvis\downloads\`，下载完成后弹原生「另存为」，保存成功发一条「已保存」通知（点击在资源管理器定位）；取消则清掉临时目录，启动时清扫上次残留
+- 外链（含 `target=_blank`、`window.open`、`mailto:`、`tel:`）一律交系统处理，**绝不替换 Jarvis 窗口**；本机服务与 Tauri 内部页面留在窗口内
+- 本地文件可以从预览弹窗用系统默认程序打开（`open_path`），可执行文件（`.exe/.msi/.bat/.ps1` 等）拒绝
 
 ## 开发
 

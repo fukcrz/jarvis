@@ -1,3 +1,5 @@
+import { saveBlob } from "./download";
+
 /**
  * mermaid 体积大（构建产物数百 KB），只在回复里真的出现 ```mermaid 代码块时才动态加载，
  * 不进入主 bundle。
@@ -480,18 +482,9 @@ async function shareBlobFile(blob: Blob, filename: string): Promise<boolean> {
   }
 }
 
-/** 触发文件下载。剪贴板不可用时由 UI 调用。 */
+/** 触发文件下载。剪贴板不可用时由 UI 调用；统一走下载能力层，桌面壳里由引擎接管。 */
 export function downloadDiagramPng(png: Blob, filename = "mermaid.png"): void {
-  if (document.body === null) throw new Error("download");
-  const url = URL.createObjectURL(png);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.rel = "noopener";
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  globalThis.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  saveBlob(png, filename);
 }
 
 /** 手机优先系统分享，否则用下载链接。 */

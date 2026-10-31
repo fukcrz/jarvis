@@ -15,6 +15,7 @@
     "process:default",
     "dialog:default",
     "allow-open-external-url",
+    "allow-open-path",
     "allow-set-notifications-enabled",
     "allow-take-update-check",
     "allow-check-desktop-update",

@@ -6,6 +6,7 @@ import { api, type SystemInfo } from "../api";
 import { getDesktopUpdateChannel, setDesktopNotificationEnabled, setDesktopUpdateChannel, type DesktopUpdateChannel } from "../desktop";
 import { APP_VERSION, CHECK_UPDATE_EVENT } from "../lib/app-version";
 import { isDesktopShell } from "../lib/desktop-shell";
+import { saveDownload } from "../lib/download";
 import { isNotificationEnabled, notificationPermission, requestNotificationPermission, setNotificationEnabled } from "../notifications";
 import { SaveState, SettingsConfirm, useDebouncedSave, useSaveStatus, useSettingsToast } from "./settings-feedback";
 import { Kbd, SectionAction, Segmented, SettingRow, SettingsCard, SettingsEmptyLine, SettingsPageHead, SettingsSection, SettingsSwitch, SettingsTag, StButton } from "./settings-ui";
@@ -167,7 +168,7 @@ export function AboutPage({ children }: { children?: React.ReactNode }) {
     </SettingsSection>
     <SettingsSection id="about-diagnostics" title="诊断">
       <SettingsCard>
-        <SettingRow id="diagnostics" title="导出诊断包" description="版本、配置（不含密码和 token）和最近的服务日志，反馈问题时附上" control={<a className="st-btn" href="/api/system/diagnostics" download><Download size={13} />导出</a>} />
+        <SettingRow id="diagnostics" title="导出诊断包" description="版本、配置（不含密码和 token）和最近的服务日志，反馈问题时附上" control={<a className="st-btn" href="/api/system/diagnostics" download onClick={(event) => { event.preventDefault(); void saveDownload("/api/system/diagnostics").catch((error: unknown) => window.alert(error instanceof Error ? error.message : "无法导出诊断包")); }}><Download size={13} />导出</a>} />
         <SettingRow title="复制版本信息" description="版本号、运行方式、更新通道和浏览器信息" control={<StButton onClick={copyVersion}><Copy size={13} />复制</StButton>} />
         {info?.snapshotDirectory === undefined ? null : <SettingRow id="snapshots" title={`每日快照（保留 ${String(info.snapshotKeep ?? 7)} 份）`} mono
           description={info.snapshots === undefined || info.snapshots.length === 0 ? `还没有快照 · ${info.snapshotDirectory}` : `最近一份 ${info.snapshots[0]?.name.replace(/\.zip$/, "") ?? ""}，共 ${String(info.snapshots.length)} 份 · ${info.snapshotDirectory}`} />}

@@ -918,7 +918,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const server = activeApp();
     const health = await server.inject({ method: "GET", url: "/api/health" });
     expect(health.statusCode).toBe(200);
-    expect(health.json()).toEqual({ ok: true, version: 1 });
+    expect(health.json()).toMatchObject({ ok: true, version: 1, appVersion: expect.any(String) as string });
 
     const invalid = await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: "" } });
     expect(invalid.statusCode).toBe(400);

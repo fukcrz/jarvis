@@ -1,3 +1,4 @@
+mod download;
 mod node;
 mod sidecar;
 mod supervisor;
@@ -6,7 +7,8 @@ mod update;
 use serde::Serialize;
 use sidecar::DesktopEvent;
 use std::fs;
-use std::path::PathBuf;
+use std::net::TcpListener;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -20,6 +22,8 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_winrt_notification::Toast;
 
 const DEFAULT_PORT: u16 = 9528;
+/// 端口被占时往后顺延的尝试次数。
+const PORT_FALLBACK_ATTEMPTS: u16 = 20;
 const STARTUP_SLOW_AFTER_SECS: u64 = 30;
 const STARTUP_TIMEOUT_SECS: u64 = 60;
 
@@ -40,7 +44,16 @@ struct AppState {
   /// 正在重启服务（看门狗、托盘、服务自己请求的重启互斥）。
   restarting: AtomicBool,
   restart_budget: Mutex<supervisor::RestartBudget>,
+  /// 下载临时目录与另存为队列。
+  downloads: download::DownloadState,
+  /// 服务版本只比对一次：更新后还连着旧服务时提醒用户重启。
+  version_checked: AtomicBool,
 }
+
+/// 可以交给系统默认程序打开、但值得拦一下的可执行扩展名。
+const EXECUTABLE_EXTENSIONS: [&str; 14] = [
+  "exe", "msi", "bat", "cmd", "com", "scr", "ps1", "vbs", "jse", "wsf", "lnk", "reg", "cpl", "dll",
+];
 
 #[derive(Clone, Serialize)]
 struct OpenSessionPayload {
@@ -77,21 +90,24 @@ pub fn run() {
       generation: AtomicU64::new(0),
       restarting: AtomicBool::new(false),
       restart_budget: Mutex::new(supervisor::RestartBudget::default()),
+      downloads: download::DownloadState::default(),
+      version_checked: AtomicBool::new(false),
     })
-    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, reveal_file_in_folder, take_update_check, check_desktop_update, update::get_update_channel, update::set_update_channel, update::check_channel_update])
+    .invoke_handler(tauri::generate_handler![set_notifications_enabled, open_external_url, open_path, reveal_file_in_folder, take_update_check, check_desktop_update, update::get_update_channel, update::set_update_channel, update::check_channel_update])
     .setup(|app| {
       app.resources_table().add(sidecar::SidecarCleanup(Arc::clone(&app.state::<AppState>().sidecar)));
       let handle = app.handle().clone();
+      // 顺序要求：先建窗口（下载/导航策略挂在 builder 上），再挂关闭即隐藏，最后才启动服务。
+      let window = build_main_window(&handle)?;
+      let window_clone = window.clone();
+      window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+          api.prevent_close();
+          let _ = window_clone.hide();
+        }
+      });
       build_tray(&handle)?;
-      if let Some(window) = handle.get_webview_window("main") {
-        let window_clone = window.clone();
-        window.on_window_event(move |event| {
-          if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-            let _ = window_clone.hide();
-          }
-        });
-      }
+      thread::spawn(download::cleanup_stale);
       thread::spawn(move || start_backend(handle));
       Ok(())
     })
@@ -126,6 +142,21 @@ fn open_external_url(url: String) -> Result<(), String> {
   open_http_url(&url)
 }
 
+/// 用系统默认程序打开本地文件；不打开可执行文件，避免把壳变成任意程序启动器。
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+  let requested = PathBuf::from(&path);
+  if !requested.is_file() {
+    return Err("文件不存在".into());
+  }
+  let file = fs::canonicalize(requested).map_err(|error| error.to_string())?;
+  let extension = file.extension().map(|value| value.to_string_lossy().to_lowercase()).unwrap_or_default();
+  if EXECUTABLE_EXTENSIONS.contains(&extension.as_str()) {
+    return Err("不打开可执行文件".into());
+  }
+  open::that_detached(&file).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn reveal_file_in_folder(path: String, cwd: Option<String>) -> Result<(), String> {
   let requested = PathBuf::from(&path);
@@ -138,13 +169,7 @@ fn reveal_file_in_folder(path: String, cwd: Option<String>) -> Result<(), String
     return Err("文件不存在".into());
   }
   let file = fs::canonicalize(file).map_err(|error| error.to_string())?;
-  let directory = file.parent().ok_or_else(|| "无法获取文件目录".to_string())?;
-  #[cfg(target_os = "windows")]
-  return std::process::Command::new("explorer.exe").arg(directory).spawn().map(|_| ()).map_err(|error| error.to_string());
-  #[cfg(target_os = "macos")]
-  return std::process::Command::new("open").arg("-R").arg(file).spawn().map(|_| ()).map_err(|error| error.to_string());
-  #[cfg(target_os = "linux")]
-  return std::process::Command::new("xdg-open").arg(directory).spawn().map(|_| ()).map_err(|error| error.to_string());
+  reveal_in_file_manager(&file)
 }
 
 #[tauri::command]
@@ -191,6 +216,163 @@ fn open_http_url(url: &str) -> Result<(), String> {
   open::that_detached(url).map_err(|error| error.to_string())
 }
 
+/// 建主窗口。下载、导航、新窗口三个策略只能挂在 builder 上，所以窗口必须在 Rust 里创建。
+fn build_main_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+  let download_handle = app.clone();
+  let navigation_handle = app.clone();
+  let new_window_handle = app.clone();
+  tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+    .title("Jarvis")
+    .inner_size(1280.0, 800.0)
+    .min_inner_size(800.0, 560.0)
+    // wry 默认会连 msPdfOOUI 一起关掉，PDF 内嵌预览就没有工具栏；下载 UI（msWebOOUI）仍然关着，由 on_download 接管。
+    .additional_browser_args("--disable-features=msWebOOUI,msSmartScreenProtection")
+    .on_navigation(move |url| {
+      if divert_to_system(url) {
+        open_in_system(&navigation_handle, url);
+        return false;
+      }
+      true
+    })
+    .on_new_window(move |url, _features| {
+      // 不新开 webview：外链交系统浏览器，同源请求保持现有行为（不做替换）。
+      if divert_to_system(&url) {
+        open_in_system(&new_window_handle, &url);
+      }
+      tauri::webview::NewWindowResponse::Deny
+    })
+    .on_download(move |_webview, event| download::handle_event(&download_handle, event))
+    .on_permission_request(|_webview, permission| {
+      use tauri::webview::{PermissionKind as Kind, PermissionResponse as Response};
+      match permission {
+        // 壳里真正用到的：复制图表、桌面通知、音视频自动播放、连续下载。
+        Kind::ClipboardRead | Kind::Notifications | Kind::Autoplay | Kind::AutomaticDownloads => Response::Allow,
+        // 摄像头、麦克风、定位、屏幕共享等没有使用场景，一律拒绝，不弹系统授权框。
+        _ => Response::Deny,
+      }
+    })
+    .build()
+}
+
+/// 站外 http(s) 与 mailto/tel 交给系统处理，绝不替换窗口里的页面。
+fn divert_to_system(url: &tauri::Url) -> bool {
+  match url.scheme() {
+    "http" | "https" => !is_internal_web_host(url.host_str()),
+    "mailto" | "tel" => true,
+    _ => false,
+  }
+}
+
+/// 本机服务与 Tauri 内部页面（Windows 上是 `http://tauri.localhost`）不走系统浏览器。
+fn is_internal_web_host(host: Option<&str>) -> bool {
+  let Some(host) = host else { return false };
+  let host = host.trim_matches(|ch| ch == '[' || ch == ']').to_ascii_lowercase();
+  host == "localhost" || host == "tauri.localhost" || host == "::1" || host == "127.0.0.1" || host.starts_with("127.")
+}
+
+fn open_in_system(app: &AppHandle, url: &tauri::Url) {
+  if open::that_detached(url.as_str()).is_err() && url.scheme().starts_with("http") {
+    show_alert(app, &format!("无法打开系统浏览器：{url}"));
+  }
+}
+
+fn reveal_in_file_manager(file: &Path) -> Result<(), String> {
+  let directory = file.parent().ok_or_else(|| "无法获取文件目录".to_string())?;
+  #[cfg(target_os = "windows")]
+  return std::process::Command::new("explorer.exe").arg(directory).spawn().map(|_| ()).map_err(|error| error.to_string());
+  #[cfg(target_os = "macos")]
+  return std::process::Command::new("open").arg("-R").arg(file).spawn().map(|_| ()).map_err(|error| error.to_string());
+  #[cfg(target_os = "linux")]
+  return std::process::Command::new("xdg-open").arg(directory).spawn().map(|_| ()).map_err(|error| error.to_string());
+}
+
+/// 下载保存完成后的提示；点击定位到文件。
+fn notify_saved(app: &AppHandle, path: &Path) {
+  let body = path.display().to_string();
+  let body = if body.chars().count() > 140 {
+    format!("{}…", body.chars().take(140).collect::<String>())
+  } else {
+    body
+  };
+  #[cfg(windows)]
+  {
+    let app_id = app.config().identifier.clone();
+    let target = path.to_path_buf();
+    let _ = Toast::new(&app_id)
+      .title("已保存")
+      .text1(&body)
+      .on_activated(move |_| {
+        let _ = reveal_in_file_manager(&target);
+        Ok(())
+      })
+      .show();
+    return;
+  }
+  #[cfg(not(windows))]
+  {
+    let _ = app.notification().builder().title("已保存").body(body).show();
+  }
+}
+
+#[cfg(test)]
+mod port_tests {
+  use super::free_port_from;
+  use std::net::TcpListener;
+
+  #[test]
+  fn skips_the_port_it_was_given() {
+    // 占住一个大号临时端口，确认顺延找到的是别的可用端口。
+    let busy = TcpListener::bind(("0.0.0.0", 0)).unwrap();
+    let port = busy.local_addr().unwrap().port();
+    if port >= u16::MAX - 25 {
+      return;
+    }
+    let free = free_port_from(port).expect("应该能找到可用端口");
+    assert_ne!(free, port);
+    assert!(free > port);
+    assert!(TcpListener::bind(("0.0.0.0", free)).is_ok());
+  }
+
+  #[test]
+  fn refuses_to_wrap_past_the_top() {
+    assert_eq!(free_port_from(u16::MAX), None);
+  }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+  use super::{divert_to_system, is_internal_web_host};
+  use tauri::Url;
+
+  #[test]
+  fn keeps_the_local_service_in_app() {
+    for value in ["http://127.0.0.1:9528/#/chat", "http://localhost:9528/", "http://tauri.localhost/index.html"] {
+      assert!(!divert_to_system(&Url::parse(value).unwrap()), "{value}");
+    }
+  }
+
+  #[test]
+  fn sends_external_targets_to_the_system() {
+    for value in ["https://example.com/a", "http://192.168.1.5:9528/", "mailto:a@b.c", "tel:10086"] {
+      assert!(divert_to_system(&Url::parse(value).unwrap()), "{value}");
+    }
+  }
+
+  #[test]
+  fn leaves_in_app_schemes_alone() {
+    for value in ["about:blank", "data:text/plain,1", "blob:http://127.0.0.1:9528/x"] {
+      assert!(!divert_to_system(&Url::parse(value).unwrap()), "{value}");
+    }
+  }
+
+  #[test]
+  fn treats_loopback_variants_as_internal() {
+    assert!(is_internal_web_host(Some("127.0.0.5")));
+    assert!(is_internal_web_host(Some("[::1]")));
+    assert!(!is_internal_web_host(None));
+  }
+}
+
 #[cfg(test)]
 mod open_url_tests {
   use super::open_http_url;
@@ -205,19 +387,34 @@ mod open_url_tests {
 fn start_backend(app: AppHandle) {
   app.state::<AppState>().generation.fetch_add(1, Ordering::SeqCst);
   app.state::<AppState>().startup_failed.store(false, Ordering::Relaxed);
+  app.state::<AppState>().version_checked.store(false, Ordering::Relaxed);
   set_splash(&app, "正在启动");
-  let port = desktop_port();
+  let mut port = desktop_port();
   if let Ok(mut slot) = app.state::<AppState>().port.lock() {
     *slot = None;
   }
+  let mut notice: Option<String> = None;
   match probe_existing_jarvis(port) {
     Some(true) => {
       mark_backend_ready(&app, port);
       return;
     }
     Some(false) => {
-      report_startup_failure(&app, &format!("端口 {port} 已被其他程序占用"), false);
-      return;
+      if port_pinned() {
+        report_startup_failure(&app, &format!("端口 {port} 已被其他程序占用（由 JARVIS_PORT 指定，不顺延）"), false);
+        return;
+      }
+      // 端口被别的程序占着就往后再找：宁可用另一个端口启动，也不要一启动就失败。
+      match free_port_from(port) {
+        Some(next) => {
+          notice = Some(format!("端口 {port} 被占用，已改用 {next}"));
+          port = next;
+        }
+        None => {
+          report_startup_failure(&app, &format!("端口 {port} 及后来 {PORT_FALLBACK_ATTEMPTS} 个端口都被占用"), false);
+          return;
+        }
+      }
     }
     None => {}
   }
@@ -233,7 +430,7 @@ fn start_backend(app: AppHandle) {
       }
     },
   };
-  set_splash(&app, "正在启动服务");
+  set_splash(&app, notice.as_deref().unwrap_or("正在启动服务"));
   let app_for_events = app.clone();
   match sidecar::spawn_managed_sidecar(&app.state::<AppState>().sidecar, &node, &root, port, move |event| handle_event(&app_for_events, event)) {
     Ok(true) => {}
@@ -285,6 +482,26 @@ fn mark_backend_ready(app: &AppHandle, port: u16) {
   }
   open_ui(app, port);
   spawn_watchdog(app, port);
+  verify_service_version(app, port);
+}
+
+/// 服务版本和客户端不一致时提醒一次：更新后旧服务没退，接口可能对不上（如 /api/files）。
+fn verify_service_version(app: &AppHandle, port: u16) {
+  if app.state::<AppState>().version_checked.swap(true, Ordering::SeqCst) {
+    return;
+  }
+  let app = app.clone();
+  thread::spawn(move || {
+    let url = format!("http://127.0.0.1:{port}/api/health");
+    let Ok(response) = ureq::get(&url).timeout(Duration::from_secs(2)).call() else { return };
+    let Ok(body) = response.into_json::<serde_json::Value>() else { return };
+    let running = body.get("appVersion").and_then(|value| value.as_str()).unwrap_or_default();
+    let expected = env!("CARGO_PKG_VERSION");
+    if running.is_empty() || running == "unknown" || running == expected {
+      return;
+    }
+    show_alert(&app, &format!("正在运行的服务是 {running}，本客户端是 {expected}。可能是更新前的旧服务还在跑：在托盘菜单里点「重启服务」。"));
+  });
 }
 
 /// 看门狗：每 5 秒看一次服务进程和 /api/health。进程退出或连续 4 次没响应，就自动重启；
@@ -698,6 +915,25 @@ fn desktop_port() -> u16 {
     .and_then(|value| value.parse().ok())
     .filter(|port| *port > 0)
     .unwrap_or(DEFAULT_PORT)
+}
+
+/// 端口是用户指定的时候不顺延：指定了还换端口，手机书签和穿透配置就对不上了。
+fn port_pinned() -> bool {
+  std::env::var("JARVIS_PORT")
+    .ok()
+    .and_then(|value| value.parse::<u16>().ok())
+    .map(|port| port > 0)
+    .unwrap_or(false)
+}
+
+/// 从 `start` 往后找第一个能绑的端口（服务监听 0.0.0.0，就按同样地址试）。
+fn free_port_from(start: u16) -> Option<u16> {
+  (1..=PORT_FALLBACK_ATTEMPTS).find_map(|offset| {
+    let candidate = start.checked_add(offset)?;
+    let listener = TcpListener::bind(("0.0.0.0", candidate)).ok()?;
+    drop(listener);
+    Some(candidate)
+  })
 }
 
 fn settings_path() -> PathBuf {
