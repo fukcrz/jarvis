@@ -1,4 +1,5 @@
 import type { SessionStatus, TimelineItem, ToolTimelineItem } from "../shared/protocol";
+import { commandLabel } from "./lib/command-summary";
 
 export function formatRunElapsed(startedAt: string | undefined, now = Date.now()): string | undefined {
   if (startedAt === undefined) return undefined;
@@ -37,9 +38,6 @@ export function getRunStatusActivity(status: SessionStatus, items: TimelineItem[
 }
 
 function toolStep(tool: ToolTimelineItem): string {
-  if (tool.name === "bash" || tool.name === "powershell") {
-    const first = (tool.inputPreview ?? tool.target ?? "").split(/\r?\n/).map((line) => line.trim()).find((line) => line !== "");
-    if (first !== undefined) return first;
-  }
+  if (tool.name === "bash" || tool.name === "powershell") return commandLabel(tool.inputPreview ?? tool.target, { steps: 1, count: false });
   return tool.target === undefined || tool.title.includes(tool.target) ? tool.title : `${tool.title} ${tool.target}`;
 }
