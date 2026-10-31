@@ -802,7 +802,7 @@ function AddModelsView({ ps, providerName, custom, onDone }: { ps: ProviderSetti
     setFetchError(undefined);
     void api.fetchProviderModels(custom.id).then((models) => {
       setFetched(models);
-      setSelected(new Set(models.filter((model) => !existing.has(model.id)).map((model) => model.id)));
+      setSelected(new Set());
     }).catch((error: unknown) => setFetchError(error instanceof Error ? error.message : "获取失败")).finally(() => setFetching(false));
   };
   const add = async (models: ManagedModel[]) => {
