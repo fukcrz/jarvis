@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
@@ -31,7 +31,9 @@ beforeEach(async () => {
   previousSessionDir = process.env["PI_CODING_AGENT_SESSION_DIR"];
   previousDesktop = process.env["JARVIS_DESKTOP"];
   delete process.env["JARVIS_DESKTOP"];
-  jarvisHome = await mkdtemp(join(tmpdir(), "jarvis-app-test-"));
+  // Windows 的 TEMP 在部分 runner 上是 8.3 短名（C:\Users\RUNNER~1\...），
+  // 服务端按真实路径回话，两种写法不能按字符串比。先把临时根换成真实路径。
+  jarvisHome = await realpath(await mkdtemp(join(tmpdir(), "jarvis-app-test-")));
   sessionDir = join(jarvisHome, "sessions");
   process.env["JARVIS_HOME"] = jarvisHome;
   process.env["PI_CODING_AGENT_DIR"] = join(jarvisHome, "agent");
@@ -1088,7 +1090,7 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(unknown.headers["content-type"]).toContain("application/octet-stream");
 
     // 工作区之外的绝对路径也可以读取（例如系统临时目录里的截图）。
-    const outsideDir = await mkdtemp(join(tmpdir(), "jarvis-outside-"));
+    const outsideDir = await realpath(await mkdtemp(join(tmpdir(), "jarvis-outside-")));
     try {
       const outsidePath = join(outsideDir, "outside.txt");
       await writeFile(outsidePath, "outside");

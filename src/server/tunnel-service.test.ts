@@ -89,5 +89,6 @@ describe("extractArchiveFile", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  });
+    // CI 上两次 PowerShell 子进程（Compress-Archive + Expand-Archive）会超过默认 5 秒。
+  }, 60_000);
 });
