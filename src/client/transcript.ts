@@ -635,6 +635,7 @@ function recordSubagentCall(value: unknown, fallbackCallIndex?: number): Subagen
     : [];
   const rawCallIndex = value["callIndex"];
   const callIndex = typeof rawCallIndex === "number" && Number.isInteger(rawCallIndex) && rawCallIndex >= 0 ? rawCallIndex : fallbackCallIndex;
+  const recentSteps = recordSubagentSteps(value["recentSteps"]);
   return [{
     ...(callIndex === undefined ? {} : { callIndex }),
     agent: value["agent"],
@@ -642,12 +643,31 @@ function recordSubagentCall(value: unknown, fallbackCallIndex?: number): Subagen
     state,
     ...(source === "user" || source === "project" || source === "unknown" ? { source } : {}),
     ...(typeof value["model"] === "string" && value["model"] !== "" ? { model: value["model"] } : {}),
+    ...(typeof value["thinkingLevel"] === "string" && (THINKING_LEVELS as readonly string[]).includes(value["thinkingLevel"]) ? { thinkingLevel: value["thinkingLevel"] as ThinkingLevel } : {}),
     ...(typeof value["turns"] === "number" && Number.isFinite(value["turns"]) && value["turns"] > 0 ? { turns: value["turns"] } : {}),
     ...(typeof value["sessionHandle"] === "string" && value["sessionHandle"] !== "" ? { sessionHandle: value["sessionHandle"] } : {}),
+    ...(typeof value["fullPrompt"] === "string" && value["fullPrompt"] !== "" ? { fullPrompt: value["fullPrompt"] } : {}),
+    ...(recentSteps.length === 0 ? {} : { recentSteps }),
     ...(typeof value["output"] === "string" && value["output"] !== "" ? { output: value["output"] } : {}),
     ...(typeof value["error"] === "string" && value["error"] !== "" ? { error: value["error"] } : {}),
     ...(toolCalls.length === 0 ? {} : { toolCalls }),
   }];
+}
+
+function recordSubagentSteps(value: unknown): NonNullable<SubagentCallView["recentSteps"]> {
+  if (!Array.isArray(value)) return [];
+  const steps: NonNullable<SubagentCallView["recentSteps"]> = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const at = typeof entry["at"] === "string" && entry["at"] !== "" ? { at: entry["at"] } : {};
+    const summary = typeof entry["summary"] === "string" ? entry["summary"] : "";
+    const text = typeof entry["text"] === "string" ? entry["text"] : "";
+    const name = typeof entry["name"] === "string" ? entry["name"] : "";
+    if (entry["kind"] === "tool" && name !== "") steps.push({ kind: "tool", ...at, name, summary });
+    else if (entry["kind"] === "thinking" && text !== "") steps.push({ kind: "thinking", ...at, text });
+    else if (entry["kind"] === "text" && text !== "") steps.push({ kind: "text", ...at, text });
+  }
+  return steps.slice(-8);
 }
 
 function toolImagesFromValue(value: unknown): { images: ImageAttachment[] } | Record<string, never> {

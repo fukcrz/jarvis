@@ -503,6 +503,17 @@ export interface FileChange {
 
 export type SubagentCallState = "running" | "completed" | "failed" | "cancelled";
 
+export interface SubagentStepView {
+  /** 该条所属消息完成的时刻。 */
+  at?: string;
+  kind: "thinking" | "text" | "tool";
+  /** thinking / text 的内容。 */
+  text?: string;
+  /** tool 的名称与参数摘要。 */
+  name?: string;
+  summary?: string;
+}
+
 export interface SubagentCallView {
   /** Original position in the subagent tool's calls array. */
   callIndex?: number;
@@ -511,8 +522,14 @@ export interface SubagentCallView {
   state: SubagentCallState;
   source?: "user" | "project" | "unknown";
   model?: string;
+  /** 实际生效的思考等级（子代理消息上的 thinkingLevel，缺失时用调用参数）。 */
+  thinkingLevel?: ThinkingLevel;
   turns?: number;
   sessionHandle?: string;
+  /** 完整提示词（截断到 8000 字），只有展开提示词时才读。 */
+  fullPrompt?: string;
+  /** 最近几条过程：思考 / 正文 / 动作按发生顺序拍平。 */
+  recentSteps?: SubagentStepView[];
   output?: string;
   error?: string;
   toolCalls?: Array<{ name: string; summary: string }>;

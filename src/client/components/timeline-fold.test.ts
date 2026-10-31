@@ -1,21 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentCallView, ToolTimelineItem } from "../../shared/protocol";
-import { activityGroupId, collapseUntouchedTimelineProcess, collapsedToolActivityItems, emptyTimelineFoldState, subagentCallDetailId, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, toggleTimelineThinking, visibleToolActivityItemIds } from "./timeline-fold";
+import { activityGroupId, collapseUntouchedTimelineProcess, collapsedToolActivityItems, emptyTimelineFoldState, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, visibleToolActivityItemIds } from "./timeline-fold";
 
 function item(id: string, state: ToolTimelineItem["state"] = "completed"): ToolTimelineItem {
   return { kind: "tool", id, createdAt: "", name: "read", title: "Read file", state };
 }
 
 describe("timeline fold state", () => {
-  it("keeps a manual thinking fold through later tokens and lets it reopen", () => {
-    const closed = toggleTimelineThinking(emptyTimelineFoldState(), "thinking-1", true);
-    expect(closed.closedDetailIds.has("thinking-1")).toBe(true);
-    expect(closed.openThinkingIds.has("thinking-1")).toBe(false);
-    const reopened = toggleTimelineThinking(closed, "thinking-1", false);
-    expect(reopened.closedDetailIds.has("thinking-1")).toBe(false);
-    expect(reopened.openThinkingIds.has("thinking-1")).toBe(true);
-  });
-
   it("keeps a manual tool detail choice across automatic completion folding", () => {
     const opened = toggleTimelineDetail(emptyTimelineFoldState("session"), "process-1", "detail-1", false);
     expect(opened.openProcessIds.has("process-1")).toBe(false);
@@ -82,22 +73,4 @@ describe("collapsed tool visibility", () => {
   });
 });
 
-describe("subagent call detail identity", () => {
-  it("uses callIndex for calls without session handles so reordering preserves identity", () => {
-    const first: SubagentCallView = { callIndex: 0, agent: "worker", prompt: "same", state: "completed" };
-    const second: SubagentCallView = { callIndex: 1, agent: "worker", prompt: "same", state: "completed" };
-    expect(subagentCallDetailId("tool-1", first)).not.toBe(subagentCallDetailId("tool-1", second));
-    expect(subagentCallDetailId("tool-1", first)).toBe(subagentCallDetailId("tool-1", { ...first }));
-  });
 
-  it("adds a render fallback for identical legacy calls", () => {
-    const call: SubagentCallView = { agent: "worker", prompt: "same", state: "completed" };
-    expect(subagentCallDetailId("tool-1", call, 0)).not.toBe(subagentCallDetailId("tool-1", call, 1));
-  });
-
-  it("keeps the call index stable when a later result adds a session handle", () => {
-    const seeded: SubagentCallView = { callIndex: 1, agent: "worker", prompt: "same", state: "running" };
-    const completed: SubagentCallView = { ...seeded, state: "completed", sessionHandle: "worker-session" };
-    expect(subagentCallDetailId("tool-1", seeded)).toBe(subagentCallDetailId("tool-1", completed));
-  });
-});

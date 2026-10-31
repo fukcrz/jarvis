@@ -5,7 +5,6 @@ export interface TimelineFoldState {
   openProcessIds: ReadonlySet<string>;
   openDetailIds: ReadonlySet<string>;
   closedDetailIds: ReadonlySet<string>;
-  openThinkingIds: ReadonlySet<string>;
   openGroupIds: ReadonlySet<string>;
   closedGroupIds: ReadonlySet<string>;
   touchedProcessIds: ReadonlySet<string>;
@@ -17,7 +16,6 @@ export function emptyTimelineFoldState(sessionKey?: string): TimelineFoldState {
     openProcessIds: new Set(),
     openDetailIds: new Set(),
     closedDetailIds: new Set(),
-    openThinkingIds: new Set(),
     openGroupIds: new Set(),
     closedGroupIds: new Set(),
     touchedProcessIds: new Set(),
@@ -51,20 +49,6 @@ export function activityGroupId(itemId: string): string {
   return `group:${itemId}`;
 }
 
-/** A manual open or close survives later tokens and completion. */
-export function toggleTimelineThinking(state: TimelineFoldState, detailId: string, currentlyOpen: boolean): TimelineFoldState {
-  const closedDetailIds = new Set(state.closedDetailIds);
-  const openThinkingIds = new Set(state.openThinkingIds);
-  if (currentlyOpen) {
-    closedDetailIds.add(detailId);
-    openThinkingIds.delete(detailId);
-  } else {
-    closedDetailIds.delete(detailId);
-    openThinkingIds.add(detailId);
-  }
-  return { ...state, closedDetailIds, openThinkingIds };
-}
-
 export function toggleTimelineGroup(state: TimelineFoldState, processId: string, groupId: string, currentlyCollapsed: boolean): TimelineFoldState {
   const openGroupIds = new Set(state.openGroupIds);
   const closedGroupIds = new Set(state.closedGroupIds);
@@ -96,13 +80,4 @@ export function visibleToolActivityItemIds(items: ToolTimelineItem[], active: bo
   return new Set(collapsedToolActivityItems(items, active, showActivePreview).map((item) => item.id));
 }
 
-/** Stable within one tool call even when the result list is regrouped or reordered. */
-export function subagentCallDetailId(toolId: string, call: SubagentCallView, duplicateIndex = 0): string {
-  const handle = call.sessionHandle?.trim();
-  const identity = call.callIndex !== undefined
-    ? `index:${String(call.callIndex)}`
-    : handle === undefined || handle === ""
-      ? `legacy:${[call.agent, call.prompt, call.model ?? ""].join("\u0000")}`
-      : `session:${handle}`;
-  return `subagent-call:${toolId}:${identity}${duplicateIndex === 0 ? "" : `:duplicate:${String(duplicateIndex)}`}`;
-}
+

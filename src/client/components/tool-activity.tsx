@@ -1,9 +1,13 @@
+import { useEffect, useState } from "react";
 import { ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import type { SubagentCallView, SubagentView, ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
+import { displayModelName } from "../model-display";
 import { ImagePreview } from "./image-lightbox";
 import { DiffStat, DiffView } from "./diff-view";
-import { collapsedToolActivityItems as collapsedItems, subagentCallDetailId } from "./timeline-fold";
+import { ElapsedClock } from "./elapsed-clock";
+import { commandLabel } from "../lib/command-summary";
+import { collapsedToolActivityItems as collapsedItems } from "./timeline-fold";
 
 export { collapsedToolActivityItems } from "./timeline-fold";
 
@@ -17,16 +21,17 @@ interface ToolActivityProps {
   /** IDs selected by the timeline fold state. */
   openItems?: ReadonlySet<string>;
   onToggleItem?: (id: string, currentlyOpen: boolean) => void;
-  openCallIds?: ReadonlySet<string>;
-  onToggleCall?: (toolId: string, callId: string, currentlyOpen: boolean) => void;
   visibleItemIds?: ReadonlySet<string>;
   /** Hide this group's rows while the enclosing process stays open. */
   groupCollapsed?: boolean;
   onToggleGroup?: (currentlyCollapsed: boolean) => void;
+  /** 运行中的流：不出分组标题，同类连续完成项合成计数行，排队项合成一行等待。 */
+  liveStream?: boolean;
 }
 
 /** Consecutive tool rows fold under their count heading. */
-export function ToolActivity({ items, active, showAll = true, showActivePreview = true, openItems, onToggleItem, openCallIds, onToggleCall, visibleItemIds, groupCollapsed = false, onToggleGroup }: ToolActivityProps) {
+export function ToolActivity({ items, active, showAll = true, showActivePreview = true, openItems, onToggleItem, visibleItemIds, groupCollapsed = false, onToggleGroup, liveStream = false }: ToolActivityProps) {
+  if (liveStream) return <LiveToolStream items={items} active={active} openItems={openItems} onToggleItem={onToggleItem} />;
   const state = activityState(items, active);
   const grouped = items.length > 1 && !items.some((item) => item.id.startsWith("bash:"));
   const visibleIds = visibleItemIds ?? new Set((showAll ? items : collapsedItems(items, active, showActivePreview)).map((item) => item.id));
@@ -40,10 +45,83 @@ export function ToolActivity({ items, active, showAll = true, showActivePreview 
         <span className="activity-group-label-text">{summary}</span>
       </button> : <div className="activity-group-label"><span className="activity-group-label-text">{summary}</span></div>}
       <div className="activity-items" hidden={groupCollapsed || visibleIds.size === 0}>{items.map((item) => <div key={item.id} hidden={!visibleIds.has(item.id)}>
-        <ToolRow item={item} pending={active && (item.state === "running" || item.state === "queued")} grouped={grouped} open={openItems?.has(item.id) === true} showDetails={showAll} openCallIds={openCallIds} onToggle={() => onToggleItem?.(item.id, openItems?.has(item.id) === true && showAll)} onToggleCall={onToggleCall} />
+        <ToolRow item={item} pending={active && item.state === "running"} grouped={grouped} open={openItems?.has(item.id) === true} showDetails={showAll} onToggle={() => onToggleItem?.(item.id, openItems?.has(item.id) === true && showAll)} />
       </div>)}</div>
     </article>
   );
+}
+
+export type LiveStreamRow =
+  | { kind: "item"; key: string; item: ToolTimelineItem }
+  | { kind: "run"; key: string; label: string; items: ToolTimelineItem[] }
+  | { kind: "waiting"; key: string; count: number; items: ToolTimelineItem[] };
+
+/** 运行中的流：同类连续完成的工具合成一行计数，排队项合成一行等待，失败项始终单独一行。 */
+export function liveStreamRows(items: ToolTimelineItem[]): LiveStreamRow[] {
+  const rows: LiveStreamRow[] = [];
+  let run: { name: string; items: ToolTimelineItem[] } | undefined;
+  let waiting: ToolTimelineItem[] = [];
+  const flushRun = () => {
+    const merged = run;
+    run = undefined;
+    if (merged === undefined) return;
+    const [first] = merged.items;
+    if (first === undefined) return;
+    rows.push(merged.items.length === 1
+      ? { kind: "item", key: `item:${first.id}`, item: first }
+      : { kind: "run", key: `run:${first.id}`, label: `${ACTIVITY_KIND_LABELS[merged.name] ?? first.title} ×${String(merged.items.length)}`, items: merged.items });
+  };
+  const flushWaiting = () => {
+    const queued = waiting;
+    waiting = [];
+    const [first] = queued;
+    if (first === undefined) return;
+    rows.push({ kind: "waiting", key: `wait:${first.id}`, count: queued.length, items: queued });
+  };
+  for (const item of items) {
+    if (item.state === "queued") {
+      flushRun();
+      waiting.push(item);
+      continue;
+    }
+    flushWaiting();
+    if (item.state !== "completed" || item.subagent !== undefined) {
+      flushRun();
+      rows.push({ kind: "item", key: `item:${item.id}`, item });
+      continue;
+    }
+    const name = item.name === "powershell" ? "bash" : item.name;
+    if (run === undefined || run.name !== name) {
+      flushRun();
+      run = { name, items: [item] };
+    } else run.items.push(item);
+  }
+  flushWaiting();
+  flushRun();
+  return rows;
+}
+
+function LiveToolStream({ items, active, openItems, onToggleItem }: { items: ToolTimelineItem[]; active: boolean; openItems?: ReadonlySet<string>; onToggleItem?: (id: string, currentlyOpen: boolean) => void }) {
+  return <article className={`activity-group live-stream ${activityState(items, active)}`}>
+    <div className="activity-items">
+      {liveStreamRows(items).map((row) => row.kind === "item" ? <div key={row.key}>
+        <ToolRow item={row.item} pending={active && row.item.state === "running"} grouped={false} open={openItems?.has(row.item.id) === true} showDetails onToggle={() => onToggleItem?.(row.item.id, openItems?.has(row.item.id) === true)} />
+      </div> : <StreamFoldRow key={row.key} foldId={row.kind === "run" ? `stream:${row.items[0]?.id ?? ""}` : `wait:${row.items[0]?.id ?? ""}`} label={row.kind === "run" ? row.label : `等待 ${String(row.count)} 步`} items={row.items} active={active} openItems={openItems} onToggleItem={onToggleItem} />)}
+    </div>
+  </article>;
+}
+
+function StreamFoldRow({ foldId, label, items, active, openItems, onToggleItem }: { foldId: string; label: string; items: ToolTimelineItem[]; active: boolean; openItems?: ReadonlySet<string>; onToggleItem?: (id: string, currentlyOpen: boolean) => void }) {
+  const open = openItems?.has(foldId) === true;
+  return <>
+    <button type="button" className="tool-summary stream-fold" aria-expanded={open} onClick={() => onToggleItem?.(foldId, open)}>
+      <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
+      <span className="tool-title">{label}</span>
+    </button>
+    {open ? <div className="stream-rows">{items.map((item) => <div key={item.id}>
+      <ToolRow item={item} pending={active && item.state === "running"} grouped={false} open={openItems?.has(item.id) === true} showDetails onToggle={() => onToggleItem?.(item.id, openItems?.has(item.id) === true)} />
+    </div>)}</div> : null}
+  </>;
 }
 
 const ACTIVITY_KIND_LABELS: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", bash: "命令", powershell: "命令", grep: "搜索", find: "查找", ls: "目录", session_update: "更新会话" };
@@ -69,9 +147,9 @@ function formatActivityChunk(key: string, count: number): string {
   return `${key} ${String(count)}`;
 }
 
-function ToolRow({ item, pending, open, showDetails, grouped, openCallIds, onToggle, onToggleCall }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; grouped: boolean; openCallIds?: ReadonlySet<string>; onToggle: () => void; onToggleCall?: (toolId: string, callId: string, currentlyOpen: boolean) => void }) {
+function ToolRow({ item, pending, open, showDetails, grouped, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; grouped: boolean; onToggle: () => void }) {
   if (item.name === "bash" || item.name === "powershell") return <CommandToolRow item={item} pending={pending} open={open} showDetails={showDetails} onToggle={onToggle} />;
-  if (item.subagent !== undefined) return <SubagentToolRow item={item} view={item.subagent} pending={pending} grouped={grouped} open={open} showDetails={showDetails} openCallIds={openCallIds} onToggle={onToggle} onToggleCall={onToggleCall} />;
+  if (item.subagent !== undefined) return <SubagentToolRow item={item} view={item.subagent} pending={pending} grouped={grouped} open={open} showDetails={showDetails} onToggle={onToggle} />;
   return <GenericToolRow item={item} pending={pending} open={open} showDetails={showDetails} onToggle={onToggle} />;
 }
 
@@ -140,16 +218,7 @@ function compactTarget(value?: string): string {
 }
 
 function compactCommand(value?: string): string {
-  const headline = commandHeadline(value);
-  if (headline === "") return "命令";
-  return headline.replace(/^(?:cd\s+[^;&]+\s*&&\s*)+/i, "").replace(/\s+/g, " ");
-}
-
-/** 行内只显示命令首行，多行命令（如 heredoc）加省略号；完整命令留在详情里。 */
-export function commandHeadline(value?: string): string {
-  const lines = (value ?? "").split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "");
-  const first = lines[0] ?? "";
-  return lines.length > 1 ? `${first} …` : first;
+  return commandLabel(value);
 }
 
 function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; onToggle: () => void }) {
@@ -163,7 +232,10 @@ function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: 
         <ChevronRight size={13} className={`turn-process-chevron${open && showDetails ? " expanded" : ""}`} aria-hidden />
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
         <span className="tool-title">{toolActivityLabel(item)}</span>
-        {change === undefined ? null : <DiffStat added={change.added} removed={change.removed} />}
+        {pending || change !== undefined ? <span className="tool-summary-tail">
+          {pending ? <ElapsedClock startedAt={item.createdAt} /> : null}
+          {change === undefined ? null : <DiffStat added={change.added} removed={change.removed} />}
+        </span> : null}
       </button>
       {open ? <div className="tool-details inline-details" hidden={!showDetails}>
         {images.length === 0 ? null : <div className="tool-images" aria-label="读取到的图片">
@@ -176,90 +248,135 @@ function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: 
   );
 }
 
-function SubagentToolRow({ item, view, pending, grouped, open, showDetails, openCallIds, onToggle, onToggleCall }: { item: ToolTimelineItem; view: SubagentView; pending: boolean; grouped: boolean; open: boolean; showDetails: boolean; openCallIds?: ReadonlySet<string>; onToggle: () => void; onToggleCall?: (toolId: string, callId: string, currentlyOpen: boolean) => void }) {
+function SubagentToolRow({ item, view, pending, grouped, open, showDetails, onToggle }: { item: ToolTimelineItem; view: SubagentView; pending: boolean; grouped: boolean; open: boolean; showDetails: boolean; onToggle: () => void }) {
   const stateIcon = compactToolStateIcon(item.state, pending);
-  const preview = open && showDetails ? "" : subagentLivePreview(view);
-  const single = view.results.length === 1 ? view.results[0] : undefined;
   return (
     <article className={`tool-item tool-list-item subagent-item ${item.state}`}>
       <button className="tool-summary subagent-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
         <ChevronRight size={13} className={`turn-process-chevron${open && showDetails ? " expanded" : ""}`} aria-hidden />
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
-        <span className="subagent-summary-copy">
+        <span className="subagent-heading">
           <span className="tool-title">{subagentRowLabel(view, grouped)}</span>
-          {preview === "" ? null : <span className="subagent-preview">{preview}</span>}
+          {pending ? <ElapsedClock startedAt={item.createdAt} /> : item.durationMs === undefined ? null : <time className="run-elapsed">{formatElapsedMs(item.durationMs)}</time>}
         </span>
       </button>
       {open ? <div className="tool-details inline-details" hidden={!showDetails}>
-        {single !== undefined ? <SubagentCallBody call={single} /> : <SubagentCallList results={view.results} toolId={item.id} openCallIds={openCallIds} onToggleCall={onToggleCall} />}
+        {view.results.length === 0 ? null : <SubagentCallList results={view.results} />}
         {view.results.length === 0 && item.error !== undefined ? <p className="subagent-error">{item.error}</p> : null}
       </div> : null}
     </article>
   );
 }
 
-export function SubagentCallList({ results, toolId = "subagent", openCallIds, onToggleCall }: { results: SubagentCallView[]; toolId?: string; openCallIds?: ReadonlySet<string>; onToggleCall?: (toolId: string, callId: string, currentlyOpen: boolean) => void }) {
+export function SubagentCallList({ results }: { results: SubagentCallView[] }) {
   return (
-    <div className="subagent-calls">
-      {results.map((call, index) => {
-        const duplicateIndex = results.slice(0, index).filter((prior) => subagentCallDetailId(toolId, prior) === subagentCallDetailId(toolId, call)).length;
-        const callId = subagentCallDetailId(toolId, call, duplicateIndex);
-        const callOpen = openCallIds?.has(callId) === true;
-        const preview = callOpen || call.state !== "running" ? "" : subagentStatusLine(call.output ?? "");
-        return (
-          <div className={`subagent-call ${call.state}`} key={callId}>
-            <button className="subagent-call-summary" type="button" aria-expanded={callOpen} onClick={() => onToggleCall?.(toolId, callId, callOpen)}>
-              {call.state === "failed" ? <CircleAlert size={13} aria-label="失败" /> : null}
-              <span>{call.agent} · {subagentCallStateLabel(call.state)}</span>
-            </button>
-            {preview === "" ? null : <p className="subagent-preview subagent-call-preview">{preview}</p>}
-            {callOpen ? <SubagentCallBody call={call} /> : null}
-          </div>
-        );
+    <div className="subagent-body">
+      {results.map((call, index) => <SubagentCallBlock call={call} key={`${String(call.callIndex ?? index)}:${call.agent}`} showAgent={results.length > 1} />)}
+    </div>
+  );
+}
+
+/** 单个 call 的卡体：一张卡只有一个 worker 时用它。 */
+export function SubagentCallBody({ call }: { call: SubagentCallView }) {
+  return <SubagentCallList results={[call]} />;
+}
+
+/** 一个 worker 的过程块：块头一行，下面是它自己的过程。 */
+function SubagentCallBlock({ call, showAgent }: { call: SubagentCallView; showAgent: boolean }) {
+  const steps = call.recentSteps ?? [];
+  const meta = subagentCallMeta(call);
+  return (
+    <section className={`subagent-call ${call.state}`}>
+      <p className="subagent-call-head">
+        <span className="subagent-dot" aria-hidden />
+        {showAgent ? <span className="subagent-call-agent">{call.agent}{call.state === "failed" ? " · 失败" : ""}</span> : null}
+        {showAgent && meta !== "" ? <span className="subagent-call-sep" aria-hidden>·</span> : null}
+        {meta === "" ? null : <span className="subagent-call-meta">{meta}</span>}
+        {call.turns === undefined ? null : <span className="subagent-call-turns">{String(call.turns)} 轮</span>}
+      </p>
+      <SubagentPrompt text={call.fullPrompt ?? ""} />
+      {steps.length === 0 ? <LegacySubagentStream call={call} /> : <SubagentProcess steps={steps} />}
+      {call.error === undefined ? null : <p className="subagent-error">{call.error}</p>}
+    </section>
+  );
+}
+
+/** 提示词：挂在它自己的 worker 块上，默认收起，展开后按灰竖线缩进。 */
+function SubagentPrompt({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const body = text.trim();
+  if (body === "") return null;
+  return (
+    <div className="subagent-prompt">
+      <button type="button" className="subagent-prompt-toggle" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+        <ChevronRight size={12} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
+        <span>提示词</span>
+      </button>
+      {open ? <div className="subagent-prompt-body">
+        <p className="subagent-prompt-text">{promptText(body)}</p>
+      </div> : null}
+    </div>
+  );
+}
+
+/** 提示词原文：只去掉 markdown 标记，保留分行。 */
+export function promptText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/^\s*#{1,6}\s+/, "").replace(/^\s*[-*]\s+/, "· ").trimEnd())
+    .join("\n")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .trim();
+}
+
+/** 旧快照只有拍平的动作和末段正文。 */
+function LegacySubagentStream({ call }: { call: SubagentCallView }) {
+  const tools = call.toolCalls ?? [];
+  const note = call.output === undefined ? "" : stripMarkdown(call.output).trim();
+  return <>
+    {tools.length === 0 ? null : <div className="subagent-process">
+      {tools.map((entry, index) => <p className="subagent-do" key={`${entry.name}:${String(index)}`}>{subagentToolLine(entry.name, entry.summary)}</p>)}
+    </div>}
+    {note === "" ? null : <p className="subagent-line">{note}</p>}
+  </>;
+}
+
+/** 同一条消息里既有正文又有思考时，思考是同一件事的草稿，只留正文。 */
+export function visibleSubagentSteps(steps: NonNullable<SubagentCallView["recentSteps"]>): NonNullable<SubagentCallView["recentSteps"]> {
+  const withText = new Set(steps.flatMap((step) => step.kind === "text" && (step.text ?? "").trim() !== "" && step.at !== undefined ? [step.at] : []));
+  return steps.filter((step) => !(step.kind === "thinking" && step.at !== undefined && withText.has(step.at)));
+}
+
+/** 子代理过程：正文一档，思考与动作是旁注一档。 */
+function SubagentProcess({ steps }: { steps: NonNullable<SubagentCallView["recentSteps"]> }) {
+  return (
+    <div className="subagent-process">
+      {visibleSubagentSteps(steps).map((step, index) => {
+        const key = `${step.at ?? "step"}:${String(index)}`;
+        if (step.kind === "tool") return <p className="subagent-do" key={key}>{subagentToolLine(step.name ?? "tool", step.summary ?? "")}</p>;
+        if (step.kind === "thinking") return <p className="subagent-think" key={key}>{stripMarkdown(step.text ?? "").trim()}</p>;
+        return <p className="subagent-line" key={key}>{stripMarkdown(step.text ?? "").trim()}</p>;
       })}
     </div>
   );
 }
 
-export function SubagentCallBody({ call }: { call: SubagentCallView }) {
-  const task = subagentTaskLine(call.prompt);
-  const tools = call.toolCalls ?? [];
-  const note = call.output === undefined ? "" : stripMarkdown(call.output).trim();
-  return (
-    <div className="subagent-call-body">
-      {task === "" ? null : <p className="subagent-task">{task}</p>}
-      {tools.length === 0 ? null : <ul className="subagent-steps">
-        {tools.map((entry, index) => <li key={`${entry.name}:${String(index)}`}>{subagentToolLine(entry.name, entry.summary)}</li>)}
-      </ul>}
-      {note === "" ? null : <p className="subagent-note">{note}</p>}
-      {call.error === undefined ? null : <p className="subagent-error">{call.error}</p>}
-    </div>
-  );
-}
-
-function subagentLivePreview(view: SubagentView): string {
-  const running = [...view.results].reverse().find((call) => call.state === "running" && (call.output ?? "") !== "");
-  return running?.output === undefined ? "" : subagentStatusLine(running.output);
+/** 块头的模型信息：短模型名 · 思考等级。 */
+export function subagentCallMeta(call: SubagentCallView): string {
+  return [
+    call.model === undefined ? "" : displayModelName(call.model).split("/").at(-1) ?? "",
+    call.thinkingLevel ?? "",
+  ].filter((part) => part !== "").join(" · ");
 }
 
 const SUBAGENT_TASK_CHARS = 42;
-const SUBAGENT_PREVIEW_CHARS = 36;
 
-export function subagentTaskLine(prompt: string): string {
-  const plain = stripMarkdown(prompt).replace(/\s+/g, " ").trim();
-  if (plain === "") return "";
-  const fullColon = plain.lastIndexOf("：");
-  const asciiColon = plain.lastIndexOf(": ");
-  const colon = Math.max(fullColon, asciiColon);
-  const suffix = colon < 0 ? "" : plain.slice(colon + (plain[colon] === "：" ? 1 : 2)).trim();
-  return truncateEnd(suffix.length >= 8 ? suffix : plain, SUBAGENT_TASK_CHARS);
-}
-
-export function subagentStatusLine(text: string): string {
-  const plain = stripMarkdown(text).replace(/\s+/g, " ").trim();
-  if (plain === "") return "";
-  const parts = plain.split(/(?<=[。！？.!?])/).map((part) => part.trim()).filter((part) => part !== "");
-  return truncateEnd(parts.at(-1) ?? plain, SUBAGENT_PREVIEW_CHARS);
+/** 已完成的子代理总耗时。 */
+export function formatElapsedMs(durationMs: number): string {
+  const seconds = Math.max(0, Math.floor(durationMs / 1_000));
+  return seconds < 3_600
+    ? `${String(Math.floor(seconds / 60))}:${String(seconds % 60).padStart(2, "0")}`
+    : `${String(Math.floor(seconds / 3_600))}:${String(Math.floor((seconds % 3_600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 export function subagentToolLine(name: string, summary: string): string {
@@ -279,7 +396,7 @@ export function stripMarkdown(value: string): string {
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/__([^_]+)__/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/(^|\s)#{1,6}\s+/g, "$1")
     .replace(/\*\*/g, "");
 }
 
@@ -290,7 +407,7 @@ function truncateEnd(value: string, max: number): string {
 
 function CommandToolRow({ item, pending, open, showDetails, onToggle }: { item: ToolTimelineItem; pending: boolean; open: boolean; showDetails: boolean; onToggle: () => void }) {
   const command = item.inputPreview ?? item.target ?? "";
-  const headline = commandHeadline(command);
+  const headline = commandLabel(command);
   const output = item.error ?? item.output;
   const stateIcon = compactToolStateIcon(item.state, pending);
   return (
@@ -298,7 +415,8 @@ function CommandToolRow({ item, pending, open, showDetails, onToggle }: { item: 
       <button className="tool-summary command-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
         <ChevronRight size={13} className={`turn-process-chevron${open && showDetails ? " expanded" : ""}`} aria-hidden />
         {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
-        <span className="tool-target">{open && showDetails ? "命令" : headline === "" ? "命令" : headline}</span>
+        <span className="tool-target">{open && showDetails ? "命令" : headline}</span>
+        {pending ? <ElapsedClock startedAt={item.createdAt} /> : null}
         {item.excludeFromContext === true ? <span className="command-excluded" title="输出不会发送给模型">不进上下文</span> : null}
       </button>
       {open ? <div className="tool-details command-details inline-details" hidden={!showDetails}>
@@ -312,6 +430,7 @@ function CommandToolRow({ item, pending, open, showDetails, onToggle }: { item: 
 
 function compactToolStateIcon(state: ToolTimelineItem["state"], pending: boolean) {
   if (pending) return <LoaderCircle size={14} className="spin" />;
+  if (state === "queued") return <span className="tool-subtle-queued" aria-label="等待执行">·</span>;
   if (state === "failed") return <CircleAlert size={14} aria-label="操作未完成" />;
   if (state === "cancelled") return <span className="tool-subtle-failure" aria-label="操作已停止">·</span>;
   return undefined;

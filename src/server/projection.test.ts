@@ -439,6 +439,7 @@ describe("pi-subagent snapshots", () => {
         callIndex: 0,
         agent: "scout",
         prompt: `${longPrompt.replace(/\s+/g, " ").trim().slice(0, 159)}…`,
+        fullPrompt: longPrompt,
         state: "running",
         sessionHandle: "explore-auth",
       }],
@@ -484,12 +485,68 @@ describe("pi-subagent snapshots", () => {
         model: "gpt-test",
         turns: 1,
         output: "Auth lives in auth-service.",
-        toolCalls: [{ name: "read", summary: "src/server/auth-service.ts" }],
+        toolCalls: [{ name: "read", summary: "auth-service.ts" }],
       }],
     });
     expect(partial.subagent?.results[0]).not.toHaveProperty("messages");
     expect(JSON.stringify(partial.subagent)).not.toContain("projectAgentsDir");
     expect(JSON.stringify(partial.subagent)).not.toContain("stderr");
+  });
+
+  it("keeps the last process steps in order and counts the ones left out", () => {
+    const running = toolFromCall("sa-turns", "subagent", { calls: [{ agent: "worker", prompt: "Fix auth" }] }, "2026-08-09T00:00:00.000Z", "running");
+    const turn = (minutes: number, content: unknown[]) => ({ role: "assistant", timestamp: Date.parse("2026-08-09T00:00:00.000Z") + minutes * 60_000, content });
+    const partial = toolWithPartial(running, {
+      details: {
+        kind: "pi-subagent",
+        results: [{
+          agent: "worker",
+          prompt: "Fix auth",
+          exitCode: -1,
+          thinking: "high",
+          usage: { turns: 5 },
+          messages: [
+            turn(0, [{ type: "thinking", thinking: "先看鉴权流程" }, { type: "text", text: "鉴权在 auth-service。" }, { type: "toolCall", name: "read", arguments: { path: "src/auth-service.ts" } }]),
+            turn(1, [{ type: "toolCall", name: "edit", arguments: { path: "src/auth-guard.ts" } }]),
+            turn(2, [{ type: "thinking", thinking: "补测试" }, { type: "toolCall", name: "bash", arguments: { command: "npm test" } }]),
+            turn(3, [{ type: "text", text: "已完成。" }]),
+            turn(4, [{ type: "text", text: "\u6700\u65b0\u4e00\u8f6e\u3002" }]),
+          ],
+        }],
+      },
+    });
+    expect(partial.subagent?.results[0]?.recentSteps).toEqual([
+      { kind: "tool", at: "2026-08-09T00:00:00.000Z", name: "read", summary: "auth-service.ts" },
+      { kind: "tool", at: "2026-08-09T00:01:00.000Z", name: "edit", summary: "auth-guard.ts" },
+      { kind: "thinking", at: "2026-08-09T00:02:00.000Z", text: "补测试" },
+      { kind: "tool", at: "2026-08-09T00:02:00.000Z", name: "bash", summary: "npm test" },
+      { kind: "text", at: "2026-08-09T00:03:00.000Z", text: "已完成。" },
+      { kind: "text", at: "2026-08-09T00:04:00.000Z", text: "最新一轮。" },
+    ]);
+    expect(partial.subagent?.results[0]?.turns).toBe(5);
+    expect(JSON.stringify(partial.subagent)).not.toContain("messages");
+  });
+
+  it("seeds model and thinking level from args, then prefers the child message level", () => {
+    const running = toolFromCall("sa-model", "subagent", {
+      calls: [{ agent: "worker", prompt: "Fix auth", model: "gpt-requested", thinking: "high" }],
+    }, "2026-08-09T00:00:00.000Z", "running");
+    expect(running.subagent?.results[0]).toMatchObject({ model: "gpt-requested", thinkingLevel: "high" });
+
+    const partial = toolWithPartial(running, {
+      details: {
+        kind: "pi-subagent",
+        results: [{
+          agent: "worker",
+          prompt: "Fix auth",
+          exitCode: -1,
+          thinking: "bogus",
+          usage: { turns: 3 },
+          messages: [{ role: "assistant", thinkingLevel: "max", model: "gpt-observed", content: [{ type: "text", text: "done" }] }],
+        }],
+      },
+    });
+    expect(partial.subagent?.results[0]).toMatchObject({ model: "gpt-observed", thinkingLevel: "max", turns: 3 });
   });
 
   it("maps completed, failed, and cancelled child states from mjakl details", () => {

@@ -1,11 +1,14 @@
-import { isRecord, type SubagentCallView, type SubagentView, type ToolTimelineItem } from "../shared/protocol.js";
+import { THINKING_LEVELS, isRecord, type SubagentCallView, type SubagentView, type ThinkingLevel, type ToolTimelineItem } from "../shared/protocol.js";
 import { numberValue, stringValue } from "./values.js";
 
 const MAX_SUBAGENT_PROMPT_CHARS = 160;
+const MAX_SUBAGENT_FULL_PROMPT_CHARS = 8_000;
 const MAX_SUBAGENT_OUTPUT_CHARS = 500;
 const MAX_SUBAGENT_ERROR_CHARS = 240;
 const MAX_SUBAGENT_TOOL_CALLS = 4;
 const MAX_SUBAGENT_TOOL_SUMMARY_CHARS = 80;
+const MAX_SUBAGENT_STEPS = 6;
+const MAX_SUBAGENT_STEP_TEXT_CHARS = 200;
 
 export function subagentViewFromArgs(name: string, args: unknown): SubagentView | undefined {
   if (name !== "subagent" || !isRecord(args) || !Array.isArray(args["calls"])) return undefined;
@@ -68,6 +71,8 @@ function subagentCallFromArgs(value: unknown, callIndex: number): SubagentCallVi
   if (agent === "") return [];
   const handle = sessionHandleFrom(value["session"]);
   const model = stringValue(value["model"]);
+  const thinkingLevel = thinkingLevelFrom(value["thinking"]);
+  const fullPrompt = truncateText(stringValue(value["prompt"]), MAX_SUBAGENT_FULL_PROMPT_CHARS);
   return [{
     callIndex,
     agent,
@@ -75,6 +80,8 @@ function subagentCallFromArgs(value: unknown, callIndex: number): SubagentCallVi
     state: "running",
     ...(handle === "" ? {} : { sessionHandle: handle }),
     ...(model === "" ? {} : { model }),
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+    ...(fullPrompt === "" ? {} : { fullPrompt }),
   }];
 }
 
@@ -86,13 +93,18 @@ function subagentCallFromResult(value: unknown, fallbackCallIndex: number): Suba
   const callIndex = rawCallIndex !== undefined && Number.isInteger(rawCallIndex) && rawCallIndex >= 0 ? rawCallIndex : fallbackCallIndex;
   const state = subagentCallState(value);
   const prompt = truncateOneLine(stringValue(value["prompt"]), MAX_SUBAGENT_PROMPT_CHARS);
-  const output = truncateText(lastAssistantText(value["messages"]), MAX_SUBAGENT_OUTPUT_CHARS);
+  const fullPrompt = truncateText(stringValue(value["prompt"]) || prompt, MAX_SUBAGENT_FULL_PROMPT_CHARS);
+  const reply = lastAssistantText(value["messages"]);
+  const output = truncateText(reply, MAX_SUBAGENT_OUTPUT_CHARS);
   const error = state === "running" ? "" : truncateText(stringValue(value["errorMessage"]), MAX_SUBAGENT_ERROR_CHARS);
   const handle = sessionHandleFrom(value["session"]);
   const source = value["agentSource"];
-  const model = stringValue(value["model"]);
+  const lastMessage = lastAssistantMessage(value["messages"]);
+  const model = stringValue(value["model"]) || stringValue(lastMessage?.["model"]);
+  const thinkingLevel = thinkingLevelFrom(lastMessage?.["thinkingLevel"]) ?? thinkingLevelFrom(value["thinking"]);
   const turns = numberValue(isRecord(value["usage"]) ? value["usage"]["turns"] : undefined);
   const toolCalls = recentToolCalls(value["messages"]);
+  const recentSteps = recentStepStream(value["messages"]);
   return [{
     callIndex,
     agent,
@@ -100,8 +112,11 @@ function subagentCallFromResult(value: unknown, fallbackCallIndex: number): Suba
     state,
     ...(source === "user" || source === "project" || source === "unknown" ? { source } : {}),
     ...(model === "" ? {} : { model }),
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(turns !== undefined && turns > 0 ? { turns } : {}),
     ...(handle === "" ? {} : { sessionHandle: handle }),
+    ...(fullPrompt === "" ? {} : { fullPrompt }),
+    ...(recentSteps.length === 0 ? {} : { recentSteps }),
     ...(output === "" ? {} : { output }),
     ...(error === "" ? {} : { error }),
     ...(toolCalls.length === 0 ? {} : { toolCalls }),
@@ -120,6 +135,7 @@ function subagentCallState(result: Record<string, unknown>): SubagentCallView["s
   return "completed";
 }
 
+/** 最后一条带正文的消息（跳过只有思考/工具调用的消息）。 */
 function lastAssistantText(messages: unknown): string {
   if (!Array.isArray(messages)) return "";
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -134,6 +150,25 @@ function lastAssistantText(messages: unknown): string {
   return "";
 }
 
+function messageTime(message: Record<string, unknown> | undefined): string | undefined {
+  const timestamp = numberValue(message?.["timestamp"]);
+  return timestamp === undefined || !Number.isFinite(timestamp) || timestamp <= 0 ? undefined : new Date(timestamp).toISOString();
+}
+
+function lastAssistantMessage(messages: unknown): Record<string, unknown> | undefined {
+  if (!Array.isArray(messages)) return undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isRecord(message) && message["role"] === "assistant") return message;
+  }
+  return undefined;
+}
+
+function thinkingLevelFrom(value: unknown): ThinkingLevel | undefined {
+  const level = stringValue(value);
+  return (THINKING_LEVELS as readonly string[]).includes(level) ? level as ThinkingLevel : undefined;
+}
+
 function recentToolCalls(messages: unknown): NonNullable<SubagentCallView["toolCalls"]> {
   if (!Array.isArray(messages)) return [];
   const calls: NonNullable<SubagentCallView["toolCalls"]> = [];
@@ -142,11 +177,46 @@ function recentToolCalls(messages: unknown): NonNullable<SubagentCallView["toolC
     for (const part of message["content"]) {
       if (!isRecord(part) || part["type"] !== "toolCall") continue;
       const name = stringValue(part["name"]) || "tool";
-      const summary = truncateOneLine(summarizeToolArgs(part["arguments"] ?? part["args"]), MAX_SUBAGENT_TOOL_SUMMARY_CHARS);
-      calls.push({ name, summary });
+      calls.push({ name, summary: subagentToolSummary(name, part["arguments"] ?? part["args"]) });
     }
   }
   return calls.slice(-MAX_SUBAGENT_TOOL_CALLS);
+}
+
+/** 最近几条过程：思考 / 正文 / 动作按发生顺序拍平，只带尾部。 */
+function recentStepStream(messages: unknown): NonNullable<SubagentCallView["recentSteps"]> {
+  if (!Array.isArray(messages)) return [];
+  const steps: NonNullable<SubagentCallView["recentSteps"]> = [];
+  for (const message of messages) {
+    if (!isRecord(message) || message["role"] !== "assistant" || !Array.isArray(message["content"])) continue;
+    const at = messageTime(message);
+    for (const part of message["content"]) {
+      if (!isRecord(part)) continue;
+      if (part["type"] === "thinking") {
+        const text = stringValue(part["thinking"]);
+        if (text !== "") steps.push({ kind: "thinking", ...(at === undefined ? {} : { at }), text: truncateOneLine(text, MAX_SUBAGENT_STEP_TEXT_CHARS) });
+        continue;
+      }
+      if (part["type"] === "text") {
+        const text = stringValue(part["text"]);
+        if (text !== "") steps.push({ kind: "text", ...(at === undefined ? {} : { at }), text: truncateText(text, MAX_SUBAGENT_STEP_TEXT_CHARS) });
+        continue;
+      }
+      if (part["type"] !== "toolCall") continue;
+      const name = stringValue(part["name"]) || "tool";
+      steps.push({ kind: "tool", ...(at === undefined ? {} : { at }), name, summary: subagentToolSummary(name, part["arguments"] ?? part["args"]) });
+    }
+  }
+  return steps.slice(-MAX_SUBAGENT_STEPS);
+}
+
+/** 路径类参数先取文件名再截断，否则长路径会截成 `context.…`。 */
+function subagentToolSummary(name: string, args: unknown): string {
+  const path = stringValue(isRecord(args) ? args["path"] ?? args["file_path"] : undefined);
+  if (path === "") return truncateOneLine(summarizeToolArgs(args), MAX_SUBAGENT_TOOL_SUMMARY_CHARS);
+  const normalized = path.trim().replaceAll("\\", "/");
+  const baseName = normalized.split("/").filter(Boolean).at(-1) ?? normalized;
+  return truncateOneLine(name === "ls" ? normalized : baseName, MAX_SUBAGENT_TOOL_SUMMARY_CHARS);
 }
 
 function summarizeToolArgs(args: unknown): string {

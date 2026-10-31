@@ -155,7 +155,7 @@ html.text-selecting .timeline-desktop-navigator { pointer-events: none !importan
 .toast-surface.warning .toast-surface-icon, .toast-surface.warning > svg { color: var(--warm); }
 .toast-surface.error { background: color-mix(in srgb, var(--danger) 8%, var(--surface-raised)); color: #e8b1b4; }
 .toast-surface.error .toast-surface-icon, .toast-surface.error > svg { color: var(--danger); }
-.spin { animation: spin 0.9s linear infinite; }@keyframes spin { to { transform: rotate(360deg); } }.tunnel-caddy { display: grid; gap: 6px; }.tunnel-caddy-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }.tunnel-caddy pre { margin: 0; overflow-x: auto; border: 1px solid var(--line); border-radius: 5px; background: #141416; padding: 10px; color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.55; }.tunnel-logs { display: grid; gap: 1px; max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #141416; padding: 10px; color: var(--subtle); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+.spin { animation: spin 0.9s linear infinite; }@keyframes spin { to { transform: rotate(360deg); } }.tunnel-caddy { display: grid; gap: 6px; }.tunnel-caddy-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }.tunnel-caddy pre { margin: 0; overflow-x: auto; border: 1px solid var(--line); border-radius: 5px; background: #141416; padding: 10px; color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.55; }.tunnel-logs { display: grid; gap: 1px; max-height: 190px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #141416; padding: 10px; color: var(--subtle); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 /* --- 品牌头像 / 状态胶囊 --- */
 .provider-avatar { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; border-radius: 7px; color: #fff; font-size: 12px; font-weight: 700; }
 
@@ -365,7 +365,6 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.aut
 .message-audio-frame { width: min(420px, 100%); background: var(--surface); padding: 8px 10px; }
 .message-audio-frame > audio { display: block; width: 100%; color-scheme: dark; }
 .activity-group { display: grid; gap: 4px; min-width: 0; color: var(--muted); }
-.thinking-summary,
 .turn-process-summary,
 .context-summary-toggle,
 .timeline-event-summary,
@@ -373,7 +372,6 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.aut
 .extension-widget-heading,
 .extension-select-preview-toggle,
 .extension-result-line button { --fold-color: var(--subtle); color: var(--fold-color); transition: color .14s ease; }
-.thinking-summary[aria-expanded="true"],
 .turn-process-summary[aria-expanded="true"],
 .context-summary-toggle[aria-expanded="true"],
 .timeline-event-summary[aria-expanded="true"],
@@ -386,7 +384,9 @@ button.activity-group-label { cursor: pointer; }
 button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .activity-group-label-text { min-width: 0; font-size: 11px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
 .activity-group-label .turn-process-chevron { flex: 0 0 auto; }
-.activity-items { display: grid; gap: 4px; }
+.activity-items { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+/* 行外层的 div 也要能收：否则长命令按 max-content 把行撑宽，行尾内容被裁掉。 */
+.activity-items > div { min-width: 0; }
 .activity-items[hidden], .activity-items [hidden], .turn-process-entry[hidden], .turn-process-entry > [hidden] { display: none !important; }
 .activity-group-label + .activity-items { padding-left: 12px; }
 .activity-items .tool-item { margin: 0; }
@@ -395,6 +395,16 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .activity-items .tool-list-item .tool-summary { display: flex; align-items: center; gap: 7px; border-radius: 4px; padding: 4px 0; }
 .activity-items .tool-list-item .tool-summary > .turn-process-chevron { flex: 0 0 auto; }
 .activity-items .tool-list-item .tool-state-icon { color: inherit; }
+/* 执行中的行比已完成的行亮一档：正在跑的那条一眼能认出来。 */
+.activity-items .tool-list-item.running .tool-summary, .activity-items .tool-list-item.queued .tool-summary { --fold-color: var(--muted); }
+/* 运行中的流：单行流水。已完成再暗一档，同类完成项和排队项各占一行。 */
+.activity-group.live-stream .activity-items { gap: 2px; }
+.activity-group.live-stream .activity-items .tool-list-item .tool-summary { padding: 2px 0; }
+.activity-group.live-stream .activity-items .tool-list-item.completed .tool-summary { --fold-color: color-mix(in srgb, var(--subtle) 68%, transparent); }
+.activity-group.live-stream .stream-fold { display: flex; align-items: center; width: 100%; min-width: 0; gap: 7px; border: 0; border-radius: 4px; background: transparent; padding: 2px 0; text-align: left; }
+.activity-group.live-stream .stream-fold .tool-title { flex: 1 1 auto; min-width: 0; overflow: hidden; font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.activity-group.live-stream .stream-rows { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding-left: 12px; }
+.tool-subtle-queued { display: grid; place-items: center; width: 14px; height: 14px; color: var(--subtle); }
 .activity-items .tool-list-item .tool-title { flex: 1 1 auto; min-width: 0; overflow: hidden; color: inherit; font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .activity-items .tool-list-item .tool-target { flex: 1 1 auto; min-width: 0; overflow: hidden; color: inherit; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .activity-items .tool-list-item .tool-images { display: flex; flex-wrap: wrap; gap: 7px; padding-bottom: 2px; }
@@ -410,28 +420,36 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .activity-items .tool-list-item .detail-command-line { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
 .activity-items .tool-list-item .detail-command-line code { color: var(--accent-strong); }
 .activity-items .tool-list-item .detail-input + div { margin-top: 1px; }
-.activity-items .subagent-summary { align-items: flex-start; }
-.activity-items .subagent-summary .tool-state-icon { margin-top: 1px; }
-.activity-items .subagent-summary-copy { display: grid; flex: 1 1 auto; min-width: 0; gap: 1px; }
-.activity-items .subagent-preview { overflow: hidden; margin: 0; color: var(--subtle); font-size: 11px; font-weight: 400; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
-.activity-items .subagent-calls { display: grid; min-width: 0; gap: 2px; }
-.activity-items .subagent-call { display: grid; min-width: 0; gap: 2px; }
-.activity-items .subagent-call-summary { display: flex; align-items: center; width: 100%; min-width: 0; gap: 7px; border: 0; background: transparent; padding: 3px 0; color: var(--subtle); text-align: left; font-size: 11px; }
-.activity-items .subagent-call-summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-items .subagent-call.running .subagent-call-summary { color: var(--muted); }
-.activity-items .subagent-call.failed .subagent-call-summary { color: var(--warm); }
-.activity-items .subagent-call-preview { padding-left: 20px; }
-.activity-items .subagent-call-body { display: grid; min-width: 0; gap: 4px; padding: 1px 0 6px 20px; }
-.activity-items .subagent-task,
+.activity-items .subagent-summary { align-items: center; }
+.activity-items .subagent-heading { display: flex; align-items: baseline; flex: 0 1 auto; min-width: 0; gap: 6px; }
+.activity-items .subagent-summary .tool-title { flex: 0 1 auto; }
+.activity-items .subagent-body { display: grid; min-width: 0; gap: 10px; padding: 4px 12px 8px 20px; }
+.activity-items .subagent-call { display: grid; min-width: 0; gap: 7px; }
+.activity-items .subagent-call + .subagent-call { border-top: 1px solid var(--line); padding-top: 10px; }
+.activity-items .subagent-call-head { display: flex; align-items: baseline; min-width: 0; gap: 5px; margin: 0; color: var(--subtle); font-size: 11px; line-height: 1.45; }
+.activity-items .subagent-dot { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: var(--subtle); opacity: .75; }
+.activity-items .subagent-call.running .subagent-dot { background: var(--accent); opacity: 1; }
+.activity-items .subagent-call.failed .subagent-dot { background: var(--warm); opacity: 1; }
+.activity-items .subagent-call-agent { flex: 0 0 auto; color: var(--muted); }
+.activity-items .subagent-call-sep { flex: 0 0 auto; opacity: .7; }
+.activity-items .subagent-call.failed .subagent-call-agent { color: var(--warm); }
+.activity-items .subagent-call-meta { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-items .subagent-call-turns { flex: 0 0 auto; margin-left: auto; }
 .activity-items .subagent-note,
 .activity-items .subagent-error { min-width: 0; max-width: 100%; margin: 0; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
-.activity-items .subagent-task { color: var(--ink); }
+.activity-items .subagent-process { display: grid; min-width: 0; gap: 4px; }
+.activity-items .subagent-line { min-width: 0; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.activity-items .subagent-think { min-width: 0; margin: 0; color: var(--subtle); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.activity-items .subagent-do { min-width: 0; margin: 0; color: var(--subtle); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.activity-items .subagent-prompt { display: grid; min-width: 0; gap: 3px; }
+.activity-items .subagent-prompt-toggle { display: flex; align-items: center; width: 100%; min-width: 0; gap: 6px; border: 0; background: transparent; padding: 0; color: var(--subtle); text-align: left; font-size: 11px; line-height: 1.45; }
+.activity-items .subagent-prompt-toggle:hover { color: var(--muted); }
+.activity-items .subagent-prompt-body { min-width: 0; max-height: 190px; overflow: auto; border-left: 1px solid var(--line-strong); padding: 2px 0 2px 9px; mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent); }
+.activity-items .subagent-prompt-text { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .activity-items .subagent-note { color: var(--muted); white-space: pre-wrap; }
 .activity-items .subagent-error { color: #ffb6b8; white-space: pre-wrap; }
-.activity-items .subagent-steps { display: grid; min-width: 0; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.activity-items .subagent-steps li { min-width: 0; color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .turn-process, .turn-process-stack { min-width: 0; max-width: 100%; overflow: hidden; color: var(--muted); }
-.turn-process-stack, .turn-process-body { display: grid; min-width: 0; gap: 4px; }
+.turn-process-stack, .turn-process-body { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 4px; }
 .turn-process-summary { display: flex; align-items: center; width: 100%; min-width: 0; gap: 7px; border: 0; border-radius: 4px; background: transparent; padding: 4px 0; text-align: left; }
 .turn-process-summary:focus-visible { color: var(--ink); outline: none; }
 .turn-process-chevron { flex: 0 0 auto; transition: transform .14s ease; }
@@ -444,16 +462,11 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .turn-process-entry { min-width: 0; max-width: 100%; overflow: hidden; }
 .turn-process-body .message-body.assistant, .turn-process-body .message-body.assistant .message-content { color: var(--muted); }
 .turn-process-body .message-content { font-size: 12px; line-height: 1.6; }
-.thinking-item { min-width: 0; max-width: min(640px, 100%); overflow: hidden; }
-.thinking-item.running, .thinking-item.completed { border: 0; background: transparent; }
-.thinking-summary, .thinking-collapse { display: block; width: fit-content; max-width: 100%; border: 0; border-radius: 4px; background: transparent; padding: 1px 0; color: var(--subtle); text-align: left; cursor: pointer; }
-.thinking-summary:hover, .thinking-summary:focus-visible, .thinking-collapse:hover, .thinking-collapse:focus-visible { color: var(--ink); background: transparent; outline: none; }
-.thinking-label { color: var(--muted); font-size: 12px; font-weight: 550; line-height: 1.45; }
-.thinking-collapse { margin-top: 8px; font-size: 12px; }
-.thinking-item.expanded .thinking-body { max-height: min(34vh, 260px); overflow: auto; }
-.thinking-preview { display: -webkit-box; overflow: hidden; max-width: 36em; color: var(--muted); font-size: 13px; font-weight: 400; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+/* 思考：淡紫墨色的小字旁白，靠色相和行距与旁白、回答区分，不加缩进和装饰。 */
+.thinking-item { min-width: 0; max-width: 100%; margin: 2px 0 4px; }
+.thinking-body { max-height: min(34vh, 260px); overflow: auto; overscroll-behavior: contain; }
+.thinking-body .message-content { color: color-mix(in srgb, var(--accent) 46%, var(--subtle)); font-size: 12px; line-height: 1.7; letter-spacing: .01em; }
 .run-elapsed { flex: 0 0 auto; color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.thinking-body .message-content { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .tool-item { margin: 6px 0 18px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .command-item { border-color: #343943; background: #1b1d21; }
 .command-item.running { border-color: #625337; background: #242018; }
@@ -469,6 +482,8 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .tool-summary { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; align-items: center; width: 100%; gap: 8px; border: 0; background: transparent; padding: 9px 11px; color: var(--ink); text-align: left; }
 .tool-state-icon { display: grid; color: var(--muted); }.tool-item.running .tool-state-icon { color: var(--warm); }.tool-item.completed .tool-state-icon { color: var(--subtle); }.tool-item.failed .tool-state-icon { color: var(--danger); }.activity-items .tool-list-item.failed .tool-state-icon { color: var(--warm); }.tool-subtle-failure { display: grid; place-items: center; width: 14px; height: 14px; color: var(--warm); font-size: 12px; font-weight: 700; }
 .tool-title { font-size: 12px; font-weight: 600; }.tool-target { min-width: 0; overflow: hidden; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+/* 行尾：执行中的计时和改动统计合成一格，网格列数不变。 */
+.tool-summary-tail { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
 .tool-details { display: grid; gap: 10px; border-top: 1px solid var(--line); padding: 10px; }.tool-details > div { display: grid; gap: 4px; }.tool-details pre { max-height: 280px; overflow: auto; margin: 0; border: 1px solid #35353c; border-radius: 4px; background: #161616; padding: 8px; color: #c9c9d1; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.tool-details pre.tool-error-output { border-color: #704548; background: #27191b; color: #ffb6b8; }
 .activity-items .tool-list-item .inline-details pre { border: 0; border-radius: 0; background: transparent; padding: 2px 0 0; color: #c7c7cf; box-shadow: none; }.detail-label { color: var(--subtle); font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .session-error { border-left: 2px solid var(--danger); background: var(--danger-soft); padding: 9px 10px; color: #ffb4b6; font-size: 12px; }
@@ -531,7 +546,7 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
   .message-content table { max-width: 100%; overflow-x: auto; }
   .turn-process-summary { padding-block: 6px; }
 }
-@media (prefers-reduced-motion: no-preference) { .spin { animation: spin 1s linear infinite; } .streaming-cursor { animation: stream-cursor .9s steps(1) infinite; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes stream-cursor { 50% { opacity: 0; } } }
+@media (prefers-reduced-motion: no-preference) { .spin { animation: spin 1s linear infinite; } .streaming-cursor { animation: stream-cursor .9s steps(1) infinite; } .thinking-item.running .message-content { animation: thinking-breathe 3.4s ease-in-out infinite; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes stream-cursor { 50% { opacity: 0; } } @keyframes thinking-breathe { 0%, 100% { opacity: .74; } 50% { opacity: 1; } } }
 @media (prefers-reduced-transparency: reduce) {
   :root { --glass: rgb(18 24 40 / .96); --glass-strong: rgb(18 24 40 / .98); --glass-dialog: rgb(18 24 40 / .98); --glass-overlay: rgb(4 8 10 / .72); --glass-blur: none; --glass-blur-soft: none; --glass-overlay-blur: none; }
   .toast-surface { background: color-mix(in srgb, var(--accent) 8%, rgb(18 24 40 / .96)); -webkit-backdrop-filter: none; backdrop-filter: none; }
@@ -692,7 +707,6 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
   .message-content .local-file-preview-trigger:hover { color: var(--accent); text-decoration-color: currentColor; }
   .code-block-copy:hover:not(:disabled) { background: rgb(255 255 255 / .05); color: var(--ink); }
   .message-image-frame:hover { border-color: var(--line-strong); }
-  .thinking-summary:hover,
   .turn-process-summary:hover,
   .context-summary-toggle:hover,
   .timeline-event-summary:hover,
@@ -903,8 +917,6 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 @media (max-width: 760px) { .settled-choices .extension-select-choice { min-height: 0; padding: 7px 8px; }.settled-history-toggle { min-height: 36px; }.settled-choices .extension-select-preview-toggle { min-height: 34px; } }
 /* 触屏设备：可展开的思考/工具卡片不显示 hover 变色（触控点击会把 hover 状态粘住）。focus-visible 保留。 */
 @media (hover: none) {
-  .thinking-summary:hover,
-  .thinking-collapse:hover,
   .turn-process-summary:hover,
   .context-summary-toggle:hover,
   .timeline-event-summary:hover,

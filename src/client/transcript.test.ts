@@ -1006,4 +1006,86 @@ describe("transcript queue", () => {
     }));
     expect(JSON.stringify(result.items[0])).not.toContain("secret");
   });
+
+  it("keeps a valid subagent thinking level and drops unknown values", () => {
+    const result = applySessionEvents(emptyTranscript, [{
+      version: 1,
+      sessionId: "session",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "tool.upsert",
+      payload: {
+        tool: {
+          kind: "tool",
+          id: "sa-2",
+          createdAt: "2026-08-09T00:00:00.000Z",
+          name: "subagent",
+          title: "subagent",
+          state: "running",
+          subagent: {
+            kind: "pi-subagent",
+            results: [
+              { agent: "scout", prompt: "Find auth", state: "running", model: "gpt-test", thinkingLevel: "high" },
+              { agent: "worker", prompt: "Fix auth", state: "running", thinkingLevel: "HIGH" },
+            ],
+            total: 2,
+            completed: 0,
+            running: 2,
+            failed: 0,
+          },
+        },
+      },
+    }]);
+    const results = result.items[0]?.kind === "tool" ? result.items[0].subagent?.results ?? [] : [];
+    expect(results[0]).toMatchObject({ model: "gpt-test", thinkingLevel: "high" });
+    expect(results[1]).not.toHaveProperty("thinkingLevel");
+  });
+
+  it("hydrates subagent turns and drops malformed entries", () => {
+    const result = applySessionEvents(emptyTranscript, [{
+      version: 1,
+      sessionId: "session",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "tool.upsert",
+      payload: {
+        tool: {
+          kind: "tool",
+          id: "sa-3",
+          createdAt: "2026-08-09T00:00:00.000Z",
+          name: "subagent",
+          title: "subagent",
+          state: "running",
+          subagent: {
+            kind: "pi-subagent",
+            results: [{
+              agent: "worker",
+              prompt: "Fix auth",
+              state: "running",
+              turns: 3,
+              recentSteps: [
+                { kind: "thinking", at: "2026-08-09T00:00:10.000Z", text: "先看" },
+                { kind: "text", at: "2026-08-09T00:00:10.000Z", text: "旧路径" },
+                { kind: "tool", at: "2026-08-09T00:00:10.000Z", name: "read", summary: "src/auth.ts" },
+                { kind: "text", text: "" },
+                { kind: "unknown", text: "忽略" },
+                { kind: "text", text: "最新" },
+              ],
+            }],
+            total: 1,
+            completed: 0,
+            running: 1,
+            failed: 0,
+          },
+        },
+      },
+    }]);
+    const steps = result.items[0]?.kind === "tool" ? result.items[0].subagent?.results[0]?.recentSteps ?? [] : [];
+    expect(steps).toEqual([
+      { kind: "thinking", at: "2026-08-09T00:00:10.000Z", text: "先看" },
+      { kind: "text", at: "2026-08-09T00:00:10.000Z", text: "旧路径" },
+      { kind: "tool", at: "2026-08-09T00:00:10.000Z", name: "read", summary: "src/auth.ts" },
+      { kind: "text", text: "最新" },
+    ]);
+  });
 });
