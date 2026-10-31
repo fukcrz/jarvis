@@ -253,8 +253,10 @@ describe("downloadDiagramPng", () => {
     expect(append).toHaveBeenCalledWith(anchor);
     expect(click).toHaveBeenCalledTimes(1);
     expect(remove).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(1000);
+    // 壳里要先落盘再弹另存为，对象 URL 不能马上释放。
+    vi.advanceTimersByTime(30_000);
     expect(revoke).toHaveBeenCalledWith("blob:diagram");
+    vi.useRealTimers();
   });
 });
 

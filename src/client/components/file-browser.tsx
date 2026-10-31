@@ -351,7 +351,7 @@ export function FileBrowser({ workspaceId, onClose }: FileBrowserProps) {
           {preview !== undefined ? <span className="file-browser-chrome-title" title={previewTitle}>{preview.name}</span> : canGoUp ? <span className="file-browser-chrome-title">{directoryTitle}</span> : <span className="file-browser-chrome-title" />}
           <div className="file-preview-actions">
             {copyable ? <Button variant="ghost" size="sm" onClick={() => { void copy(preview.content!.content, "已复制文件内容"); }}>复制</Button> : null}
-            {preview === undefined || previewUrl === undefined ? null : <a className="button button-ghost button-sm" href={previewUrl} target="_blank" rel="noreferrer" onClick={isDesktopShell() ? (event) => { event.preventDefault(); void openLocalPath(nativePath(preview.path)).catch(() => setError("无法用系统默认程序打开")); } : undefined}>打开</a>}
+            {preview === undefined || previewUrl === undefined ? null : <a className="button button-ghost button-sm" href={previewUrl} target="_blank" rel="noreferrer" onClick={isDesktopShell() ? (event) => { event.preventDefault(); void openLocalPath(nativePath(preview.path)).catch((error: unknown) => { setError(error instanceof Error && error.message !== "" ? error.message : "无法用系统默认程序打开"); }); } : undefined}>打开</a>}
             {preview === undefined || downloadUrl === undefined ? null : <a className="button button-ghost button-sm" href={downloadUrl} download onClick={(event) => { event.preventDefault(); void saveDownload(downloadUrl, preview?.name).catch((error: unknown) => { setError(error instanceof Error ? error.message : "无法下载"); }); }}>下载</a>}
             <DialogPrimitive.Close asChild>
               <Button variant="ghost" size="icon" aria-label="关闭"><X size={16} /></Button>

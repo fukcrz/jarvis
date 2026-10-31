@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type MouseEvent, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
 import { copyText } from "../lib/clipboard";
 import { cachedMermaidDiagram, canCopyDiagramImage, copyMermaidDiagram, downloadMermaidDiagram, mermaidFitScale, pngBlobFromSvg, renderMermaidDiagram, saveBlobFile, svgPixelSize } from "../lib/mermaid";
@@ -48,6 +48,7 @@ import { DiagramLightbox, ImagePreview, MermaidScaledSvg } from "./image-lightbo
 import { LocalTextFileLink } from "./text-file-preview";
 import { isDesktopShell } from "../lib/desktop-shell";
 import { revealLocalPath } from "../desktop";
+import { saveDownload } from "../lib/download";
 
 interface MarkdownMessageProps {
   text: string;
@@ -174,12 +175,20 @@ function LocalLink({ node: _node, href, className, children, ...rest }: Componen
   const resolved = rewriteLocalLinkHref(href, cwd);
   if (resolved === href && !href?.startsWith("/api/files?")) return <a href={href} className={className} {...rest}>{children}</a>;
   const downloadHref = localFileDownloadHref(resolved);
-  return <a {...rest} href={downloadHref} className={className === undefined ? "local-file-link" : `local-file-link ${className}`} download onClick={isDesktopShell() ? (event) => {
+  // 桌面壳里：有本地文件引用就定位到资源管理器；没有（流式输出、用户消息）就照常下载，
+  // 但要经过能力层预检，别把 401/404 的错误页存成文件。
+  const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (!isDesktopShell()) return;
     event.preventDefault();
-    if (reference === undefined) return;
+    if (reference === undefined) {
+      if (downloadHref === undefined) return;
+      void saveDownload(downloadHref).catch((error: unknown) => { window.alert(error instanceof Error ? error.message : "无法下载"); });
+      return;
+    }
     void revealLocalPath(reference.path, cwd).catch(() => window.alert("无法打开文件所在目录"));
-  } : rest.onClick}>{children}</a>;
+  };
+  return <a {...rest} href={downloadHref} className={className === undefined ? "local-file-link" : `local-file-link ${className}`} download onClick={onClick}>{children}</a>;
 }
 
 /**
@@ -232,7 +241,13 @@ function MediaFallback({ label, src }: { label: string; src: string | undefined 
     <ImageOff size={15} aria-hidden />
     <span className="message-image-fallback-path" title={src}>{imageFallbackTarget(src)}</span>
     {src === undefined ? null : src.startsWith("/api/files?")
-      ? <a href={localFileDownloadHref(src)} download>下载</a>
+      ? <a href={localFileDownloadHref(src)} download onClick={(event) => {
+        if (!isDesktopShell() || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        const href = localFileDownloadHref(src);
+        if (href === undefined) return;
+        void saveDownload(href).catch((error: unknown) => { window.alert(error instanceof Error ? error.message : "无法下载"); });
+      }}>下载</a>
       : <a href={src} target="_blank" rel="noreferrer">打开</a>}
   </span>;
 }

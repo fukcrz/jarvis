@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import type { WorkspaceFileContent } from "../../shared/protocol";
 import { api, workspaceFileUrl } from "../api";
+import { isDesktopShell } from "../lib/desktop-shell";
+import { saveDownload } from "../lib/download";
 import { useHistoryBackTrap } from "../lib/history-back-trap";
 import { CodePreview } from "./code-preview";
 import { Dialog, DialogContent } from "./ui/dialog";
@@ -139,7 +141,17 @@ export function LocalTextFileLink({ path, cwd, line, column, children, className
       .finally(() => { setLoading(false); });
   };
 
-  if (available === false) return <a href={fallbackHref ?? localTextFileDownloadHref(path, cwd)} className={className === undefined ? "local-file-link" : `local-file-link ${className}`} download>{children}</a>;
+  const fallbackDownload = fallbackHref ?? localTextFileDownloadHref(path, cwd);
+  if (available === false) return <a
+    href={fallbackDownload}
+    className={className === undefined ? "local-file-link" : `local-file-link ${className}`}
+    download
+    onClick={(event) => {
+      if (!isDesktopShell() || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      void saveDownload(fallbackDownload).catch((error: unknown) => { window.alert(error instanceof Error ? error.message : "无法下载"); });
+    }}
+  >{children}</a>;
   return <>
     <LocalTextFilePreviewAnchor path={path} cwd={cwd} className={className} loading={loading || available === undefined} onOpen={openPreview}>{children}</LocalTextFilePreviewAnchor>
     {file === undefined ? null : <TextFilePreviewDialog file={file} line={line} column={column} open={open} onClose={() => setOpen(false)} />}

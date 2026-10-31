@@ -13,7 +13,6 @@ const TAURI_ALLOWLIST = new Set([
   "src/client/desktop.ts",
   "src/client/lib/composer-drop-desktop.ts",
   "src/client/lib/desktop-updater.ts",
-  "src/client/components/update-prompt.tsx",
 ]);
 const WINDOW_OPEN_ALLOWLIST = new Set(["src/client/desktop.ts"]);
 
@@ -58,6 +57,14 @@ describe("桌面壳配置与命令", () => {
     expect(config.app?.windows).toBeUndefined();
   });
 
+  it("capabilities 里的窗口 label 与 Rust 创建的 label 一致", () => {
+    // label 对不上时，自定义权限会全部静默失效（通知、open_path、更新通道）。
+    const capabilities = JSON.parse(read("src-tauri/capabilities/default.json")) as { windows: string[] };
+    const created = /WebviewWindowBuilder::new\(app, "([^"]+)"/.exec(read("src-tauri/src/lib.rs"))?.[1];
+    expect(created).toBeDefined();
+    expect(capabilities.windows).toEqual([created]);
+  });
+
   it("注册的命令与权限声明一一对应", () => {
     const registered = [...read("src-tauri/src/lib.rs").matchAll(/generate_handler!\[([\s\S]*?)\]/g)]
       .flatMap((match) => match[1]!.split(","))
@@ -80,6 +87,8 @@ describe("桌面壳配置与命令", () => {
 
     expect([...registered].sort()).toEqual([...defined].sort());
     expect([...registered].sort()).toEqual([...allowed].sort());
+    // 两个方向都要查：capabilities 引了不存在的权限、permissions 里声明了却没在 capabilities 引用。
     expect(custom.filter((name) => !declared.has(name))).toEqual([]);
+    expect([...declared].sort()).toEqual([...custom].sort());
   });
 });

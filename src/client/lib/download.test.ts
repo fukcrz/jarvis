@@ -41,4 +41,23 @@ describe("preflightDownload", () => {
     await preflightDownload("https://example.com/a.zip", fetchImpl as unknown as typeof fetch);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it("0 字节文件的 416 不算失败", async () => {
+    // /api/files 对空文件回 416（bytes=0-0 不成立），这种文件照样能下。
+    const fetchImpl = vi.fn(async () => response("", { status: 416 }));
+    await expect(preflightDownload("/api/files?path=empty.md&download=1", fetchImpl as unknown as typeof fetch)).resolves.toBeUndefined();
+  });
+
+  it("/api/files 之外的接口用 HEAD 预检，不拉整个响应体", async () => {
+    const fetchImpl = vi.fn(async () => response("", { status: 200, headers: { "content-disposition": "attachment; filename=d.zip" } }));
+    await preflightDownload("/api/system/diagnostics", fetchImpl as unknown as typeof fetch);
+    const init = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(init.method).toBe("HEAD");
+    expect(init.headers).toBeUndefined();
+  });
+
+  it("错误里带上服务端说明", async () => {
+    const fetchImpl = vi.fn(async () => response(JSON.stringify({ error: { code: "FILE_NOT_FOUND", message: "文件不存在" } }), { status: 404 }));
+    await expect(preflightDownload("/api/files?path=missing&download=1", fetchImpl as unknown as typeof fetch)).rejects.toThrow("文件不存在");
+  });
 });

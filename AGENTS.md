@@ -18,7 +18,7 @@
 
 ## 桌面壳能力边界
 
-- 浏览器原生能力（下载、外链、新窗口、打开/定位本地文件、拖拽、通知）只能经能力层：`src/client/desktop.ts`、`src/client/lib/download.ts`。组件里不写 `@tauri-apps/*`、不写 `window.open`、不判断 `isDesktopShell()`。
+- 浏览器原生能力（下载、外链、新窗口、打开/定位本地文件、拖拽、通知）只能经能力层：`src/client/desktop.ts`、`src/client/lib/download.ts`。组件里不写 `@tauri-apps/*`、不写 `window.open`；桌面壳与网页的差异由能力层吸收，只有语义真要分叉时（如「打开」在壳里走系统程序、在网页里走浏览器）才判断 `isDesktopShell()`。
 - 下载统一走 `saveDownload` / `saveBlob`，不要自己拼 `<a download>`：桌面壳由 `on_download` 接管（临时目录 → 原生另存为），自己拼的入口会绕过 401/404 预检。
 - 主窗口在 Rust 里创建（`build_main_window`），`tauri.conf.json` 不得再出现 `app.windows`；否则 label 冲突会让启动直接崩溃。
 - 新增 Rust 命令必须同时改 `generate_handler!`、`permissions/desktop.toml`、`capabilities/default.json`，并补 `docs/desktop-capabilities.md` 的矩阵行；`npm test` 会校验一致性。

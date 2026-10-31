@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { listenDesktopCheckUpdate, showDesktopWindow } from "../desktop";
+import { listenDesktopCheckUpdate, showDesktopWindow, takeDesktopUpdateCheck } from "../desktop";
 import { CHECK_UPDATE_EVENT } from "../lib/app-version";
 import {
   UPDATE_CHECK_INTERVAL_MS,
@@ -166,16 +166,15 @@ export function DesktopUpdatePrompt() {
     if (!isDesktopShell()) return;
     let disposed = false;
     const listening = listenDesktopCheckUpdate(() => {
-      void import("@tauri-apps/api/core").then(({ invoke }) => invoke("take_update_check")).catch(() => undefined);
+      void takeDesktopUpdateCheck().catch(() => undefined);
       void runCheckRef.current(true);
     });
     const onManualCheck = () => { void runCheckRef.current(true); };
     window.addEventListener(CHECK_UPDATE_EVENT, onManualCheck);
     const timer = window.setInterval(() => { void runCheckRef.current(false); }, UPDATE_CHECK_INTERVAL_MS);
     void listening.ready.then(async () => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const pending = await invoke<boolean>("take_update_check");
-      if (!disposed) void runCheckRef.current(pending === true);
+      const pending = await takeDesktopUpdateCheck();
+      if (!disposed) void runCheckRef.current(pending);
     }).catch(() => {
       if (!disposed) void runCheckRef.current(false);
     });

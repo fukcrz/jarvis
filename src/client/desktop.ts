@@ -43,6 +43,13 @@ export async function openLocalPath(path: string): Promise<void> {
   await invoke("open_path", { path });
 }
 
+/** 领取桌面壳「检查更新」的结果（更新提示里用）。 */
+export async function takeDesktopUpdateCheck(): Promise<boolean> {
+  if (!isDesktopShell()) return false;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<boolean>("take_update_check");
+}
+
 /** 在资源管理器里定位本地文件。 */
 export async function revealLocalPath(path: string, cwd?: string): Promise<void> {
   if (!isDesktopShell()) return;

@@ -185,6 +185,10 @@ pub fn spawn_managed_sidecar(slot: &SharedSidecar, node: &Path, root: &Path, por
   if slot.closing {
     return Ok(false);
   }
+  // 先停旧的再去打开新的：直接覆盖 slot.child 会留下一个没被记录的进程占着端口。
+  if let Some(mut previous) = slot.child.take() {
+    stop_sidecar(&mut previous);
+  }
   slot.child = Some(spawn_sidecar(node, root, port, on_event)?);
   Ok(true)
 }
