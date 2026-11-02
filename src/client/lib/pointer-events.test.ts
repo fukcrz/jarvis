@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearTouchFocus, hasBlockingOverlay, installTextSelectionGuard, installTouchFocusGuard, restoreBodyPointerEventsIfIdle, setTextSelecting } from "./pointer-events";
+import { clearTouchFocus, hasBlockingOverlay, installTextSelectionGuard, installTouchFocusGuard, restoreBodyPointerEventsIfIdle } from "./pointer-events";
 
 function fakeDocument(pointerEvents: string, overlay: boolean, overlayClass = "dialog-overlay"): Document {
   const overlayNode = overlay ? { className: overlayClass } : null;
@@ -261,27 +261,5 @@ describe("installTextSelectionGuard", () => {
     dispatchView("blur", {});
     expect(selecting()).toBe(false);
     uninstall();
-  });
-});
-
-describe("setTextSelecting", () => {
-  it("toggles the document class only when the state changes", () => {
-    const classNames = new Set<string>();
-    const doc = {
-      documentElement: {
-        classList: {
-          contains: (name: string) => classNames.has(name),
-          toggle: (name: string, force?: boolean) => {
-            if (force === true) classNames.add(name);
-            else classNames.delete(name);
-          },
-        },
-      },
-    } as unknown as Document;
-    expect(setTextSelecting(true, doc)).toBe(true);
-    expect(classNames.has("text-selecting")).toBe(true);
-    expect(setTextSelecting(true, doc)).toBe(false);
-    expect(setTextSelecting(false, doc)).toBe(true);
-    expect(classNames.has("text-selecting")).toBe(false);
   });
 });

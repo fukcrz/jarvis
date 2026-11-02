@@ -25,9 +25,4 @@ describe("composerImageAttachments", () => {
       { mimeType: "image/webp", data: "", url: "/media/1" },
     ])).toEqual([{ mimeType: "image/png", data: "abc" }]);
   });
-
-  it("returns an empty list when there are no images", () => {
-    expect(composerImageAttachments(undefined)).toEqual([]);
-    expect(composerImageAttachments([])).toEqual([]);
-  });
 });

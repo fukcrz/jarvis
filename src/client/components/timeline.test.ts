@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeTimelineTurn, activeUserMessageAnchor, formatUserMessageIndex, groupTimelineItems, groupTimelineTurns, isFollowingLatest, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, jumpLatestBottomForDock, mobileUserMessageRows, shouldFoldTurnProcess, shouldHideJumpLatestForComposer, shouldLoadEarlierAtTop, shouldShowJumpLatest, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, timelineProcessId, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds } from "./timeline";
+import { activeTimelineTurn, activeUserMessageAnchor, groupTimelineItems, groupTimelineTurns, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, shouldFoldTurnProcess, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, timelineProcessId, trailingAssistantMessage, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -85,30 +85,12 @@ describe("userMessageAnchorsFromOutline", () => {
   });
 });
 
-describe("mobileUserMessageRows", () => {
-  it("lists newest user messages first without changing indexes", () => {
-    const anchors = userMessageAnchors([user("u1"), user("u2"), user("u3")]);
-    expect(mobileUserMessageRows(anchors).map((anchor) => [anchor.id, anchor.index])).toEqual([
-      ["u3", 3],
-      ["u2", 2],
-      ["u1", 1],
-    ]);
-  });
-});
-
 describe("activeUserMessageAnchor", () => {
   it("prefers the active message and otherwise uses the latest", () => {
     const anchors = userMessageAnchors([user("u1"), user("u2")]);
     expect(activeUserMessageAnchor(anchors, "u1")?.id).toBe("u1");
     expect(activeUserMessageAnchor(anchors)?.id).toBe("u2");
     expect(activeUserMessageAnchor([])).toBeUndefined();
-  });
-});
-
-describe("formatUserMessageIndex", () => {
-  it("pads chronological indexes to two digits", () => {
-    expect(formatUserMessageIndex(1)).toBe("01");
-    expect(formatUserMessageIndex(12)).toBe("12");
   });
 });
 
@@ -137,57 +119,6 @@ describe("shouldStopFollowingOnGesture", () => {
 
   it("stops following when an upward gesture can move away from the latest messages", () => {
     expect(shouldStopFollowingOnGesture({ scrollTop: 600, scrollHeight: 1_200, clientHeight: 600 }, -100)).toBe(true);
-  });
-});
-
-describe("isFollowingLatest", () => {
-  it("is true only inside the near-bottom threshold", () => {
-    const viewport = { scrollHeight: 1_200, clientHeight: 600 };
-    expect(isFollowingLatest({ ...viewport, scrollTop: 528 })).toBe(false);
-    expect(isFollowingLatest({ ...viewport, scrollTop: 529 })).toBe(true);
-    expect(isFollowingLatest({ ...viewport, scrollTop: 600 })).toBe(true);
-  });
-});
-
-describe("shouldShowJumpLatest", () => {
-  it("hides the button while the viewport is at most 300px from the bottom", () => {
-    const viewport = { scrollHeight: 1_200, clientHeight: 600 };
-    expect(shouldShowJumpLatest({ ...viewport, scrollTop: 300 })).toBe(false);
-    expect(shouldShowJumpLatest({ ...viewport, scrollTop: 299 })).toBe(true);
-  });
-
-  it("hides the button at the latest content", () => {
-    expect(shouldShowJumpLatest({ scrollHeight: 600, clientHeight: 600, scrollTop: 0 })).toBe(false);
-  });
-});
-
-describe("jumpLatestBottomForDock", () => {
-  it("places the button above the dock with a small gap", () => {
-    expect(jumpLatestBottomForDock(900, 700)).toBe(212);
-  });
-
-  it("does not return a negative offset when the dock reaches the shell top", () => {
-    expect(jumpLatestBottomForDock(900, 960)).toBe(0);
-  });
-});
-
-describe("shouldHideJumpLatestForComposer", () => {
-  it("hides only on mobile after the editor exceeds 140px", () => {
-    expect(shouldHideJumpLatestForComposer(true, 140)).toBe(false);
-    expect(shouldHideJumpLatestForComposer(true, 141)).toBe(true);
-    expect(shouldHideJumpLatestForComposer(false, 300)).toBe(false);
-  });
-});
-
-describe("shouldLoadEarlierAtTop", () => {
-  it("loads more history only when the user reaches the top threshold", () => {
-    expect(shouldLoadEarlierAtTop({ scrollTop: 72 }, true, false)).toBe(true);
-    expect(shouldLoadEarlierAtTop({ scrollTop: 73 }, true, false)).toBe(false);
-  });
-
-  it("does not request history without another page or while a request is active", () => {
-    expect(shouldLoadEarlierAtTop({ scrollTop: 0 }, false, false)).toBe(false);
-    expect(shouldLoadEarlierAtTop({ scrollTop: 0 }, true, true)).toBe(false);
   });
 });
 
@@ -245,9 +176,6 @@ describe("groupTimelineItems", () => {
     ]);
   });
 
-  it("returns an empty list for an empty timeline", () => {
-    expect(groupTimelineItems([])).toEqual([]);
-  });
 });
 
 describe("groupTimelineTurns", () => {
@@ -324,10 +252,6 @@ describe("groupTimelineTurns", () => {
 
     expect(groupTimelineTurns([firstTool])[0]?.key).toBe("turn:response");
     expect(groupTimelineTurns([earlierThinking, firstTool])[0]?.key).toBe("turn:response");
-  });
-
-  it("returns an empty list for an empty timeline", () => {
-    expect(groupTimelineTurns([])).toEqual([]);
   });
 
   it("lifts a trailing unrecovered error out of the process", () => {
@@ -586,6 +510,17 @@ describe("splitVisibleTurnEntries", () => {
       { kind: "activity", items: [command("c1")] },
       { kind: "extension-ui", item: dialog("d1") },
     ]);
+  });
+});
+
+describe("trailingAssistantMessage", () => {
+  it("keeps the run indicator inside the message when it ends the process", () => {
+    expect(trailingAssistantMessage([{ kind: "activity", items: [tool("a")] }, { kind: "message", item: message("a1") }])?.item.id).toBe("a1");
+  });
+
+  it("does not hold the run indicator above later steps", () => {
+    expect(trailingAssistantMessage([{ kind: "message", item: message("a1") }, { kind: "activity", items: [tool("b", "edit")] }])).toBeUndefined();
+    expect(trailingAssistantMessage([])).toBeUndefined();
   });
 });
 

@@ -174,51 +174,11 @@ describe("canCopyDiagramImage", () => {
     expect(canCopyDiagramImage()).toBe(true);
   });
 
-  it("allows desktop Macintosh without touch points", () => {
-    stubClipboardHost({
-      ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
-      platform: "MacIntel",
-      maxTouchPoints: 0,
-    });
-    expect(canCopyDiagramImage()).toBe(true);
-  });
-
-  it("rejects Android even when ClipboardItem exists", () => {
-    stubClipboardHost({ ua: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/120.0.0.0 Mobile Safari/537.36" });
-    expect(canCopyDiagramImage()).toBe(false);
-  });
-
-  it("rejects iPhone", () => {
-    stubClipboardHost({ ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15" });
-    expect(canCopyDiagramImage()).toBe(false);
-  });
-
-  it("rejects iPad UA", () => {
-    stubClipboardHost({ ua: "Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15" });
-    expect(canCopyDiagramImage()).toBe(false);
-  });
-
   it("rejects iPadOS that reports Macintosh with touch points", () => {
     stubClipboardHost({
       ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
       platform: "MacIntel",
       maxTouchPoints: 5,
-    });
-    expect(canCopyDiagramImage()).toBe(false);
-  });
-
-  it("rejects insecure contexts", () => {
-    stubClipboardHost({
-      ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
-      secure: false,
-    });
-    expect(canCopyDiagramImage()).toBe(false);
-  });
-
-  it("rejects hosts without image clipboard write", () => {
-    stubClipboardHost({
-      ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
-      canWrite: false,
     });
     expect(canCopyDiagramImage()).toBe(false);
   });

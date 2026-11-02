@@ -1386,6 +1386,12 @@ export function splitVisibleTurnEntries(entries: TimelineRenderItem[]): { proces
   return { process, visible };
 }
 
+/** 「执行中」并进末尾助手消息时跟着那条消息排版；过程末尾已是别的条目就落回回合底部，不能停在最新一步之前。 */
+export function trailingAssistantMessage(entries: TimelineRenderItem[]): Extract<TimelineRenderItem, { kind: "message" }> | undefined {
+  const last = entries.at(-1);
+  return last?.kind === "message" && last.item.role === "assistant" ? last : undefined;
+}
+
 /** 回合以未恢复的错误收尾。末尾失败卡会提到折叠外，过程里也可能还留着未恢复错误。 */
 export function turnEndedInFailure(turn: TimelineTurn): boolean {
   if (turn.finalError?.some((item) => item.state === "failed")) return true;
@@ -1608,7 +1614,7 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   const runIndicator = context.runStatusTurnKey === turn.key && context.runStatusActivity !== undefined
     ? <WorkingIndicator className="working-indicator message-run-status" activity={context.runStatusActivity} startedAt={context.runStatusStartedAt} />
     : undefined;
-  const runStatusMessage = runIndicator === undefined || turn.final !== undefined || split.visible.length > 0 ? undefined : [...displayTurn.process].reverse().find((entry): entry is Extract<TimelineRenderItem, { kind: "message" }> => entry.kind === "message" && entry.item.role === "assistant");
+  const runStatusMessage = runIndicator === undefined || turn.final !== undefined || split.visible.length > 0 ? undefined : trailingAssistantMessage(displayTurn.process);
   const runStatusMessageId = runStatusMessage?.item.id;
   const processContext: TurnRenderContext = {
     ...processBaseContext,
