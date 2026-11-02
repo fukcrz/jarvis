@@ -281,7 +281,7 @@ input[aria-invalid="true"]:focus { border-color: var(--danger) !important; }.aut
 .message-row.user { justify-content: flex-end; }
 .message-body { min-width: 0; max-width: 760px; }
 .message-body.user { display: flex; width: max-content; max-width: min(690px, 84%); flex-direction: column; align-items: flex-end; }
-.message-content { max-width: 100%; color: #e1e1e6; font-size: 14px; line-height: 1.68; overflow-wrap: anywhere; }
+.message-content { max-width: 100%; color: #eff0f5; font-size: 14px; line-height: 1.68; overflow-wrap: anywhere; }
 .message-body.user .message-content { display: block; width: max-content; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); padding: 10px 13px; color: #f4f4f6; transition: border-color .24s ease, box-shadow .24s ease; }.message-row.navigator-highlight .message-body.user .message-content { border-color: color-mix(in srgb, var(--accent) 68%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); } .message-body.user .message-content > p:first-child { margin-top: 0; } .message-body.user .message-content > p:last-child { margin-bottom: 0; }
 .message-generation-meta { display: flex; align-items: center; min-width: 0; gap: 5px; margin-top: 5px; color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-variant-numeric: tabular-nums; line-height: 1.35; }
 .message-generation-meta.streaming { color: var(--accent-strong); }
@@ -427,14 +427,15 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .activity-items .subagent-call { display: grid; min-width: 0; gap: 7px; }
 .activity-items .subagent-call + .subagent-call { border-top: 1px solid var(--line); padding-top: 10px; }
 .activity-items .subagent-call-head { display: flex; align-items: baseline; min-width: 0; gap: 5px; margin: 0; color: var(--subtle); font-size: 11px; line-height: 1.45; }
-.activity-items .subagent-dot { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: var(--subtle); opacity: .75; }
-.activity-items .subagent-call.running .subagent-dot { background: var(--accent); opacity: 1; }
-.activity-items .subagent-call.failed .subagent-dot { background: var(--warm); opacity: 1; }
 .activity-items .subagent-call-agent { flex: 0 0 auto; color: var(--muted); }
 .activity-items .subagent-call-sep { flex: 0 0 auto; opacity: .7; }
 .activity-items .subagent-call.failed .subagent-call-agent { color: var(--warm); }
 .activity-items .subagent-call-meta { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-items .subagent-call-turns { flex: 0 0 auto; margin-left: auto; }
+.activity-items .subagent-call-tail { display: flex; align-items: baseline; flex: 0 0 auto; gap: 6px; margin-left: auto; }
+.activity-items .subagent-call-turns { flex: 0 0 auto; }
+.activity-items .subagent-call-state { flex: 0 0 auto; }
+.activity-items .subagent-call.running .subagent-call-state { color: var(--accent); }
+.activity-items .subagent-call.failed .subagent-call-state { color: var(--warm); }
 .activity-items .subagent-note,
 .activity-items .subagent-error { min-width: 0; max-width: 100%; margin: 0; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
 .activity-items .subagent-process { display: grid; min-width: 0; gap: 4px; }
@@ -462,10 +463,9 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .turn-process-entry { min-width: 0; max-width: 100%; overflow: hidden; }
 .turn-process-body .message-body.assistant, .turn-process-body .message-body.assistant .message-content { color: var(--muted); }
 .turn-process-body .message-content { font-size: 12px; line-height: 1.6; }
-/* 思考：淡紫墨色的小字旁白，靠色相和行距与旁白、回答区分，不加缩进和装饰。 */
+/* 思考：衬线的小字旁注，靠字形、字号和行距与无衬线的回答区分，不用色相；没有中文衬线的环境退化成无衬线节奏版。 */
 .thinking-item { min-width: 0; max-width: 100%; margin: 2px 0 4px; }
-.thinking-body { max-height: min(34vh, 260px); overflow: auto; overscroll-behavior: contain; }
-.thinking-body .message-content { color: color-mix(in srgb, var(--accent) 46%, var(--subtle)); font-size: 12px; line-height: 1.7; letter-spacing: .01em; }
+.thinking-body .message-content { font-family: "Noto Serif CJK SC", "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, SimSun, serif; color: #d9dbe3; font-size: 12.5px; line-height: 1.88; letter-spacing: .015em; }
 .run-elapsed { flex: 0 0 auto; color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tool-item { margin: 6px 0 18px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .command-item { border-color: #343943; background: #1b1d21; }
@@ -546,7 +546,7 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
   .message-content table { max-width: 100%; overflow-x: auto; }
   .turn-process-summary { padding-block: 6px; }
 }
-@media (prefers-reduced-motion: no-preference) { .spin { animation: spin 1s linear infinite; } .streaming-cursor { animation: stream-cursor .9s steps(1) infinite; } .thinking-item.running .message-content { animation: thinking-breathe 3.4s ease-in-out infinite; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes stream-cursor { 50% { opacity: 0; } } @keyframes thinking-breathe { 0%, 100% { opacity: .74; } 50% { opacity: 1; } } }
+@media (prefers-reduced-motion: no-preference) { .spin { animation: spin 1s linear infinite; } .streaming-cursor { animation: stream-cursor .9s steps(1) infinite; } @keyframes spin { to { transform: rotate(360deg); } } @keyframes stream-cursor { 50% { opacity: 0; } } }
 @media (prefers-reduced-transparency: reduce) {
   :root { --glass: rgb(18 24 40 / .96); --glass-strong: rgb(18 24 40 / .98); --glass-dialog: rgb(18 24 40 / .98); --glass-overlay: rgb(4 8 10 / .72); --glass-blur: none; --glass-blur-soft: none; --glass-overlay-blur: none; }
   .toast-surface { background: color-mix(in srgb, var(--accent) 8%, rgb(18 24 40 / .96)); -webkit-backdrop-filter: none; backdrop-filter: none; }

@@ -29,12 +29,12 @@ describe("ToolActivity summaries", () => {
     expect(collapsedToolActivityItems(items, false, true)).toEqual([failed]);
   });
 
-  it("summarizes consecutive operations while keeping running and failed rows visible", () => {
+  it("renders each operation without a grouped summary", () => {
     const base: ToolTimelineItem = { kind: "tool", id: "a", createdAt: "", name: "read", title: "Read file", state: "completed", target: "a.ts", output: "retained output" };
     const items = [base, { ...base, id: "b", target: "b.ts" }, { ...base, id: "c", state: "running" as const, target: "current.ts" }, { ...base, id: "d", name: "bash", title: "Run command", state: "failed" as const, inputPreview: "npm test", error: "failed output" }];
     expect(summarizeToolActivity(items)).toBe("读取 3 · 命令 1");
     const compact = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, showAll: false }));
-    expect(compact).toContain("读取 3 · 命令 1");
+    expect(compact).not.toContain("读取 3 · 命令 1");
     expect(compact).toContain('<div><article class="tool-item tool-list-item running"');
     expect(compact).toContain("npm test");
     expect(compact).toContain('<div hidden=""><article class="tool-item tool-list-item completed"><button class="tool-summary" type="button" aria-expanded="false"><svg');
@@ -45,20 +45,11 @@ describe("ToolActivity summaries", () => {
     const expanded = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, showAll: true }));
     expect(expanded).toContain("a.ts");
     expect(expanded).toContain("b.ts");
-    expect(expanded).toContain('class="activity-group-label"');
+    expect(expanded).not.toContain("activity-group-label");
     expect(expanded).not.toContain("activity-narration");
-    expect(expanded).not.toContain('<div class="activity-group-label" aria-expanded');
-    const foldable = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, showAll: true, onToggleGroup: () => undefined }));
-    expect(foldable).toContain('aria-expanded="true"');
-    expect(foldable).toContain("读取了 a.ts");
-    const folded = renderToStaticMarkup(createElement(ToolActivity, { items, active: false, showAll: true, groupCollapsed: true, onToggleGroup: () => undefined }));
-    expect(folded).toContain('aria-expanded="false"');
-    expect(folded).toContain('class="activity-items" hidden=""');
-    const activeFoldable = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, showAll: true, groupCollapsed: true, onToggleGroup: () => undefined }));
-    expect(activeFoldable).toContain('aria-expanded="false"');
-    expect(activeFoldable).toContain('class="activity-items" hidden=""');
-    const preview = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, showAll: false, onToggleGroup: () => undefined }));
-    expect(preview).toContain('<button type="button" class="activity-group-label" aria-expanded="true">');
+    expect(expanded).toContain("读取了 a.ts");
+    expect(expanded).toContain("读取了 b.ts");
+    expect(expanded).not.toContain("读取 3 · 命令 1");
   });
 });
 
@@ -179,8 +170,8 @@ describe("ToolActivity subagent rows", () => {
     })];
     expect(summarizeToolActivity(items)).toBe("更新会话 · 子代理 1/2");
     const markup = renderToStaticMarkup(createElement(ToolActivity, { items, active: true }));
-    expect(markup).toContain("更新会话 · 子代理 1/2");
-    expect(markup).toContain("worker · 执行中");
+    expect(markup).not.toContain("更新会话 · 子代理 1/2");
+    expect(markup).toContain("子代理 1/2 · worker");
     expect(markup).not.toContain("现在执行目标单测。");
     expect(markup).not.toContain("session update");
     expect(markup).not.toContain("**");
@@ -214,6 +205,19 @@ describe("ToolActivity subagent rows", () => {
     const markup = renderToStaticMarkup(createElement(ToolActivity, { items: [item], active: false }));
     expect(markup).toContain('class="run-elapsed">1:23</time>');
     expect(formatElapsedMs(3_723_000)).toBe("1:02:03");
+  });
+
+  it("writes each call's state and its own time", () => {
+    const markup = renderToStaticMarkup(createElement(SubagentCallList, {
+      results: [
+        { agent: "scout", prompt: "Map the auth flow", state: "completed", turns: 5, durationMs: 83_000 },
+        { agent: "worker", prompt: "Fix the return path", state: "running", turns: 2, startedAt: new Date(Date.now() - 45_000).toISOString() },
+      ],
+    }));
+    expect(markup).not.toContain("subagent-dot");
+    expect(markup).toContain("完成");
+    expect(markup).toContain('class="run-elapsed">1:23</time>');
+    expect(markup).toMatch(/执行中<\/span><time class="run-elapsed">0:4[4-6]<\/time>/);
   });
 
   it("shows every finished call's process without a second fold", () => {
@@ -379,30 +383,23 @@ describe("ToolActivity live stream", () => {
     expect(rows[0]).toMatchObject({ kind: "run", label: "命令 ×2" });
   });
 
-  it("folds queued rows into one waiting line and never spins them", () => {
+  it("renders queued calls as separate rows", () => {
     const queued = { ...base, state: "queued" as const };
-    const rows = liveStreamRows([{ ...queued, id: "q1" }, { ...queued, id: "q2" }, { ...base, id: "run", state: "running" as const }]);
-    expect(rows.map((row) => row.kind)).toEqual(["waiting", "item"]);
-    expect(rows[0]).toMatchObject({ count: 2 });
     const markup = renderToStaticMarkup(createElement(ToolActivity, { items: [{ ...queued, id: "q1" }, { ...queued, id: "q2" }], active: true, liveStream: true }));
-    expect(markup).toContain("等待 2 步");
-    expect(markup).not.toContain("spin");
-    expect(markup).not.toContain("run-elapsed");
+    expect(markup).not.toContain("等待 2 步");
+    expect(markup.match(/aria-label="等待执行"/g)).toHaveLength(2);
   });
 
-  it("keeps a failed step as its own readable row and skips the group heading", () => {
-    const rows = liveStreamRows([base, { ...base, id: "b" }, { ...base, id: "bad", state: "failed" as const, error: "boom" }, { ...base, id: "c" }, { ...base, id: "d" }]);
-    expect(rows.map((row) => row.kind)).toEqual(["run", "item", "run"]);
-    const markup = renderToStaticMarkup(createElement(ToolActivity, { items: [base, { ...base, id: "b" }, { ...base, id: "bad", state: "failed" as const, error: "boom" }], active: true, liveStream: true }));
-    expect(markup).toContain('class="activity-group live-stream running"');
-    expect(markup).not.toContain("activity-group-label");
-    expect(markup).toContain("读取 ×2");
-    expect(markup).toContain('aria-expanded="false"');
+  it("renders repeated and failed steps individually", () => {
+    const items = [base, { ...base, id: "b" }, { ...base, id: "bad", state: "failed" as const, error: "boom" }];
+    const markup = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, liveStream: true }));
+    expect(markup).not.toContain("读取 ×2");
+    expect(markup.match(/读取了 a.ts/g)).toHaveLength(3);
   });
 
-  it("opens a merged row into its individual steps", () => {
-    const markup = renderToStaticMarkup(createElement(ToolActivity, { items: [base, { ...base, id: "b", target: "b.ts" }], active: true, liveStream: true, openItems: new Set(["stream:a"]) }));
-    expect(markup).toContain('aria-expanded="true"');
+  it("shows repeated steps without a merged toggle", () => {
+    const markup = renderToStaticMarkup(createElement(ToolActivity, { items: [base, { ...base, id: "b", target: "b.ts" }], active: true, liveStream: true }));
+    expect(markup).not.toContain('aria-expanded="true"');
     expect(markup).toContain("读取了 a.ts");
     expect(markup).toContain("读取了 b.ts");
   });

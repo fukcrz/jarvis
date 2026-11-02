@@ -525,6 +525,10 @@ export interface SubagentCallView {
   /** 实际生效的思考等级（子代理消息上的 thinkingLevel，缺失时用调用参数）。 */
   thinkingLevel?: ThinkingLevel;
   turns?: number;
+  /** 该 call 开始计时的时刻：首条子代理消息，缺省用派发时刻。 */
+  startedAt?: string;
+  /** 已结束 call 的执行时长，实时行由 startedAt 现算。 */
+  durationMs?: number;
   sessionHandle?: string;
   /** 完整提示词（截断到 8000 字），只有展开提示词时才读。 */
   fullPrompt?: string;

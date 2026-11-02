@@ -441,6 +441,7 @@ describe("pi-subagent snapshots", () => {
         prompt: `${longPrompt.replace(/\s+/g, " ").trim().slice(0, 159)}…`,
         fullPrompt: longPrompt,
         state: "running",
+        startedAt: "2026-08-09T00:00:00.000Z",
         sessionHandle: "explore-auth",
       }],
       total: 1,

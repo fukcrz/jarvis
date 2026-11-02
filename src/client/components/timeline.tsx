@@ -1518,13 +1518,9 @@ function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderConte
     return <ThinkingItem key={entry.item.id} item={entry.item} streaming={streaming} baseDir={context.workspaceCwd} />;
   }
   const active = context.status.runState !== "idle" && entry.items.some((item) => item.state === "queued" || item.state === "running");
-  const groupId = activityGroupId(entry.items[0]?.id ?? "empty");
-  const pending = entry.items.some((item) => item.state === "running" || item.state === "queued");
-  const grouped = entry.items.length > 1 && !entry.items.some((item) => item.id.startsWith("bash:"));
-  const groupCollapsed = grouped && (context.closedGroupIds.has(groupId) || (!pending && context.inlineProcess !== true && !context.openGroupIds.has(groupId)));
-  // 执行中也不自动展开：只有手动点开过的行才显示详情。计数行用 `stream:` / `wait:` 前缀，同样记在这里。
+  // 执行中也不自动展开：只有手动点开过的行才显示详情。
   const openItems = new Set([...context.openDetailIds].filter((id) => !context.closedDetailIds.has(id)));
-  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={active} liveStream={context.inlineProcess === true} showAll={showAll} showActivePreview={showActivePreview} visibleItemIds={showAll ? undefined : visibleToolActivityItemIds(entry.items, active, showActivePreview)} openItems={openItems} onToggleItem={(id, currentlyOpen) => context.onToggleDetail(id, currentlyOpen)} groupCollapsed={groupCollapsed} onToggleGroup={context.onToggleGroup === undefined ? undefined : (currentlyCollapsed) => context.onToggleGroup?.(groupId, currentlyCollapsed)} />;
+  return <ToolActivity key={`activity:${entry.items[0]?.id ?? "empty"}`} items={entry.items} active={active} showAll={showAll} showActivePreview={showActivePreview} visibleItemIds={showAll ? undefined : visibleToolActivityItemIds(entry.items, active, showActivePreview)} openItems={openItems} onToggleItem={(id, currentlyOpen) => context.onToggleDetail(id, currentlyOpen)} />;
 }
 
 export function processTextPreview(text: string): string {
@@ -1658,25 +1654,12 @@ function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string |
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} live={turn.key === liveTurnKey} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
 }
 
-/** 思考是过程里的旁白：没有标题、箭头和开合，随生成增长并跟随最新行；要收起时由「过程」统一收起。 */
+/** 思考是过程里的旁白：没有标题、箭头和开合，按内容自然铺开随页面滚动；要收起时由「过程」统一收起。 */
 function ThinkingItem({ item, streaming = false, baseDir }: { item: ThinkingTimelineItem; streaming?: boolean; baseDir?: string }) {
-  const bodyRef = useRef<HTMLDivElement | null>(null);
-  // 用户自己往上滚看历史时不要再被拽回底部。
-  const followRef = useRef(true);
-  const running = item.state === "running";
-  useEffect(() => {
-    const node = bodyRef.current;
-    if (node === null || !running || !followRef.current) return;
-    node.scrollTop = node.scrollHeight;
-  }, [item.text, running]);
   if (item.text.trim() === "") return null;
   return (
     <article className={`thinking-item ${item.state}`}>
-      <div className="thinking-body" ref={bodyRef} onScroll={() => {
-        const node = bodyRef.current;
-        if (node === null) return;
-        followRef.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 24;
-      }}>
+      <div className="thinking-body">
         <div className="message-content"><MarkdownMessage text={item.text} streaming={streaming} baseDir={baseDir} plainHeadings /></div>
       </div>
     </article>

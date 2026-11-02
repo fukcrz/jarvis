@@ -414,7 +414,7 @@ export function toolFromCall(
   const target = toolTarget(args);
   const title = toolTitle(name);
   const inputPreview = summarizeArgs(args);
-  const subagent = subagentViewFromArgs(name, args);
+  const subagent = subagentViewFromArgs(name, args, createdAt);
   const fileChange = fileChangeFromCall(name, args);
   return {
     kind: "tool",

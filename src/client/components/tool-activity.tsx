@@ -22,30 +22,22 @@ interface ToolActivityProps {
   openItems?: ReadonlySet<string>;
   onToggleItem?: (id: string, currentlyOpen: boolean) => void;
   visibleItemIds?: ReadonlySet<string>;
-  /** Hide this group's rows while the enclosing process stays open. */
+  /** Deprecated: tool rows are always shown flat. */
   groupCollapsed?: boolean;
   onToggleGroup?: (currentlyCollapsed: boolean) => void;
-  /** 运行中的流：不出分组标题，同类连续完成项合成计数行，排队项合成一行等待。 */
+  /** Deprecated: tool rows are always shown flat. */
   liveStream?: boolean;
 }
 
-/** Consecutive tool rows fold under their count heading. */
-export function ToolActivity({ items, active, showAll = true, showActivePreview = true, openItems, onToggleItem, visibleItemIds, groupCollapsed = false, onToggleGroup, liveStream = false }: ToolActivityProps) {
-  if (liveStream) return <LiveToolStream items={items} active={active} openItems={openItems} onToggleItem={onToggleItem} />;
+/** Render every tool call as its own row; the enclosing process owns folding. */
+export function ToolActivity({ items, active, showAll = true, showActivePreview = true, openItems, onToggleItem, visibleItemIds }: ToolActivityProps) {
   const state = activityState(items, active);
-  const grouped = items.length > 1 && !items.some((item) => item.id.startsWith("bash:"));
   const visibleIds = visibleItemIds ?? new Set((showAll ? items : collapsedItems(items, active, showActivePreview)).map((item) => item.id));
-  const groupToggle = grouped && onToggleGroup !== undefined;
-  const summary = grouped ? summarizeToolActivity(items) : "";
 
   return (
     <article className={`activity-group ${state}`}>
-      {!grouped ? null : groupToggle ? <button type="button" className="activity-group-label" aria-expanded={!groupCollapsed} onClick={() => onToggleGroup(groupCollapsed)}>
-        <ChevronRight size={13} className={`turn-process-chevron${groupCollapsed ? "" : " expanded"}`} aria-hidden />
-        <span className="activity-group-label-text">{summary}</span>
-      </button> : <div className="activity-group-label"><span className="activity-group-label-text">{summary}</span></div>}
-      <div className="activity-items" hidden={groupCollapsed || visibleIds.size === 0}>{items.map((item) => <div key={item.id} hidden={!visibleIds.has(item.id)}>
-        <ToolRow item={item} pending={active && item.state === "running"} grouped={grouped} open={openItems?.has(item.id) === true} showDetails={showAll} onToggle={() => onToggleItem?.(item.id, openItems?.has(item.id) === true && showAll)} />
+      <div className="activity-items" hidden={visibleIds.size === 0}>{items.map((item) => <div key={item.id} hidden={!visibleIds.has(item.id)}>
+        <ToolRow item={item} pending={active && item.state === "running"} grouped={false} open={openItems?.has(item.id) === true} showDetails={showAll} onToggle={() => onToggleItem?.(item.id, openItems?.has(item.id) === true && showAll)} />
       </div>)}</div>
     </article>
   );
@@ -288,17 +280,26 @@ function SubagentCallBlock({ call, showAgent }: { call: SubagentCallView; showAg
   return (
     <section className={`subagent-call ${call.state}`}>
       <p className="subagent-call-head">
-        <span className="subagent-dot" aria-hidden />
-        {showAgent ? <span className="subagent-call-agent">{call.agent}{call.state === "failed" ? " · 失败" : ""}</span> : null}
+        {showAgent ? <span className="subagent-call-agent">{call.agent}</span> : null}
         {showAgent && meta !== "" ? <span className="subagent-call-sep" aria-hidden>·</span> : null}
         {meta === "" ? null : <span className="subagent-call-meta">{meta}</span>}
-        {call.turns === undefined ? null : <span className="subagent-call-turns">{String(call.turns)} 轮</span>}
+        <span className="subagent-call-tail">
+          {call.turns === undefined ? null : <span className="subagent-call-turns">{String(call.turns)} 轮</span>}
+          <span className="subagent-call-state">{subagentCallStateLabel(call.state)}</span>
+          <SubagentCallClock call={call} />
+        </span>
       </p>
       <SubagentPrompt text={call.fullPrompt ?? ""} />
       {steps.length === 0 ? <LegacySubagentStream call={call} /> : <SubagentProcess steps={steps} />}
       {call.error === undefined ? null : <p className="subagent-error">{call.error}</p>}
     </section>
   );
+}
+
+/** 单个 worker 的计时：执行中走秒，结束后给总时长。 */
+function SubagentCallClock({ call }: { call: SubagentCallView }) {
+  if (call.state === "running") return call.startedAt === undefined ? null : <ElapsedClock startedAt={call.startedAt} />;
+  return call.durationMs === undefined ? null : <time className="run-elapsed">{formatElapsedMs(call.durationMs)}</time>;
 }
 
 /** 提示词：挂在它自己的 worker 块上，默认收起，展开后按灰竖线缩进。 */

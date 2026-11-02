@@ -10,23 +10,23 @@ const MAX_SUBAGENT_TOOL_SUMMARY_CHARS = 80;
 const MAX_SUBAGENT_STEPS = 6;
 const MAX_SUBAGENT_STEP_TEXT_CHARS = 200;
 
-export function subagentViewFromArgs(name: string, args: unknown): SubagentView | undefined {
+export function subagentViewFromArgs(name: string, args: unknown, dispatchedAt?: string): SubagentView | undefined {
   if (name !== "subagent" || !isRecord(args) || !Array.isArray(args["calls"])) return undefined;
-  const results = args["calls"].flatMap((value, index) => subagentCallFromArgs(value, index));
+  const results = args["calls"].flatMap((value, index) => subagentCallFromArgs(value, index, dispatchedAt));
   return results.length === 0 ? undefined : viewFromCalls(results);
 }
 
 export function attachSubagentView(tool: ToolTimelineItem, result?: unknown): ToolTimelineItem {
   if (tool.name !== "subagent") return tool;
-  const fromResult = subagentViewFromResult(result);
+  const fromResult = subagentViewFromResult(result, tool.createdAt);
   if (fromResult !== undefined && fromResult.results.length > 0) return { ...tool, subagent: fromResult };
   return finalizeSeededSubagent(tool);
 }
 
-function subagentViewFromResult(result: unknown): SubagentView | undefined {
+function subagentViewFromResult(result: unknown, dispatchedAt?: string): SubagentView | undefined {
   const details = detailsRecord(result);
   if (details === undefined) return undefined;
-  const results = Array.isArray(details["results"]) ? details["results"].flatMap((value, index) => subagentCallFromResult(value, index)) : [];
+  const results = Array.isArray(details["results"]) ? details["results"].flatMap((value, index) => subagentCallFromResult(value, index, dispatchedAt)) : [];
   return viewFromCalls(results);
 }
 
@@ -65,7 +65,7 @@ function viewFromCalls(results: SubagentCallView[]): SubagentView {
   };
 }
 
-function subagentCallFromArgs(value: unknown, callIndex: number): SubagentCallView[] {
+function subagentCallFromArgs(value: unknown, callIndex: number, dispatchedAt?: string): SubagentCallView[] {
   if (!isRecord(value)) return [];
   const agent = stringValue(value["agent"]);
   if (agent === "") return [];
@@ -78,6 +78,7 @@ function subagentCallFromArgs(value: unknown, callIndex: number): SubagentCallVi
     agent,
     prompt: truncateOneLine(stringValue(value["prompt"]), MAX_SUBAGENT_PROMPT_CHARS),
     state: "running",
+    ...(dispatchedAt === undefined ? {} : { startedAt: dispatchedAt }),
     ...(handle === "" ? {} : { sessionHandle: handle }),
     ...(model === "" ? {} : { model }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
@@ -85,13 +86,14 @@ function subagentCallFromArgs(value: unknown, callIndex: number): SubagentCallVi
   }];
 }
 
-function subagentCallFromResult(value: unknown, fallbackCallIndex: number): SubagentCallView[] {
+function subagentCallFromResult(value: unknown, fallbackCallIndex: number, dispatchedAt?: string): SubagentCallView[] {
   if (!isRecord(value)) return [];
   const agent = stringValue(value["agent"]);
   if (agent === "") return [];
   const rawCallIndex = numberValue(value["callIndex"]);
   const callIndex = rawCallIndex !== undefined && Number.isInteger(rawCallIndex) && rawCallIndex >= 0 ? rawCallIndex : fallbackCallIndex;
   const state = subagentCallState(value);
+  const timing = callTiming(value["messages"], state, dispatchedAt);
   const prompt = truncateOneLine(stringValue(value["prompt"]), MAX_SUBAGENT_PROMPT_CHARS);
   const fullPrompt = truncateText(stringValue(value["prompt"]) || prompt, MAX_SUBAGENT_FULL_PROMPT_CHARS);
   const reply = lastAssistantText(value["messages"]);
@@ -114,6 +116,7 @@ function subagentCallFromResult(value: unknown, fallbackCallIndex: number): Suba
     ...(model === "" ? {} : { model }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(turns !== undefined && turns > 0 ? { turns } : {}),
+    ...timing,
     ...(handle === "" ? {} : { sessionHandle: handle }),
     ...(fullPrompt === "" ? {} : { fullPrompt }),
     ...(recentSteps.length === 0 ? {} : { recentSteps }),
@@ -153,6 +156,27 @@ function lastAssistantText(messages: unknown): string {
 function messageTime(message: Record<string, unknown> | undefined): string | undefined {
   const timestamp = numberValue(message?.["timestamp"]);
   return timestamp === undefined || !Number.isFinite(timestamp) || timestamp <= 0 ? undefined : new Date(timestamp).toISOString();
+}
+
+/** 子代理消息的时间跨度：首条到最后一条。 */
+function messageSpan(messages: unknown): { first?: string; last?: string } {
+  if (!Array.isArray(messages)) return {};
+  const times = messages
+    .flatMap((message) => isRecord(message) ? [messageTime(message)] : [])
+    .filter((time): time is string => time !== undefined);
+  const [first] = times;
+  const last = times.at(-1);
+  return { ...(first === undefined ? {} : { first }), ...(last === undefined ? {} : { last }) };
+}
+
+/** 首条消息的时间作起点，派发时刻兼顾还没出消息的 call。 */
+function callTiming(messages: unknown, state: SubagentCallView["state"], dispatchedAt?: string): Pick<SubagentCallView, "startedAt" | "durationMs"> {
+  const { first, last } = messageSpan(messages);
+  const startedAt = first ?? dispatchedAt;
+  return {
+    ...(startedAt === undefined ? {} : { startedAt }),
+    ...(state === "running" || startedAt === undefined || last === undefined ? {} : { durationMs: Math.max(0, Date.parse(last) - Date.parse(startedAt)) }),
+  };
 }
 
 function lastAssistantMessage(messages: unknown): Record<string, unknown> | undefined {

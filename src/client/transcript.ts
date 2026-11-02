@@ -645,6 +645,8 @@ function recordSubagentCall(value: unknown, fallbackCallIndex?: number): Subagen
     ...(typeof value["model"] === "string" && value["model"] !== "" ? { model: value["model"] } : {}),
     ...(typeof value["thinkingLevel"] === "string" && (THINKING_LEVELS as readonly string[]).includes(value["thinkingLevel"]) ? { thinkingLevel: value["thinkingLevel"] as ThinkingLevel } : {}),
     ...(typeof value["turns"] === "number" && Number.isFinite(value["turns"]) && value["turns"] > 0 ? { turns: value["turns"] } : {}),
+    ...(typeof value["startedAt"] === "string" && value["startedAt"] !== "" ? { startedAt: value["startedAt"] } : {}),
+    ...(typeof value["durationMs"] === "number" && Number.isFinite(value["durationMs"]) && value["durationMs"] >= 0 ? { durationMs: value["durationMs"] } : {}),
     ...(typeof value["sessionHandle"] === "string" && value["sessionHandle"] !== "" ? { sessionHandle: value["sessionHandle"] } : {}),
     ...(typeof value["fullPrompt"] === "string" && value["fullPrompt"] !== "" ? { fullPrompt: value["fullPrompt"] } : {}),
     ...(recentSteps.length === 0 ? {} : { recentSteps }),
