@@ -96,12 +96,12 @@ await replaceOneOf(
   join(root, "node_modules/@earendil-works/pi-coding-agent/dist/core/sdk.js"),
   [
     {
-      before: "            return modelRuntime.streamSimple(model, context, {\n                ...options,\n                timeoutMs,",
-      after: "            return modelRuntime.streamSimple(model, context, {\n                ...options,\n                // Keep local provider routing tied to this AgentSession even when compaction\n                // replaces sessionId with an isolated UUID for cache/request affinity.\n                ownerSessionId: sessionManager.getSessionId(),\n                timeoutMs,",
+      before: "            return modelRuntime.streamSimple(model, context, requestOptions);",
+      after: "            return modelRuntime.streamSimple(model, context, {\n                ...requestOptions,\n                // Keep local provider routing tied to this AgentSession even when compaction\n                // replaces sessionId with an isolated UUID for cache/request affinity.\n                ownerSessionId: sessionManager.getSessionId(),\n            });",
     },
     {
-      before: "            const requestOptions = buildRequestOptions(model, options);",
-      after: "            const requestOptions = buildRequestOptions(model, {\n                ...options,\n                // Keep local provider routing tied to this AgentSession even when compaction\n                // replaces sessionId with an isolated UUID for cache/request affinity.\n                ownerSessionId: sessionManager.getSessionId(),\n            });",
+      before: "            const requestOptions = buildRequestOptions(options);",
+      after: "            const requestOptions = buildRequestOptions({\n                ...options,\n                // Keep local provider routing tied to this AgentSession even when compaction\n                // replaces sessionId with an isolated UUID for cache/request affinity.\n                ownerSessionId: sessionManager.getSessionId(),\n            });",
     },
   ],
   { critical: true },
