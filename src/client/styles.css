@@ -1045,7 +1045,7 @@ html.text-selecting .run-status-bar { pointer-events: none !important; }
 /* 正文后的过程和文件变更在操作统计之前。 */
 .turn-details { display: grid; min-width: 0; gap: 6px; margin-top: 10px; }
 .turn-details .turn-changes { margin: 0; }
-/* 长回答：最终回答下的复制按钮和统计放一行；表格横向滚动不再挤成窄列；标题旁的 # 锚点 */
+/* 长回答：最终回答下的复制按钮和统计放一行；表格横向滚动不再挤成窄列 */
 .assistant-message-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .assistant-message-footer .message-actions, .assistant-message-footer .message-generation-meta { margin-top: 0; }
 .message-content .table-scroll { max-width: 100%; overflow-x: auto; margin: 10px 0; -webkit-overflow-scrolling: touch; }
@@ -1053,10 +1053,6 @@ html.text-selecting .run-status-bar { pointer-events: none !important; }
 .message-content .table-scroll td { overflow-wrap: normal; word-break: normal; }
 @media (max-width: 760px) { .message-content .table-scroll > table { width: max-content; max-width: 620px; } }
 .message-content .md-heading { position: relative; scroll-margin-top: 16px; }
-.md-heading-anchor { margin-left: 6px; border: 0; background: transparent; padding: 0 2px; color: var(--subtle); font: inherit; font-weight: 400; opacity: 0; cursor: pointer; }
-.md-heading:hover .md-heading-anchor, .md-heading-anchor:focus-visible { opacity: 1; }
-.md-heading-anchor:hover { color: var(--accent-strong); }
-@media (hover: none) { .md-heading-anchor { display: none; } }
 
 /* P0：密钥打码、只读信息列表、提示文字 */
 .settings-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; font-size: 12px; }

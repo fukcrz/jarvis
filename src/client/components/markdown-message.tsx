@@ -522,11 +522,7 @@ function headingComponent(Tag: HeadingTag) {
     const streaming = useContext(MarkdownStreamingContext);
     const slug = headingSlug(textFromReactNode(children));
     const id = slug === "" ? undefined : `md-${slug}`;
-    // 路由用的是 hash，不能用 href="#..."；点 # 把这一节滚到顶部。
-    return <Tag {...rest} id={id} className="md-heading">
-      {children}
-      {streaming || id === undefined ? null : <button type="button" className="md-heading-anchor" aria-label="滚到这一节" title="滚到这一节" onClick={(event) => event.currentTarget.parentElement?.scrollIntoView({ block: "start", behavior: "smooth" })}>#</button>}
-    </Tag>;
+    return <Tag {...rest} id={id} className="md-heading">{children}</Tag>;
   };
 }
 

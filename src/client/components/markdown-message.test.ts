@@ -364,10 +364,10 @@ describe("long answers", () => {
     expect(headingSlug("!!")).toBe("");
   });
 
-  it("wraps tables and adds heading anchors", () => {
+  it("wraps tables and renders headings without anchor markers", () => {
     const html = renderToStaticMarkup(createElement(MarkdownMessage, { text: "## 改动\n\n| a | b |\n| - | - |\n| 1 | 2 |" }));
-    expect(html).toContain('<h2 id="md-改动" class="md-heading">');
-    expect(html).toContain('class="md-heading-anchor"');
+    expect(html).toContain('<h2 id="md-改动" class="md-heading">改动</h2>');
+    expect(html).not.toContain("md-heading-anchor");
     expect(html).toContain('<div class="table-scroll"><table>');
   });
 });
