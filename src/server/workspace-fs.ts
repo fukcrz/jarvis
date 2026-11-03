@@ -216,7 +216,13 @@ function fileRequestCandidates(requestedPath: string, cwd: string | undefined): 
   if (platform() === "win32") {
     for (const alias of windowsPosixDriveAliases(normalized)) paths.push(alias);
   }
-  return paths.map((path) => isAbsoluteFilePath(path) ? path : resolve(cwd ?? process.cwd(), path));
+  const resolved = paths.map((path) => isAbsoluteFilePath(path) ? path : resolve(cwd ?? process.cwd(), path));
+  // Windows 上单斜杠开头的路径只会落到当前盘根目录；找不到时再按工作区相对路径试一次，
+  // 兜住把 `.tmp-shots/a.png` 写成 `/.tmp-shots/a.png` 这类路径笔误。
+  if (platform() === "win32" && normalized.startsWith("/") && !normalized.startsWith("//")) {
+    resolved.push(resolve(cwd ?? process.cwd(), `.${normalized}`));
+  }
+  return resolved;
 }
 
 export async function resolveFileRequestPath(requestedPath: string, cwd: string | undefined): Promise<string> {

@@ -166,6 +166,18 @@ describe("fileMatchScore", () => {
 });
 
 describe("resolveFileRequestPath", () => {
+  it.runIf(platform() === "win32")("falls back to a workspace-relative path for a root-relative path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jarvis-path-"));
+    try {
+      const file = join(dir, "shots", "a.png");
+      await mkdir(join(dir, "shots"), { recursive: true });
+      await writeFile(file, "x");
+      expect(await resolveFileRequestPath("/shots/a.png", dir)).toBe(await realpath(file));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it.runIf(platform() === "win32")("opens /D:/ and Git Bash / WSL drive paths", async () => {
     const dir = await mkdtemp(join(tmpdir(), "jarvis-path-"));
     try {
