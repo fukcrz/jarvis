@@ -6,8 +6,11 @@ import { AuthGate } from "./components/auth-gate";
 import { DesktopUpdatePrompt } from "./components/update-prompt";
 import { isDesktopShell } from "./lib/desktop-shell";
 import { openExternalUrl } from "./desktop";
+import { installClientErrorReporting } from "./lib/client-diagnostics";
 import { installExternalLinkHandler } from "./lib/external-links";
 import "./styles.css";
+
+installClientErrorReporting();
 
 installExternalLinkHandler((url) => {
   void openExternalUrl(url).catch(() => window.alert("无法打开链接"));

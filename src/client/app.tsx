@@ -41,6 +41,7 @@ import { markSessionUserActivity, mergeWorkspace, sessionCleanupConfirmMessage }
 import { composerImageAttachments, sameImageAttachments } from "./lib/image";
 import { mergeQueuedMessagesIntoDraft } from "./lib/composer-draft";
 import { errorMessage, isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel } from "./lib/utils";
+import { reportClientIssue, selectionIssueDetail } from "./lib/client-diagnostics";
 import { useIsMobile } from "./hooks/use-is-mobile";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, useSidebarResize } from "./hooks/use-sidebar-resize";
@@ -175,6 +176,10 @@ export function App() {
   const selectedRef = useMemo<SessionRef | undefined>(() => selectedWorkspace === undefined || selectedSession === undefined
     ? undefined
     : { workspaceId: selectedWorkspace.id, sessionId: selectedSession.id }, [selectedWorkspace?.id, selectedSession?.id]);
+  // 点击会话后自检用：记录当前真正生效的选中项。
+  const appliedSelectionRef = useRef({ selectedWorkspaceId: selectedWorkspace?.id, selectedSessionId: selectedSession?.id });
+  appliedSelectionRef.current = { selectedWorkspaceId: selectedWorkspace?.id, selectedSessionId: selectedSession?.id };
+  const selectionCheckRef = useRef(0);
   const selectedSessionId = selectedRef?.sessionId;
   const selectedRefKey = selectedRef === undefined ? undefined : `${selectedRef.workspaceId}:${selectedRef.sessionId}`;
   const sideChatOpen = selectedRefKey !== undefined && sideChatOpenBySession[selectedRefKey] === true;
@@ -1224,6 +1229,22 @@ export function App() {
     const current = (sessionsByWorkspace[nextWorkspaceId] ?? []).find((session) => session.id === nextSessionId);
     markSessionViewed({ workspaceId: nextWorkspaceId, sessionId: nextSessionId }, current);
     const target = `/chat/${nextWorkspaceId}/${nextSessionId}`;
+    // 选中是同步的：一会儿还没生效就说明点击被吞或列表里没有这个会话，把现场记进服务端日志。
+    // 只检查最后一次点击：连续点两个会话时，前一个已被后一个取代，不算没生效。
+    const checkId = ++selectionCheckRef.current;
+    window.setTimeout(() => {
+      if (selectionCheckRef.current !== checkId) return;
+      const applied = appliedSelectionRef.current;
+      if (applied.selectedWorkspaceId === nextWorkspaceId && applied.selectedSessionId === nextSessionId) return;
+      const hash = window.location.hash.slice(1);
+      reportClientIssue("session-select", "点击会话后未选中", selectionIssueDetail({
+        targetWorkspaceId: nextWorkspaceId,
+        targetSessionId: nextSessionId,
+        ...applied,
+        path: hash === "" ? "/" : hash,
+        listedSessionIds: sessionsByWorkspaceRef.current[nextWorkspaceId]?.map((session) => session.id),
+      }));
+    }, 1_500);
     if (!isMobile) {
       // Desktop: session selection never enters the history.
       navigate(target, { replace: true });

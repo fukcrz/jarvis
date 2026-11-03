@@ -40,6 +40,7 @@ import type { ModelGroupsConfig, ModelGroupsSnapshot, PluginCatalogItem, PluginS
 import type { RecoveryNotice } from "../shared/system";
 import type { UsageRange, UsageStats } from "../shared/usage";
 import type { SkillFileContent, SkillFileListing, SkillSnapshot } from "../shared/skills";
+import { reportClientIssue } from "./lib/client-diagnostics";
 
 /** 会话失效（HTTP 401 / WebSocket 4401）时广播，由 AuthGate 切回登录页。 */
 export const UNAUTHORIZED_EVENT = "jarvis:unauthorized";
@@ -79,7 +80,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   try {
     response = await fetch(path, { ...options, headers });
   } catch (error) {
-    throw new ApiError("NETWORK_ERROR", networkErrorMessage(error), 0);
+    const message = networkErrorMessage(error);
+    reportClientIssue("api-network", `${options?.method ?? "GET"} ${path}`, message);
+    throw new ApiError("NETWORK_ERROR", message, 0);
   }
   if (!response.ok) {
     // 登录态失效：通知外层切回登录页（登录/状态接口自身的 401 不算）。
@@ -88,6 +91,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     const error = apiErrorDetails(body);
     const code = error.code ?? "REQUEST_FAILED";
     const message = error.message ?? `Request failed (${String(response.status)})`;
+    if (response.status >= 500) reportClientIssue("api-status", `${options?.method ?? "GET"} ${path} ${String(response.status)} ${code}`, message);
     throw new ApiError(
       code,
       formatApiErrorMessage(code, message),

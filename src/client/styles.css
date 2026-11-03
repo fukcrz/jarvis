@@ -690,6 +690,7 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
   .project-row:hover, .project-row:focus-within { background: var(--surface-hover); }
   .project-toggle:hover { color: var(--ink); }
   .session-row:hover { background: var(--surface-hover); color: var(--ink); }
+  .session-row.selected:hover { background: color-mix(in srgb, var(--accent) 8%, var(--surface-hover)); }
   .context-menu-item:hover:not(:disabled) { background: var(--surface-hover); }
   .context-menu-item.danger:hover:not(:disabled) { background: var(--danger-soft); color: #ffd1d3; }
   .session-expand-more:hover, .session-collapse:hover { background: var(--surface-hover); color: var(--muted); }
