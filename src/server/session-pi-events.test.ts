@@ -113,6 +113,18 @@ describe("Pi assistant block streaming", () => {
     } finally { fixture.close(); }
   });
 
+  it("completes a running thinking block when visible text starts", () => {
+    const fixture = setup();
+    try {
+      const partial = message([{ type: "thinking", thinking: "reasoning" }, { type: "text", text: "answer" }]);
+      fixture.update(partial, { type: "thinking_delta", contentIndex: 0, delta: "reasoning", partial });
+      fixture.update(partial, { type: "text_start", contentIndex: 1, partial });
+      expect(fixture.active.partialAssistantItems.get(0)).toMatchObject({ kind: "thinking", state: "completed", text: "reasoning" });
+      expect(fixture.active.partialThinking).toBeUndefined();
+      expect(fixture.events.filter((event) => event.type === "thinking.completed")).toHaveLength(1);
+    } finally { fixture.close(); }
+  });
+
   it("does not copy mutable partial text at start and calibrates phase at text_end", () => {
     const fixture = setup();
     try {

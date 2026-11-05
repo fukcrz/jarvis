@@ -147,6 +147,16 @@ export class SessionPiEvents {
     }
     if (update.type === "text_start" || update.type === "text_delta" || update.type === "text_end") {
       active.assistantGenerationStartedAt ??= Date.now();
+      for (const [index, block] of active.partialAssistantItems) {
+        if (block.kind !== "thinking" || block.state !== "running") continue;
+        const completed: ThinkingTimelineItem = { ...block, state: "completed" };
+        active.partialAssistantItems.set(index, completed);
+        if (active.partialThinking?.id === completed.id) active.partialThinking = undefined;
+        this.host.events.publishSession(active.ref, {
+          type: "thinking.completed", runId,
+          payload: { thinkingId: completed.id, createdAt: completed.createdAt, contentIndex: index, assistantMessageId, text: completed.text },
+        });
+      }
       const phase = assistantTextPhaseFromContent(update.partial.content[contentIndex]);
       const text = update.type === "text_end" ? update.content
         : (existing?.kind === "message" ? existing.text : "") + (update.type === "text_delta" ? update.delta : "");
