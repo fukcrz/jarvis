@@ -514,6 +514,16 @@ export interface SubagentStepView {
   summary?: string;
 }
 
+export interface SubagentUsageView {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  /** 输入 + 输出 + 缓存读写。 */
+  total?: number;
+  cost?: number;
+}
+
 export interface SubagentCallView {
   /** Original position in the subagent tool's calls array. */
   callIndex?: number;
@@ -532,6 +542,8 @@ export interface SubagentCallView {
   /** 实际生效的思考等级（子代理消息上的 thinkingLevel，缺失时用调用参数）。 */
   thinkingLevel?: ThinkingLevel;
   turns?: number;
+  /** 子代理自己的 token 与成本（新插件提供）。 */
+  usage?: SubagentUsageView;
   /** 该 call 开始计时的时刻：首条子代理消息，缺省用派发时刻。 */
   startedAt?: string;
   /** 已结束 call 的执行时长，实时行由 startedAt 现算。 */

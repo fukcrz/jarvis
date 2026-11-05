@@ -150,4 +150,12 @@ describe("parke.dev/pi-subagent shape", () => {
     });
     expect(done.subagent).toMatchObject({ completed: 1, results: [{ state: "partial", output: "half done" }] });
   });
+
+  it("keeps tokens and cost for the card and drawer", () => {
+    const done = attachSubagentView(tool(), {
+      details: { mode: "single", state: "completed", startedAt: base, endedAt: base + 1_000, results: [{ label: "task-1", task: "Do it", state: "completed", finalOutput: "done", usage: { input: 1_200, output: 800, cacheRead: 300, cost: 0.0123, turns: 4 } }] },
+    });
+    expect(done.subagent?.results[0]?.usage).toEqual({ input: 1_200, output: 800, cacheRead: 300, total: 2_300, cost: 0.0123 });
+    expect(done.subagent?.results[0]?.turns).toBe(4);
+  });
 });

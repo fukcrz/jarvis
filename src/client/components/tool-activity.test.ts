@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { SubagentCallView, SubagentView, ToolTimelineItem } from "../../shared/protocol";
-import { collapsedToolActivityItems, formatElapsedMs, liveStreamRows, promptText, SubagentCallBody, SubagentCallList, subagentCallMeta, subagentRowLabel, subagentToolLine, summarizeToolActivity, ToolActivity, visibleSubagentSteps } from "./tool-activity";
+import { collapsedToolActivityItems, formatElapsedMs, liveStreamRows, promptText, SubagentCallBody, SubagentCallList, SubagentDrawer, subagentCallMeta, subagentRowLabel, subagentToolLine, subagentUsageTotals, summarizeToolActivity, ToolActivity, visibleSubagentSteps } from "./tool-activity";
 
 function subagentTool(state: ToolTimelineItem["state"], view: SubagentView): ToolTimelineItem {
   return {
@@ -259,7 +259,7 @@ describe("ToolActivity subagent rows", () => {
     expect(markup).not.toContain("<code>");
   });
 
-  it("keeps model and thinking level inside the expanded body", () => {
+  it("shows model, thinking level and turns on the task tile", () => {
     const items = [subagentTool("running", {
       kind: "pi-subagent",
       results: [{ agent: "worker", prompt: "Fix the return path", state: "running", model: "gpt-test (fast)", thinkingLevel: "high", turns: 12 }],
@@ -269,8 +269,8 @@ describe("ToolActivity subagent rows", () => {
       failed: 0,
     })];
     const collapsed = renderToStaticMarkup(createElement(ToolActivity, { items, active: true }));
-    expect(collapsed).not.toContain("gpt-test");
-    expect(collapsed).not.toContain("high");
+    expect(collapsed).toContain("gpt-test · high");
+    expect(collapsed).toContain("12 轮");
 
     const expanded = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, openItems: new Set(["sa-1"]) }));
     expect(expanded).toContain("gpt-test · high");
@@ -364,6 +364,72 @@ describe("ToolActivity subagent rows", () => {
     expect(markup).toContain("读取了 auth.ts");
     expect(markup).toContain("静态覆盖已补完。现在执行目标单测。");
     expect(markup).not.toContain("思考");
+  });
+});
+
+describe("Subagent drawer", () => {
+  const view: SubagentView = {
+    kind: "pi-subagent",
+    results: [{
+      agent: "scout",
+      prompt: "迁移 auth",
+      fullPrompt: "迁移 auth\n\n## 范围\n只改 a.ts",
+      state: "completed",
+      turns: 4,
+      durationMs: 95_000,
+      profile: "explore",
+      model: "anthropic/claude-haiku-4.5",
+      thinkingLevel: "high",
+      usage: { input: 1_200, output: 800, total: 2_000, cost: 0.0123 },
+      sessionHandle: "8f4d2c1b",
+      output: "## 结论\n\n登录入口在 `src/server/auth.ts`。",
+      recentSteps: [
+        { kind: "tool", name: "read", summary: "src/server/auth.ts" },
+        { kind: "text", text: "**旧路径** 已确认" },
+      ],
+    }],
+    total: 1,
+    completed: 1,
+    running: 0,
+    failed: 0,
+  };
+
+  it("shows configuration, usage, prompt and session on the overview tab", () => {
+    const markup = renderToStaticMarkup(createElement(SubagentDrawer, { view, onClose: () => undefined }));
+    expect(markup).toContain("概览");
+    expect(markup).toContain("输出");
+    expect(markup).toContain("过程");
+    expect(markup).toContain("2.0k · $0.012");
+    expect(markup).toContain("1:35");
+    expect(markup).toContain("范围");
+    expect(markup).toContain("8f4d2c1b");
+    expect(markup).toContain("haiku-4.5");
+  });
+
+  it("renders the final answer as markdown on the output tab", () => {
+    const markup = renderToStaticMarkup(createElement(SubagentDrawer, { view, initialTab: "output", onClose: () => undefined }));
+    expect(markup).toContain("结论");
+    expect(markup).toContain("src/server/auth.ts");
+    expect(markup).toContain("复制");
+  });
+
+  it("lists the transcript on the process tab", () => {
+    const markup = renderToStaticMarkup(createElement(SubagentDrawer, { view, initialTab: "process", onClose: () => undefined }));
+    expect(markup).toContain("读取了 auth.ts");
+    expect(markup).toContain("旧路径 已确认");
+    expect(markup).not.toContain("**");
+  });
+
+  it("sums tokens and cost across tasks", () => {
+    const totals = subagentUsageTotals({
+      ...view,
+      results: [
+        { ...view.results[0]!, usage: { total: 2_000, cost: 0.01 } },
+        { ...view.results[0]!, usage: { total: 3_000, cost: 0.005 } },
+      ],
+    });
+    expect(totals.tokens).toBe(5_000);
+    expect(totals.cost).toBeCloseTo(0.015);
   });
 });
 

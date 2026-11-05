@@ -494,7 +494,7 @@ describe("pi-subagent snapshots", () => {
     expect(JSON.stringify(partial.subagent)).not.toContain("stderr");
   });
 
-  it("keeps the last process steps in order and counts the ones left out", () => {
+  it("keeps the process steps in order for the drawer", () => {
     const running = toolFromCall("sa-turns", "subagent", { calls: [{ agent: "worker", prompt: "Fix auth" }] }, "2026-08-09T00:00:00.000Z", "running");
     const turn = (minutes: number, content: unknown[]) => ({ role: "assistant", timestamp: Date.parse("2026-08-09T00:00:00.000Z") + minutes * 60_000, content });
     const partial = toolWithPartial(running, {
@@ -517,6 +517,8 @@ describe("pi-subagent snapshots", () => {
       },
     });
     expect(partial.subagent?.results[0]?.recentSteps).toEqual([
+      { kind: "thinking", at: "2026-08-09T00:00:00.000Z", text: "先看鉴权流程" },
+      { kind: "text", at: "2026-08-09T00:00:00.000Z", text: "鉴权在 auth-service。" },
       { kind: "tool", at: "2026-08-09T00:00:00.000Z", name: "read", summary: "auth-service.ts" },
       { kind: "tool", at: "2026-08-09T00:01:00.000Z", name: "edit", summary: "auth-guard.ts" },
       { kind: "thinking", at: "2026-08-09T00:02:00.000Z", text: "补测试" },

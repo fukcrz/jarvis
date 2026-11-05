@@ -3,11 +3,11 @@ import { numberValue, stringValue } from "./values.js";
 
 const MAX_SUBAGENT_PROMPT_CHARS = 160;
 const MAX_SUBAGENT_FULL_PROMPT_CHARS = 8_000;
-const MAX_SUBAGENT_OUTPUT_CHARS = 500;
+const MAX_SUBAGENT_OUTPUT_CHARS = 4_000;
 const MAX_SUBAGENT_ERROR_CHARS = 240;
 const MAX_SUBAGENT_TOOL_CALLS = 4;
 const MAX_SUBAGENT_TOOL_SUMMARY_CHARS = 80;
-const MAX_SUBAGENT_STEPS = 6;
+const MAX_SUBAGENT_STEPS = 24;
 const MAX_SUBAGENT_STEP_TEXT_CHARS = 200;
 
 export function subagentViewFromArgs(name: string, args: unknown, dispatchedAt?: string): SubagentView | undefined {
@@ -104,7 +104,7 @@ function taskCallFromArgs(value: unknown, callIndex: number, dispatchedAt?: stri
   const fullPrompt = truncateText(task, MAX_SUBAGENT_FULL_PROMPT_CHARS);
   return [{
     callIndex,
-    agent: agent !== "" ? agent : profile ?? "子代理",
+    agent: agent !== "" ? agent : "子代理",
     ...(label === "" ? {} : { label }),
     prompt: truncateOneLine(task, MAX_SUBAGENT_PROMPT_CHARS),
     state: "running",
@@ -130,7 +130,8 @@ function taskCallFromResult(value: unknown, fallbackCallIndex: number, dispatche
   const backend = backendFrom(value["backend"]) ?? seed?.backend;
   const model = stringValue(value["model"]) || seed?.model || "";
   const thinkingLevel = thinkingLevelFrom(value["thinking"]) ?? seed?.thinkingLevel;
-  const turns = numberValue(isRecord(value["usage"]) ? value["usage"]["turns"] : undefined);
+  const usage = usageFrom(value["usage"]);
+  const turns = usage.turns;
   const startedAt = seed?.startedAt ?? runStartedAt ?? dispatchedAt;
   const endedAt = state === "running" ? undefined : runEndedAt;
   const errorText = state === "running" ? "" : [stringValue(value["errorMessage"]), stringValue(value["structuredError"])].filter(Boolean).join(" · ");
@@ -153,6 +154,7 @@ function taskCallFromResult(value: unknown, fallbackCallIndex: number, dispatche
     ...(backend === undefined ? {} : { backend }),
     ...(worktree ? { worktree: true } : {}),
     ...(turns !== undefined && turns > 0 ? { turns } : {}),
+    ...(usage.view === undefined ? {} : { usage: usage.view }),
     ...(startedAt === undefined ? {} : { startedAt }),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(sessionId === "" ? {} : { sessionHandle: sessionId }),
@@ -161,6 +163,27 @@ function taskCallFromResult(value: unknown, fallbackCallIndex: number, dispatche
     ...(output === "" ? {} : { output }),
     ...(errorText === "" ? {} : { error: truncateText(errorText, MAX_SUBAGENT_ERROR_CHARS) }),
   }];
+}
+
+/** 新插件在 usage 里给 tokens / 成本；旧插件只有轮数。 */
+function usageFrom(value: unknown): { turns?: number; view?: SubagentCallView["usage"] } {
+  if (!isRecord(value)) return {};
+  const turns = numberValue(value["turns"]);
+  const input = numberValue(value["input"]);
+  const output = numberValue(value["output"]);
+  const cacheRead = numberValue(value["cacheRead"]);
+  const cacheWrite = numberValue(value["cacheWrite"]);
+  const cost = numberValue(value["cost"]);
+  const total = numberValue(value["totalTokens"]) ?? [input, output, cacheRead, cacheWrite].reduce<number>((sum, part) => sum + (part ?? 0), 0);
+  const view = input === undefined && output === undefined && cost === undefined && total === 0 ? undefined : {
+    ...(input === undefined ? {} : { input }),
+    ...(output === undefined ? {} : { output }),
+    ...(cacheRead === undefined ? {} : { cacheRead }),
+    ...(cacheWrite === undefined ? {} : { cacheWrite }),
+    ...(total === undefined || total === 0 ? {} : { total }),
+    ...(cost === undefined || cost <= 0 ? {} : { cost }),
+  };
+  return { ...(turns === undefined ? {} : { turns }), ...(view === undefined ? {} : { view }) };
 }
 
 function taskCallState(raw: unknown, errorMessage: string): SubagentCallView["state"] {

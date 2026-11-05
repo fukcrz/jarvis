@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
-import { ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Check, ChevronRight, CircleAlert, CircleDashed, Copy, LoaderCircle, X } from "lucide-react";
 import type { SubagentCallView, SubagentView, ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
 import { displayModelName } from "../model-display";
 import { ImagePreview } from "./image-lightbox";
 import { DiffStat, DiffView } from "./diff-view";
 import { ElapsedClock } from "./elapsed-clock";
+import { copyText } from "../lib/clipboard";
+import { MarkdownMessage } from "./markdown-message";
 import { commandLabel } from "../lib/command-summary";
 import { collapsedToolActivityItems as collapsedItems } from "./timeline-fold";
 
@@ -246,22 +249,247 @@ function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: 
 }
 
 function SubagentToolRow({ item, view, pending, grouped, open, showDetails, onToggle }: { item: ToolTimelineItem; view: SubagentView; pending: boolean; grouped: boolean; open: boolean; showDetails: boolean; onToggle: () => void }) {
-  const stateIcon = compactToolStateIcon(item.state, pending);
+  const [detailIndex, setDetailIndex] = useState<number>();
+  const running = pending || view.running > 0;
+  const cardState: SubagentCallView["state"] = item.state === "failed" ? "failed" : item.state === "cancelled" ? "cancelled" : running ? "running" : "completed";
+  const totals = subagentUsageTotals(view);
   return (
-    <article className={`tool-item tool-list-item subagent-item ${item.state}`}>
+    <article className={`tool-item tool-list-item subagent-item subagent-card ${cardState}`}>
       <button className="tool-summary subagent-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
         <ChevronRight size={13} className={`turn-process-chevron${open && showDetails ? " expanded" : ""}`} aria-hidden />
-        {stateIcon === undefined ? null : <span className="tool-state-icon">{stateIcon}</span>}
+        <span className={`subagent-card-state ${cardState}`} aria-hidden>{subagentStateIcon(cardState)}</span>
         <span className="subagent-heading">
           <span className="tool-title">{subagentRowLabel(view, grouped)}</span>
-          {pending ? <ElapsedClock startedAt={item.createdAt} /> : item.durationMs === undefined ? null : <time className="run-elapsed">{formatElapsedMs(item.durationMs)}</time>}
+          <span className="subagent-facts">
+            {pending ? <ElapsedClock startedAt={item.createdAt} /> : item.durationMs === undefined ? null : <time className="run-elapsed">{formatElapsedMs(item.durationMs)}</time>}
+            {totals.tokens === 0 ? null : <span className="subagent-fact">{formatTokenCount(totals.tokens)} tok</span>}
+            {totals.cost === 0 ? null : <span className="subagent-fact">{formatCost(totals.cost)}</span>}
+          </span>
         </span>
       </button>
+      {view.results.length === 0 ? null : (
+        <div className="subagent-tiles">
+          {view.results.map((call, index) => {
+            const foot = [
+              call.turns === undefined ? "" : `${String(call.turns)} 轮`,
+              call.durationMs === undefined ? "" : formatElapsedMs(call.durationMs),
+            ].filter(Boolean).join(" · ");
+            return (
+              <button
+                type="button"
+                key={`${String(call.callIndex ?? index)}:${call.agent}`}
+                className={`subagent-tile ${call.state}`}
+                onClick={() => setDetailIndex(index)}
+                aria-label={`${subagentCallName(call)} · ${subagentCallStateLabel(call.state)}`}
+              >
+                <span className="subagent-tile-head">
+                  <span className="subagent-tile-dot" aria-hidden />
+                  <span className="subagent-tile-name">{subagentCallName(call)}</span>
+                  <ChevronRight size={12} className="subagent-tile-chevron" aria-hidden />
+                </span>
+                <span className="subagent-tile-meta">{subagentCallMeta(call)}</span>
+                <span className="subagent-tile-foot">
+                  <span className="subagent-tile-state">{subagentCallStateLabel(call.state)}</span>
+                  {foot === "" ? null : <span className="subagent-tile-turns">{foot}</span>}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
       {open ? <div className="tool-details inline-details" hidden={!showDetails}>
         {view.results.length === 0 ? null : <SubagentCallList results={view.results} />}
         {view.results.length === 0 && item.error !== undefined ? <p className="subagent-error">{item.error}</p> : null}
       </div> : null}
+      {detailIndex === undefined ? null : createPortal(
+        <SubagentDrawer view={view} initialIndex={detailIndex} baseDir={item.cwd} onClose={() => setDetailIndex(undefined)} />,
+        document.body,
+      )}
     </article>
+  );
+}
+
+function subagentStateIcon(state: SubagentCallView["state"]) {
+  if (state === "running") return <LoaderCircle size={13} className="spin" />;
+  if (state === "failed") return <CircleAlert size={13} />;
+  if (state === "partial") return <CircleDashed size={13} />;
+  if (state === "cancelled") return <X size={13} />;
+  return <Check size={13} />;
+}
+
+export function subagentUsageTotals(view: SubagentView): { tokens: number; cost: number } {
+  let tokens = 0;
+  let cost = 0;
+  for (const call of view.results) {
+    tokens += call.usage?.total ?? 0;
+    cost += call.usage?.cost ?? 0;
+  }
+  return { tokens, cost };
+}
+
+export function formatTokenCount(count: number): string {
+  if (count < 1_000) return String(count);
+  if (count < 1_000_000) return `${(count / 1_000).toFixed(1)}k`;
+  return `${(count / 1_000_000).toFixed(1)}m`;
+}
+
+export function formatCost(cost: number): string {
+  return cost >= 1 ? `$${cost.toFixed(2)}` : `$${cost.toFixed(3)}`;
+}
+
+export type SubagentDrawerTab = "overview" | "output" | "process";
+
+const DRAWER_TABS: ReadonlyArray<readonly [SubagentDrawerTab, string]> = [["overview", "概览"], ["output", "输出"], ["process", "过程"]];
+
+/** 详情抽屉：单个子代理的配置、输出与完整过程。 */
+export function SubagentDrawer({ view, initialIndex = 0, initialTab = "overview", baseDir, onClose }: { view: SubagentView; initialIndex?: number; initialTab?: SubagentDrawerTab; baseDir?: string; onClose: () => void }) {
+  const [index, setIndex] = useState(initialIndex);
+  const [tab, setTab] = useState<SubagentDrawerTab>(initialTab);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const closeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    closeButton.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, []);
+  const call = view.results[index];
+  if (call === undefined) return null;
+  return (
+    <div
+      className="subagent-drawer-layer"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) closeRef.current();
+      }}
+    >
+      <aside className="subagent-drawer" role="dialog" aria-modal="true" aria-label={`${subagentCallName(call)} · ${subagentCallStateLabel(call.state)}`}>
+        <header className="subagent-drawer-head">
+          <span className={`subagent-drawer-dot ${call.state}`} aria-hidden />
+          <div className="subagent-drawer-title">
+            <p className="subagent-drawer-name">{subagentCallName(call)}</p>
+            <p className="subagent-drawer-sub">{subagentCallStateLabel(call.state)}</p>
+          </div>
+          <button ref={closeButton} className="subagent-drawer-close" type="button" onClick={() => closeRef.current()} aria-label="关闭详情">
+            <X size={15} />
+          </button>
+        </header>
+        {view.results.length > 1 ? <nav className="subagent-drawer-tasks" aria-label="任务列表">
+          {view.results.map((entry, entryIndex) => (
+            <button
+              type="button"
+              key={`${String(entry.callIndex ?? entryIndex)}:${entry.agent}`}
+              className={`subagent-drawer-task${entryIndex === index ? " active" : ""} ${entry.state}`}
+              aria-current={entryIndex === index}
+              onClick={() => setIndex(entryIndex)}
+            >
+              <span className="subagent-tile-dot" aria-hidden />
+              <span className="subagent-drawer-task-name">{subagentCallName(entry)}</span>
+              <span className="subagent-drawer-task-state">{subagentCallStateLabel(entry.state)}</span>
+            </button>
+          ))}
+        </nav> : null}
+        <div className="subagent-drawer-tabs" role="tablist" aria-label="详情内容">
+          {DRAWER_TABS.map(([id, label]) => (
+            <button key={id} type="button" role="tab" aria-selected={tab === id} className={`subagent-drawer-tab${tab === id ? " active" : ""}`} onClick={() => setTab(id)}>{label}</button>
+          ))}
+        </div>
+        <div className="subagent-drawer-body">
+          {tab === "overview" ? <SubagentOverview call={call} /> : null}
+          {tab === "output" ? <SubagentOutput call={call} baseDir={baseDir} /> : null}
+          {tab === "process" ? <SubagentProcessDetail call={call} /> : null}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function SubagentOverview({ call }: { call: SubagentCallView }) {
+  const model = call.model === undefined ? "" : displayModelName(call.model);
+  const execution = [call.backend === undefined || call.backend === "pi" ? "" : call.backend, call.profile ?? "", call.worktree === true ? "worktree" : ""].filter(Boolean).join(" · ");
+  const usage = call.usage === undefined ? "" : [formatTokenCount(call.usage.total ?? 0), call.usage.cost === undefined ? "" : formatCost(call.usage.cost)].filter(Boolean).join(" · ");
+  const prompt = (call.fullPrompt ?? call.prompt).trim();
+  return (
+    <div className="subagent-overview">
+      <dl className="subagent-facts-grid">
+        <div><dt>状态</dt><dd className={`state ${call.state}`}>{subagentCallStateLabel(call.state)}</dd></div>
+        <div><dt>轮数</dt><dd>{call.turns === undefined ? "—" : String(call.turns)}</dd></div>
+        <div><dt>耗时</dt><dd>{call.state === "running" ? (call.startedAt === undefined ? "—" : <ElapsedClock startedAt={call.startedAt} />) : call.durationMs === undefined ? "—" : formatElapsedMs(call.durationMs)}</dd></div>
+        <div><dt>Token</dt><dd>{usage === "" ? "—" : usage}</dd></div>
+        <div><dt>模型</dt><dd>{model === "" ? "—" : model}</dd></div>
+        <div><dt>执行</dt><dd>{execution === "" ? "—" : execution}</dd></div>
+        <div><dt>思考</dt><dd>{call.thinkingLevel ?? "—"}</dd></div>
+        <div><dt>来源</dt><dd>{call.source === undefined ? "—" : call.source === "user" ? "用户" : call.source === "project" ? "项目" : "未知"}</dd></div>
+      </dl>
+      {call.error === undefined ? null : <p className="subagent-error">{call.error}</p>}
+      {prompt === "" ? null : (
+        <section className="subagent-drawer-section">
+          <header className="subagent-drawer-section-head"><h3>提示词</h3><CopyButton text={prompt} /></header>
+          <pre className="subagent-drawer-prompt">{promptText(prompt)}</pre>
+        </section>
+      )}
+      {call.sessionHandle === undefined ? null : (
+        <section className="subagent-drawer-section">
+          <header className="subagent-drawer-section-head"><h3>子会话</h3><CopyButton text={call.sessionHandle} /></header>
+          <code className="subagent-drawer-session">{call.sessionHandle}</code>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function SubagentOutput({ call, baseDir }: { call: SubagentCallView; baseDir?: string }) {
+  const output = (call.output ?? "").trim();
+  if (output === "") return <p className="subagent-empty">无输出</p>;
+  return (
+    <div className="subagent-output">
+      <div className="subagent-drawer-section-head"><h3>输出</h3><CopyButton text={output} /></div>
+      <div className="subagent-markdown"><MarkdownMessage text={output} baseDir={baseDir} /></div>
+    </div>
+  );
+}
+
+function SubagentProcessDetail({ call }: { call: SubagentCallView }) {
+  const steps = visibleSubagentSteps(call.recentSteps ?? []);
+  if (steps.length === 0) return (call.toolCalls ?? []).length === 0 && (call.output ?? "") === "" ? <p className="subagent-empty">无过程</p> : <LegacySubagentStream call={call} />;
+  return (
+    <ol className="subagent-steps">
+      {steps.map((step, index) => (
+        <li className={`subagent-step ${step.kind}`} key={`${step.at ?? "step"}:${String(index)}`}>
+          <span className={`subagent-step-dot ${step.kind}`} aria-hidden />
+          <span className="subagent-step-text">{step.kind === "tool" ? subagentToolLine(step.name ?? "tool", step.summary ?? "") : stripMarkdown(step.text ?? "").trim()}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return undefined;
+    const timer = setTimeout(() => setCopied(false), 1_400);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <button
+      type="button"
+      className="subagent-copy"
+      onClick={() => {
+        void copyText(text).then(() => setCopied(true)).catch(() => undefined);
+      }}
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+      <span>{copied ? "已复制" : "复制"}</span>
+    </button>
   );
 }
 
@@ -290,6 +518,7 @@ function SubagentCallBlock({ call, showAgent }: { call: SubagentCallView; showAg
         {meta === "" ? null : <span className="subagent-call-meta">{meta}</span>}
         <span className="subagent-call-tail">
           {call.turns === undefined ? null : <span className="subagent-call-turns">{String(call.turns)} 轮</span>}
+          {call.usage?.total === undefined ? null : <span className="subagent-call-turns">{formatTokenCount(call.usage.total)} tok</span>}
           <span className="subagent-call-state">{subagentCallStateLabel(call.state)}</span>
           <SubagentCallClock call={call} />
         </span>
