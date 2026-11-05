@@ -652,17 +652,18 @@ export function ProviderPage({ ps, providerId, onBack }: { ps: ProviderSettings;
 }
 
 /** 连接区块：多字段表单，底部「放弃 / 保存」。 */
-function ConnectionSection({ ps, provider, custom }: { ps: ProviderSettings; provider?: ProviderStatus; custom?: ManagedProvider }) {
+export function ConnectionSection({ ps, provider, custom }: { ps: ProviderSettings; provider?: ProviderStatus; custom?: ManagedProvider }) {
   const toast = useSettingsToast();
   const initial = useMemo(() => connectionDraftOf(provider, custom), [provider, custom]);
   const initialJson = JSON.stringify(initial);
   const keyEditable = custom !== undefined || (provider?.supportsApiKey === true && provider.apiKeyLogin !== "login" && !isEnvironmentAuth(provider) && provider.authSource !== "runtime");
   const initialKey = provider?.apiKey ?? "";
   const [draft, setDraft] = useState(initial);
-  const [apiKey, setApiKey] = useState("");
+  const [apiKey, setApiKey] = useState(initialKey);
   const [saving, setSaving] = useState(false);
   const [check, setCheck] = useState<{ running: boolean; result?: { ok: boolean; text: string } }>({ running: false });
-  const dirty = JSON.stringify(draft) !== initialJson || (keyEditable && apiKey.trim() !== "");
+  const keyChanged = keyEditable && apiKey.trim() !== "" && apiKey.trim() !== initialKey;
+  const dirty = JSON.stringify(draft) !== initialJson || keyChanged;
   const forceSync = useRef(false);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
@@ -671,7 +672,7 @@ function ConnectionSection({ ps, provider, custom }: { ps: ProviderSettings; pro
     if (!dirtyRef.current || forceSync.current) {
       forceSync.current = false;
       setDraft(JSON.parse(initialJson) as ConnectionDraft);
-      setApiKey("");
+      setApiKey(initialKey);
     }
   }, [initialJson, initialKey]);
   const id = custom?.id ?? provider?.id ?? "";
@@ -680,12 +681,12 @@ function ConnectionSection({ ps, provider, custom }: { ps: ProviderSettings; pro
   const save = async () => {
     setSaving(true);
     try {
-      const keyChanged = keyEditable && apiKey.trim() !== "" ? apiKey.trim() : undefined;
+      const updatedKey = keyChanged ? apiKey.trim() : undefined;
       if (custom !== undefined) {
-        await ps.saveCustomConnection({ ...custom, name: draft.name.trim() === "" ? undefined : draft.name.trim(), baseUrl: draft.baseUrl.trim(), api: draft.api, authHeader: draft.authHeader, headers: draft.headers, compat: draft.compat }, keyChanged);
+        await ps.saveCustomConnection({ ...custom, name: draft.name.trim() === "" ? undefined : draft.name.trim(), baseUrl: draft.baseUrl.trim(), api: draft.api, authHeader: draft.authHeader, headers: draft.headers, compat: draft.compat }, updatedKey);
       } else if (provider !== undefined) {
         const overrideChanged = JSON.stringify([draft.baseUrl, draft.headers, draft.compat]) !== JSON.stringify([initial.baseUrl, initial.headers, initial.compat]);
-        await ps.saveBuiltinConnection(provider, overrideChanged ? { ...(draft.baseUrl.trim() === "" ? {} : { baseUrl: draft.baseUrl.trim() }), headers: draft.headers, compat: draft.compat } : undefined, keyChanged);
+        await ps.saveBuiltinConnection(provider, overrideChanged ? { ...(draft.baseUrl.trim() === "" ? {} : { baseUrl: draft.baseUrl.trim() }), headers: draft.headers, compat: draft.compat } : undefined, updatedKey);
       }
       forceSync.current = true;
       toast.notify("连接已保存");
@@ -709,7 +710,7 @@ function ConnectionSection({ ps, provider, custom }: { ps: ProviderSettings; pro
       <SettingsField id="base-url" label="Base URL（接口地址）" warn={urlWarning(draft.baseUrl)} hint={custom === undefined ? "留空就用官方地址" : undefined}>
         <input value={draft.baseUrl} placeholder={custom === undefined ? "官方默认" : "https://api.example.com/v1"} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} spellCheck={false} />
       </SettingsField>
-      {keyEditable ? <ApiKeyField value={apiKey} onChange={setApiKey} placeholder={initialKey === "" ? (custom === undefined ? "sk-…" : "没有可以留空") : `已设置 ${maskApiKey(initialKey) ?? ""}，留空不变`} /> : null}
+      {keyEditable ? <ApiKeyField value={apiKey} onChange={setApiKey} placeholder={custom === undefined ? "sk-…" : "没有可以留空"} /> : null}
       {environmentKey ? <SettingsField label="API Key" hint="这里改不了：改环境变量后重启服务"><input value={`来自${authSourceLabel(provider) ?? "环境变量"}`} readOnly /></SettingsField> : null}
       {!keyEditable && !environmentKey && provider?.apiKeyLogin === "login" && (provider.apiKey ?? "") !== "" ? <SettingsField label="API Key" hint="通过上面的「登录」修改"><input value={maskApiKey(provider.apiKey) ?? ""} readOnly /></SettingsField> : null}
       {custom === undefined ? null : <>
