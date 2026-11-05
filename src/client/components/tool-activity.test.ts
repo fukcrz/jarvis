@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { SubagentCallView, SubagentView, ToolTimelineItem } from "../../shared/protocol";
-import { collapsedToolActivityItems, formatElapsedMs, liveStreamRows, promptText, SubagentCallBody, SubagentCallList, subagentRowLabel, subagentToolLine, summarizeToolActivity, ToolActivity, visibleSubagentSteps } from "./tool-activity";
+import { collapsedToolActivityItems, formatElapsedMs, liveStreamRows, promptText, SubagentCallBody, SubagentCallList, subagentCallMeta, subagentRowLabel, subagentToolLine, summarizeToolActivity, ToolActivity, visibleSubagentSteps } from "./tool-activity";
 
 function subagentTool(state: ToolTimelineItem["state"], view: SubagentView): ToolTimelineItem {
   return {
@@ -408,5 +408,42 @@ describe("ToolActivity live stream", () => {
     const subagent = subagentTool("completed", { kind: "pi-subagent", results: [{ agent: "scout", prompt: "a", state: "completed" }], total: 1, completed: 1, running: 0, failed: 0 });
     const rows = liveStreamRows([subagent, { ...subagent, id: "sa-2" }]);
     expect(rows.map((row) => row.kind)).toEqual(["item", "item"]);
+  });
+});
+
+describe("parke.dev/pi-subagent rows", () => {
+  it("shows an unlabelled task by its description and marks a partial run", () => {
+    const view: SubagentView = {
+      kind: "pi-subagent",
+      results: [{
+        agent: "子代理",
+        label: "迁移 auth",
+        prompt: "迁移 auth",
+        state: "partial",
+        profile: "explore",
+        backend: "codex",
+        worktree: true,
+        model: "openai/gpt-5.2",
+        thinkingLevel: "high",
+      }],
+      total: 1,
+      completed: 1,
+      running: 0,
+      failed: 0,
+    };
+    expect(subagentRowLabel(view, false)).toBe("迁移 auth · 未收尾");
+    expect(subagentCallMeta(view.results[0]!)).toBe("codex · explore · gpt-5.2 · high · worktree");
+  });
+
+  it("keeps an async subagent row visible while its child still runs", () => {
+    const item = subagentTool("completed", {
+      kind: "pi-subagent",
+      results: [{ agent: "scout", prompt: "Map auth", state: "running" }],
+      total: 1,
+      completed: 0,
+      running: 1,
+      failed: 0,
+    });
+    expect(collapsedToolActivityItems([item], true, false)).toEqual([item]);
   });
 });

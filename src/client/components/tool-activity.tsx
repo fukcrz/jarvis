@@ -177,7 +177,7 @@ export function subagentGroupLabel(view: SubagentView): string {
 
 export function subagentRowLabel(view: SubagentView, grouped: boolean): string {
   const only = view.results.length === 1 ? view.results[0] : undefined;
-  if (only !== undefined) return `${only.agent} · ${subagentCallStateLabel(only.state)}`;
+  if (only !== undefined) return `${subagentCallName(only)} · ${subagentCallStateLabel(only.state)}`;
   if (view.results.length === 0) return "子代理";
   const who = runningAgentLabel(view);
   const failed = view.failed === 0 ? "" : `${String(view.failed)} 失败`;
@@ -190,14 +190,19 @@ export function subagentRowLabel(view: SubagentView, grouped: boolean): string {
 }
 
 function runningAgentLabel(view: SubagentView): string {
-  const names = [...new Set(view.results.filter((call) => call.state === "running").map((call) => call.agent))];
+  const names = [...new Set(view.results.filter((call) => call.state === "running").map(subagentCallName))];
   if (names.length === 0) return "";
   if (names.length <= 2) return names.join("、");
   return `${names.slice(0, 2).join("、")} 等`;
 }
 
+function subagentCallName(call: SubagentCallView): string {
+  return call.agent === "子代理" && call.label !== undefined && call.label !== "" ? call.label : call.agent;
+}
+
 function subagentCallStateLabel(state: SubagentCallView["state"]): string {
   if (state === "running") return "执行中";
+  if (state === "partial") return "未收尾";
   if (state === "failed") return "失败";
   if (state === "cancelled") return "已停止";
   return "完成";
@@ -280,7 +285,7 @@ function SubagentCallBlock({ call, showAgent }: { call: SubagentCallView; showAg
   return (
     <section className={`subagent-call ${call.state}`}>
       <p className="subagent-call-head">
-        {showAgent ? <span className="subagent-call-agent">{call.agent}</span> : null}
+        {showAgent ? <span className="subagent-call-agent">{subagentCallName(call)}</span> : null}
         {showAgent && meta !== "" ? <span className="subagent-call-sep" aria-hidden>·</span> : null}
         {meta === "" ? null : <span className="subagent-call-meta">{meta}</span>}
         <span className="subagent-call-tail">
@@ -362,11 +367,14 @@ function SubagentProcess({ steps }: { steps: NonNullable<SubagentCallView["recen
   );
 }
 
-/** 块头的模型信息：短模型名 · 思考等级。 */
+/** 块头的执行配置：后端/profile · 短模型名 · 思考等级。 */
 export function subagentCallMeta(call: SubagentCallView): string {
   return [
+    call.backend !== undefined && call.backend !== "pi" ? call.backend : "",
+    call.profile === undefined || call.profile === "general" ? "" : call.profile,
     call.model === undefined ? "" : displayModelName(call.model).split("/").at(-1) ?? "",
     call.thinkingLevel ?? "",
+    call.worktree === true ? "worktree" : "",
   ].filter((part) => part !== "").join(" · ");
 }
 

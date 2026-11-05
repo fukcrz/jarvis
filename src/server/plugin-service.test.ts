@@ -72,40 +72,40 @@ describe("plugin service isolation", () => {
 
   it("does not install or update a recommended package that was turned off", async () => {
     const harness = await createHarness();
-    harness.packages.sources.push({ source: "npm:@mjakl/pi-subagent@3.1.0" });
-    await harness.service.setRecommendedEnabled("@mjakl/pi-subagent", false);
-    expect(harness.packages.calls).toEqual(["remove:npm:@mjakl/pi-subagent@3.1.0"]);
+    harness.packages.sources.push({ source: "npm:@parke.dev/pi-subagent@0.8.0" });
+    await harness.service.setRecommendedEnabled("@parke.dev/pi-subagent", false);
+    expect(harness.packages.calls).toEqual(["remove:npm:@parke.dev/pi-subagent@0.8.0"]);
     harness.packages.calls.length = 0;
     await harness.service.ensureRecommended();
-    expect(harness.packages.calls).not.toContain("install:npm:@mjakl/pi-subagent");
-    expect(harness.packages.calls.some((call) => call.startsWith("update:npm:@mjakl/pi-subagent"))).toBe(false);
+    expect(harness.packages.calls).not.toContain("install:npm:@parke.dev/pi-subagent");
+    expect(harness.packages.calls.some((call) => call.startsWith("update:npm:@parke.dev/pi-subagent"))).toBe(false);
     const snapshot = await harness.service.snapshot();
-    expect(snapshot.recommended.find((item) => item.name === "@mjakl/pi-subagent")).toMatchObject({ enabled: false, installed: false });
+    expect(snapshot.recommended.find((item) => item.name === "@parke.dev/pi-subagent")).toMatchObject({ enabled: false, installed: false });
   });
 
   it("treats a local package with the same name as the recommended install and drops the npm duplicate", async () => {
     const harness = await createHarness();
     const local = join(harness.agentDir, "vendor", "pi-subagent");
     await mkdir(local, { recursive: true });
-    await writeFile(join(local, "package.json"), JSON.stringify({ name: "@mjakl/pi-subagent", version: "3.1.0" }), "utf8");
+    await writeFile(join(local, "package.json"), JSON.stringify({ name: "@parke.dev/pi-subagent", version: "0.8.0" }), "utf8");
     harness.packages.sources.push(
       { source: "./vendor/pi-subagent", installedPath: local },
-      { source: "npm:@mjakl/pi-subagent", installedPath: join(harness.agentDir, "npm", "pi-subagent") },
+      { source: "npm:@parke.dev/pi-subagent", installedPath: join(harness.agentDir, "npm", "pi-subagent") },
     );
     await harness.service.ensureRecommended();
-    expect(harness.packages.calls).toContain("remove:npm:@mjakl/pi-subagent");
-    expect(harness.packages.calls).not.toContain("install:npm:@mjakl/pi-subagent");
+    expect(harness.packages.calls).toContain("remove:npm:@parke.dev/pi-subagent");
+    expect(harness.packages.calls).not.toContain("install:npm:@parke.dev/pi-subagent");
     expect(harness.packages.calls.some((call) => call.startsWith("update:"))).toBe(false);
-    expect(harness.packages.sources.map((item) => item.source)).not.toContain("npm:@mjakl/pi-subagent");
+    expect(harness.packages.sources.map((item) => item.source)).not.toContain("npm:@parke.dev/pi-subagent");
     expect(harness.packages.sources.map((item) => item.source)).toContain("./vendor/pi-subagent");
     const snapshot = await harness.service.snapshot();
-    expect(snapshot.recommended.find((item) => item.name === "@mjakl/pi-subagent")).toMatchObject({
+    expect(snapshot.recommended.find((item) => item.name === "@parke.dev/pi-subagent")).toMatchObject({
       enabled: true,
       installed: true,
       source: "./vendor/pi-subagent",
     });
     harness.packages.calls.length = 0;
-    await harness.service.setRecommendedEnabled("@mjakl/pi-subagent", true);
+    await harness.service.setRecommendedEnabled("@parke.dev/pi-subagent", true);
     expect(harness.packages.calls).toEqual([]);
   });
 

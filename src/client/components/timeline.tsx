@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { KeyboardEvent, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import { Archive, ArrowDown, Bell, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
-import type { AssistantGenerationStats, ContextSummaryTimelineItem, FileChange, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, RunOutcomeTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
+import type { AssistantGenerationStats, ContextSummaryTimelineItem, FileChange, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, NoticeTimelineItem, RunOutcomeTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
 import { userMessageOutline as outlineFromItems } from "../../shared/user-message";
 import { plainErrorReason } from "../lib/error-reason";
 import { getRunStatusActivity, type RunStatusActivity } from "../run-feedback";
@@ -1162,6 +1162,7 @@ export type TimelineRenderItem =
   | { kind: "message"; item: MessageTimelineItem }
   | { kind: "error"; items: ErrorTimelineItem[] }
   | { kind: "context-summary"; item: ContextSummaryTimelineItem }
+  | { kind: "notice"; item: NoticeTimelineItem }
   | { kind: "run-outcome"; item: RunOutcomeTimelineItem }
   | { kind: "extension-ui"; item: ExtensionUiTimelineItem }
   | { kind: "thinking"; item: ThinkingTimelineItem }
@@ -1193,6 +1194,7 @@ function groupTimelineItemsInternal(items: TimelineItem[], includeRunOutcomes: b
       } else if (item.kind === "extension-ui") result.push({ kind: "extension-ui", item });
       else if (item.kind === "thinking") result.push({ kind: "thinking", item });
       else if (item.kind === "context-summary") result.push({ kind: "context-summary", item });
+      else if (item.kind === "notice") result.push({ kind: "notice", item });
       else if (item.kind === "run-outcome" && includeRunOutcomes) result.push({ kind: "run-outcome", item });
     }
   }
@@ -1511,6 +1513,7 @@ function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderConte
   }
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
+  if (entry.kind === "notice") return <p className="timeline-notice" key={entry.item.id}>{entry.item.text}</p>;
   if (entry.kind === "run-outcome") return null;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} customText={context.customAnswers?.get(entry.item.id)} />;
   if (entry.kind === "thinking") {

@@ -3,6 +3,41 @@ import type { ExtensionUiOutcome, ExtensionUiRequest, ExtensionUiSnapshot, Exten
 
 export const UNSUPPORTED_EXTENSION_INTERACTION = "UNSUPPORTED_EXTENSION_INTERACTION";
 
+/** ANSI escapes from TUI-oriented extensions would render literally in the browser. */
+const ANSI_PATTERN = /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*\u0007)/g;
+
+export function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, "");
+}
+
+/**
+ * `ctx.ui.theme` is part of the extension UI contract, but there is no terminal
+ * theme behind the browser. Hand out a plain theme: every style returns its
+ * text unchanged, so extensions that call `theme.fg()`/`theme.bold()` keep
+ * working instead of crashing on `undefined`.
+ */
+export function plainExtensionTheme(): ExtensionUIContext["theme"] {
+  const passthrough = (text: string): string => text;
+  return {
+    name: "jarvis-plain",
+    appearance: "dark",
+    colors: new Proxy({}, { get: () => "" }) as ExtensionUIContext["theme"]["colors"],
+    style: passthrough,
+    fg: (_color: unknown, text: string) => text,
+    bg: (_color: unknown, text: string) => text,
+    bold: passthrough,
+    italic: passthrough,
+    underline: passthrough,
+    inverse: passthrough,
+    strikethrough: passthrough,
+    getFgAnsi: () => "",
+    getBgAnsi: () => "",
+    getColorMode: () => "truecolor",
+    getThinkingBorderColor: () => passthrough,
+    getBashModeBorderColor: () => passthrough,
+  } as unknown as ExtensionUIContext["theme"];
+}
+
 export class UnsupportedExtensionInteractionError extends Error {
   readonly code = UNSUPPORTED_EXTENSION_INTERACTION;
 
@@ -81,18 +116,20 @@ export class ExtensionUiBridge {
       input: (title, placeholder, opts) => this.dialog({ method: "input", title, placeholder, timeout: opts?.timeout }, opts, undefined),
       editor: (title, prefill) => this.dialog({ method: "editor", title, prefill }, undefined, undefined),
       notify: (message, notifyType) => {
-        this.request({ id: crypto.randomUUID(), method: "notify", message, notifyType });
+        this.request({ id: crypto.randomUUID(), method: "notify", message: stripAnsi(message), notifyType });
       },
       setStatus: (statusKey, statusText) => {
-        if (statusText === undefined) delete this.statuses[statusKey];
-        else this.statuses[statusKey] = statusText;
-        this.request({ id: crypto.randomUUID(), method: "setStatus", statusKey, statusText });
+        const text = statusText === undefined ? undefined : stripAnsi(statusText);
+        if (text === undefined) delete this.statuses[statusKey];
+        else this.statuses[statusKey] = text;
+        this.request({ id: crypto.randomUUID(), method: "setStatus", statusKey, statusText: text });
       },
       setWidget: (widgetKey, widgetLines, options) => {
         if (widgetLines !== undefined && !Array.isArray(widgetLines)) return;
-        if (widgetLines === undefined) delete this.widgets[widgetKey];
-        else this.widgets[widgetKey] = { lines: [...widgetLines], placement: options?.placement === "belowEditor" ? "belowEditor" : "aboveEditor" };
-        this.request({ id: crypto.randomUUID(), method: "setWidget", widgetKey, widgetLines, widgetPlacement: options?.placement });
+        const lines = widgetLines === undefined ? undefined : widgetLines.map(stripAnsi);
+        if (lines === undefined) delete this.widgets[widgetKey];
+        else this.widgets[widgetKey] = { lines: [...lines], placement: options?.placement === "belowEditor" ? "belowEditor" : "aboveEditor" };
+        this.request({ id: crypto.randomUUID(), method: "setWidget", widgetKey, widgetLines: lines, widgetPlacement: options?.placement });
       },
       setTitle: (title) => {
         this.title = title;
@@ -117,7 +154,7 @@ export class ExtensionUiBridge {
       getAllThemes: () => [],
       getTheme: () => undefined,
       setTheme: () => ({ success: false, error: "Theme switching is not supported" }),
-      theme: undefined as unknown as ExtensionUIContext["theme"],
+      theme: plainExtensionTheme(),
     } as ExtensionUIContext;
   }
 

@@ -687,3 +687,35 @@ describe("pi-subagent snapshots", () => {
     expect(completed).not.toHaveProperty("subagent");
   });
 });
+
+describe("extension custom messages", () => {
+  it("projects a displayed custom_message entry as a notice", () => {
+    const items = projectHistory([{
+      type: "custom_message",
+      id: "entry-1",
+      customType: "subagent-completion",
+      content: "A background subagent run finished.",
+      display: true,
+      timestamp: "2026-08-09T00:00:00.000Z",
+    }]);
+    expect(items).toEqual([{
+      kind: "notice",
+      id: "notice:entry-1",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      source: "subagent-completion",
+      text: "A background subagent run finished.",
+    }]);
+  });
+
+  it("skips hidden and empty custom messages", () => {
+    expect(projectHistory([{ type: "custom_message", id: "a", customType: "x", content: "hidden", display: false }])).toEqual([]);
+    expect(projectHistory([{ type: "custom_message", id: "b", customType: "x", content: "   ", display: true }])).toEqual([]);
+  });
+
+  it("titles new-plugin management calls by their action", () => {
+    const wait = toolFromCall("sa-wait", "subagent", { action: "wait", id: "run-1" }, "2026-08-09T00:00:00.000Z");
+    expect(wait.title).toBe("收集子代理");
+    expect(wait).not.toHaveProperty("subagent");
+    expect(toolFromCall("sa-wait-tool", "subagent_wait", { id: "run-1" }, "2026-08-09T00:00:00.000Z").title).toBe("收集子代理");
+  });
+});

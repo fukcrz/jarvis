@@ -483,7 +483,7 @@ export interface ToolTimelineItem {
   excludeFromContext?: boolean;
   /** 工具结果携带的图片（如 read 读取图片文件时），用于在工具行内展示。 */
   images?: ImageAttachment[];
-  /** Compact @mjakl/pi-subagent snapshot. Never includes child message trees. */
+  /** Compact @mjakl/pi-subagent or @parke.dev/pi-subagent snapshot. Never includes child message trees. */
   subagent?: SubagentView;
   /** Exact usage and duration when this response only contains tool calls. */
   generation?: AssistantGenerationStats;
@@ -501,7 +501,7 @@ export interface FileChange {
   truncated?: boolean;
 }
 
-export type SubagentCallState = "running" | "completed" | "failed" | "cancelled";
+export type SubagentCallState = "running" | "completed" | "partial" | "failed" | "cancelled";
 
 export interface SubagentStepView {
   /** 该条所属消息完成的时刻。 */
@@ -518,10 +518,17 @@ export interface SubagentCallView {
   /** Original position in the subagent tool's calls array. */
   callIndex?: number;
   agent: string;
+  /** 任务的短标签（新插件的 label），没有指定 agent 时作为标题。 */
+  label?: string;
   prompt: string;
   state: SubagentCallState;
   source?: "user" | "project" | "unknown";
   model?: string;
+  /** 执行配置：profile 与子代理使用的后端。 */
+  profile?: "explore" | "review" | "general";
+  backend?: "pi" | "codex" | "claude";
+  /** 子代理在隔离 worktree 中执行。 */
+  worktree?: boolean;
   /** 实际生效的思考等级（子代理消息上的 thinkingLevel，缺失时用调用参数）。 */
   thinkingLevel?: ThinkingLevel;
   turns?: number;
@@ -573,6 +580,16 @@ export interface ContextSummaryTimelineItem {
   tokensBefore?: number;
 }
 
+/** 扩展写入的展示消息（如后台子代理完成通知），不参与折叠和分组。 */
+export interface NoticeTimelineItem {
+  kind: "notice";
+  id: string;
+  createdAt: string;
+  /** 扩展自定义消息类型，用于区分来源。 */
+  source?: string;
+  text: string;
+}
+
 export interface RunOutcomeTimelineItem {
   kind: "run-outcome";
   id: string;
@@ -583,7 +600,7 @@ export interface RunOutcomeTimelineItem {
   message?: string;
 }
 
-export type TimelineItem = MessageTimelineItem | ErrorTimelineItem | ToolTimelineItem | ThinkingTimelineItem | ContextSummaryTimelineItem | RunOutcomeTimelineItem | ExtensionUiTimelineItem;
+export type TimelineItem = MessageTimelineItem | ErrorTimelineItem | ToolTimelineItem | ThinkingTimelineItem | ContextSummaryTimelineItem | NoticeTimelineItem | RunOutcomeTimelineItem | ExtensionUiTimelineItem;
 
 export interface TimelinePage {
   items: TimelineItem[];

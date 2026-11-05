@@ -73,10 +73,10 @@ describe("bundled plugin sync", () => {
 describe("plugin install sources", () => {
   it("accepts npm names and GitHub addresses, and rejects local paths", () => {
     expect(normalizeInstallSource("pi-fovea")).toBe("npm:pi-fovea");
-    expect(normalizeInstallSource("npm:@mjakl/pi-subagent@3.1.0")).toBe("npm:@mjakl/pi-subagent@3.1.0");
+    expect(normalizeInstallSource("npm:@parke.dev/pi-subagent@0.8.0")).toBe("npm:@parke.dev/pi-subagent@0.8.0");
     expect(normalizeInstallSource("https://github.com/example/pi-tools")).toBe("https://github.com/example/pi-tools");
     expect(normalizeInstallSource("git:github.com/example/pi-tools@v1")).toBe("git:github.com/example/pi-tools@v1");
-    expect(packageNameFromSource("npm:@mjakl/pi-subagent@3.1.0")).toBe("@mjakl/pi-subagent");
+    expect(packageNameFromSource("npm:@parke.dev/pi-subagent@0.8.0")).toBe("@parke.dev/pi-subagent");
     expect(() => normalizeInstallSource("./local-package")).toThrow(/无法识别/);
     expect(() => normalizeInstallSource("https://gitlab.com/example/pi-tools")).toThrow(/无法识别/);
     expect(catalogUrl("git+https://github.com/example/pi-tools.git", undefined, "https://www.npmjs.com/package/pi-tools")).toBe("https://github.com/example/pi-tools");

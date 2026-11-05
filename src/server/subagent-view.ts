@@ -11,36 +11,50 @@ const MAX_SUBAGENT_STEPS = 6;
 const MAX_SUBAGENT_STEP_TEXT_CHARS = 200;
 
 export function subagentViewFromArgs(name: string, args: unknown, dispatchedAt?: string): SubagentView | undefined {
-  if (name !== "subagent" || !isRecord(args) || !Array.isArray(args["calls"])) return undefined;
-  const results = args["calls"].flatMap((value, index) => subagentCallFromArgs(value, index, dispatchedAt));
+  if (name !== "subagent" || !isRecord(args)) return undefined;
+  const results = Array.isArray(args["calls"])
+    ? args["calls"].flatMap((value, index) => subagentCallFromArgs(value, index, dispatchedAt))
+    : taskCallsFromArgs(args, dispatchedAt);
   return results.length === 0 ? undefined : viewFromCalls(results);
 }
 
 export function attachSubagentView(tool: ToolTimelineItem, result?: unknown): ToolTimelineItem {
   if (tool.name !== "subagent") return tool;
-  const fromResult = subagentViewFromResult(result, tool.createdAt);
+  const fromResult = subagentViewFromResult(result, tool.createdAt, tool.subagent);
   if (fromResult !== undefined && fromResult.results.length > 0) return { ...tool, subagent: fromResult };
-  return finalizeSeededSubagent(tool);
+  return finalizeSeededSubagent(tool, result);
 }
 
-function subagentViewFromResult(result: unknown, dispatchedAt?: string): SubagentView | undefined {
+function subagentViewFromResult(result: unknown, dispatchedAt?: string, seed?: SubagentView): SubagentView | undefined {
   const details = detailsRecord(result);
-  if (details === undefined) return undefined;
-  const results = Array.isArray(details["results"]) ? details["results"].flatMap((value, index) => subagentCallFromResult(value, index, dispatchedAt)) : [];
+  if (details === undefined || !Array.isArray(details["results"])) return undefined;
+  const runStartedAt = timeFromMillis(details["startedAt"]);
+  const runEndedAt = timeFromMillis(details["endedAt"]);
+  const results = details["kind"] === "pi-subagent"
+    ? details["results"].flatMap((value, index) => subagentCallFromResult(value, index, dispatchedAt))
+    : details["results"].flatMap((value: unknown, index: number) => taskCallFromResult(value, index, dispatchedAt, seed?.results[index], runStartedAt, runEndedAt));
   return viewFromCalls(results);
 }
 
 function detailsRecord(value: unknown): Record<string, unknown> | undefined {
   if (!isRecord(value)) return undefined;
-  if (value["kind"] === "pi-subagent") return value;
-  if (isRecord(value["details"]) && value["details"]["kind"] === "pi-subagent") return value["details"];
-  return undefined;
+  if (isRecord(value["details"])) return value["details"];
+  return value;
 }
 
-function finalizeSeededSubagent(tool: ToolTimelineItem): ToolTimelineItem {
+/** 新插件的后台运行：工具已返回但子任务仍在跑时不能被标成完成。 */
+function runIsStillActive(result: unknown): boolean {
+  const details = detailsRecord(result);
+  if (details === undefined) return false;
+  const state = stringValue(details["state"]);
+  return state === "queued" || state === "starting" || state === "running" || state === "cancelling";
+}
+
+function finalizeSeededSubagent(tool: ToolTimelineItem, result?: unknown): ToolTimelineItem {
   const view = tool.subagent;
   if (view === undefined) return tool;
   if (tool.state === "queued" || tool.state === "running") return tool;
+  if (runIsStillActive(result)) return tool;
   const nextState = tool.state === "cancelled" ? "cancelled" as const : tool.state === "failed" ? "failed" as const : "completed" as const;
   const error = nextState === "failed" ? tool.error : undefined;
   const results = view.results.map((call) => {
@@ -59,10 +73,147 @@ function viewFromCalls(results: SubagentCallView[]): SubagentView {
     kind: "pi-subagent",
     results,
     total: results.length,
-    completed: results.filter((call) => call.state === "completed").length,
+    completed: results.filter((call) => call.state === "completed" || call.state === "partial").length,
     running: results.filter((call) => call.state === "running").length,
     failed: results.filter((call) => call.state === "failed").length,
   };
+}
+
+/** @parke.dev/pi-subagent：单个 task 或 tasks 数组，入口先给出运行中的卡片。 */
+function taskCallsFromArgs(args: Record<string, unknown>, dispatchedAt?: string): SubagentCallView[] {
+  if (args["action"] !== undefined) return [];
+  const tasks = args["tasks"];
+  if (Array.isArray(tasks)) return tasks.flatMap((value, index) => taskCallFromArgs(value, index, dispatchedAt, args));
+  if (stringValue(args["task"]) === "") return [];
+  return taskCallFromArgs(args, 0, dispatchedAt, args);
+}
+
+function taskCallFromArgs(value: unknown, callIndex: number, dispatchedAt?: string, inherited?: Record<string, unknown>): SubagentCallView[] {
+  if (!isRecord(value)) return [];
+  const task = stringValue(value["task"]);
+  if (task === "") return [];
+  const explicitAgent = stringValue(value["agent"]);
+  const inheritedAgent = inherited === undefined ? "" : stringValue(inherited["agent"]);
+  const agent = explicitAgent || inheritedAgent;
+  const profile = profileFrom(value["profile"]) ?? profileFrom(inherited?.["profile"]);
+  const backend = backendFrom(value["backend"]) ?? backendFrom(inherited?.["backend"]);
+  const label = stringValue(value["description"]) || stringValue(inherited?.["description"]);
+  const model = stringValue(value["model"]) || (inherited === undefined ? "" : stringValue(inherited["model"]));
+  const thinkingLevel = thinkingLevelFrom(value["thinking"]) ?? thinkingLevelFrom(inherited?.["thinking"]);
+  const isolation = stringValue(value["isolation"]) || (inherited === undefined ? "" : stringValue(inherited["isolation"]));
+  const fullPrompt = truncateText(task, MAX_SUBAGENT_FULL_PROMPT_CHARS);
+  return [{
+    callIndex,
+    agent: agent !== "" ? agent : profile ?? "子代理",
+    ...(label === "" ? {} : { label }),
+    prompt: truncateOneLine(task, MAX_SUBAGENT_PROMPT_CHARS),
+    state: "running",
+    ...(dispatchedAt === undefined ? {} : { startedAt: dispatchedAt }),
+    ...(model === "" ? {} : { model }),
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+    ...(profile === undefined ? {} : { profile }),
+    ...(backend === undefined ? {} : { backend }),
+    ...(isolation === "worktree" ? { worktree: true } : {}),
+    ...(fullPrompt === "" ? {} : { fullPrompt }),
+  }];
+}
+
+function taskCallFromResult(value: unknown, fallbackCallIndex: number, dispatchedAt?: string, seed?: SubagentCallView, runStartedAt?: string, runEndedAt?: string): SubagentCallView[] {
+  if (!isRecord(value)) return [];
+  const rawCallIndex = numberValue(value["callIndex"] ?? value["index"]);
+  const callIndex = rawCallIndex !== undefined && Number.isInteger(rawCallIndex) && rawCallIndex >= 0 ? rawCallIndex : fallbackCallIndex;
+  const state = taskCallState(value["state"], stringValue(value["errorMessage"]));
+  const task = stringValue(value["task"]) || seed?.fullPrompt || "";
+  const prompt = truncateOneLine(task, MAX_SUBAGENT_PROMPT_CHARS) || seed?.prompt || "";
+  const fullPrompt = truncateText(task, MAX_SUBAGENT_FULL_PROMPT_CHARS);
+  const profile = profileFrom(value["profile"]) ?? seed?.profile;
+  const backend = backendFrom(value["backend"]) ?? seed?.backend;
+  const model = stringValue(value["model"]) || seed?.model || "";
+  const thinkingLevel = thinkingLevelFrom(value["thinking"]) ?? seed?.thinkingLevel;
+  const turns = numberValue(isRecord(value["usage"]) ? value["usage"]["turns"] : undefined);
+  const startedAt = seed?.startedAt ?? runStartedAt ?? dispatchedAt;
+  const endedAt = state === "running" ? undefined : runEndedAt;
+  const errorText = state === "running" ? "" : [stringValue(value["errorMessage"]), stringValue(value["structuredError"])].filter(Boolean).join(" · ");
+  const output = truncateText(stringValue(value["finalOutput"]), MAX_SUBAGENT_OUTPUT_CHARS);
+  const steps = stepsFromTranscript(stringValue(value["transcript"]));
+  const label = stringValue(value["label"]) || seed?.label;
+  const sessionId = stringValue(value["sessionId"]);
+  const worktree = isRecord(value["worktree"]) || seed?.worktree === true;
+  const durationStart = runStartedAt ?? startedAt;
+  const durationMs = durationStart === undefined || endedAt === undefined ? undefined : Math.max(0, Date.parse(endedAt) - Date.parse(durationStart));
+  return [{
+    callIndex,
+    agent: seed?.agent ?? profile ?? backend ?? "子代理",
+    ...(label === undefined || label === "" ? {} : { label }),
+    prompt,
+    state,
+    ...(model === "" ? {} : { model }),
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+    ...(profile === undefined ? {} : { profile }),
+    ...(backend === undefined ? {} : { backend }),
+    ...(worktree ? { worktree: true } : {}),
+    ...(turns !== undefined && turns > 0 ? { turns } : {}),
+    ...(startedAt === undefined ? {} : { startedAt }),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(sessionId === "" ? {} : { sessionHandle: sessionId }),
+    ...(fullPrompt === "" ? {} : { fullPrompt }),
+    ...(steps.length === 0 ? {} : { recentSteps: steps }),
+    ...(output === "" ? {} : { output }),
+    ...(errorText === "" ? {} : { error: truncateText(errorText, MAX_SUBAGENT_ERROR_CHARS) }),
+  }];
+}
+
+function taskCallState(raw: unknown, errorMessage: string): SubagentCallView["state"] {
+  const state = stringValue(raw);
+  if (state === "partial") return "partial";
+  if (state === "cancelled") return "cancelled";
+  if (state === "failed" || state === "timeout" || state === "lost") return "failed";
+  if (state === "completed") return "completed";
+  if (state === "queued" || state === "starting" || state === "running" || state === "cancelling") return "running";
+  return errorMessage === "" ? "completed" : "failed";
+}
+
+function profileFrom(value: unknown): SubagentCallView["profile"] | undefined {
+  return value === "explore" || value === "review" || value === "general" ? value : undefined;
+}
+
+function backendFrom(value: unknown): SubagentCallView["backend"] | undefined {
+  return value === "pi" || value === "codex" || value === "claude" ? value : undefined;
+}
+
+function timeFromMillis(value: unknown): string | undefined {
+  const millis = numberValue(value);
+  return millis === undefined || !Number.isFinite(millis) || millis <= 0 ? undefined : new Date(millis).toISOString();
+}
+
+/** 新插件的子会话过程是拍平的纯文本行：`→ tool {args}` / 正文 / `← tool 结果`。 */
+function stepsFromTranscript(transcript: string): NonNullable<SubagentCallView["recentSteps"]> {
+  if (transcript.trim() === "") return [];
+  const steps: NonNullable<SubagentCallView["recentSteps"]> = [];
+  for (const rawLine of transcript.split("\n")) {
+    const line = rawLine.trim();
+    if (line === "" || line.startsWith("← ")) continue;
+    if (!line.startsWith("→ ")) {
+      steps.push({ kind: "text", text: truncateText(line, MAX_SUBAGENT_STEP_TEXT_CHARS) });
+      continue;
+    }
+    const body = line.slice(2).trim();
+    const space = body.indexOf(" ");
+    const name = (space === -1 ? body : body.slice(0, space)) || "tool";
+    const rawArgs = space === -1 ? "" : body.slice(space + 1).trim();
+    steps.push({ kind: "tool", name, summary: subagentToolSummary(name, parseToolArguments(rawArgs)) });
+  }
+  return steps.slice(-MAX_SUBAGENT_STEPS);
+}
+
+function parseToolArguments(raw: string): unknown {
+  if (raw === "") return "";
+  if (!raw.startsWith("{") && !raw.startsWith("[")) return raw;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
 }
 
 function subagentCallFromArgs(value: unknown, callIndex: number, dispatchedAt?: string): SubagentCallView[] {

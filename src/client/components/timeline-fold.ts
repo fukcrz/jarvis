@@ -73,6 +73,7 @@ export function collapseUntouchedTimelineProcess(state: TimelineFoldState, proce
 export function collapsedToolActivityItems(items: ToolTimelineItem[], active: boolean, showActivePreview: boolean): ToolTimelineItem[] {
   return items.filter((item) => item.state === "failed"
     || (item.subagent?.failed ?? 0) > 0
+    || (item.subagent?.running ?? 0) > 0
     || showActivePreview && active && (item.state === "running" || item.state === "queued"));
 }
 

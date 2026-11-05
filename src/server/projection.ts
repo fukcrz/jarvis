@@ -1,4 +1,4 @@
-import { isRecord, type AssistantGenerationStats, type AssistantTextPhase, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type RunOutcomeTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type TokenUsage, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
+import { isRecord, type AssistantGenerationStats, type AssistantTextPhase, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type NoticeTimelineItem, type RunOutcomeTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type TokenUsage, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
 import { fileChangeFromCall, fileChangeFromPatch } from "../shared/file-change.js";
 import { attachSubagentView, subagentViewFromArgs } from "./subagent-view.js";
 import { isAbortErrorMessage, numberValue, stringValue, toIso } from "./values.js";
@@ -29,6 +29,11 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
     const contextSummary = contextSummaryFromEntry(entry);
     if (contextSummary !== undefined) {
       items.push(contextSummary);
+      continue;
+    }
+    const notice = noticeFromEntry(entry);
+    if (notice !== undefined) {
+      items.push(notice);
       continue;
     }
     if (!isRecord(entry) || entry["type"] !== "message") continue;
@@ -159,6 +164,27 @@ function runOutcomeFromEntry(entry: unknown): RunOutcomeTimelineItem | undefined
     outcome,
     ...(typeof data["code"] === "string" ? { code: data["code"] } : {}),
     ...(typeof data["message"] === "string" ? { message: data["message"] } : {}),
+  };
+}
+
+export function noticeFromEntry(entry: unknown): NoticeTimelineItem | undefined {
+  if (!isRecord(entry) || entry["type"] !== "custom_message") return undefined;
+  const entryId = stringValue(entry["id"]) || crypto.randomUUID();
+  return noticeFromCustomMessage(entry["content"], entry["display"], entry["customType"], toIso(entry["timestamp"]), entryId);
+}
+
+/** 扩展自定义消息：display 为 false 的不展示，正文为空的不生成条目。 */
+export function noticeFromCustomMessage(content: unknown, display: unknown, customType: unknown, createdAt: string, id: string = crypto.randomUUID()): NoticeTimelineItem | undefined {
+  if (display === false) return undefined;
+  const text = textFromContent(content);
+  if (text.trim() === "") return undefined;
+  const source = stringValue(customType);
+  return {
+    kind: "notice",
+    id: `notice:${id}`,
+    createdAt,
+    text: truncate(text),
+    ...(source === "" ? {} : { source }),
   };
 }
 
@@ -412,7 +438,7 @@ export function toolFromCall(
   metadata?: { cwd?: string; contentIndex?: number; assistantMessageId?: string },
 ): ToolTimelineItem {
   const target = toolTarget(args);
-  const title = toolTitle(name);
+  const title = toolTitle(name, args);
   const inputPreview = summarizeArgs(args);
   const subagent = subagentViewFromArgs(name, args, createdAt);
   const fileChange = fileChangeFromCall(name, args);
@@ -639,7 +665,7 @@ function toolTarget(args: unknown): string | undefined {
   return stringValue(args["path"]) || stringValue(args["file_path"]) || stringValue(args["command"]) || undefined;
 }
 
-function toolTitle(name: string): string {
+function toolTitle(name: string, args?: unknown): string {
   if (name === "bash") return "Run command";
   if (name === "read") return "Read file";
   if (name === "write") return "Write file";
@@ -647,6 +673,18 @@ function toolTitle(name: string): string {
   if (name === "grep") return "Search files";
   if (name === "find") return "Find files";
   if (name === "ls") return "List directory";
+  if (name === "subagent_wait") return "收集子代理";
+  if (name === "subagent") {
+    const action = isRecord(args) ? stringValue(args["action"]) : "";
+    if (action === "status") return "子代理状态";
+    if (action === "wait") return "收集子代理";
+    if (action === "cancel") return "停止子代理";
+    if (action === "steer") return "引导子代理";
+    if (action === "diff") return "子代理改动";
+    if (action === "apply") return "应用子代理改动";
+    if (action === "discard") return "丢弃子代理改动";
+    if (action === "plan") return "子代理预检";
+  }
   return name.replaceAll("_", " ");
 }
 

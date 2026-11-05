@@ -148,3 +148,33 @@ describe("ExtensionUiBridge", () => {
     await expect(bridge.context.custom(() => ({}) as never)).resolves.toBeUndefined();
   });
 });
+
+describe("extension UI without a terminal", () => {
+  function setup() {
+    const messages: ExtensionUiMessage[] = [];
+    const bridge = new ExtensionUiBridge((message) => messages.push(message));
+    return { bridge, messages };
+  }
+
+  it("hands extensions a plain theme instead of undefined", () => {
+    const { bridge } = setup();
+    const theme = bridge.context.theme;
+    expect(theme).toBeDefined();
+    expect(theme.fg("accent", "Subagents")).toBe("Subagents");
+    expect(theme.bg("selectedBg", "row")).toBe("row");
+    expect(theme.bold("bold")).toBe("bold");
+    expect(theme.getColorMode()).toBe("truecolor");
+  });
+
+  it("strips ANSI escapes from statuses, widgets, and notifications", () => {
+    const { bridge, messages } = setup();
+    bridge.context.setStatus("subagent", "\u001b[36m●\u001b[39m Subagents");
+    bridge.context.setWidget("subagent", ["\u001b[2m└─ active\u001b[22m"]);
+    bridge.context.notify("\u001b[31mSubagent failed\u001b[39m", "warning");
+    expect(bridge.snapshot()).toMatchObject({
+      statuses: { subagent: "● Subagents" },
+      widgets: { subagent: { lines: ["└─ active"] } },
+    });
+    expect(messages).toContainEqual(expect.objectContaining({ type: "request", request: expect.objectContaining({ method: "notify", message: "Subagent failed" }) }));
+  });
+});

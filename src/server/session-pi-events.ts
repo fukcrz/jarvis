@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { isRecord, type AssistantGenerationStats, type MessageTimelineItem, type SessionSummary, type SessionThinkingSnapshot, type ThinkingTimelineItem, type TokenUsage, type ToolTimelineItem } from "../shared/protocol.js";
 import type { EventHub } from "./event-hub.js";
-import { assistantTextBlockId, assistantTextPhaseFromContent, assistantThinkingBlockId, assistantTimelineItemsFromPi, contextSummaryFromEntry, errorFromPi, messageFromPi, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
+import { assistantTextBlockId, assistantTextPhaseFromContent, assistantThinkingBlockId, assistantTimelineItemsFromPi, contextSummaryFromEntry, errorFromPi, messageFromPi, noticeFromCustomMessage, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import type { ActiveRun, ActiveSession, PiEvent } from "./session-active.js";
 import { firstUserMessage, isAssistantMessage, isUserMessage, retryStatus } from "./session-helpers.js";
 import { UsageLedger, usageRecordFrom } from "./usage-ledger.js";
-import { isAbortErrorMessage, stringValue } from "./values.js";
+import { isAbortErrorMessage, stringValue, toIso } from "./values.js";
 
 export interface SessionPiHost {
   events: EventHub;
@@ -195,6 +195,13 @@ export class SessionPiEvents {
       return;
     }
     if (isAssistantMessage(event.message)) this.onAssistantMessageEnd(active, event.message, runId);
+    else if (isRecord(event.message) && (event.message as { role?: unknown })["role"] === "custom") this.onCustomMessageEnd(active, event.message, runId);
+  }
+
+  private onCustomMessageEnd(active: ActiveSession, message: Record<string, unknown>, runId: string): void {
+    const item = noticeFromCustomMessage(message["content"], message["display"], message["customType"], toIso(message["timestamp"]));
+    if (item === undefined) return;
+    this.host.events.publishSession(active.ref, { type: "timeline.upsert", runId, payload: { item } });
   }
 
   private onUserMessageEnd(active: ActiveSession, message: { role: "user"; content: unknown; timestamp?: number | string }, runId: string): void {

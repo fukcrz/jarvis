@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type AssistantGenerationStats, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type FileChange, type ImageAttachment, type LiveGenerationStats, type MessageTimelineItem, type ModelDescriptor, type RetryStatus, type RunOutcomeTimelineItem, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type TokenUsage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol.js";
+import { THINKING_LEVELS, type AssistantGenerationStats, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type FileChange, type ImageAttachment, type LiveGenerationStats, type MessageTimelineItem, type ModelDescriptor, type NoticeTimelineItem, type RetryStatus, type RunOutcomeTimelineItem, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type TokenUsage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol.js";
 import { isRecord } from "../shared/protocol.js";
 
 export interface TranscriptState {
@@ -408,8 +408,22 @@ function recordTimelineItem(value: unknown): TimelineItem[] {
   if (thinking !== undefined) return [thinking];
   const summary = recordContextSummary(value);
   if (summary !== undefined) return [summary];
+  const notice = recordNotice(value);
+  if (notice !== undefined) return [notice];
   const outcome = recordRunOutcome(value);
   return outcome === undefined ? [] : [outcome];
+}
+
+function recordNotice(value: unknown): NoticeTimelineItem | undefined {
+  if (!isRecord(value) || value["kind"] !== "notice") return undefined;
+  if (typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["text"] !== "string" || value["text"].trim() === "") return undefined;
+  return {
+    kind: "notice",
+    id: value["id"],
+    createdAt: value["createdAt"],
+    text: value["text"],
+    ...(typeof value["source"] === "string" && value["source"] !== "" ? { source: value["source"] } : {}),
+  };
 }
 
 function optimisticUserMessage(id: string, text: string, images: MessageTimelineItem["images"] = []): MessageTimelineItem {
@@ -615,7 +629,7 @@ function recordSubagentView(value: unknown): { subagent: SubagentView } | Record
       kind: "pi-subagent",
       results,
       total: results.length,
-      completed: results.filter((call) => call.state === "completed").length,
+      completed: results.filter((call) => call.state === "completed" || call.state === "partial").length,
       running: results.filter((call) => call.state === "running").length,
       failed: results.filter((call) => call.state === "failed").length,
     },
@@ -625,7 +639,7 @@ function recordSubagentView(value: unknown): { subagent: SubagentView } | Record
 function recordSubagentCall(value: unknown, fallbackCallIndex?: number): SubagentCallView[] {
   if (!isRecord(value) || typeof value["agent"] !== "string" || value["agent"] === "" || typeof value["prompt"] !== "string") return [];
   const state = value["state"];
-  if (state !== "running" && state !== "completed" && state !== "failed" && state !== "cancelled") return [];
+  if (state !== "running" && state !== "completed" && state !== "partial" && state !== "failed" && state !== "cancelled") return [];
   const source = value["source"];
   const toolCalls = Array.isArray(value["toolCalls"])
     ? value["toolCalls"].flatMap((entry) => {
@@ -641,6 +655,10 @@ function recordSubagentCall(value: unknown, fallbackCallIndex?: number): Subagen
     agent: value["agent"],
     prompt: value["prompt"],
     state,
+    ...(typeof value["label"] === "string" && value["label"] !== "" ? { label: value["label"] } : {}),
+    ...(value["profile"] === "explore" || value["profile"] === "review" || value["profile"] === "general" ? { profile: value["profile"] } : {}),
+    ...(value["backend"] === "pi" || value["backend"] === "codex" || value["backend"] === "claude" ? { backend: value["backend"] } : {}),
+    ...(value["worktree"] === true ? { worktree: true } : {}),
     ...(source === "user" || source === "project" || source === "unknown" ? { source } : {}),
     ...(typeof value["model"] === "string" && value["model"] !== "" ? { model: value["model"] } : {}),
     ...(typeof value["thinkingLevel"] === "string" && (THINKING_LEVELS as readonly string[]).includes(value["thinkingLevel"]) ? { thinkingLevel: value["thinkingLevel"] as ThinkingLevel } : {}),
