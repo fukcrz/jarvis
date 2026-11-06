@@ -10,8 +10,18 @@ const MAX_SUBAGENT_TOOL_SUMMARY_CHARS = 80;
 const MAX_SUBAGENT_STEPS = 24;
 const MAX_SUBAGENT_STEP_TEXT_CHARS = 200;
 
+/** pi-subagent-manager：每个工具只管一个线程或一棵子树，线程快照是 ThreadView。 */
+const MANAGER_TOOLS = new Set(["agent_spawn", "agent_wait", "agent_steer", "agent_status", "agent_stop"]);
+const MANAGER_SEED_TOOLS = new Set(["agent_spawn"]);
+const MANAGER_THREAD_STATES = ["starting", "running", "paused", "completed", "failed", "stopped"] as const;
+
 export function subagentViewFromArgs(name: string, args: unknown, dispatchedAt?: string): SubagentView | undefined {
-  if (name !== "subagent" || !isRecord(args)) return undefined;
+  if (!isRecord(args)) return undefined;
+  if (MANAGER_SEED_TOOLS.has(name)) {
+    const seed = managerCallFromArgs(args, dispatchedAt);
+    return seed === undefined ? undefined : viewFromCalls([seed]);
+  }
+  if (name !== "subagent") return undefined;
   const results = Array.isArray(args["calls"])
     ? args["calls"].flatMap((value, index) => subagentCallFromArgs(value, index, dispatchedAt))
     : taskCallsFromArgs(args, dispatchedAt);
@@ -19,13 +29,18 @@ export function subagentViewFromArgs(name: string, args: unknown, dispatchedAt?:
 }
 
 export function attachSubagentView(tool: ToolTimelineItem, result?: unknown): ToolTimelineItem {
-  if (tool.name !== "subagent") return tool;
+  if (!MANAGER_TOOLS.has(tool.name) && tool.name !== "subagent") return tool;
   const fromResult = subagentViewFromResult(result, tool.createdAt, tool.subagent);
   if (fromResult !== undefined && fromResult.results.length > 0) return { ...tool, subagent: fromResult };
   return finalizeSeededSubagent(tool, result);
 }
 
 function subagentViewFromResult(result: unknown, dispatchedAt?: string, seed?: SubagentView): SubagentView | undefined {
+  const threads = managerThreads(result);
+  if (threads !== undefined) {
+    const results = threads.flatMap((thread, index) => managerCallFromThread(thread, index, dispatchedAt, seed));
+    return results.length === 0 ? undefined : viewFromCalls(results);
+  }
   const details = detailsRecord(result);
   if (details === undefined || !Array.isArray(details["results"])) return undefined;
   const runStartedAt = timeFromMillis(details["startedAt"]);
@@ -40,6 +55,104 @@ function detailsRecord(value: unknown): Record<string, unknown> | undefined {
   if (!isRecord(value)) return undefined;
   if (isRecord(value["details"])) return value["details"];
   return value;
+}
+
+/** 结果里的 `details` 可能是单个 ThreadView，也可能是线程数组。 */
+function detailsValue(value: unknown): unknown {
+  return isRecord(value) && value["details"] !== undefined ? value["details"] : value;
+}
+
+function isThreadView(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const state = stringValue(value["state"]);
+  return typeof value["path"] === "string"
+    && typeof value["type"] === "string"
+    && typeof value["task"] === "string"
+    && (MANAGER_THREAD_STATES as readonly string[]).includes(state);
+}
+
+/** `agent_status` 不带路径时返回可见子线程数组。 */
+function managerThreads(result: unknown): Record<string, unknown>[] | undefined {
+  const details = detailsValue(result);
+  if (Array.isArray(details)) {
+    const threads = details.filter(isThreadView);
+    return threads.length === 0 ? undefined : threads;
+  }
+  return isThreadView(details) ? [details] : undefined;
+}
+
+function managerCallFromArgs(args: Record<string, unknown>, dispatchedAt?: string): SubagentCallView | undefined {
+  const task = stringValue(args["task"]);
+  if (task === "") return undefined;
+  const agent = stringValue(args["type"]);
+  const path = stringValue(args["path"]);
+  return {
+    agent: agent === "" ? "子代理" : agent,
+    ...(path === "" ? {} : { label: path }),
+    prompt: truncateOneLine(task, MAX_SUBAGENT_PROMPT_CHARS),
+    state: "running",
+    ...(dispatchedAt === undefined ? {} : { startedAt: dispatchedAt }),
+    fullPrompt: truncateText(task, MAX_SUBAGENT_FULL_PROMPT_CHARS),
+  };
+}
+
+function managerCallFromThread(value: Record<string, unknown>, fallbackCallIndex: number, dispatchedAt?: string, seed?: SubagentView): SubagentCallView[] {
+  const state = managerCallState(stringValue(value["state"]));
+  const agent = stringValue(value["type"]);
+  const task = stringValue(value["task"]);
+  const path = stringValue(value["path"]);
+  const usage = managerUsage(value);
+  const startedAt = timeFromMillis(numberValue(value["startedAt"]) ?? numberValue(value["lastStartedAt"]) ?? numberValue(value["createdAt"]))
+    ?? seed?.results[fallbackCallIndex]?.startedAt
+    ?? dispatchedAt;
+  const elapsedMs = numberValue(value["elapsedMs"]);
+  const thinkingLevel = thinkingLevelFrom(value["thinkingLevel"]);
+  const model = stringValue(value["model"]);
+  const output = truncateText(stringValue(value["output"]), MAX_SUBAGENT_OUTPUT_CHARS);
+  const error = state === "running" ? "" : truncateText(stringValue(value["error"]), MAX_SUBAGENT_ERROR_CHARS);
+  const progress = stringValue(value["status"]);
+  const steps = state === "running" && progress !== ""
+    ? [{ kind: "text" as const, text: truncateText(progress, MAX_SUBAGENT_STEP_TEXT_CHARS) }]
+    : [];
+  return [{
+    callIndex: fallbackCallIndex,
+    agent: agent === "" ? "子代理" : agent,
+    ...(path === "" ? {} : { label: path }),
+    prompt: truncateOneLine(task, MAX_SUBAGENT_PROMPT_CHARS),
+    state,
+    ...(model === "" ? {} : { model }),
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+    ...(usage === undefined ? {} : { usage }),
+    ...(startedAt === undefined ? {} : { startedAt }),
+    ...(state === "running" || elapsedMs === undefined ? {} : { durationMs: Math.max(0, elapsedMs) }),
+    ...(task === "" ? {} : { fullPrompt: truncateText(task, MAX_SUBAGENT_FULL_PROMPT_CHARS) }),
+    ...(steps.length === 0 ? {} : { recentSteps: steps }),
+    ...(output === "" ? {} : { output }),
+    ...(error === "" ? {} : { error }),
+  }];
+}
+
+/** paused 是“停在轮边界、不交答案”，按未收尾计，不算失败也不算完成。 */
+function managerCallState(raw: string): SubagentCallView["state"] {
+  if (raw === "completed") return "completed";
+  if (raw === "failed") return "failed";
+  if (raw === "stopped") return "cancelled";
+  if (raw === "paused") return "partial";
+  return "running";
+}
+
+function managerUsage(value: Record<string, unknown>): SubagentCallView["usage"] | undefined {
+  const input = numberValue(value["inputTokens"]);
+  const output = numberValue(value["outputTokens"]);
+  const cost = numberValue(value["costUsd"]);
+  const total = (input ?? 0) + (output ?? 0);
+  if (input === undefined && output === undefined && (cost === undefined || cost <= 0)) return undefined;
+  return {
+    ...(input === undefined ? {} : { input }),
+    ...(output === undefined ? {} : { output }),
+    ...(total === 0 ? {} : { total }),
+    ...(cost === undefined || cost <= 0 ? {} : { cost }),
+  };
 }
 
 /** 新插件的后台运行：工具已返回但子任务仍在跑时不能被标成完成。 */

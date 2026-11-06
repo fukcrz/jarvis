@@ -115,8 +115,8 @@ recover changes missed while disconnected.
 
 ## Pi CLI compatibility
 
-Pi extensions that delegate work by spawning Pi sub-processes (`@parke.dev/pi-subagent`,
-Pi's own subagent example, ...) derive the child command from `process.argv[1]`. Jarvis
+Pi extensions that delegate work by spawning Pi sub-processes (Pi's own subagent
+example, ...) derive the child command from `process.argv[1]`. Jarvis
 embeds Pi in its own server process, so that path points at
 `dist/server/server/index.js` and the child would be a second Jarvis server instead of
 a subagent.

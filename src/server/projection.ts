@@ -674,6 +674,13 @@ function toolTitle(name: string, args?: unknown): string {
   if (name === "find") return "Find files";
   if (name === "ls") return "List directory";
   if (name === "subagent_wait") return "收集子代理";
+  if (name === "agent_spawn") return "启动子代理";
+  if (name === "agent_wait") return "等待子代理";
+  if (name === "agent_steer") return "引导子代理";
+  if (name === "agent_status") return "子代理状态";
+  if (name === "agent_stop") return "停止子代理";
+  if (name === "agent_output") return "子代理输出";
+  if (name === "agent_types") return "子代理类型";
   if (name === "subagent") {
     const action = isRecord(args) ? stringValue(args["action"]) : "";
     if (action === "status") return "子代理状态";

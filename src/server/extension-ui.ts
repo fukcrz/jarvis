@@ -6,6 +6,9 @@ export const UNSUPPORTED_EXTENSION_INTERACTION = "UNSUPPORTED_EXTENSION_INTERACT
 /** ANSI escapes from TUI-oriented extensions would render literally in the browser. */
 const ANSI_PATTERN = /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*\u0007)/g;
 
+/** 子代理插件的 Agents widget 与 Jarvis 的子代理卡片重复，且只有运行中才有意义。 */
+const BLOCKED_WIDGETS = new Set(["pi-subagent"]);
+
 export function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, "");
 }
@@ -125,6 +128,11 @@ export class ExtensionUiBridge {
         this.request({ id: crypto.randomUUID(), method: "setStatus", statusKey, statusText: text });
       },
       setWidget: (widgetKey, widgetLines, options) => {
+        // 子代理插件自带 TUI 的 Agents widget，卡片已表达同样信息，不再重复。
+        if (BLOCKED_WIDGETS.has(widgetKey)) {
+          delete this.widgets[widgetKey];
+          return;
+        }
         if (widgetLines !== undefined && !Array.isArray(widgetLines)) return;
         const lines = widgetLines === undefined ? undefined : widgetLines.map(stripAnsi);
         if (lines === undefined) delete this.widgets[widgetKey];

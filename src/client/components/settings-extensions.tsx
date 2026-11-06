@@ -19,7 +19,7 @@ export const PLUGIN_DESCRIPTIONS: Record<string, string> = {
   "session-board": "会话之间可以互相发消息、交接任务",
   "pi-web-access": "联网搜索与网页读取",
   "@juicesharp/rpiv-ask-user-question": "让 AI 用选项卡片向你提问",
-  "@parke.dev/pi-subagent": "子代理：把任务分给独立上下文执行",
+  "pi-subagent-manager": "子代理：把任务分给独立上下文执行",
   "pi-playwright": "浏览器自动化（Playwright）",
 };
 

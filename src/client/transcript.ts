@@ -664,6 +664,7 @@ function recordSubagentCall(value: unknown, fallbackCallIndex?: number): Subagen
     ...(typeof value["thinkingLevel"] === "string" && (THINKING_LEVELS as readonly string[]).includes(value["thinkingLevel"]) ? { thinkingLevel: value["thinkingLevel"] as ThinkingLevel } : {}),
     ...(typeof value["turns"] === "number" && Number.isFinite(value["turns"]) && value["turns"] > 0 ? { turns: value["turns"] } : {}),
     ...(typeof value["startedAt"] === "string" && value["startedAt"] !== "" ? { startedAt: value["startedAt"] } : {}),
+    ...recordSubagentUsage(value["usage"]),
     ...(typeof value["durationMs"] === "number" && Number.isFinite(value["durationMs"]) && value["durationMs"] >= 0 ? { durationMs: value["durationMs"] } : {}),
     ...(typeof value["sessionHandle"] === "string" && value["sessionHandle"] !== "" ? { sessionHandle: value["sessionHandle"] } : {}),
     ...(typeof value["fullPrompt"] === "string" && value["fullPrompt"] !== "" ? { fullPrompt: value["fullPrompt"] } : {}),
@@ -672,6 +673,31 @@ function recordSubagentCall(value: unknown, fallbackCallIndex?: number): Subagen
     ...(typeof value["error"] === "string" && value["error"] !== "" ? { error: value["error"] } : {}),
     ...(toolCalls.length === 0 ? {} : { toolCalls }),
   }];
+}
+
+function recordSubagentUsage(value: unknown): { usage: NonNullable<SubagentCallView["usage"]> } | Record<string, never> {
+  if (!isRecord(value)) return {};
+  const pick = (key: string): number | undefined => {
+    const raw = value[key];
+    return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : undefined;
+  };
+  const input = pick("input");
+  const output = pick("output");
+  const cacheRead = pick("cacheRead");
+  const cacheWrite = pick("cacheWrite");
+  const total = pick("total");
+  const cost = pick("cost");
+  if (input === undefined && output === undefined && cacheRead === undefined && cacheWrite === undefined && total === undefined && cost === undefined) return {};
+  return {
+    usage: {
+      ...(input === undefined ? {} : { input }),
+      ...(output === undefined ? {} : { output }),
+      ...(cacheRead === undefined ? {} : { cacheRead }),
+      ...(cacheWrite === undefined ? {} : { cacheWrite }),
+      ...(total === undefined ? {} : { total }),
+      ...(cost === undefined ? {} : { cost }),
+    },
+  };
 }
 
 function recordSubagentSteps(value: unknown): NonNullable<SubagentCallView["recentSteps"]> {

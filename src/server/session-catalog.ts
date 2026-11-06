@@ -72,7 +72,8 @@ async function listFromIndex(deps: SessionCatalogDeps, workspaceId: string): Pro
 async function listBySearch(deps: SessionCatalogDeps, workspaceId: string, needle: string): Promise<SessionSummary[]> {
   const workspace = deps.workspaces.get(workspaceId);
   const sideIds = await deps.attention.sideChatIds(workspaceId);
-  const listed = (await listManagedSessions(workspace.cwd)).filter((entry) => isVisibleSessionId(entry.id) && !sideIds.has(entry.id));
+  const visibleIds = new Set((await listSessionFiles(workspace)).map((file) => file.id));
+  const listed = (await listManagedSessions(workspace.cwd)).filter((entry) => visibleIds.has(entry.id) && !sideIds.has(entry.id));
   const sortMeta = await deps.attention.list(workspaceId);
   const listedMatches = listed
     .map((entry) => ({

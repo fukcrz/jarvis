@@ -1088,4 +1088,35 @@ describe("transcript queue", () => {
       { kind: "text", text: "最新" },
     ]);
   });
+
+  it("keeps subagent usage through a replay so tokens survive a reload", () => {
+    const result = applySessionEvents(emptyTranscript, [{
+      version: 1,
+      sessionId: "session",
+      seq: 1,
+      emittedAt: "2026-08-09T00:00:00.000Z",
+      type: "tool.upsert",
+      payload: {
+        tool: {
+          kind: "tool",
+          id: "sa-4",
+          createdAt: "2026-08-09T00:00:00.000Z",
+          name: "agent_spawn",
+          title: "启动子代理",
+          state: "completed",
+          subagent: {
+            kind: "pi-subagent",
+            results: [{ agent: "tasker", prompt: "列文件", state: "completed", usage: { input: 1_200, output: 800, total: 2_000, cost: 0.0123 }, durationMs: 11_000 }],
+            total: 1,
+            completed: 1,
+            running: 0,
+            failed: 0,
+          },
+        },
+      },
+    }]);
+    const call = result.items[0]?.kind === "tool" ? result.items[0].subagent?.results[0] : undefined;
+    expect(call?.usage).toEqual({ input: 1_200, output: 800, total: 2_000, cost: 0.0123 });
+    expect(call?.durationMs).toBe(11_000);
+  });
 });

@@ -143,6 +143,15 @@ describe("ExtensionUiBridge", () => {
     expect(bridge.snapshot().cards).toEqual([]);
   });
 
+  it("drops the subagent Agents widget that duplicates the subagent card", () => {
+    const { bridge, messages } = setup();
+    bridge.context.setWidget("pi-subagent", ["2 running", "\u219112k \u21933k"]);
+    expect(messages.filter((message) => message.type === "request")).toEqual([]);
+    expect(bridge.snapshot().widgets).toEqual({});
+    bridge.context.setWidget("pi-subagent", undefined);
+    expect(bridge.snapshot().widgets).toEqual({});
+  });
+
   it("custom() resolves undefined like RPC mode", async () => {
     const { bridge } = setup();
     await expect(bridge.context.custom(() => ({}) as never)).resolves.toBeUndefined();

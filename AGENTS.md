@@ -25,7 +25,7 @@
 
 ## 其他注意事项
 
-- Pi 嵌在 Jarvis 服务进程里运行：派生 Pi 子进程的扩展（pi-subagent 等）用 `process.argv[1]` 推导子进程入口，会落到 `dist/server/server/index.js`。`src/server/pi-cli-forward.ts` 在启动服务前把这类 Pi CLI 调用（`--mode text|json|rpc`）转发给真正的 Pi CLI；改启动入口时不要绕过它。
+- Pi 嵌在 Jarvis 服务进程里运行：派生 Pi 子进程的扩展（Pi 官方 subagent 示例等）用 `process.argv[1]` 推导子进程入口，会落到 `dist/server/server/index.js`。`src/server/pi-cli-forward.ts` 在启动服务前把这类 Pi CLI 调用（`--mode text|json|rpc`）转发给真正的 Pi CLI；改启动入口时不要绕过它。
 
 - 自举式开发：用 Jarvis 开发 Jarvis 的约定见 [BOOTSTRAP.md](BOOTSTRAP.md)（编译与重启分离；重启只由用户触发）。
 

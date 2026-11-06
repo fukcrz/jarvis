@@ -12,9 +12,12 @@ import { jarvisHome } from "./jarvis-home.js";
 export const RECOMMENDED_PACKAGES: readonly { name: string; source: string }[] = [
   { name: "pi-web-access", source: "npm:pi-web-access" },
   { name: "@juicesharp/rpiv-ask-user-question", source: "npm:@juicesharp/rpiv-ask-user-question" },
-  { name: "@parke.dev/pi-subagent", source: "npm:@parke.dev/pi-subagent" },
+  { name: "pi-subagent-manager", source: "npm:pi-subagent-manager" },
   { name: "pi-playwright", source: "npm:pi-playwright" },
 ];
+
+/** 已下线的推荐插件：两个 subagent 插件同时装会抢 `/agents`，启动时必须清掉。 */
+const RETIRED_PACKAGES: readonly string[] = ["@parke.dev/pi-subagent"];
 
 interface PluginPrefs { version: 1; disabledBundled: string[]; disabledRecommended: string[]; }
 
@@ -163,6 +166,7 @@ export class PluginService {
   /** 推荐包缺了就装，已有的 npm 包则更新。本地路径的 package.json 名对上时视为已安装，不另装 npm 副本，也不覆盖该路径。失败只记日志，不挡启动。 */
   async ensureRecommended(): Promise<void> {
     const installed = await this.listInstalled();
+    await this.removeRetiredPackages(installed);
     for (const item of RECOMMENDED_PACKAGES) {
       if (this.prefs.disabledRecommended.includes(item.name)) continue;
       const matches = installed.filter((entry) => entry.name === item.name);
@@ -268,6 +272,18 @@ export class PluginService {
     return installed.sort((left, right) => left.name.localeCompare(right.name));
   }
 
+  private async removeRetiredPackages(installed: readonly InstalledPluginStatus[]): Promise<void> {
+    for (const entry of installed) {
+      const name = packageNameFromSource(entry.source) ?? entry.name;
+      if (!RETIRED_PACKAGES.includes(name)) continue;
+      try {
+        await this.packages.removeAndPersist(entry.source);
+      } catch (error) {
+        this.log(`Retired plugin removal failed for ${name}: ${asMessage(error)}`);
+      }
+    }
+  }
+
   private async removeByName(name: string): Promise<void> {
     const installed = await this.listInstalled();
     const match = installed.find((item) => packageNameFromSource(item.source) === name);
@@ -289,7 +305,7 @@ export class PluginService {
       return {
         version: 1 as const,
         disabledBundled: stringList(parsed["disabledBundled"]).filter((id) => BUNDLED_PLUGINS.some((plugin) => plugin.id === id)),
-        disabledRecommended: stringList(parsed["disabledRecommended"]),
+        disabledRecommended: stringList(parsed["disabledRecommended"]).filter((name) => RECOMMENDED_PACKAGES.some((item) => item.name === name)),
       };
     });
     if (loaded.value !== undefined) this.prefs = loaded.value;

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronRight, CircleAlert, CircleDashed, Copy, LoaderCircle, X } from "lucide-react";
+import { Check, ChevronRight, CircleAlert, Copy, LoaderCircle, X } from "lucide-react";
 import type { SubagentCallView, SubagentView, ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
 import { displayModelName } from "../model-display";
@@ -180,7 +180,11 @@ export function subagentGroupLabel(view: SubagentView): string {
 
 export function subagentRowLabel(view: SubagentView, grouped: boolean): string {
   const only = view.results.length === 1 ? view.results[0] : undefined;
-  if (only !== undefined) return `${subagentCallName(only)} · ${subagentCallStateLabel(only.state)}`;
+  if (only !== undefined) {
+    const name = subagentCallName(only);
+    const task = truncateEnd(only.prompt.trim(), SUBAGENT_TASK_CHARS);
+    return task === "" || task === name ? name : `${name} · ${task}`;
+  }
   if (view.results.length === 0) return "子代理";
   const who = runningAgentLabel(view);
   const failed = view.failed === 0 ? "" : `${String(view.failed)} 失败`;
@@ -251,23 +255,38 @@ function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: 
 function SubagentToolRow({ item, view, pending, grouped, open, showDetails, onToggle }: { item: ToolTimelineItem; view: SubagentView; pending: boolean; grouped: boolean; open: boolean; showDetails: boolean; onToggle: () => void }) {
   const [detailIndex, setDetailIndex] = useState<number>();
   const running = pending || view.running > 0;
-  const cardState: SubagentCallView["state"] = item.state === "failed" ? "failed" : item.state === "cancelled" ? "cancelled" : running ? "running" : "completed";
+  const single = view.results.length === 1;
+  const only = single ? view.results[0] : undefined;
+  const cardState: SubagentCallView["state"] = item.state === "failed" ? "failed" : item.state === "cancelled" ? "cancelled" : running ? "running" : only?.state ?? "completed";
   const totals = subagentUsageTotals(view);
+  const durationMs = (single ? view.results[0]?.durationMs : undefined) ?? item.durationMs;
+  const answer = only === undefined ? "" : subagentAnswerPreview(only);
   return (
     <article className={`tool-item tool-list-item subagent-item subagent-card ${cardState}`}>
-      <button className="tool-summary subagent-summary" type="button" onClick={onToggle} aria-expanded={open && showDetails}>
-        <ChevronRight size={13} className={`turn-process-chevron${open && showDetails ? " expanded" : ""}`} aria-hidden />
-        <span className={`subagent-card-state ${cardState}`} aria-hidden>{subagentStateIcon(cardState)}</span>
+      <button
+        className="tool-summary subagent-summary"
+        type="button"
+        onClick={single ? () => setDetailIndex(0) : onToggle}
+        aria-expanded={single ? undefined : open && showDetails}
+        {...(single ? { "aria-haspopup": "dialog" as const } : {})}
+      >
+        <span className={`subagent-type-dot ${cardState}`} data-tone={subagentTypeTone(only?.agent ?? view.results[0]?.agent ?? "")} aria-hidden />
         <span className="subagent-heading">
-          <span className="tool-title">{subagentRowLabel(view, grouped)}</span>
-          <span className="subagent-facts">
-            {pending ? <ElapsedClock startedAt={item.createdAt} /> : item.durationMs === undefined ? null : <time className="run-elapsed">{formatElapsedMs(item.durationMs)}</time>}
-            {totals.tokens === 0 ? null : <span className="subagent-fact">{formatTokenCount(totals.tokens)} tok</span>}
-            {totals.cost === 0 ? null : <span className="subagent-fact">{formatCost(totals.cost)}</span>}
+          <span className="subagent-title-row">
+            <span className="subagent-role">{only?.agent ?? "子代理"}</span>
+            <span className={`subagent-state-chip ${cardState}`}>{subagentCallStateLabel(cardState)}</span>
+            <ChevronRight size={14} className="subagent-open-icon" aria-hidden />
           </span>
+          <span className="tool-title">{only?.prompt.trim() || subagentRowLabel(view, grouped)}</span>
+          {answer === "" ? null : <span className="subagent-answer">{answer}</span>}
+        </span>
+        <span className="subagent-facts">
+          {pending ? <ElapsedClock startedAt={item.createdAt} /> : durationMs === undefined ? null : <time className="run-elapsed">{formatElapsedMs(durationMs)}</time>}
+          {totals.tokens === 0 ? null : <span className="subagent-fact">{formatTokenCount(totals.tokens)} tok</span>}
+          {totals.cost === 0 ? null : <span className="subagent-fact">{formatCost(totals.cost)}</span>}
         </span>
       </button>
-      {view.results.length === 0 ? null : (
+      {single || view.results.length === 0 ? null : (
         <div className="subagent-tiles">
           {view.results.map((call, index) => {
             const foot = [
@@ -297,7 +316,7 @@ function SubagentToolRow({ item, view, pending, grouped, open, showDetails, onTo
           })}
         </div>
       )}
-      {open ? <div className="tool-details inline-details" hidden={!showDetails}>
+      {open && !single ? <div className="tool-details inline-details" hidden={!showDetails}>
         {view.results.length === 0 ? null : <SubagentCallList results={view.results} />}
         {view.results.length === 0 && item.error !== undefined ? <p className="subagent-error">{item.error}</p> : null}
       </div> : null}
@@ -309,12 +328,22 @@ function SubagentToolRow({ item, view, pending, grouped, open, showDetails, onTo
   );
 }
 
-function subagentStateIcon(state: SubagentCallView["state"]) {
-  if (state === "running") return <LoaderCircle size={13} className="spin" />;
-  if (state === "failed") return <CircleAlert size={13} />;
-  if (state === "partial") return <CircleDashed size={13} />;
-  if (state === "cancelled") return <X size={13} />;
-  return <Check size={13} />;
+/** 子代理的类型色微点：同类同名颜色稳定，不同类能一眼分开。 */
+const SUBAGENT_TONES = ["violet", "teal", "amber", "pink", "blue", "green"] as const;
+
+export function subagentTypeTone(type: string): string {
+  if (type === "") return SUBAGENT_TONES[0];
+  let hash = 0;
+  for (const character of type) hash = (hash * 31 + character.codePointAt(0)!) % 997;
+  return SUBAGENT_TONES[hash % SUBAGENT_TONES.length]!;
+}
+
+/** 卡片上直接给一行答案：拍平成一行，拿不到就不占位。 */
+export function subagentAnswerPreview(call: SubagentCallView): string {
+  if (call.state === "running") return "";
+  const paragraphs = (call.output ?? "").split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
+  const preview = paragraphs.find((part) => !/^#{1,6}\s/.test(part)) ?? paragraphs[0] ?? "";
+  return stripMarkdown(preview).replace(/\s+/g, " ").trim();
 }
 
 export function subagentUsageTotals(view: SubagentView): { tokens: number; cost: number } {
@@ -337,14 +366,9 @@ export function formatCost(cost: number): string {
   return cost >= 1 ? `$${cost.toFixed(2)}` : `$${cost.toFixed(3)}`;
 }
 
-export type SubagentDrawerTab = "overview" | "output" | "process";
-
-const DRAWER_TABS: ReadonlyArray<readonly [SubagentDrawerTab, string]> = [["overview", "概览"], ["output", "输出"], ["process", "过程"]];
-
-/** 详情抽屉：单个子代理的配置、输出与完整过程。 */
-export function SubagentDrawer({ view, initialIndex = 0, initialTab = "overview", baseDir, onClose }: { view: SubagentView; initialIndex?: number; initialTab?: SubagentDrawerTab; baseDir?: string; onClose: () => void }) {
+/** 详情抽屉：输出在前，其余信息按顺序排在下面，不藏页签。 */
+export function SubagentDrawer({ view, initialIndex = 0, baseDir, onClose }: { view: SubagentView; initialIndex?: number; baseDir?: string; onClose: () => void }) {
   const [index, setIndex] = useState(initialIndex);
-  const [tab, setTab] = useState<SubagentDrawerTab>(initialTab);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -363,6 +387,8 @@ export function SubagentDrawer({ view, initialIndex = 0, initialTab = "overview"
   }, []);
   const call = view.results[index];
   if (call === undefined) return null;
+  const hasProcess = visibleSubagentSteps(call.recentSteps ?? []).length > 0 || (call.toolCalls ?? []).length > 0;
+  const meta = subagentCallMetaRows(call);
   return (
     <div
       className="subagent-drawer-layer"
@@ -373,14 +399,14 @@ export function SubagentDrawer({ view, initialIndex = 0, initialTab = "overview"
     >
       <aside className="subagent-drawer" role="dialog" aria-modal="true" aria-label={`${subagentCallName(call)} · ${subagentCallStateLabel(call.state)}`}>
         <header className="subagent-drawer-head">
-          <span className={`subagent-drawer-dot ${call.state}`} aria-hidden />
-          <div className="subagent-drawer-title">
-            <p className="subagent-drawer-name">{subagentCallName(call)}</p>
-            <p className="subagent-drawer-sub">{subagentCallStateLabel(call.state)}</p>
+          <div className="subagent-drawer-badges">
+            <span className="subagent-agent-pill" data-tone={subagentTypeTone(call.agent)}>{subagentCallName(call)}</span>
+            <span className={`subagent-state-pill ${call.state}`}>{subagentCallStateLabel(call.state)}</span>
+            <button ref={closeButton} className="subagent-drawer-close" type="button" onClick={() => closeRef.current()} aria-label="关闭详情">
+              <X size={15} />
+            </button>
           </div>
-          <button ref={closeButton} className="subagent-drawer-close" type="button" onClick={() => closeRef.current()} aria-label="关闭详情">
-            <X size={15} />
-          </button>
+
         </header>
         {view.results.length > 1 ? <nav className="subagent-drawer-tasks" aria-label="任务列表">
           {view.results.map((entry, entryIndex) => (
@@ -397,15 +423,24 @@ export function SubagentDrawer({ view, initialIndex = 0, initialTab = "overview"
             </button>
           ))}
         </nav> : null}
-        <div className="subagent-drawer-tabs" role="tablist" aria-label="详情内容">
-          {DRAWER_TABS.map(([id, label]) => (
-            <button key={id} type="button" role="tab" aria-selected={tab === id} className={`subagent-drawer-tab${tab === id ? " active" : ""}`} onClick={() => setTab(id)}>{label}</button>
-          ))}
-        </div>
         <div className="subagent-drawer-body">
-          {tab === "overview" ? <SubagentOverview call={call} /> : null}
-          {tab === "output" ? <SubagentOutput call={call} baseDir={baseDir} /> : null}
-          {tab === "process" ? <SubagentProcessDetail call={call} /> : null}
+          <SubagentOutput call={call} baseDir={baseDir} />
+          <div className="subagent-supporting">
+            <details className="subagent-disclosure">
+              <summary>任务<ChevronRight size={14} aria-hidden /></summary>
+              <SubagentOverview call={call} />
+            </details>
+            {hasProcess ? <details className="subagent-disclosure">
+              <summary>执行过程<ChevronRight size={14} aria-hidden /></summary>
+              <SubagentProcessDetail call={call} />
+            </details> : null}
+            {meta.length === 0 ? null : <details className="subagent-disclosure">
+              <summary>运行详情<ChevronRight size={14} aria-hidden /></summary>
+              <dl className="subagent-drawer-meta">
+                {meta.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+              </dl>
+            </details>}
+          </div>
         </div>
       </aside>
     </div>
@@ -413,22 +448,15 @@ export function SubagentDrawer({ view, initialIndex = 0, initialTab = "overview"
 }
 
 function SubagentOverview({ call }: { call: SubagentCallView }) {
-  const model = call.model === undefined ? "" : displayModelName(call.model);
   const execution = [call.backend === undefined || call.backend === "pi" ? "" : call.backend, call.profile ?? "", call.worktree === true ? "worktree" : ""].filter(Boolean).join(" · ");
-  const usage = call.usage === undefined ? "" : [formatTokenCount(call.usage.total ?? 0), call.usage.cost === undefined ? "" : formatCost(call.usage.cost)].filter(Boolean).join(" · ");
   const prompt = (call.fullPrompt ?? call.prompt).trim();
+  const rows: Array<[string, ReactNode]> = [
+    ...(call.label?.startsWith("/") === true ? [["路径", call.label] as [string, ReactNode]] : []),
+    ...(execution === "" ? [] : [["执行", execution] as [string, ReactNode]]),
+    ...(call.source === undefined ? [] : [["来源", call.source === "user" ? "用户" : call.source === "project" ? "项目" : "未知"] as [string, ReactNode]]),
+  ];
   return (
     <div className="subagent-overview">
-      <dl className="subagent-facts-grid">
-        <div><dt>状态</dt><dd className={`state ${call.state}`}>{subagentCallStateLabel(call.state)}</dd></div>
-        <div><dt>轮数</dt><dd>{call.turns === undefined ? "—" : String(call.turns)}</dd></div>
-        <div><dt>耗时</dt><dd>{call.state === "running" ? (call.startedAt === undefined ? "—" : <ElapsedClock startedAt={call.startedAt} />) : call.durationMs === undefined ? "—" : formatElapsedMs(call.durationMs)}</dd></div>
-        <div><dt>Token</dt><dd>{usage === "" ? "—" : usage}</dd></div>
-        <div><dt>模型</dt><dd>{model === "" ? "—" : model}</dd></div>
-        <div><dt>执行</dt><dd>{execution === "" ? "—" : execution}</dd></div>
-        <div><dt>思考</dt><dd>{call.thinkingLevel ?? "—"}</dd></div>
-        <div><dt>来源</dt><dd>{call.source === undefined ? "—" : call.source === "user" ? "用户" : call.source === "project" ? "项目" : "未知"}</dd></div>
-      </dl>
       {call.error === undefined ? null : <p className="subagent-error">{call.error}</p>}
       {prompt === "" ? null : (
         <section className="subagent-drawer-section">
@@ -436,6 +464,9 @@ function SubagentOverview({ call }: { call: SubagentCallView }) {
           <pre className="subagent-drawer-prompt">{promptText(prompt)}</pre>
         </section>
       )}
+      {rows.length === 0 ? null : <dl className="subagent-facts-grid">
+        {rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+      </dl>}
       {call.sessionHandle === undefined ? null : (
         <section className="subagent-drawer-section">
           <header className="subagent-drawer-section-head"><h3>子会话</h3><CopyButton text={call.sessionHandle} /></header>
@@ -448,10 +479,10 @@ function SubagentOverview({ call }: { call: SubagentCallView }) {
 
 function SubagentOutput({ call, baseDir }: { call: SubagentCallView; baseDir?: string }) {
   const output = (call.output ?? "").trim();
-  if (output === "") return <p className="subagent-empty">无输出</p>;
+  if (output === "") return <p className="subagent-empty">{call.state === "running" ? "执行中" : "暂无输出"}</p>;
   return (
     <div className="subagent-output">
-      <div className="subagent-drawer-section-head"><h3>输出</h3><CopyButton text={output} /></div>
+      <div className="subagent-output-toolbar"><span>结果</span><CopyButton text={output} /></div>
       <div className="subagent-markdown"><MarkdownMessage text={output} baseDir={baseDir} /></div>
     </div>
   );
@@ -596,7 +627,18 @@ function SubagentProcess({ steps }: { steps: NonNullable<SubagentCallView["recen
   );
 }
 
-/** 块头的执行配置：后端/profile · 短模型名 · 思考等级。 */
+/** 抽屉头部的读数行：每个数字单独一列，没有值就不占位。 */
+export function subagentCallMetaRows(call: SubagentCallView): Array<[string, string]> {
+  return [
+    call.state === "running" || call.durationMs === undefined ? undefined : ["耗时", formatElapsedMs(call.durationMs)] as [string, string],
+    call.usage?.total === undefined || call.usage.total === 0 ? undefined : ["Token", formatTokenCount(call.usage.total)] as [string, string],
+    call.usage?.cost === undefined || call.usage.cost <= 0 ? undefined : ["成本", formatCost(call.usage.cost)] as [string, string],
+    call.model === undefined ? undefined : ["模型", displayModelName(call.model).split("/").at(-1) ?? ""] as [string, string],
+    call.thinkingLevel === undefined ? undefined : ["思考", call.thinkingLevel] as [string, string],
+    call.turns === undefined ? undefined : ["轮数", String(call.turns)] as [string, string],
+  ].filter((row): row is [string, string] => row !== undefined && row[1] !== "");
+}
+
 export function subagentCallMeta(call: SubagentCallView): string {
   return [
     call.backend !== undefined && call.backend !== "pi" ? call.backend : "",

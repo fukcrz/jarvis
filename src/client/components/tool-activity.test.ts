@@ -102,7 +102,7 @@ describe("ToolActivity command rows", () => {
 });
 
 describe("ToolActivity subagent rows", () => {
-  it("collapses a single running call to agent and status", () => {
+  it("puts the agent and its task on a single call", () => {
     const markup = renderToStaticMarkup(createElement(ToolActivity, {
       items: [subagentTool("running", {
         kind: "pi-subagent",
@@ -114,8 +114,51 @@ describe("ToolActivity subagent rows", () => {
       })],
       active: true,
     }));
-    expect(markup).toContain("scout · 执行中");
-    expect(markup).not.toContain("Find the auth flow");
+    expect(markup).toContain('class="subagent-role">scout');
+    expect(markup).toContain("Find the auth flow");
+    expect(markup).toContain('aria-haspopup="dialog"');
+    expect(markup).not.toContain("subagent-tiles");
+  });
+
+  it("shows the finished answer and the agent type colour on the card", () => {
+    const markup = renderToStaticMarkup(createElement(ToolActivity, {
+      items: [subagentTool("completed", {
+        kind: "pi-subagent",
+        results: [{
+          agent: "tasker",
+          label: "/root/verify-session-filter",
+          prompt: "列 src/server 下名字含 subagent 的文件",
+          state: "completed",
+          output: "**subagent-view.ts**\n\nsubagent-view.test.ts",
+          durationMs: 11_910,
+          usage: { total: 261_958, cost: 0.0042 },
+        }],
+        total: 1,
+        completed: 1,
+        running: 0,
+        failed: 0,
+      })],
+      active: false,
+    }));
+    expect(markup).toContain('class="subagent-type-dot completed" data-tone=');
+    expect(markup).toContain('<span class="subagent-answer">subagent-view.ts</span>');
+    expect(markup).toContain("262.0k tok");
+    expect(markup).toContain('subagent-state-chip completed');
+  });
+
+  it("marks a failed call with a state chip instead of a bare title", () => {
+    const markup = renderToStaticMarkup(createElement(ToolActivity, {
+      items: [subagentTool("failed", {
+        kind: "pi-subagent",
+        results: [{ agent: "scout", prompt: "Find auth", state: "failed", error: "boom" }],
+        total: 1,
+        completed: 0,
+        running: 0,
+        failed: 1,
+      })],
+      active: false,
+    }));
+    expect(markup).toContain('<span class="subagent-state-chip failed">失败</span>');
   });
 
   it("names the running agents instead of a bare fraction", () => {
@@ -192,7 +235,8 @@ describe("ToolActivity subagent rows", () => {
       active: true,
     }));
     const summary = /<button class="tool-summary subagent-summary"[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
-    expect(summary).toContain("worker · 执行中");
+    expect(summary).toContain('class="subagent-role">worker');
+    expect(summary).toContain("Fix auth");
     expect(summary).not.toContain("现在执行目标单测");
   });
 
@@ -259,22 +303,22 @@ describe("ToolActivity subagent rows", () => {
     expect(markup).not.toContain("<code>");
   });
 
-  it("shows model, thinking level and turns on the task tile", () => {
-    const items = [subagentTool("running", {
+  it("moves model, thinking level and turns into the drawer", () => {
+    const view: SubagentView = {
       kind: "pi-subagent",
       results: [{ agent: "worker", prompt: "Fix the return path", state: "running", model: "gpt-test (fast)", thinkingLevel: "high", turns: 12 }],
       total: 1,
       completed: 0,
       running: 1,
       failed: 0,
-    })];
-    const collapsed = renderToStaticMarkup(createElement(ToolActivity, { items, active: true }));
-    expect(collapsed).toContain("gpt-test · high");
-    expect(collapsed).toContain("12 轮");
-
-    const expanded = renderToStaticMarkup(createElement(ToolActivity, { items, active: true, openItems: new Set(["sa-1"]) }));
-    expect(expanded).toContain("gpt-test · high");
-    expect(expanded).toContain("12 轮");
+    };
+    const markup = renderToStaticMarkup(createElement(SubagentDrawer, { view, onClose: () => undefined }));
+    expect(markup).toContain('<span class="subagent-agent-pill" data-tone="violet">worker</span>');
+    expect(markup).toContain('<span class="subagent-state-pill running">执行中</span>');
+    expect(markup).toContain("<dt>模型</dt><dd>gpt-test</dd>");
+    expect(markup).toContain("<dt>思考</dt><dd>high</dd>");
+    expect(markup).toContain("<dt>轮数</dt><dd>12</dd>");
+    expect(markup).not.toContain("过程");
   });
 
   it("collapses a failed call without dumping output", () => {
@@ -289,7 +333,8 @@ describe("ToolActivity subagent rows", () => {
       })],
       active: false,
     }));
-    expect(markup).toContain("scout · 失败");
+    expect(markup).toContain('class="subagent-role">scout');
+    expect(markup).toContain("Find auth");
     expect(markup).not.toContain("boom");
   });
 
@@ -394,27 +439,53 @@ describe("Subagent drawer", () => {
     failed: 0,
   };
 
-  it("shows configuration, usage, prompt and session on the overview tab", () => {
+  it("puts the answer first without a tab to click", () => {
     const markup = renderToStaticMarkup(createElement(SubagentDrawer, { view, onClose: () => undefined }));
-    expect(markup).toContain("概览");
-    expect(markup).toContain("输出");
+    expect(markup).toContain("结论");
+    expect(markup).not.toContain("subagent-drawer-tab");
+  });
+
+  it("drops the facts an agent never reported instead of showing dashes", () => {
+    const markup = renderToStaticMarkup(createElement(SubagentDrawer, {
+      view: { ...view, results: [{ agent: "tasker", prompt: "列文件", state: "completed", output: "a.ts", durationMs: 11_000 }] },
+      onClose: () => undefined,
+    }));
+    expect(markup).toContain("完成");
+    expect(markup).toContain("0:11");
+    expect(markup).not.toContain("轮数");
+    expect(markup).not.toContain("执行");
+    expect(markup).not.toContain("来源");
+    expect(markup).not.toContain("Token");
+  });
+
+  it("omits the process section when the snapshot has no process", () => {
+    const markup = renderToStaticMarkup(createElement(SubagentDrawer, {
+      view: { ...view, results: [{ agent: "tasker", prompt: "列文件", state: "completed", output: "a.ts" }] },
+      onClose: () => undefined,
+    }));
+    expect(markup).not.toContain("过程");
+  });
+
+  it("stacks usage, prompt and session under the answer", () => {
+    const markup = renderToStaticMarkup(createElement(SubagentDrawer, { view, onClose: () => undefined }));
     expect(markup).toContain("过程");
-    expect(markup).toContain("2.0k · $0.012");
-    expect(markup).toContain("1:35");
+    expect(markup).toContain("<dt>Token</dt><dd>2.0k</dd>");
+    expect(markup).toContain("<dt>成本</dt><dd>$0.012</dd>");
+    expect(markup).toContain("<dt>耗时</dt><dd>1:35</dd>");
     expect(markup).toContain("范围");
     expect(markup).toContain("8f4d2c1b");
     expect(markup).toContain("haiku-4.5");
   });
 
-  it("renders the final answer as markdown on the output tab", () => {
-    const markup = renderToStaticMarkup(createElement(SubagentDrawer, { view, initialTab: "output", onClose: () => undefined }));
+  it("renders the final answer as markdown", () => {
+    const markup = renderToStaticMarkup(createElement(SubagentDrawer, { view, onClose: () => undefined }));
     expect(markup).toContain("结论");
     expect(markup).toContain("src/server/auth.ts");
     expect(markup).toContain("复制");
   });
 
-  it("lists the transcript on the process tab", () => {
-    const markup = renderToStaticMarkup(createElement(SubagentDrawer, { view, initialTab: "process", onClose: () => undefined }));
+  it("lists the transcript in the process section", () => {
+    const markup = renderToStaticMarkup(createElement(SubagentDrawer, { view, onClose: () => undefined }));
     expect(markup).toContain("读取了 auth.ts");
     expect(markup).toContain("旧路径 已确认");
     expect(markup).not.toContain("**");
@@ -497,7 +568,7 @@ describe("parke.dev/pi-subagent rows", () => {
       running: 0,
       failed: 0,
     };
-    expect(subagentRowLabel(view, false)).toBe("迁移 auth · 未收尾");
+    expect(subagentRowLabel(view, false)).toBe("迁移 auth");
     expect(subagentCallMeta(view.results[0]!)).toBe("codex · explore · gpt-5.2 · high · worktree");
   });
 

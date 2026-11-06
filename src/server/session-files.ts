@@ -106,7 +106,7 @@ export async function listSessionFiles(workspace: Workspace): Promise<SessionFil
   const files = await mapLimit(jsonlNames, HEADER_READ_CONCURRENCY, async (name) => {
     const path = join(directory, name);
     const header = await readSessionFileHeader(path);
-    if (header === undefined || !isVisibleSessionId(header.id)) return undefined;
+    if (header === undefined || header.subagentThread === true || !isVisibleSessionId(header.id)) return undefined;
     if (filterCwd && (header.cwd === undefined || header.cwd === "" || resolve(header.cwd) !== resolvedCwd)) return undefined;
     let stats: Awaited<ReturnType<typeof stat>>;
     try {
@@ -171,27 +171,53 @@ const SESSION_HEADER_SCAN_BYTES = 64 * 1024;
 const SESSION_LIST_HEAD_SCAN_BYTES = 256 * 1024;
 const SESSION_LIST_TAIL_SCAN_BYTES = 64 * 1024;
 const HEADER_READ_CONCURRENCY = 16;
+/** pi-subagent-manager 在建子会话时写入的归属记录，用来区分主会话与子代理会话。 */
+const SUBAGENT_THREAD_ENTRY = "pi-subagent:thread:v1";
 
-export async function readSessionFileHeader(path: string): Promise<{ id: string; cwd?: string; timestamp?: string } | undefined> {
+export async function readSessionFileHeader(path: string): Promise<{ id: string; cwd?: string; timestamp?: string; subagentThread?: true } | undefined> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(path, "r");
     const buffer = Buffer.alloc(SESSION_HEADER_SCAN_BYTES);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const newline = buffer.subarray(0, bytesRead).indexOf(0x0a);
+    const head = buffer.subarray(0, bytesRead);
+    const newline = head.indexOf(0x0a);
     if (newline <= 0) return undefined;
-    const parsed: unknown = JSON.parse(buffer.subarray(0, newline).toString("utf8"));
+    const parsed: unknown = JSON.parse(head.subarray(0, newline).toString("utf8"));
     if (!isRecord(parsed) || parsed["type"] !== "session" || typeof parsed["id"] !== "string" || parsed["id"] === "") return undefined;
     return {
       id: parsed["id"],
       ...(typeof parsed["cwd"] === "string" ? { cwd: parsed["cwd"] } : {}),
       ...(typeof parsed["timestamp"] === "string" ? { timestamp: parsed["timestamp"] } : {}),
+      ...(subagentThreadMarked(head.subarray(newline + 1)) ? { subagentThread: true as const } : {}),
     };
   } catch {
     return undefined;
   } finally {
     await handle?.close().catch(() => undefined);
   }
+}
+
+/** 只看会话开头的几行：归属记录在建子会话时先于对话内容写入。 */
+function subagentThreadMarked(head: Buffer): boolean {
+  let offset = 0;
+  for (let index = 0; index < 8; index += 1) {
+    const newline = head.indexOf(0x0a, offset);
+    const line = head.subarray(offset, newline === -1 ? head.length : newline).toString("utf8").trim();
+    if (line !== "") {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        parsed = undefined;
+      }
+      if (isRecord(parsed) && parsed["type"] === "message") return false;
+      if (isRecord(parsed) && parsed["type"] === "custom" && parsed["customType"] === SUBAGENT_THREAD_ENTRY) return true;
+    }
+    if (newline === -1) return false;
+    offset = newline + 1;
+  }
+  return false;
 }
 
 export async function sessionModifiedAt(sessionFile: string | undefined, fallback: string): Promise<string> {
