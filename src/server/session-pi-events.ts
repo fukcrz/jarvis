@@ -6,6 +6,7 @@ import { assistantTextBlockId, assistantTextPhaseFromContent, assistantThinkingB
 import type { ActiveRun, ActiveSession, PiEvent } from "./session-active.js";
 import { firstUserMessage, isAssistantMessage, isUserMessage, retryStatus } from "./session-helpers.js";
 import { UsageLedger, usageRecordFrom } from "./usage-ledger.js";
+import { attachLiveSubagentThread } from "./subagent-view.js";
 import { isAbortErrorMessage, stringValue, toIso } from "./values.js";
 
 export interface SessionPiHost {
@@ -79,6 +80,22 @@ export class SessionPiEvents {
         return;
       default:
         return;
+    }
+  }
+
+  /** Runtime-only child changes reuse tool.upsert; no model turn or visible message. */
+  handleSubagentUpdate(active: ActiveSession, data: unknown): void {
+    if (!isRecord(data) || data["version"] !== 1) return;
+    const tools = active.subagentTools ??= new Map();
+    for (const tool of active.activeTools.values()) {
+      if (tool.subagent !== undefined && !tools.has(tool.id)) tools.set(tool.id, tool);
+    }
+    for (const tool of tools.values()) {
+      const updated = attachLiveSubagentThread(tool, data["thread"]);
+      if (updated !== tool) {
+        tools.set(updated.id, updated);
+        this.host.publishTool(active, updated);
+      }
     }
   }
 

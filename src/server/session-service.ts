@@ -1361,7 +1361,7 @@ export class SessionService {
     const leafId = active.session.sessionManager.getLeafId();
     const cached = active.timelineCache;
     if (cached?.leafId === leafId) return cached.items;
-    const items = projectHistory(active.session.sessionManager.getBranch());
+    const items = projectHistory(active.session.sessionManager.getBranch()).map((item) => item.kind === "tool" ? active.subagentTools?.get(item.id) ?? item : item);
     const interruption = active.state.lastError;
     if (interruption?.code === "RUN_INTERRUPTED") {
       const runId = `interrupted:${active.ref.sessionId}:${interruption.occurredAt}`;
@@ -1532,6 +1532,10 @@ export class SessionService {
   private publishTool(active: ActiveSession, tool: ToolTimelineItem, runId?: string): void {
     const id = runId ?? active.state.activeRun?.id;
     active.activeTools.set(tool.id, tool);
+    if (tool.subagent !== undefined) {
+      (active.subagentTools ??= new Map()).set(tool.id, tool);
+      active.timelineCache = undefined;
+    }
     this.events.publishSession(active.ref, { type: "tool.upsert", runId: id, payload: { tool: toExternalTimelineItem(tool, active.ref) } });
   }
 

@@ -34,12 +34,13 @@ interface ToolActivityProps {
 
 /** Render every tool call as its own row; the enclosing process owns folding. */
 export function ToolActivity({ items, active, showAll = true, showActivePreview = true, openItems, onToggleItem, visibleItemIds }: ToolActivityProps) {
-  const state = activityState(items, active);
-  const visibleIds = visibleItemIds ?? new Set((showAll ? items : collapsedItems(items, active, showActivePreview)).map((item) => item.id));
+  const presentedItems = items.filter((item) => item.name !== "session_update");
+  const state = activityState(presentedItems, active);
+  const visibleIds = visibleItemIds ?? new Set((showAll ? presentedItems : collapsedItems(presentedItems, active, showActivePreview)).map((item) => item.id));
 
   return (
     <article className={`activity-group ${state}`}>
-      <div className="activity-items" hidden={visibleIds.size === 0}>{items.map((item) => <div key={item.id} hidden={!visibleIds.has(item.id)}>
+      <div className="activity-items" hidden={visibleIds.size === 0}>{presentedItems.map((item) => <div key={item.id} hidden={!visibleIds.has(item.id)}>
         <ToolRow item={item} pending={active && item.state === "running"} grouped={false} open={openItems?.has(item.id) === true} showDetails={showAll} onToggle={() => onToggleItem?.(item.id, openItems?.has(item.id) === true && showAll)} />
       </div>)}</div>
     </article>
@@ -119,11 +120,12 @@ function StreamFoldRow({ foldId, label, items, active, openItems, onToggleItem }
   </>;
 }
 
-const ACTIVITY_KIND_LABELS: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", bash: "命令", powershell: "命令", grep: "搜索", find: "查找", ls: "目录", session_update: "更新会话" };
+const ACTIVITY_KIND_LABELS: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", bash: "命令", powershell: "命令", grep: "搜索", find: "查找", ls: "目录" };
 
 export function summarizeToolActivity(items: ToolTimelineItem[]): string {
   const chunks: Array<{ key: string; count: number }> = [];
   for (const item of items) {
+    if (item.name === "session_update") continue;
     if (item.subagent !== undefined) {
       chunks.push({ key: `subagent:${subagentGroupLabel(item.subagent)}`, count: 1 });
       continue;
@@ -138,7 +140,6 @@ export function summarizeToolActivity(items: ToolTimelineItem[]): string {
 
 function formatActivityChunk(key: string, count: number): string {
   if (key.startsWith("subagent:")) return key.slice("subagent:".length);
-  if (key === "更新会话" && count === 1) return key;
   return `${key} ${String(count)}`;
 }
 
@@ -157,7 +158,6 @@ function activityState(items: ToolTimelineItem[], active: boolean): ToolState {
 
 function toolActivityLabel(item: ToolTimelineItem): string {
   if (item.subagent !== undefined) return subagentRowLabel(item.subagent, false);
-  if (item.name === "session_update") return "更新会话";
   const target = compactTarget(item.target);
   if (item.name === "bash") return `执行了 ${compactCommand(item.inputPreview ?? item.target)}`;
   if (item.name === "read") return `读取了 ${target || "文件"}`;
@@ -174,7 +174,9 @@ export function subagentGroupLabel(view: SubagentView): string {
   if (view.failed === view.total) return `子代理 ${String(view.failed)}/${String(view.total)} 失败`;
   const cancelled = view.results.filter((call) => call.state === "cancelled").length;
   if (cancelled === view.total) return `子代理 ${String(cancelled)} 已停止`;
-  if (view.failed > 0) return `子代理 ${String(view.completed)}/${String(view.total)} · ${String(view.failed)} 失败`;
+  const failed = view.failed === 0 ? "" : `${String(view.failed)} 失败`;
+  const partial = (view.partial ?? 0) === 0 ? "" : `${String(view.partial)} 未收尾`;
+  if (view.failed > 0 || (view.partial ?? 0) > 0) return `子代理 ${String(view.completed)}/${String(view.total)}${failed === "" ? "" : ` · ${failed}`}${partial === "" ? "" : ` · ${partial}`}`;
   return `子代理 ${String(view.completed)}/${String(view.total)}`;
 }
 
@@ -188,8 +190,9 @@ export function subagentRowLabel(view: SubagentView, grouped: boolean): string {
   if (view.results.length === 0) return "子代理";
   const who = runningAgentLabel(view);
   const failed = view.failed === 0 ? "" : `${String(view.failed)} 失败`;
-  if (who !== "" && grouped) return [failed, who, "执行中"].filter(Boolean).join(" · ");
-  if (who !== "") return [`子代理 ${String(view.completed)}/${String(view.total)}`, failed, who].filter(Boolean).join(" · ");
+  const partial = (view.partial ?? 0) === 0 ? "" : `${String(view.partial)} 未收尾`;
+  if (who !== "" && grouped) return [failed, partial, who, "执行中"].filter(Boolean).join(" · ");
+  if (who !== "") return [`子代理 ${String(view.completed)}/${String(view.total)}`, failed, partial, who].filter(Boolean).join(" · ");
   if (view.failed === view.total) return `${String(view.failed)}/${String(view.total)} 失败`;
   const cancelled = view.results.filter((call) => call.state === "cancelled").length;
   if (cancelled === view.total) return `${String(cancelled)} 已停止`;
@@ -270,9 +273,9 @@ function SubagentToolRow({ item, view, pending, grouped, open, showDetails, onTo
         aria-expanded={single ? undefined : open && showDetails}
         {...(single ? { "aria-haspopup": "dialog" as const } : {})}
       >
-        <span className={`subagent-type-dot ${cardState}`} data-tone={subagentTypeTone(only?.agent ?? view.results[0]?.agent ?? "")} aria-hidden />
         <span className="subagent-heading">
           <span className="subagent-title-row">
+            <span className={`subagent-type-dot ${cardState}`} data-tone={subagentTypeTone(only?.agent ?? view.results[0]?.agent ?? "")} aria-hidden />
             <span className="subagent-role">{only?.agent ?? "子代理"}</span>
             <span className={`subagent-state-chip ${cardState}`}>{subagentCallStateLabel(cardState)}</span>
             <ChevronRight size={14} className="subagent-open-icon" aria-hidden />
@@ -281,7 +284,7 @@ function SubagentToolRow({ item, view, pending, grouped, open, showDetails, onTo
           {answer === "" ? null : <span className="subagent-answer">{answer}</span>}
         </span>
         <span className="subagent-facts">
-          {pending ? <ElapsedClock startedAt={item.createdAt} /> : durationMs === undefined ? null : <time className="run-elapsed">{formatElapsedMs(durationMs)}</time>}
+          {running ? <ElapsedClock startedAt={only?.startedAt ?? item.createdAt} /> : durationMs === undefined ? null : <time className="run-elapsed">{formatElapsedMs(durationMs)}</time>}
           {totals.tokens === 0 ? null : <span className="subagent-fact">{formatTokenCount(totals.tokens)} tok</span>}
           {totals.cost === 0 ? null : <span className="subagent-fact">{formatCost(totals.cost)}</span>}
         </span>

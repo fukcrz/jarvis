@@ -12,7 +12,7 @@ import { jarvisHome } from "./jarvis-home.js";
 export const RECOMMENDED_PACKAGES: readonly { name: string; source: string }[] = [
   { name: "pi-web-access", source: "npm:pi-web-access" },
   { name: "@juicesharp/rpiv-ask-user-question", source: "npm:@juicesharp/rpiv-ask-user-question" },
-  { name: "pi-subagent-manager", source: "npm:pi-subagent-manager" },
+  { name: "pi-subagent-manager", source: join(process.cwd(), "plugins", "pi-subagent-manager") },
   { name: "pi-playwright", source: "npm:pi-playwright" },
 ];
 
@@ -173,6 +173,16 @@ export class PluginService {
       const local = matches.find((entry) => packageNameFromSource(entry.source) === undefined);
       const npm = matches.find((entry) => packageNameFromSource(entry.source) === item.name);
       try {
+        const recommendedIsLocal = packageNameFromSource(item.source) === undefined;
+        if (recommendedIsLocal) {
+          if (local !== undefined) {
+            if (npm !== undefined) await this.packages.removeAndPersist(npm.source);
+            continue;
+          }
+          if (npm !== undefined) await this.packages.removeAndPersist(npm.source);
+          await this.packages.installAndPersist(item.source);
+          continue;
+        }
         if (local !== undefined) {
           if (npm !== undefined) await this.packages.removeAndPersist(npm.source);
           continue;

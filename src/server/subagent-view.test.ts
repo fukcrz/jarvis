@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolTimelineItem } from "../shared/protocol.js";
-import { attachSubagentView, subagentViewFromArgs } from "./subagent-view.js";
+import { attachLiveSubagentThread, attachSubagentView, subagentViewFromArgs } from "./subagent-view.js";
 
 const dispatchedAt = "2026-01-01T00:00:00.000Z";
 
@@ -148,7 +148,7 @@ describe("parke.dev/pi-subagent shape", () => {
     const done = attachSubagentView(tool(), {
       details: { mode: "single", state: "partial", startedAt: base, endedAt: base + 1_000, results: [{ label: "task-1", task: "Do it", state: "partial", finalOutput: "half done" }] },
     });
-    expect(done.subagent).toMatchObject({ completed: 1, results: [{ state: "partial", output: "half done" }] });
+    expect(done.subagent).toMatchObject({ completed: 0, partial: 1, results: [{ state: "partial", output: "half done" }] });
   });
 
   it("keeps tokens and cost for the card and drawer", () => {
@@ -179,6 +179,17 @@ const thread = {
 };
 
 describe("pi-subagent-manager shape", () => {
+  it("updates only the matching call, including relative root paths", () => {
+    const seeded = { ...managerTool("agent_spawn"), subagent: subagentViewFromArgs("agent_spawn", { path: "map-auth", type: "scout", task: thread.task }, dispatchedAt) };
+    expect(attachLiveSubagentThread(seeded, { ...thread, path: "/root/other" })).toBe(seeded);
+    expect(attachLiveSubagentThread(seeded, null)).toBe(seeded);
+    const live = attachLiveSubagentThread(seeded, { ...thread, state: "running", status: "Reading auth", output: undefined });
+    expect(live.subagent).toMatchObject({ running: 1, completed: 0, results: [{ label: thread.path, recentSteps: [{ text: "Reading auth" }], usage: { total: 1660 } }] });
+    const stopped = attachLiveSubagentThread(live, { ...thread, state: "stopped", error: undefined });
+    expect(stopped.subagent).toMatchObject({ running: 0, completed: 0, failed: 0, results: [{ state: "cancelled" }] });
+    expect(attachLiveSubagentThread(live, { ...thread, state: "paused" }).subagent).toMatchObject({ completed: 0, partial: 1 });
+  });
+
   it("seeds a running card from agent_spawn with the agent type as the name", () => {
     const view = subagentViewFromArgs("agent_spawn", { path: "/root/map-auth", type: "scout", task: "Map the auth flow" }, dispatchedAt)?.results[0];
     expect(view).toMatchObject({ agent: "scout", label: "/root/map-auth", prompt: "Map the auth flow", state: "running", startedAt: dispatchedAt });
@@ -188,6 +199,7 @@ describe("pi-subagent-manager shape", () => {
   it("maps a thread snapshot onto the card fields", () => {
     const done = attachSubagentView(managerTool("agent_spawn"), { details: thread });
     expect(done.subagent).toMatchObject({ total: 1, completed: 1 });
+    expect(done.subagent).not.toHaveProperty("partial");
     expect(done.subagent?.results[0]).toMatchObject({
       agent: "scout",
       label: "/root/map-auth",

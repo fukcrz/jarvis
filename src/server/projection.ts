@@ -1,6 +1,6 @@
 import { isRecord, type AssistantGenerationStats, type AssistantTextPhase, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type NoticeTimelineItem, type RunOutcomeTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type TokenUsage, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
 import { fileChangeFromCall, fileChangeFromPatch } from "../shared/file-change.js";
-import { attachSubagentView, subagentViewFromArgs } from "./subagent-view.js";
+import { attachLiveSubagentThread, attachSubagentView, subagentThreadsFromEntries, subagentViewFromArgs } from "./subagent-view.js";
 import { isAbortErrorMessage, numberValue, stringValue, toIso } from "./values.js";
 
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
@@ -112,7 +112,10 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
     }
   }
 
-  return items.filter((item) => item.kind !== "run-outcome" || !dismissedRunOutcomes.has(item.runId));
+  const threads = subagentThreadsFromEntries(entries);
+  return items.filter((item) => item.kind !== "run-outcome" || !dismissedRunOutcomes.has(item.runId))
+    .map((item) => item.kind !== "tool" || item.subagent === undefined ? item
+      : threads.reduce<ToolTimelineItem>((tool, thread) => attachLiveSubagentThread(tool, thread), item));
 }
 
 /**

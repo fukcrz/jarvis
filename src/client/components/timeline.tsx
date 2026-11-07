@@ -214,7 +214,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   const activeTurn = activeTimelineTurn(turns, status);
   const statusTurn = turns.at(-1);
   const hasVisibleLiveProcess = (activeTurn !== undefined && hasVisibleLiveProcessEntry(activeTurn, streamingMessageId))
-    || (status.activeRun?.kind === "bash" && items.some((item) => item.kind === "tool" && item.name !== "ask_user_question" && (item.state === "queued" || item.state === "running")));
+    || (status.activeRun?.kind === "bash" && items.some((item) => item.kind === "tool" && item.name !== "ask_user_question" && item.name !== "session_update" && (item.state === "queued" || item.state === "running")));
   const showInlineRunStatus = runActivity !== undefined && (runActivity.target === "bottom" || status.runState !== "running" || !hasVisibleLiveProcess);
   const statusAtComposer = !hasVisibleLiveProcess && (status.compacting !== undefined || status.retrying !== undefined || status.runState === "stopping");
   const runStatusTurnKey = showInlineRunStatus && !statusAtComposer ? statusTurn?.key : undefined;
@@ -1480,7 +1480,7 @@ export function presentTurnProcess(entries: TimelineRenderItem[]): PresentedTurn
     customAnswers,
     entries: entries.flatMap((entry): TimelineRenderItem[] => {
       if (entry.kind === "activity") {
-        const items = entry.items.filter((item) => item.name !== "ask_user_question");
+        const items = entry.items.filter((item) => item.name !== "ask_user_question" && item.name !== "session_update");
         return items.length === 0 ? [] : [{ kind: "activity", items }];
       }
       if (entry.kind === "extension-ui" && hidden.has(entry.item.id)) return [];

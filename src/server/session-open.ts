@@ -1,5 +1,6 @@
 import {
   createAgentSession,
+  createEventBus,
   createMcpExtension,
   DefaultResourceLoader,
   getAgentDir,
@@ -22,6 +23,7 @@ import { sessionModifiedAt } from "./session-files.js";
 import { activeKey } from "./session-helpers.js";
 import type { SessionPiEvents } from "./session-pi-events.js";
 import { SessionMessageQueue } from "./session-queue.js";
+import { projectHistory } from "./projection.js";
 
 function sideChatNotice(source: SideChatSource | undefined): string {
   if (source === undefined) return SIDE_CHAT_NOTICE;
@@ -58,7 +60,9 @@ export async function createActiveSession(
     : { scopedModels: [], diagnostics: [] };
   for (const diagnostic of diagnostics) console.warn(`Model scope warning: ${diagnostic.message}`);
 
+  const eventBus = createEventBus();
   const resourceLoader = new DefaultResourceLoader({
+    eventBus,
     cwd: workspace.cwd,
     extensionFactories: [createMcpExtension()],
     agentDir,
@@ -158,6 +162,7 @@ export async function createActiveSession(
     streamingMessageIds: new Set(),
     toolStartedAt: new Map(),
     activeTools: new Map(),
+    subagentTools: new Map(projectHistory(manager.getBranch()).flatMap((item) => item.kind === "tool" && item.subagent !== undefined ? [[item.id, item] as const] : [])),
     activeBash: undefined,
     queue: emptySessionQueue,
     messageQueue,
@@ -171,7 +176,12 @@ export async function createActiveSession(
     createdAt,
     updatedAt: await sessionModifiedAt(session.sessionFile, now),
   };
-  active.unsubscribe = session.subscribe((event) => deps.piEvents.handle(active, event));
+  const unsubscribePi = session.subscribe((event) => deps.piEvents.handle(active, event));
+  const unsubscribeSubagents = eventBus.on("pi-subagent:live:v1", (data) => deps.piEvents.handleSubagentUpdate(active, data));
+  active.unsubscribe = () => {
+    unsubscribePi();
+    unsubscribeSubagents();
+  };
   deps.active.set(activeKey(actualRef), active);
   const onExtensionError = (error: ExtensionError) => {
     console.warn("Pi extension error", error);

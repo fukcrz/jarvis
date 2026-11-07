@@ -137,7 +137,8 @@ describe("plugin service isolation", () => {
     harness.packages.sources.push({ source: "git:github.com/LukasParke/pi-subagent", installedPath: retired });
     await harness.service.ensureRecommended();
     expect(harness.packages.calls).toContain("remove:git:github.com/LukasParke/pi-subagent");
-    expect(harness.packages.calls).toContain("install:npm:pi-subagent-manager");
+    expect(harness.packages.calls).not.toContain("install:npm:pi-subagent-manager");
+    expect(harness.packages.calls).toContain(`install:${join(process.cwd(), "plugins", "pi-subagent-manager")}`);
     expect(harness.packages.sources.map((item) => item.source)).not.toContain("git:github.com/LukasParke/pi-subagent");
   });
 

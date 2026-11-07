@@ -35,6 +35,54 @@ export function attachSubagentView(tool: ToolTimelineItem, result?: unknown): To
   return finalizeSeededSubagent(tool, result);
 }
 
+/** Apply a live pi-subagent-manager thread snapshot to the matching seeded call. */
+export function attachLiveSubagentThread(tool: ToolTimelineItem, value: unknown): ToolTimelineItem {
+  if (!MANAGER_TOOLS.has(tool.name) || tool.subagent === undefined || !isThreadView(value)) return tool;
+  const path = stringValue(value["path"]);
+  const index = tool.subagent.results.findIndex((call) => {
+    const label = call.label;
+    return label === path || (label !== undefined && !label.startsWith("/") && `/root/${label}` === path);
+  });
+  if (index < 0) return tool;
+  const updated = managerCallFromThread(value, index, tool.createdAt, tool.subagent)[0];
+  if (updated === undefined) return tool;
+  const results = tool.subagent.results.map((call, resultIndex) => resultIndex === index ? updated : call);
+  return { ...tool, subagent: viewFromCalls(results) };
+}
+
+/** Read existing registry checkpoints for card hydration, without exposing child history. */
+export function subagentThreadsFromEntries(entries: readonly unknown[]): unknown[] {
+  const threads = new Map<string, Record<string, unknown>>();
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry["type"] !== "custom" || !isRecord(entry["data"])) continue;
+    const data = entry["data"];
+    if (data["version"] !== 1) continue;
+    if (entry["customType"] === "pi-subagent:registry:v1" && Array.isArray(data["threads"])) {
+      threads.clear();
+      for (const thread of data["threads"]) {
+        if (isRecord(thread) && isThreadView(thread["view"])) threads.set(stringValue(thread["view"]["path"]), thread["view"]);
+      }
+    } else if (entry["customType"] === "pi-subagent:registry-delta:v1" && Array.isArray(data["changes"])) {
+      for (const change of data["changes"]) {
+        if (!isRecord(change)) continue;
+        const thread = change["thread"];
+        if (isRecord(thread) && isThreadView(thread["view"])) {
+          threads.set(stringValue(thread["view"]["path"]), thread["view"]);
+        } else if (typeof change["path"] === "string" && isRecord(change["view"])) {
+          const previous = threads.get(change["path"]);
+          if (previous === undefined) continue;
+          const view = { ...previous, ...change["view"] };
+          if (Array.isArray(change["cleared"])) for (const field of change["cleared"]) {
+            if (typeof field === "string") delete view[field];
+          }
+          threads.set(change["path"], view);
+        }
+      }
+    }
+  }
+  return [...threads.values()];
+}
+
 function subagentViewFromResult(result: unknown, dispatchedAt?: string, seed?: SubagentView): SubagentView | undefined {
   const threads = managerThreads(result);
   if (threads !== undefined) {
@@ -186,7 +234,8 @@ function viewFromCalls(results: SubagentCallView[]): SubagentView {
     kind: "pi-subagent",
     results,
     total: results.length,
-    completed: results.filter((call) => call.state === "completed" || call.state === "partial").length,
+    completed: results.filter((call) => call.state === "completed").length,
+    ...(results.some((call) => call.state === "partial") ? { partial: results.filter((call) => call.state === "partial").length } : {}),
     running: results.filter((call) => call.state === "running").length,
     failed: results.filter((call) => call.state === "failed").length,
   };

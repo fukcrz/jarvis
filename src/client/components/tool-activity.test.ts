@@ -140,7 +140,7 @@ describe("ToolActivity subagent rows", () => {
       })],
       active: false,
     }));
-    expect(markup).toContain('class="subagent-type-dot completed" data-tone=');
+    expect(markup).toMatch(/class="subagent-title-row"><span class="subagent-type-dot completed"/);
     expect(markup).toContain('<span class="subagent-answer">subagent-view.ts</span>');
     expect(markup).toContain("262.0k tok");
     expect(markup).toContain('subagent-state-chip completed');
@@ -211,9 +211,9 @@ describe("ToolActivity subagent rows", () => {
       running: 1,
       failed: 0,
     })];
-    expect(summarizeToolActivity(items)).toBe("更新会话 · 子代理 1/2");
+    expect(summarizeToolActivity(items)).toBe("子代理 1/2");
     const markup = renderToStaticMarkup(createElement(ToolActivity, { items, active: true }));
-    expect(markup).not.toContain("更新会话 · 子代理 1/2");
+    expect(markup).not.toContain("更新会话");
     expect(markup).toContain("子代理 1/2 · worker");
     expect(markup).not.toContain("现在执行目标单测。");
     expect(markup).not.toContain("session update");
@@ -238,6 +238,16 @@ describe("ToolActivity subagent rows", () => {
     expect(summary).toContain('class="subagent-role">worker');
     expect(summary).toContain("Fix auth");
     expect(summary).not.toContain("现在执行目标单测");
+  });
+
+  it("keeps a detached child clock running after its spawn tool has returned", () => {
+    const item: ToolTimelineItem = { ...subagentTool("completed", {
+      kind: "pi-subagent", results: [{ agent: "scout", prompt: "Return OK", state: "running", startedAt: new Date(Date.now() - 45_000).toISOString() }],
+      total: 1, completed: 0, running: 1, failed: 0,
+    }), durationMs: 2 };
+    const markup = renderToStaticMarkup(createElement(ToolActivity, { items: [item], active: false }));
+    expect(markup).toContain('subagent-state-chip running');
+    expect(markup).toMatch(/class="run-elapsed">0:4[4-6]<\/time>/);
   });
 
   it("shows the finished duration instead of a clock", () => {

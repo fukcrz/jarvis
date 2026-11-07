@@ -344,7 +344,7 @@ describe("structured text phases", () => {
 });
 
 describe("presentTurnProcess", () => {
-  it("drops the ask tool and the custom follow-up, keeping the typed answer on the select", () => {
+  it("drops internal session updates along with the ask tool and custom follow-up", () => {
     const select: ExtensionUiTimelineItem = {
       kind: "extension-ui",
       id: "select",
@@ -362,7 +362,7 @@ describe("presentTurnProcess", () => {
       request: { id: "input", method: "input", title: "是否按这个方案改？\n\nType your answer:" },
     };
     const presented = presentTurnProcess([
-      { kind: "activity", items: [{ ...tool("ask", "ask_user_question"), title: "ask user question" }] },
+      { kind: "activity", items: [{ ...tool("update", "session_update"), title: "session update" }, { ...tool("ask", "ask_user_question"), title: "ask user question" }] },
       { kind: "extension-ui", item: select },
       { kind: "extension-ui", item: input },
     ]);

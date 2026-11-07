@@ -563,6 +563,8 @@ export interface SubagentView {
   results: SubagentCallView[];
   total: number;
   completed: number;
+  /** Paused or otherwise incomplete calls; not included in completed. */
+  partial?: number;
   running: number;
   failed: number;
 }

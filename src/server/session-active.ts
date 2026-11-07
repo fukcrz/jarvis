@@ -70,6 +70,8 @@ export interface ActiveSession {
   queue: SessionQueue;
   messageQueue: SessionMessageQueue;
   activeTools: Map<string, ToolTimelineItem>;
+  /** Child cards outlive the root model turn; retained for runtime updates. */
+  subagentTools?: Map<string, ToolTimelineItem>;
   /** Memoized projection of the current immutable branch. The leaf id is its version. */
   timelineCache?: { leafId: string | null; items: TimelineItem[] };
   /** 正在执行的用户 !cmd 命令（流式输出尚未落盘）。 */

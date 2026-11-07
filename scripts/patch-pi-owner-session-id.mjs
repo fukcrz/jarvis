@@ -97,13 +97,20 @@ await replaceOneOf(
   [
     {
       before: "            return modelRuntime.streamSimple(model, context, requestOptions);",
-      after: "            return modelRuntime.streamSimple(model, context, {\n                ...requestOptions,\n                // Keep local provider routing tied to this AgentSession even when compaction\n                // replaces sessionId with an isolated UUID for cache/request affinity.\n                ownerSessionId: sessionManager.getSessionId(),\n            });",
+      after: "            return modelRuntime.streamSimple(model, context, {\n                ...requestOptions,\n                // Keep local provider routing tied to this AgentSession unless a nested\n                // runtime supplies its root owner; sessionId may be an isolated summary id.\n                ownerSessionId: requestOptions.ownerSessionId ?? sessionManager.getSessionId(),\n            });",
     },
     {
       before: "            const requestOptions = buildRequestOptions(options);",
-      after: "            const requestOptions = buildRequestOptions({\n                ...options,\n                // Keep local provider routing tied to this AgentSession even when compaction\n                // replaces sessionId with an isolated UUID for cache/request affinity.\n                ownerSessionId: sessionManager.getSessionId(),\n            });",
+      after: "            const requestOptions = buildRequestOptions({\n                ...options,\n                // Keep local provider routing tied to this AgentSession unless a nested\n                // runtime supplies its root owner; sessionId may be an isolated summary id.\n                ownerSessionId: options?.ownerSessionId ?? sessionManager.getSessionId(),\n            });",
     },
   ],
+  { critical: true },
+);
+
+await replaceOnce(
+  join(codingAgentRoot, "dist/core/sdk.js"),
+  "                // Keep local provider routing tied to this AgentSession even when compaction\n                // replaces sessionId with an isolated UUID for cache/request affinity.\n                ownerSessionId: sessionManager.getSessionId(),",
+  "                // Keep local provider routing tied to this AgentSession unless a nested\n                // runtime supplies its root owner; sessionId may be an isolated summary id.\n                ownerSessionId: requestOptions.ownerSessionId ?? sessionManager.getSessionId(),",
   { critical: true },
 );
 
