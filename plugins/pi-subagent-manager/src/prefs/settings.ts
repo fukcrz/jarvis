@@ -20,7 +20,7 @@ export type SubagentMode = (typeof SUBAGENT_MODES)[number];
 export const WIDGET_MODES = ["full", "minimal"] as const;
 export type WidgetMode = (typeof WIDGET_MODES)[number];
 
-export const COST_DISPLAY_MODES = ["pi-footer-event", "pi-footer-status", "pi-status"] as const;
+export const COST_DISPLAY_MODES = ["off", "pi-footer-event", "pi-footer-status", "pi-status"] as const;
 export type CostDisplayMode = (typeof COST_DISPLAY_MODES)[number];
 
 export const COST_VALUES = ["subagents", "total"] as const;
@@ -86,7 +86,7 @@ export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
   subagentMode: "opportunistic",
   toolFiltering: "all-except-blocked",
   widgetMode: "full",
-  costDisplay: "pi-footer-status",
+  costDisplay: "off",
   costValue: "subagents",
   costIcon: "money",
   nerdFontIcons: false,
@@ -167,7 +167,7 @@ function requirement(key: (typeof KEYS)[number]): string {
   if (key === "subagentMode") return "subagentMode must be off, opportunistic or orchestration";
   if (key === "widgetMode") return "widgetMode must be full or minimal";
   if (key === "costDisplay")
-    return "costDisplay must be pi-footer-event, pi-footer-status or pi-status";
+    return "costDisplay must be off, pi-footer-event, pi-footer-status or pi-status";
   if (key === "costValue") return "costValue must be subagents or total";
   if (key === "costIcon") return "costIcon must be money, coins or wallet";
   if (key === "loaderStyle") return `loaderStyle must be one of: ${LOADER_STYLES.join(", ")}`;

@@ -131,6 +131,11 @@ const WIDGET_MODE_HELP =
 
 const COST_DISPLAY_OPTIONS = [
   {
+    id: "off",
+    label: "Off",
+    help: "Do not show cost in the footer or status area.",
+  },
+  {
     id: "pi-status",
     label: "Replace Pi status",
     help: "Show the selected cost in Pi’s status area, without replacing the whole footer. Third-party footers may also consume this status.",

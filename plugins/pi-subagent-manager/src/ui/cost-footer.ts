@@ -62,7 +62,7 @@ export class CostFooterController {
     private readonly pi: Pick<ExtensionAPI, "getCommands" | "events">,
     private readonly subagentCost: () => number,
     private readonly nerdFontIcons: () => boolean,
-    private readonly displayMode: () => CostDisplayMode = () => "pi-footer-status",
+    private readonly displayMode: () => CostDisplayMode = () => "off",
     private readonly costValue: () => CostValue = () => "subagents",
     private readonly costIcon: () => CostIcon = () => "money",
   ) {}
@@ -74,6 +74,12 @@ export class CostFooterController {
 
   refresh(ctx: ExtensionContext): void {
     const mode = this.displayMode();
+    if (mode === "off") {
+      this.clear();
+      this.reset(ctx);
+      if (ctx.hasUI) ctx.ui.setStatus(COST_WIDGET_ID, undefined);
+      return;
+    }
     const value = this.formatCost(
       this.costValue() === "total" ? footerUsage(ctx.sessionManager.getEntries()).cost : 0,
     );
