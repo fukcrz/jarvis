@@ -13,17 +13,20 @@ describe("subagent status line", () => {
     expect(subagentThreadCounts(undefined)).toEqual({ running: 0, paused: 0 });
   });
 
-  it("reports only unfinished threads, never history", () => {
+  it("reports only threads that are running", () => {
     expect(subagentStatusLabel(undefined)).toBeUndefined();
     expect(subagentStatusLabel([])).toBeUndefined();
     expect(subagentStatusLabel([row("/root/a", "running"), row("/root/b", "running")])).toBe("2 个子代理执行中");
     expect(subagentStatusLabel([row("/root/a", "running"), row("/root/c", "paused")])).toBe("1 个子代理执行中 · 1 已暂停");
-    expect(subagentStatusLabel([row("/root/c", "paused")])).toBe("1 个子代理已暂停");
+    // paused 不会自己往前走，不单独占一行。
+    expect(subagentStatusLabel([row("/root/c", "paused")])).toBeUndefined();
+    expect(subagentStatusLabel([row("/root/c", "paused"), row("/root/d", "paused")])).toBeUndefined();
   });
 
   it("drops the noun on narrow screens", () => {
-    expect(subagentStatusLabelCompact([row("/root/a", "running"), row("/root/c", "paused")])).toBe("2 执行中");
-    expect(subagentStatusLabelCompact([row("/root/c", "paused")])).toBe("1 已暂停");
+    expect(subagentStatusLabelCompact([row("/root/a", "running"), row("/root/c", "paused")])).toBe("1 执行中 · 1 暂停");
+    expect(subagentStatusLabelCompact([row("/root/a", "running")])).toBe("1 执行中");
+    expect(subagentStatusLabelCompact([row("/root/c", "paused")])).toBeUndefined();
     expect(subagentStatusLabelCompact([])).toBeUndefined();
   });
 

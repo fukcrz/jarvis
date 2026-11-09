@@ -122,7 +122,7 @@ async function exercise(baseUrl, workspace, label, viewport) {
     assert.ok(layout.inFooter && layout.height > 0 && layout.width > 0 && layout.aboveEditor, `${label}: status line must sit in the composer toolbar`, layout);
     assert.ok(layout.documentWidth <= layout.viewportWidth + 1, `${label}: status line must not overflow: ${layout.documentWidth} > ${layout.viewportWidth}`);
     assert.equal(layout.dotColor, "rgb(127, 210, 200)", `${label}: sidebar must use the subagent colour`);
-    if (label === "mobile") assert.deepEqual(layout.text, ["3 执行中"], `${label}: compact label`);
+    if (label === "mobile") assert.deepEqual(layout.text, ["2 执行中 · 1 暂停"], `${label}: compact label`);
     else assert.deepEqual(layout.text, ["2 个子代理执行中 · 1 已暂停"], `${label}: full label`);
     await page.screenshot({ path: join(shotDir, `${label}-status-line.png`) });
 
@@ -143,6 +143,10 @@ async function exercise(baseUrl, workspace, label, viewport) {
     await page.screenshot({ path: join(shotDir, `${label}-status-sheet.png`) });
     await page.keyboard.press("Escape");
     await sheet.waitFor({ state: "hidden" });
+
+    await emitSummary(page, { workspaceId: workspace.id, sessionId: session.id, summary: withThreads(base, [threads[2]]) });
+    await paint(page);
+    assert.equal(await page.locator(".subagent-status").count(), 0, `${label}: paused-only threads must not keep the status line`);
 
     await emitSummary(page, { workspaceId: workspace.id, sessionId: session.id, summary: withThreads(base, []) });
     await page.locator(".subagent-status").waitFor({ state: "hidden" });

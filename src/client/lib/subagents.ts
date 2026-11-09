@@ -17,27 +17,22 @@ export function subagentThreadCounts(threads: SubagentThreadRow[] | undefined): 
   return { running, paused };
 }
 
-/** 未结束的线程总数；为 0 时不显示状态行。 */
-export function subagentThreadTotal(threads: SubagentThreadRow[] | undefined): number {
-  const { running, paused } = subagentThreadCounts(threads);
-  return running + paused;
-}
-
-/** 状态行文案：只说现在有几个没结束，不报历史、不报失败。 */
+/** 状态行文案：只在有线程真正在跑时出现。
+ * paused 只作为后缀：它停在轮边界、不会自己往前走，单独挂着只会在工具栏里长期占位。
+ */
 export function subagentStatusLabel(threads: SubagentThreadRow[] | undefined): string | undefined {
   const { running, paused } = subagentThreadCounts(threads);
-  if (running > 0 && paused > 0) return `${String(running)} 个子代理执行中 · ${String(paused)} 已暂停`;
-  if (running > 0) return `${String(running)} 个子代理执行中`;
-  if (paused > 0) return `${String(paused)} 个子代理已暂停`;
-  return undefined;
+  if (running === 0) return undefined;
+  if (paused > 0) return `${String(running)} 个子代理执行中 · ${String(paused)} 已暂停`;
+  return `${String(running)} 个子代理执行中`;
 }
 
 /** 窄屏只保留计数与状态。 */
 export function subagentStatusLabelCompact(threads: SubagentThreadRow[] | undefined): string | undefined {
   const { running, paused } = subagentThreadCounts(threads);
-  if (running > 0) return `${String(running + paused)} 执行中`;
-  if (paused > 0) return `${String(paused)} 已暂停`;
-  return undefined;
+  if (running === 0) return undefined;
+  if (paused > 0) return `${String(running)} 执行中 · ${String(paused)} 暂停`;
+  return `${String(running)} 执行中`;
 }
 
 /** 线程本次运行已跑多久，m:ss。paused 线程的时长已冻结，不随当前时间增长。 */
