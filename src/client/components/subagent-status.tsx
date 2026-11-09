@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { SubagentThreadRow } from "../../shared/protocol";
-import { revealSubagentThread, subagentElapsed, subagentStatusLabel, subagentStatusLabelCompact } from "../lib/subagents";
+import { revealSubagentThread, subagentElapsed, subagentStatusLabel } from "../lib/subagents";
 import { Dialog, DialogContent } from "./ui/dialog";
 
 interface SubagentStatusProps {
@@ -9,25 +9,25 @@ interface SubagentStatusProps {
 }
 
 /**
- * 输入框上方的一行状态：还有几个子代理没结束。点开看是哪些线程。
+ * 输入框上方的一行状态：还有几个子代理在跑。点开看是哪些线程。
  * 只表达当前会话；别的会话靠侧栏的状态点。
  */
 export function SubagentStatus({ threads }: SubagentStatusProps) {
   const [open, setOpen] = useState(false);
   const label = subagentStatusLabel(threads);
   if (label === undefined || threads === undefined) return null;
-  const compact = subagentStatusLabelCompact(threads);
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <button type="button" className="subagent-status" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
-        <span className="subagent-status-dot" aria-hidden="true" />
-        <span className="subagent-status-text">{label}</span>
-        <span className="subagent-status-text-compact">{compact}</span>
-      </button>
-      <DialogContent className="selector-sheet subagent-status-sheet" title="子代理">
-        <SubagentStatusList threads={threads} onReveal={(path) => { setOpen(false); revealSubagentThread(path); }} />
-      </DialogContent>
-    </Dialog>
+    <div className="subagent-status-bar">
+      <Dialog open={open} onOpenChange={setOpen}>
+        <button type="button" className="subagent-status" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
+          <span className="subagent-status-dot" aria-hidden="true" />
+          <span className="subagent-status-text">{label}</span>
+        </button>
+        <DialogContent className="selector-sheet subagent-status-sheet" title="子代理">
+          <SubagentStatusList threads={threads} onReveal={(path) => { setOpen(false); revealSubagentThread(path); }} />
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 

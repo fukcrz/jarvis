@@ -105,12 +105,14 @@ async function exercise(baseUrl, workspace, label, viewport) {
       const editor = document.querySelector(".composer-editor");
       const dot = document.querySelector(".sidebar-activity.subagents");
       const box = chip.getBoundingClientRect();
+      const editorBox = editor.getBoundingClientRect();
       const text = [...chip.querySelectorAll("span")].filter((node) => getComputedStyle(node).display !== "none").map((node) => node.textContent?.trim()).filter(Boolean);
       return {
         text,
         label: chip.textContent?.trim(),
         inFooter: footer?.contains(chip) === true,
-        aboveEditor: box.bottom <= editor.getBoundingClientRect().bottom,
+        aboveEditor: box.bottom <= editor.getBoundingClientRect().top,
+        leftGap: Math.abs(box.left - editorBox.left),
         height: box.height,
         width: box.width,
         dotColor: dot === null ? undefined : getComputedStyle(dot).borderTopColor,
@@ -119,11 +121,13 @@ async function exercise(baseUrl, workspace, label, viewport) {
         viewportWidth: innerWidth,
       };
     });
-    assert.ok(layout.inFooter && layout.height > 0 && layout.width > 0 && layout.aboveEditor, `${label}: status line must sit in the composer toolbar`, layout);
+    assert.ok(layout.height > 0 && layout.width > 0, `${label}: status line must be visible`, layout);
+    assert.equal(layout.inFooter, false, `${label}: status line must not sit inside the composer toolbar`);
+    assert.ok(layout.aboveEditor, `${label}: status line must sit above the input box`, layout);
+    assert.ok(layout.leftGap <= 8, `${label}: status line must line up with the input box, gap ${layout.leftGap}px`, layout);
     assert.ok(layout.documentWidth <= layout.viewportWidth + 1, `${label}: status line must not overflow: ${layout.documentWidth} > ${layout.viewportWidth}`);
     assert.equal(layout.dotColor, "rgb(127, 210, 200)", `${label}: sidebar must use the subagent colour`);
-    if (label === "mobile") assert.deepEqual(layout.text, ["2 执行中 · 1 暂停"], `${label}: compact label`);
-    else assert.deepEqual(layout.text, ["2 个子代理执行中 · 1 已暂停"], `${label}: full label`);
+    assert.deepEqual(layout.text, ["2 个子代理执行中 · 1 已暂停"], `${label}: label`);
     await page.screenshot({ path: join(shotDir, `${label}-status-line.png`) });
 
     await page.locator(".subagent-status").click();

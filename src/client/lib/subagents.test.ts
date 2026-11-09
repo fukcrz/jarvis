@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentThreadRow } from "../../shared/protocol";
-import { subagentElapsed, subagentStatusLabel, subagentStatusLabelCompact, subagentThreadCounts } from "./subagents";
+import { subagentElapsed, subagentStatusLabel, subagentThreadCounts } from "./subagents";
 
 function row(path: string, state: SubagentThreadRow["state"]): SubagentThreadRow {
   return { path, type: "scout", state, line: "Reading" };
@@ -21,13 +21,6 @@ describe("subagent status line", () => {
     // paused 不会自己往前走，不单独占一行。
     expect(subagentStatusLabel([row("/root/c", "paused")])).toBeUndefined();
     expect(subagentStatusLabel([row("/root/c", "paused"), row("/root/d", "paused")])).toBeUndefined();
-  });
-
-  it("drops the noun on narrow screens", () => {
-    expect(subagentStatusLabelCompact([row("/root/a", "running"), row("/root/c", "paused")])).toBe("1 执行中 · 1 暂停");
-    expect(subagentStatusLabelCompact([row("/root/a", "running")])).toBe("1 执行中");
-    expect(subagentStatusLabelCompact([row("/root/c", "paused")])).toBeUndefined();
-    expect(subagentStatusLabelCompact([])).toBeUndefined();
   });
 
   it("formats elapsed time from the run start", () => {

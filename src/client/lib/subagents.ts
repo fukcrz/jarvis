@@ -27,14 +27,6 @@ export function subagentStatusLabel(threads: SubagentThreadRow[] | undefined): s
   return `${String(running)} 个子代理执行中`;
 }
 
-/** 窄屏只保留计数与状态。 */
-export function subagentStatusLabelCompact(threads: SubagentThreadRow[] | undefined): string | undefined {
-  const { running, paused } = subagentThreadCounts(threads);
-  if (running === 0) return undefined;
-  if (paused > 0) return `${String(running)} 执行中 · ${String(paused)} 暂停`;
-  return `${String(running)} 执行中`;
-}
-
 /** 线程本次运行已跑多久，m:ss。paused 线程的时长已冻结，不随当前时间增长。 */
 export function subagentElapsed(thread: Pick<SubagentThreadRow, "startedAt" | "elapsedMs">, now: number): string | undefined {
   if (thread.elapsedMs !== undefined) return formatElapsedMs(thread.elapsedMs);
