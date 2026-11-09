@@ -28,5 +28,8 @@ export function stripRedundantRootBeforeWindowsDrive(path: string): string {
 
 /** 去掉引号/尖括号，并剥掉盘符前多余的 Unix 根斜杠。 */
 export function canonicalizeLocalPathInput(value: string): string {
-  return stripRedundantRootBeforeWindowsDrive(unwrapPathDelimiters(value));
+  const path = stripRedundantRootBeforeWindowsDrive(unwrapPathDelimiters(value));
+  return /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith("\\\\")
+    ? path
+    : path.replaceAll("\\", "/");
 }

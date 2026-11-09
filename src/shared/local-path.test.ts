@@ -36,4 +36,10 @@ describe("canonicalizeLocalPathInput", () => {
     expect(canonicalizeLocalPathInput('  "/D:/work/a.png"  ')).toBe("D:/work/a.png");
     expect(canonicalizeLocalPathInput("<//D:/work/a.png>")).toBe("D:/work/a.png");
   });
+
+  it("normalizes Windows separators in relative paths only", () => {
+    expect(canonicalizeLocalPathInput(String.raw`.\shots\health-index.png`)).toBe("./shots/health-index.png");
+    expect(canonicalizeLocalPathInput(String.raw`C:\work\shot.png`)).toBe(String.raw`C:\work\shot.png`);
+    expect(canonicalizeLocalPathInput(String.raw`\\server\share\shot.png`)).toBe(String.raw`\\server\share\shot.png`);
+  });
 });
