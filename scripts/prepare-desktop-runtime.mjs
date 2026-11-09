@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,6 +36,29 @@ if (process.platform === "win32") {
 }
 if (install.status !== 0) {
   throw new Error("desktop runtime npm ci --omit=dev 失败");
+}
+
+// 本地路径插件不会由 Pi 安装依赖，必须随运行时自包含，否则装完插件加载就报缺模块。
+for (const entry of readdirSync(join(staging, "plugins"))) {
+  const pluginDir = join(staging, "plugins", entry);
+  if (!existsSync(join(pluginDir, "package.json"))) continue;
+  const args = existsSync(join(pluginDir, "package-lock.json"))
+    ? ["ci", "--omit=dev"]
+    : ["install", "--omit=dev", "--no-package-lock"];
+  const pluginInstall = spawnSync("npm", args, {
+    cwd: pluginDir,
+    stdio: process.platform === "win32" ? ["ignore", "pipe", "pipe"] : "inherit",
+    maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
+    shell: process.platform === "win32",
+    env: { ...process.env, NODE_ENV: "production" },
+  });
+  if (process.platform === "win32") {
+    if (pluginInstall.stdout) process.stdout.write(pluginInstall.stdout);
+    if (pluginInstall.stderr) process.stderr.write(pluginInstall.stderr);
+  }
+  if (pluginInstall.status !== 0) throw new Error(`插件依赖安装失败：${entry}`);
+  console.log(`plugin dependencies installed: ${entry}`);
 }
 
 console.log(`desktop runtime staged at ${staging}`);

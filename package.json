@@ -78,8 +78,10 @@
     "rehype-highlight": "^7.0.2",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
+    "shell-quote": "^1.8.3",
     "tailwind-merge": "^3.7.0",
     "typebox": "^1.4.3",
+    "yaml": "^2.8.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
