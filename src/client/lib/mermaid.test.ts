@@ -284,6 +284,7 @@ describe("renderMermaidDiagram", () => {
       themeVariables: expect.objectContaining({
         lineColor: "#ffffff",
         arrowheadColor: "#ffffff",
+        scaleLabelColor: "#24212b",
       }),
     }));
     expect(mermaid.parse).toHaveBeenCalledTimes(1);

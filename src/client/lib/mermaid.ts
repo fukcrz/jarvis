@@ -119,6 +119,7 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
         signalColor: "#c9c9d1",
         signalTextColor: "#c9c9d1",
         labelTextColor: "#f1f3f4",
+        scaleLabelColor: "#24212b",
         edgeLabelBackground: "#16181c",
       },
     });
