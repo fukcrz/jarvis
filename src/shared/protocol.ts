@@ -403,6 +403,11 @@ export interface SessionSummary {
   starred?: boolean;
   /** 全文搜索命中片段（仅搜索响应附带），用于展示命中上下文。 */
   matchSnippet?: string;
+  /**
+   * 未结束的子代理线程。只由插件的 live 事件驱动：线程结束即移除，全部结束为空数组。
+   * 侧栏状态点与工具栏状态行都读这一份，不另设计数。
+   */
+  subagentThreads?: SubagentThreadRow[];
 }
 
 export interface SessionCleanupSkipped {
@@ -556,6 +561,22 @@ export interface SubagentCallView {
   output?: string;
   error?: string;
   toolCalls?: Array<{ name: string; summary: string }>;
+}
+
+/** 未结束子代理线程的一行最小描述，供会话状态使用。 */
+export interface SubagentThreadRow {
+  /** 线程路径，同一会话内唯一。 */
+  path: string;
+  /** 线程类型名，例如 researcher。 */
+  type: string;
+  /** running = 正在执行；paused = 停在轮边界、不再自己往前走。 */
+  state: "running" | "paused";
+  /** 一行当前动作；没有进度时退化为任务描述。 */
+  line: string;
+  /** 本次运行开始时刻。running 的耗时由它现算，paused 不再增长。 */
+  startedAt?: string;
+  /** paused 线程冻结的已跑时长，不再随当前时间增长。 */
+  elapsedMs?: number;
 }
 
 export interface SubagentView {
@@ -857,6 +878,14 @@ const sessionSummarySchema = z.object({
   lastUserMessageAt: z.string().optional(),
   lastReplyEndedAt: z.string().optional(),
   starred: z.boolean().optional(),
+  subagentThreads: z.array(z.object({
+    path: z.string(),
+    type: z.string(),
+    state: z.enum(["running", "paused"]),
+    line: z.string(),
+    startedAt: z.string().optional(),
+    elapsedMs: z.number().optional(),
+  })).optional(),
 });
 
 export const globalEventSchema = z.discriminatedUnion("type", [

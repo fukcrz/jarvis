@@ -21,6 +21,7 @@
   --accent-strong: #d0c7ff;
   --warm: #f4be70;
   --warm-soft: #3a2e20;
+  --subagent: #7fd2c8;
   --danger: #ef8f93;
   --danger-soft: #3d2428;
   --success: #8fcea9;
@@ -105,6 +106,7 @@ html[data-pointer="coarse"] [role="button"] { cursor: default; }
 .button.project-new-session { width: 26px; height: 26px; flex: 0 0 auto; margin-right: 4px; border-radius: 50%; color: var(--muted); }
 .sidebar-activity { width: 12px; height: 12px; flex: 0 0 auto; margin-right: 10px; border: 2px solid color-mix(in srgb, var(--accent) 32%, transparent); border-top-color: var(--accent-strong); border-radius: 50%; animation: spin .85s linear infinite; }
 .sidebar-activity.stopping { border-color: rgb(244 190 112 / .28); border-top-color: var(--warm); animation-duration: 1.2s; }
+.sidebar-activity.subagents { border-color: color-mix(in srgb, var(--subagent) 26%, transparent); border-top-color: var(--subagent); animation-duration: 1.1s; }
 .sidebar-activity.attention-completed_unread, .sidebar-activity.attention-failed, .sidebar-activity.attention-waiting_interaction { width: 8px; height: 8px; margin-right: 12px; border: 0; animation: none; }
 .sidebar-activity.attention-completed_unread { background: var(--success); box-shadow: 0 0 0 3px rgb(111 207 151 / .13); }
 .sidebar-activity.attention-failed { background: var(--danger); box-shadow: 0 0 0 3px rgb(255 107 112 / .13); }
@@ -1594,4 +1596,29 @@ html.text-selecting .run-status-bar { pointer-events: none !important; }
 
 @media (max-width: 640px) {
   .activity-items .subagent-card .subagent-facts { margin-top: 4px; font-size: 10px; }
+}
+
+/* 子代理状态行：输入框上方只报“还有几个没结束”，细节点开看。 */
+.subagent-status { display: inline-flex; align-items: center; flex: 0 1 auto; min-width: 0; max-width: min(240px, 40vw); gap: 6px; border: 0; border-radius: 5px; background: transparent; padding: 0 5px; color: var(--subagent); font: 600 11px/1 var(--font-sans, sans-serif); white-space: nowrap; }
+.subagent-status:hover { background: color-mix(in srgb, var(--subagent) 12%, transparent); }
+.subagent-status-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--subagent); animation: subagent-pulse 1.6s ease-in-out infinite; }
+.subagent-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.subagent-status-text-compact { display: none; }
+@keyframes subagent-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.subagent-status-sheet { width: min(460px, calc(100vw - 32px)); }
+.subagent-status-list { display: grid; min-width: 0; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.subagent-status-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; width: 100%; gap: 10px; border: 0; border-radius: 5px; background: transparent; padding: 7px 8px; color: var(--ink); text-align: left; }
+.subagent-status-row:hover { background: var(--surface-hover); }
+.subagent-status-kind { display: inline-flex; align-items: center; gap: 6px; }
+.subagent-status-type { color: var(--subagent); font: 600 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.subagent-status-state { border-radius: 4px; background: var(--line); padding: 1px 5px; color: var(--muted); font-size: 9px; font-weight: 600; }
+.subagent-status-line { min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-status-elapsed { color: var(--subtle); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.subagent-flash { animation: subagent-flash 1.2s ease; }
+@keyframes subagent-flash { 0%, 60% { box-shadow: inset 0 0 0 2px var(--subagent); } 100% { box-shadow: inset 0 0 0 2px transparent; } }
+
+@media (max-width: 640px) {
+  .subagent-status { max-width: min(150px, 34vw); }
+  .subagent-status-text { display: none; }
+  .subagent-status-text-compact { display: inline; }
 }

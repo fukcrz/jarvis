@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolTimelineItem } from "../shared/protocol.js";
-import { attachLiveSubagentThread, attachSubagentView, subagentViewFromArgs } from "./subagent-view.js";
+import { attachLiveSubagentThread, attachSubagentView, subagentThreadRow, subagentViewFromArgs } from "./subagent-view.js";
 
 const dispatchedAt = "2026-01-01T00:00:00.000Z";
 
@@ -235,5 +235,22 @@ describe("pi-subagent-manager shape", () => {
   it("leaves tools without a thread snapshot as plain rows", () => {
     const plain = attachSubagentView(managerTool("agent_types"), { details: [{ name: "scout", description: "look", model: "x", thinkingLevel: "low" }] });
     expect(plain.subagent).toBeUndefined();
+  });
+
+  it("maps live threads to session-status rows and drops finished ones", () => {
+    expect(subagentThreadRow({ ...thread, state: "running", status: "Running tests", startedAt: 1_767_225_600_000 })).toEqual({
+      path: thread.path,
+      type: "scout",
+      state: "running",
+      line: "Running tests",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(subagentThreadRow({ ...thread, state: "paused", status: "", elapsedMs: 41_000 })).toMatchObject({ state: "paused", line: thread.task, elapsedMs: 41_000 });
+    // running 线程不给冻结时长，前端用 startedAt 现算。
+    expect(subagentThreadRow({ ...thread, state: "running", elapsedMs: 41_000 })?.elapsedMs).toBeUndefined();
+    // summary 比 status 更接近“当前在干什么”。
+    expect(subagentThreadRow({ ...thread, state: "running", summary: "正在核对路由", status: "Reading" })?.line).toBe("正在核对路由");
+    for (const state of ["completed", "failed", "stopped"]) expect(subagentThreadRow({ ...thread, state })).toBeUndefined();
+    expect(subagentThreadRow({ state: "running" })).toBeUndefined();
   });
 });

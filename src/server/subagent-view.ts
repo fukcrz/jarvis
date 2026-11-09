@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, isRecord, type SubagentCallView, type SubagentView, type ThinkingLevel, type ToolTimelineItem } from "../shared/protocol.js";
+import { THINKING_LEVELS, isRecord, type SubagentCallView, type SubagentThreadRow, type SubagentView, type ThinkingLevel, type ToolTimelineItem } from "../shared/protocol.js";
 import { numberValue, stringValue } from "./values.js";
 
 const MAX_SUBAGENT_PROMPT_CHARS = 160;
@@ -48,6 +48,29 @@ export function attachLiveSubagentThread(tool: ToolTimelineItem, value: unknown)
   if (updated === undefined) return tool;
   const results = tool.subagent.results.map((call, resultIndex) => resultIndex === index ? updated : call);
   return { ...tool, subagent: viewFromCalls(results) };
+}
+
+const MAX_SUBAGENT_THREAD_LINE_CHARS = 80;
+
+/**
+ * live 线程快照 → 会话状态用的最小行。
+ * 返回 undefined 表示线程已结束（completed / failed / stopped），调用方据此移除。
+ */
+export function subagentThreadRow(value: unknown): SubagentThreadRow | undefined {
+  if (!isThreadView(value)) return undefined;
+  const state = stringValue(value["state"]);
+  const rowState = state === "paused" ? "paused" as const : state === "starting" || state === "running" ? "running" as const : undefined;
+  if (rowState === undefined) return undefined;
+  const startedAt = timeFromMillis(value["startedAt"]);
+  const elapsedMs = numberValue(value["elapsedMs"]);
+  return {
+    path: stringValue(value["path"]),
+    type: stringValue(value["type"]),
+    state: rowState,
+    line: truncateOneLine(stringValue(value["summary"]) || stringValue(value["status"]) || stringValue(value["task"]), MAX_SUBAGENT_THREAD_LINE_CHARS),
+    ...(startedAt === undefined ? {} : { startedAt }),
+    ...(rowState === "paused" && elapsedMs !== undefined ? { elapsedMs } : {}),
+  };
 }
 
 /** Read existing registry checkpoints for card hydration, without exposing child history. */
@@ -598,7 +621,6 @@ function sessionHandleFrom(value: unknown): string {
 function truncateOneLine(value: string, max: number): string {
   return truncateText(value.replace(/\s+/g, " ").trim(), max);
 }
-
 function truncateText(value: string, max: number): string {
   if (value.length <= max) return value;
   return `${value.slice(0, Math.max(0, max - 1))}…`;

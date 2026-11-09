@@ -458,6 +458,11 @@ export class SessionService {
         skipped.push({ id: sessionId, reason: "busy" });
         continue;
       }
+      // 主线程空闲但后台子代理还在跑：清理不碰它，它不是“放着不用的旧会话”。
+      if ((active?.subagentThreads?.size ?? 0) > 0) {
+        skipped.push({ id: sessionId, reason: "busy" });
+        continue;
+      }
       const attentionState = active?.attentionState ?? sortMeta.get(sessionId)?.attentionState ?? "idle";
       if (attentionState !== "idle") continue;
       try {

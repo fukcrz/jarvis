@@ -81,4 +81,16 @@ describe("session summary order", () => {
     ]);
     expect(ids(ordered)).toEqual(["running", "empty-new", "empty-old", "idle"]);
   });
+
+  it("ranks an idle session whose subagents still run with running, behind the root run itself", () => {
+    const rows = [{ path: "/root/scout", type: "scout", state: "running" as const, line: "Reading" }];
+    const paused = [{ path: "/root/coder", type: "coder", state: "paused" as const, line: "Paused" }];
+    const ordered = sortSessionSummaries([
+      { ...base, id: "idle", preview: "hello", lastUserMessageAt: "2026-01-09T00:00:00.000Z" },
+      { ...base, id: "subagents", preview: "hello", subagentThreads: rows, lastUserMessageAt: "2026-01-08T00:00:00.000Z" },
+      { ...base, id: "root", runState: "running", attentionState: "running", attentionAt: "2026-01-02T00:00:00.000Z" },
+      { ...base, id: "paused", preview: "hello", subagentThreads: paused, lastUserMessageAt: "2026-01-09T00:00:00.000Z" },
+    ]);
+    expect(ids(ordered)).toEqual(["root", "subagents", "idle", "paused"]);
+  });
 });

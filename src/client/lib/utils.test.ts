@@ -104,6 +104,17 @@ describe("session cleanup targets", () => {
     ];
     expect(ids(sessionCleanupTargets(items))).toEqual(["idle-1"]);
   });
+
+  it("keeps idle sessions whose subagents are still running or paused", () => {
+    const row = { path: "/root/scout", type: "scout", state: "running" as const, line: "Reading" };
+    const items = [
+      idle("idle-1"),
+      { ...idle("subagents"), subagentThreads: [row] },
+      { ...idle("paused"), subagentThreads: [{ ...row, state: "paused" as const }] },
+      { ...idle("done"), subagentThreads: [] },
+    ];
+    expect(ids(sessionCleanupTargets(items))).toEqual(["idle-1", "done"]);
+  });
 });
 
 describe("session list window", () => {

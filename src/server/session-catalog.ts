@@ -172,6 +172,7 @@ export function summaryFromList(
     ...(lastUserMessageAt === undefined ? {} : { lastUserMessageAt }),
     ...(lastReplyEndedAt === undefined ? {} : { lastReplyEndedAt }),
     ...(starred ? { starred: true } : {}),
+    ...(active?.subagentThreads === undefined ? {} : { subagentThreads: [...active.subagentThreads.values()] }),
   };
 }
 
@@ -201,6 +202,7 @@ export async function summaryFromStored(deps: SessionCatalogDeps, workspace: Wor
 }
 
 export function summaryFromActive(active: ActiveSession, previewOverride?: string): SessionSummary {
+  const threads = active.subagentThreads;
   return {
     id: active.ref.sessionId,
     workspaceId: active.ref.workspaceId,
@@ -214,6 +216,7 @@ export function summaryFromActive(active: ActiveSession, previewOverride?: strin
     ...(active.lastUserMessageAt === undefined ? {} : { lastUserMessageAt: active.lastUserMessageAt }),
     ...(active.lastReplyEndedAt === undefined ? {} : { lastReplyEndedAt: active.lastReplyEndedAt }),
     ...(active.starred === true ? { starred: true } : {}),
+    ...(threads === undefined ? {} : { subagentThreads: [...threads.values()] }),
   };
 }
 

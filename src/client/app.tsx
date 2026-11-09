@@ -6,6 +6,7 @@ import { api, isSessionConflict, notifyUnauthorized } from "./api";
 import { listenDesktopOpenSession } from "./desktop";
 import { PromptEditor } from "./components/prompt-editor";
 import { ModelSelector } from "./components/model-selector";
+import { SubagentStatus } from "./components/subagent-status";
 import { ThinkingSelector } from "./components/thinking-selector";
 import { Sidebar } from "./components/sidebar";
 import { SessionContextMenu, type SessionContextMenuTarget } from "./components/session-context-menu";
@@ -1296,6 +1297,7 @@ export function App() {
       <div className="chat-dock">
         <ExtensionPanels panels={stream.extensionPanels} />
         <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} workspaceId={selectedRef.workspaceId} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage?.sessionId === selectedRef.sessionId ? cancelMessageEdit : undefined} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
+        <SubagentStatus threads={selectedSession.subagentThreads} />
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />
         <ContextButton contextUsage={stream.transcript.contextUsage} sessionUsage={stream.transcript.sessionUsage} latestGeneration={stream.transcript.latestGeneration} liveGeneration={stream.transcript.liveGeneration} disabled={stream.connection !== "live"} busy={stream.transcript.status.runState !== "idle" || compactionPending} onCompact={() => { void compact(); }} />

@@ -9,6 +9,7 @@ import type {
   SessionQueue,
   SessionRef,
   SessionStatus,
+  SubagentThreadRow,
   ThinkingTimelineItem,
   TimelineItem,
   ToolTimelineItem,
@@ -72,6 +73,10 @@ export interface ActiveSession {
   activeTools: Map<string, ToolTimelineItem>;
   /** Child cards outlive the root model turn; retained for runtime updates. */
   subagentTools?: Map<string, ToolTimelineItem>;
+  /** 未结束的子代理线程，按路径索引；会话状态行与侧栏状态点读它。 */
+  subagentThreads?: Map<string, SubagentThreadRow>;
+  /** 上一次因为子代理进度发布会话摘要的时刻（节流用）。 */
+  subagentSummaryAt?: number;
   /** Memoized projection of the current immutable branch. The leaf id is its version. */
   timelineCache?: { leafId: string | null; items: TimelineItem[] };
   /** 正在执行的用户 !cmd 命令（流式输出尚未落盘）。 */

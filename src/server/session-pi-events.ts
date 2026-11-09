@@ -6,8 +6,11 @@ import { assistantTextBlockId, assistantTextPhaseFromContent, assistantThinkingB
 import type { ActiveRun, ActiveSession, PiEvent } from "./session-active.js";
 import { firstUserMessage, isAssistantMessage, isUserMessage, retryStatus } from "./session-helpers.js";
 import { UsageLedger, usageRecordFrom } from "./usage-ledger.js";
-import { attachLiveSubagentThread } from "./subagent-view.js";
+import { attachLiveSubagentThread, subagentThreadRow } from "./subagent-view.js";
 import { isAbortErrorMessage, stringValue, toIso } from "./values.js";
+
+/** 子代理只改了进度行时，会话摘要最多每秒发一次。 */
+const SUBAGENT_SUMMARY_INTERVAL_MS = 1_000;
 
 export interface SessionPiHost {
   events: EventHub;
@@ -97,6 +100,32 @@ export class SessionPiEvents {
         this.host.publishTool(active, updated);
       }
     }
+    if (this.trackSubagentThread(active, data["thread"])) this.host.publishSummary(active);
+  }
+
+  /**
+   * 线程表是侧栏状态点和工具栏状态行的唯一来源。
+   * 数量或状态变化立即发布会话摘要；只有一行进度文字变化时按 interval 节流。
+   */
+  private trackSubagentThread(active: ActiveSession, value: unknown): boolean {
+    if (!isRecord(value)) return false;
+    const path = stringValue(value["path"]);
+    if (path === "") return false;
+    const threads = active.subagentThreads ??= new Map();
+    const previous = threads.get(path);
+    const row = subagentThreadRow(value);
+    const now = Date.now();
+    if (row === undefined) {
+      if (previous === undefined) return false;
+      threads.delete(path);
+      active.subagentSummaryAt = now;
+      return true;
+    }
+    const structural = previous === undefined || previous.state !== row.state;
+    threads.set(path, row);
+    if (!structural && now - (active.subagentSummaryAt ?? 0) < SUBAGENT_SUMMARY_INTERVAL_MS) return false;
+    active.subagentSummaryAt = now;
+    return true;
   }
 
   private onAgentStart(active: ActiveSession): void {

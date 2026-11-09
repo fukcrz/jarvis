@@ -264,8 +264,10 @@ function SubagentToolRow({ item, view, pending, grouped, open, showDetails, onTo
   const totals = subagentUsageTotals(view);
   const durationMs = (single ? view.results[0]?.durationMs : undefined) ?? item.durationMs;
   const answer = only === undefined ? "" : subagentAnswerPreview(only);
+  // 状态行点线程时靠这个属性找回卡片；相对路径补成 /root/ 前缀，与 live 线程的 path 对齐。
+  const threadPaths = view.results.flatMap((call) => call.label === undefined || call.label === "" ? [] : [call.label.startsWith("/") ? call.label : `/root/${call.label}`]);
   return (
-    <article className={`tool-item tool-list-item subagent-item subagent-card ${cardState}`}>
+    <article className={`tool-item tool-list-item subagent-item subagent-card ${cardState}`} {...(threadPaths.length === 0 ? {} : { "data-subagent-paths": threadPaths.join(" ") })}>
       <button
         className="tool-summary subagent-summary"
         type="button"

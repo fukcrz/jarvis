@@ -1519,6 +1519,33 @@ describe("Jarvis HTTP and WebSocket API", () => {
     expect(existsSync(sessionPath(idle.id))).toBe(false);
   });
 
+  it("keeps sessions whose background subagents are still running", async () => {
+    const server = activeApp();
+    const extensionsPath = join(jarvisHome, "agent", "extensions");
+    await mkdir(extensionsPath, { recursive: true });
+    await writeFile(join(extensionsPath, "cleanup-live-subagent.ts"), `const emit = (pi, thread) => { try { pi.events.emit("pi-subagent:live:v1", { version: 1, thread }); } catch (error) {} };
+      export default function (pi) {
+        pi.on("session_start", () => {
+          setTimeout(() => emit(pi, { path: "/root/scout", type: "scout", task: "keep working", state: "running", status: "Reading", startedAt: Date.now() }), 50);
+        });
+      }`);
+    const workspacePath = join(jarvisHome, "cleanup-subagent-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const busy = (await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} })).json<{ session: { id: string } }>().session;
+    const idle = await writeConversationSession(workspacePath);
+
+    await vi.waitFor(async () => {
+      const sessions = (await server.inject({ method: "GET", url: `/api/workspaces/${workspace.id}/sessions` })).json<{ sessions: Array<{ id: string; subagentThreads?: unknown[] }> }>();
+      expect(sessions.sessions.find((session) => session.id === busy.id)?.subagentThreads).toEqual([expect.objectContaining({ path: "/root/scout", state: "running" })]);
+    });
+
+    const cleaned = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions/cleanup`, payload: {} });
+
+    expect(cleaned.statusCode).toBe(200);
+    expect(cleaned.json()).toEqual({ removed: [idle.id], skipped: [{ id: busy.id, reason: "busy" }] });
+  });
+
   it("keeps sessions with a pending interaction during cleanup", async () => {
     const server = activeApp();
     const extensionsPath = join(jarvisHome, "agent", "extensions");

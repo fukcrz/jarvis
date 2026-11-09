@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, Focus, Folder, FolderPlus, MessageSquarePlus, Search, Settings2, SquarePen, Star } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { SessionSummary, Workspace } from "../../shared/protocol";
-import { formatRelativeTime, isSessionRunning, sessionAttentionLabel, sessionLabel, sessionListWindow, sortSessionSummaries, workspaceDropTarget } from "../lib/utils";
+import { formatRelativeTime, hasRunningSubagent, isSessionRunning, sessionActivityClass, sessionAttentionLabel, sessionLabel, sessionListWindow, sortSessionSummaries, workspaceDropTarget } from "../lib/utils";
 import { ProjectPickerDialog } from "./project-picker-dialog";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
@@ -165,7 +165,7 @@ export function Sidebar(props: SidebarProps) {
                   <span>{workspace.label}</span>
                 </button>
                 <Tooltip label={`在 ${workspace.label} 中新建会话`}><Button variant="ghost" size="icon" className="project-new-session" aria-label={`在 ${workspace.label} 中新建会话`} onClick={(event) => { event.stopPropagation(); props.onCreateSession(workspace.id); }}><MessageSquarePlus size={15} /></Button></Tooltip>
-                {expanded || activeSession === undefined || sessionAttentionLabel(activeSession) === undefined ? null : <span className={`sidebar-activity attention-${activeSession.attentionState ?? "idle"} ${activeSession.runState}`} role="status" aria-label={`${workspace.label} 有${sessionAttentionLabel(activeSession)}`} />}
+                {expanded || activeSession === undefined || sessionAttentionLabel(activeSession) === undefined ? null : <span className={`sidebar-activity ${sessionActivityClass(activeSession)}`} role="status" aria-label={`${workspace.label} 有${sessionAttentionLabel(activeSession)}`} />}
               </div>
               {expanded ? <div className="project-sessions" role="group">
                 {window.sessions.map((session) => <button key={session.id} type="button" data-session-id={session.id} className={`session-row ${workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "selected" : ""}`} aria-current={workspace.id === props.workspaceId && session.id === props.selectedSessionId ? "page" : undefined} onClick={() => { if (!consumeLongPress()) props.onSelectSession(workspace.id, session.id); }} onPointerDown={(event) => startLongPress(event, () => props.onLongPressSession(workspace.id, session))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerLeave={cancelLongPress} onContextMenu={(event) => {
@@ -176,8 +176,8 @@ export function Sidebar(props: SidebarProps) {
                     y: event.clientY === 0 ? bounds.bottom : event.clientY,
                   });
                 }}>
-                  <span className="session-text"><strong>{session.starred === true ? <Star className="session-star" size={11} fill="currentColor" aria-hidden="true" /> : null}<span>{sessionLabel(session.name, session.preview)}</span></strong>{isSessionRunning(session) ? null : <small>{formatRelativeTime(session.updatedAt)}</small>}</span>
-                  {sessionAttentionLabel(session) === undefined ? null : <span className={`sidebar-activity attention-${session.attentionState ?? "idle"} ${session.runState}`} role="status" aria-label={`${sessionAttentionLabel(session)}的会话`} />}
+                  <span className="session-text"><strong>{session.starred === true ? <Star className="session-star" size={11} fill="currentColor" aria-hidden="true" /> : null}<span>{sessionLabel(session.name, session.preview)}</span></strong>{isSessionRunning(session) || hasRunningSubagent(session) ? null : <small>{formatRelativeTime(session.updatedAt)}</small>}</span>
+                  {sessionAttentionLabel(session) === undefined ? null : <span className={`sidebar-activity ${sessionActivityClass(session)}`} role="status" aria-label={`${sessionAttentionLabel(session)}的会话`} />}
                 </button>)}
                 {window.hasMore ? <button type="button" className="session-expand-more" onClick={() => expandSessions(workspace.id)} aria-label="展开更多会话"><ChevronDown size={13} />展开更多会话</button> : null}
                 {window.expanded ? <button type="button" className="session-collapse" onClick={() => collapseSessions(workspace.id)} aria-label="收起会话"><ChevronUp size={13} />收起会话</button> : null}

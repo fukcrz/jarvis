@@ -1,9 +1,9 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import type { SessionSummary } from "../../shared/protocol";
-import { isEmptySession, isSessionRunning, sessionAttentionRank, sessionAttentionState, sessionRecencyAt, sortSessionSummaries } from "../../shared/session-sort";
+import { hasRunningSubagent, hasUnfinishedSubagent, isEmptySession, isSessionRunning, sessionAttentionRank, sessionAttentionState, sessionRecencyAt, sortSessionSummaries } from "../../shared/session-sort";
 
-export { isEmptySession, isSessionRunning, sessionAttentionRank, sessionAttentionState, sessionRecencyAt, sortSessionSummaries };
+export { hasRunningSubagent, hasUnfinishedSubagent, isEmptySession, isSessionRunning, sessionAttentionRank, sessionAttentionState, sessionRecencyAt, sortSessionSummaries };
 
 export function cn(...values: ClassValue[]): string {
   return twMerge(clsx(values));
@@ -90,6 +90,7 @@ export const SESSION_FOCUS_WINDOW_MS = 60 * 60_000;
 export function sessionCleanupTargets(sessions: SessionSummary[], keepSessionId?: string): SessionSummary[] {
   return sessions.filter((session) => session.id !== keepSessionId
     && !isSessionRunning(session)
+    && !hasUnfinishedSubagent(session)
     && sessionAttentionState(session) === "idle"
     && session.starred !== true);
 }
@@ -100,7 +101,18 @@ export function sessionAttentionLabel(session: SessionSummary): string | undefin
   if (state === "completed_unread") return "任务完成未查看";
   if (state === "failed") return "出错失败";
   if (state === "waiting_interaction") return "待交互";
+  // 主线程已结束，子代理还在后台跑：它自己会继续往前，和空闲的会话不是一回事。
+  if (hasRunningSubagent(session)) return "子代理执行中";
   return undefined;
+}
+
+/**
+ * 侧栏状态点的样式类。主线程自己在跑时用普通转圈；主线程已结束、只剩子代理在跑时
+ * 换成子代理色，并把转速放慢，读作“别人的活还在跑”。
+ */
+export function sessionActivityClass(session: SessionSummary): string {
+  const attention = `attention-${session.attentionState ?? "idle"} ${session.runState}`;
+  return !isSessionRunning(session) && hasRunningSubagent(session) ? `${attention} subagents` : attention;
 }
 
 /** 聚焦模式保留非空闲会话、新对话、当前正在查看的会话，以及最近一小时内有活动的普通会话。 */

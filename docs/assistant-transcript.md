@@ -57,6 +57,16 @@ An active run always has an inline indicator after the latest timeline content, 
 
 Only when the timeline is more than 300px from the bottom does a floating capsule appear above the composer. It replaces the jump-to-latest button during an active run. Returning to the bottom hides it; on mobile an expanded composer taller than 140px also hides it. Clicking the capsule scrolls to the active step, streaming reply, or bottom. The inline indicator disappears when the run becomes idle.
 
+## Subagent activity
+
+A session whose root turn has ended can still have child threads running. `pi-subagent-manager` publishes each thread on `pi-subagent:live:v1`; the server turns those threads into `SessionSummary.subagentThreads` (path, type, state, one-line activity, run start, and a frozen elapsed time for paused threads). A finished thread leaves the list immediately, so an empty array means nothing is outstanding, and the field is the only source of both the sidebar marker and the composer status chip.
+
+A thread that changes count or state publishes the session summary at once; a thread that only changed its activity line is throttled to one summary per second, so the list and the chip do not rebuild on every progress tick. Threads known only from a blocking tool result, with no live event, do not appear here.
+
+The sidebar keeps its running ring for the root turn. When the root turn has ended and only child threads are running, the same ring uses `--subagent` (teal) and turns slower, and the relative time is hidden while it shows. Paused-only threads do not mark the session; they stay in the status chip. In the list such a session ranks with running sessions, behind the sessions whose own turn is running.
+
+The composer toolbar carries one chip: `2 个子代理执行中`, `1 个子代理执行中 · 1 已暂停`, or `1 个子代理已暂停`. It exists only while at least one thread is unfinished — completed, failed and stopped threads never appear there, and the chip disappears instead of showing zero. Narrow screens shorten it to `2 执行中`. Clicking opens a sheet with each thread's type, activity line and elapsed time; picking a row scrolls to that thread's card and flashes it. There is no stop action: the plugin exposes stopping only as a model tool.
+
 ## File changes
 
 `edit` and `write` tool items carry a `fileChange` (path, added/removed line counts, display diff). It is first derived from the call arguments (edit `oldText`/`newText` pairs, or the whole written content) and replaced by the unified patch in Pi's `details.patch` once the edit succeeds; a failed edit drops it. The diff is capped at 400 lines. The row shows `+a −b` next to its title and opens to a coloured diff. After a turn settles, a `N 个文件 +a −b` line sits below the final answer text and above its copy/fork controls and generation statistics, with clickable file chips (existing text preview). Expanding it hides that summary and shows only each file's path, stats, and diff; the chevron on the first file collapses the block. Repeated edits to one file are merged.
@@ -74,8 +84,11 @@ npm run lint
 npm run build
 node scripts/ui-fold-smoke.mjs
 node scripts/ui-run-status-smoke.mjs
+node scripts/ui-subagent-status-smoke.mjs
 ```
 
 `ui-run-status-smoke.mjs` separately injects protocol events into the client socket. It checks the inline indicator through streaming, tools, thinking, gaps between responses, retry, compaction, and stopping; the 300px scroll boundary; mobile composer sizing; and the DOM and visual order of the completed process before the final reply, with file changes after its text and before the message actions. It captures screenshots and layout measurements on desktop and mobile.
+
+`ui-subagent-status-smoke.mjs` injects a session summary carrying child threads into the client socket. It checks the composer chip in its three shapes, the compact label and no horizontal overflow on phones, the sidebar ring colour with the relative time hidden, the sheet rows (type, activity, elapsed, paused tag, frozen pause time), and that clearing the threads removes both markers. It captures desktop and mobile screenshots.
 
 The smoke scripts use deterministic fixtures and require no external model calls. They check Jarvis behavior for the supplied structured metadata; upstream model/provider classification depends on the metadata Pi emits. Production port 9528 is not used by this script. Production restart remains user-triggered under [BOOTSTRAP.md](../BOOTSTRAP.md).
