@@ -93,7 +93,7 @@ export function Sidebar(props: SidebarProps) {
   }
 
   function startWorkspacePointerDrag(event: PointerEvent<HTMLElement>, workspaceId: string): void {
-    if (event.pointerType !== "mouse" || event.button !== 0 || orderPendingRef.current) return;
+    if (event.pointerType !== "mouse" || event.button !== 0 || event.buttons !== 1 || orderPendingRef.current) return;
     if ((event.target as HTMLElement | null)?.closest(".project-new-session") !== null) return;
     pointerDragRef.current = { pointerId: event.pointerId, sourceId: workspaceId, startX: event.clientX, startY: event.clientY, moved: false };
   }

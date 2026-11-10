@@ -37,13 +37,11 @@ export function ProjectContextMenu({ target, onClose, onCreateSession, onCleanup
     document.addEventListener("pointerdown", dismiss);
     document.addEventListener("keydown", dismissOnEscape);
     document.addEventListener("scroll", onClose, true);
-    window.addEventListener("blur", onClose);
     window.addEventListener("resize", onClose);
     return () => {
       document.removeEventListener("pointerdown", dismiss);
       document.removeEventListener("keydown", dismissOnEscape);
       document.removeEventListener("scroll", onClose, true);
-      window.removeEventListener("blur", onClose);
       window.removeEventListener("resize", onClose);
     };
   }, [onClose]);
