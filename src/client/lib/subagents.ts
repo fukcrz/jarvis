@@ -1,5 +1,8 @@
 import type { SubagentThreadRow } from "../../shared/protocol";
 
+/** 点线程要回溯多少页历史；超过就承认找不到。 */
+const SUBAGENT_REACH_PAGE_LIMIT = 20;
+
 export interface SubagentThreadCounts {
   /** 正在执行（starting / running）。 */
   running: number;
@@ -42,16 +45,52 @@ function formatElapsedMs(value: number): string {
 }
 
 /**
- * 点状态行里的线程，滚到对应的子代理卡片并闪一下。
- * 卡片不在已加载的时间线里时就什么都不做——那说明它已经滚出窗口，用户自己翻即可。
+ * 找到线程对应的卡片元素。卡片可能因所在回合的过程块折叠而未渲染。
  */
-export function revealSubagentThread(path: string): void {
-  const target = document.querySelector<HTMLElement>(`[data-subagent-paths~="${CSS.escape(path)}"]`);
-  if (target === null) return;
-  target.scrollIntoView({ block: "center", behavior: "smooth" });
-  target.classList.remove("subagent-flash");
+export function subagentCard(path: string): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  return document.querySelector<HTMLElement>(`[data-subagent-paths~="${CSS.escape(path)}"]`);
+}
+
+/** 下一页渲染完后才算真正可见，等两帧。 */
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
+  });
+}
+
+/**
+ * 点状态行里的线程，滚到对应的子代理卡片并闪一下。
+ * 卡片在折叠的过程块里时逐层展开（从最近的回合往上找），展开后仍没有则返回 false。
+ */
+export async function revealSubagentThread(path: string): Promise<boolean> {
+  if (typeof document === "undefined") return false;
+  let card = subagentCard(path);
+  if (card === null) {
+    const collapsed = [...document.querySelectorAll<HTMLElement>(".turn-process-summary[aria-expanded='false']")].reverse();
+    for (const summary of collapsed) {
+      summary.click();
+      await nextPaint();
+      card = subagentCard(path);
+      if (card !== null) break;
+    }
+  }
+  if (card === null) return false;
+  card.scrollIntoView({ block: "center", behavior: "smooth" });
+  card.classList.remove("subagent-flash");
   // 同一帧里 remove + add 会被合并，先读一次布局强制重排。
-  void target.offsetWidth;
-  target.classList.add("subagent-flash");
-  window.setTimeout(() => target.classList.remove("subagent-flash"), 1_200);
+  void card.offsetWidth;
+  card.classList.add("subagent-flash");
+  window.setTimeout(() => card?.classList.remove("subagent-flash"), 1_200);
+  return true;
+}
+
+/** 往回翻页直到卡片出现；每翻一页先试着展开+滚动。loadEarlier 返回是否还有更早的历史。 */
+export async function reachSubagentCard(path: string, loadEarlier: () => Promise<boolean>): Promise<boolean> {
+  if (await revealSubagentThread(path)) return true;
+  for (let page = 0; page < SUBAGENT_REACH_PAGE_LIMIT; page += 1) {
+    if (!(await loadEarlier())) break;
+    if (await revealSubagentThread(path)) return true;
+  }
+  return false;
 }

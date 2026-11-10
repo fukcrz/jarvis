@@ -588,6 +588,35 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     }
   }, [refKey]);
 
+  /** 往前翻一页，返回翻完后是否还有更早的历史；给“跳到某张卡片”这类循环用。 */
+  const loadEarlierOnce = useCallback(async (): Promise<boolean> => {
+    if (ref === undefined || refKey === undefined) return false;
+    const selectedKey = refKey;
+    const generation = historyLoadGeneration.current;
+    while (loadingEarlierLock.current) {
+      await new Promise((resolve) => window.setTimeout(resolve, 32));
+      if (historyLoadGeneration.current !== generation || refKeyRef.current !== selectedKey) return false;
+    }
+    if (!stateRef.current.transcript.hasMore) return false;
+    loadingEarlierLock.current = true;
+    setLoadingEarlier(true);
+    try {
+      const page = await api.timeline(ref, stateRef.current.transcript.start);
+      if (historyLoadGeneration.current !== generation || refKeyRef.current !== selectedKey) return false;
+      dispatch({ type: "prepend", sessionKey: selectedKey, page });
+      // 等 React 提交，否则调用方读到的还是旧 DOM 与旧 hasMore。
+      await new Promise((resolve) => { window.requestAnimationFrame(() => { window.requestAnimationFrame(() => { resolve(undefined); }); }); });
+      return historyLoadGeneration.current === generation && refKeyRef.current === selectedKey && stateRef.current.transcript.hasMore;
+    } catch {
+      return false;
+    } finally {
+      if (historyLoadGeneration.current === generation && refKeyRef.current === selectedKey) {
+        loadingEarlierLock.current = false;
+        setLoadingEarlier(false);
+      }
+    }
+  }, [refKey]);
+
   const loadUntilMessage = useCallback(async (id: string) => {
     if (ref === undefined || refKey === undefined) return;
     if (stateRef.current.transcript.items.some((item) => item.id === id)) return;
@@ -635,7 +664,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   }, []);
   const discardOptimisticUser = useCallback((id: string) => { dispatch({ type: "discard-optimistic-user", id }); }, []);
   const replaceUserMessage = useCallback((messageId: string, id: string, text: string, images: import("../../shared/protocol").ImageAttachment[]) => { dispatch({ type: "replace-user", messageId, id, text, images }); }, []);
-  return { ...state, localMediaVersion: `${mediaSeed}-${String(state.mediaRevision)}`, refresh, loadEarlier, loadUntilMessage, loadingEarlier, userMessages, userMessagesLoading, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
+  return { ...state, localMediaVersion: `${mediaSeed}-${String(state.mediaRevision)}`, refresh, loadEarlier, loadEarlierOnce, loadUntilMessage, loadingEarlier, userMessages, userMessagesLoading, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
 }
 
 export function runNotificationFor(event: SessionEvent, items: TimelineItem[]): RunNotificationInfo | undefined {

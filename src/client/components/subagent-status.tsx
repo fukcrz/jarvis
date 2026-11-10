@@ -4,15 +4,17 @@ import { revealSubagentThread, subagentElapsed, subagentStatusLabel } from "../l
 import { Dialog, DialogContent } from "./ui/dialog";
 
 interface SubagentStatusProps {
-  /** 未结束的子代理线程；空或缺失时整行不出现。 */
+  /** 未结束的子代理线程；空或缺失时整颗胶囊不出现。 */
   threads?: SubagentThreadRow[];
+  /** 点线程行：定位到它的卡片。不给就自己滚一下。 */
+  onOpenThread?: (path: string) => void;
 }
 
 /**
  * 扩展面板里的一个状态胶囊：还有几个子代理在跑。点开看是哪些线程。
  * 只表达当前会话；别的会话靠侧栏的状态点。
  */
-export function SubagentStatus({ threads }: SubagentStatusProps) {
+export function SubagentStatus({ threads, onOpenThread }: SubagentStatusProps) {
   const [open, setOpen] = useState(false);
   const label = subagentStatusLabel(threads);
   if (label === undefined || threads === undefined) return null;
@@ -23,7 +25,7 @@ export function SubagentStatus({ threads }: SubagentStatusProps) {
         <span className="subagent-status-text">{label}</span>
       </button>
       <DialogContent className="selector-sheet subagent-status-sheet" title="子代理">
-        <SubagentStatusList threads={threads} onReveal={(path) => { setOpen(false); revealSubagentThread(path); }} />
+        <SubagentStatusList threads={threads} onReveal={(path) => { setOpen(false); if (onOpenThread === undefined) void revealSubagentThread(path); else onOpenThread(path); }} />
       </DialogContent>
     </Dialog>
   );

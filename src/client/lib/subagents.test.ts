@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentThreadRow } from "../../shared/protocol";
-import { subagentElapsed, subagentStatusLabel, subagentThreadCounts } from "./subagents";
+import { reachSubagentCard, subagentElapsed, subagentStatusLabel, subagentThreadCounts } from "./subagents";
 
 function row(path: string, state: SubagentThreadRow["state"]): SubagentThreadRow {
   return { path, type: "scout", state, line: "Reading" };
@@ -21,6 +21,16 @@ describe("subagent status line", () => {
     // paused 不会自己往前走，不单独占一行。
     expect(subagentStatusLabel([row("/root/c", "paused")])).toBeUndefined();
     expect(subagentStatusLabel([row("/root/c", "paused"), row("/root/d", "paused")])).toBeUndefined();
+  });
+
+  it("stops paging back once history runs out", async () => {
+    let pages = 0;
+    // node 环境没有 DOM，每页都找不到卡片，靠页数上限收口。
+    expect(await reachSubagentCard("/root/a", () => { pages += 1; return Promise.resolve(false); })).toBe(false);
+    expect(pages).toBe(1);
+    pages = 0;
+    expect(await reachSubagentCard("/root/a", () => { pages += 1; return Promise.resolve(true); })).toBe(false);
+    expect(pages).toBe(20);
   });
 
   it("formats elapsed time from the run start", () => {

@@ -43,6 +43,7 @@ import { composerImageAttachments, sameImageAttachments } from "./lib/image";
 import { mergeQueuedMessagesIntoDraft } from "./lib/composer-draft";
 import { errorMessage, isEmptySession, isSessionInFocusWindow, randomUUID, parseBashCommand, reorderById, sessionCleanupTargets, sessionLabel } from "./lib/utils";
 import { reportClientIssue, selectionIssueDetail } from "./lib/client-diagnostics";
+import { reachSubagentCard } from "./lib/subagents";
 import { useIsMobile } from "./hooks/use-is-mobile";
 import { useSessionStream } from "./hooks/use-session-stream";
 import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, useSidebarResize } from "./hooks/use-sidebar-resize";
@@ -1264,6 +1265,12 @@ export function App() {
     if (workspace !== undefined) setMobileActionTarget({ kind: "session", workspaceId, workspaceLabel: workspace.label, session });
   };
 
+  const openSubagentThread = (path: string) => {
+    void reachSubagentCard(path, stream.loadEarlierOnce).then((found) => {
+      if (!found) setSessionNotice("子代理卡片不在历史中");
+    });
+  };
+
   const sidebar = <Sidebar
     workspaces={visibleWorkspaces}
     allWorkspaces={workspaces}
@@ -1295,7 +1302,7 @@ export function App() {
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <div className="chat-stage">
       <Timeline sessionKey={selectedRefKey} localMediaVersion={stream.localMediaVersion} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} liveGeneration={stream.transcript.liveGeneration} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onRetryTurn={(user) => { void retryTurn(user); }} onContinue={() => { void continueTurn(); }} onDismissInterrupted={selectedRef === undefined ? undefined : () => { void api.dismissInterrupted(selectedRef).catch(() => undefined); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} />
       <div className="chat-dock">
-        <ExtensionPanels panels={stream.extensionPanels} extra={<SubagentStatus threads={selectedSession?.subagentThreads} />} />
+        <ExtensionPanels panels={stream.extensionPanels} extra={<SubagentStatus threads={selectedSession?.subagentThreads} onOpenThread={openSubagentThread} />} />
         <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} workspaceId={selectedRef.workspaceId} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage?.sessionId === selectedRef.sessionId ? cancelMessageEdit : undefined} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
         <ModelSelector model={stream.transcript.model} disabled={stream.connection !== "live" || thinkingLevelPending || compactionPending} pending={modelSwitchPending} onSelect={(model) => { void selectModel(model); }} />
         <ThinkingSelector thinking={stream.transcript.thinking} disabled={stream.connection !== "live" || modelSwitchPending || compactionPending} pending={thinkingLevelPending} onSelect={(level) => { void selectThinkingLevel(level); }} />

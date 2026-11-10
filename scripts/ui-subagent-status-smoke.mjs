@@ -154,6 +154,54 @@ async function exercise(baseUrl, workspace, label, viewport) {
     await page.keyboard.press("Escape");
     await sheet.waitFor({ state: "hidden" });
 
+    // 点线程行要能进入卡片：卡片所在回合的过程块折叠时整块不渲染，需要先展开再滚过去。
+    await page.evaluate(() => {
+      const timeline = document.querySelector(".timeline");
+      const spacer = document.createElement("div");
+      spacer.className = "subagent-fixture";
+      spacer.style.height = "1400px";
+      const section = document.createElement("section");
+      section.className = "turn-process collapsed subagent-fixture";
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "turn-process-summary";
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.textContent = "过程";
+      const body = document.createElement("div");
+      body.className = "turn-process-body";
+      toggle.addEventListener("click", () => {
+        if (body.childElementCount > 0) return;
+        const card = document.createElement("article");
+        card.className = "subagent-card";
+        card.setAttribute("data-subagent-paths", "/root/researcher");
+        card.style.height = "48px";
+        card.textContent = "researcher 卡片";
+        body.append(card);
+        toggle.setAttribute("aria-expanded", "true");
+      });
+      section.append(toggle, body);
+      timeline.prepend(spacer, section);
+    });
+
+    await page.locator(".subagent-status").click();
+    await sheet.waitFor({ state: "visible" });
+    await page.locator(".subagent-status-row").first().click();
+    await sheet.waitFor({ state: "hidden" });
+    await page.waitForFunction(() => {
+      const card = document.querySelector('[data-subagent-paths~=\"/root/researcher\"]');
+      if (card === null) return false;
+      const box = card.getBoundingClientRect();
+      return card.classList.contains("subagent-flash") && box.top >= 0 && box.bottom <= innerHeight;
+    }, undefined, { timeout: 5_000 });
+    const revealed = await page.evaluate(() => ({
+      expanded: document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded"),
+      inViewport: (() => { const box = document.querySelector('[data-subagent-paths~=\"/root/researcher\"]').getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; })(),
+    }));
+    assert.equal(revealed.expanded, "true", `${label}: reaching the card must expand the folded process`);
+    assert.equal(revealed.inViewport, true, `${label}: revealed card must end up in view`);
+    await page.screenshot({ path: join(shotDir, `${label}-status-reveal.png`) });
+    await page.evaluate(() => { for (const node of document.querySelectorAll(".subagent-fixture")) node.remove(); });
+
     await emitSummary(page, { workspaceId: workspace.id, sessionId: session.id, summary: withThreads(base, [threads[2]]) });
     await paint(page);
     assert.equal(await page.locator(".subagent-status").count(), 0, `${label}: paused-only threads must not keep the status line`);
