@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentThreadRow } from "../../shared/protocol";
-import { reachSubagentCard, subagentElapsed, subagentStatusLabel, subagentThreadCounts } from "./subagents";
+import { centeredScrollTop, reachSubagentCard, subagentElapsed, subagentStatusLabel, subagentThreadCounts } from "./subagents";
 
 function row(path: string, state: SubagentThreadRow["state"]): SubagentThreadRow {
   return { path, type: "scout", state, line: "Reading" };
@@ -31,6 +31,13 @@ describe("subagent status line", () => {
     pages = 0;
     expect(await reachSubagentCard("/root/a", () => { pages += 1; return Promise.resolve(true); })).toBe(false);
     expect(pages).toBe(20);
+  });
+
+  it("centers the card inside the scroller", () => {
+    // 卡片在容器可视区下方 900px，容器高 800、卡片高 200：再滚 600 就居中（已在 100）。
+    expect(centeredScrollTop({ scrollerTop: 0, scrollerScrollTop: 100, scrollerHeight: 800, cardTop: 900, cardHeight: 200 })).toBe(700);
+    // 不许滚成负数。
+    expect(centeredScrollTop({ scrollerTop: 0, scrollerScrollTop: 0, scrollerHeight: 800, cardTop: 100, cardHeight: 200 })).toBe(0);
   });
 
   it("formats elapsed time from the run start", () => {

@@ -59,6 +59,32 @@ function nextPaint(): Promise<void> {
   });
 }
 
+/** 把卡片居中所需的容器 scrollTop；纯函数，便于测试。 */
+export function centeredScrollTop(input: { scrollerTop: number; scrollerScrollTop: number; scrollerHeight: number; cardTop: number; cardHeight: number }): number {
+  const offset = input.cardTop - input.scrollerTop - (input.scrollerHeight - input.cardHeight) / 2;
+  return Math.max(0, input.scrollerScrollTop + offset);
+}
+
+/** 直接给滚动位置，不用平滑动画：流式内容一刷新就会被“钉到底”的布局效应吃掉。 */
+function scrollCardIntoView(card: HTMLElement): void {
+  const scroller = card.closest<HTMLElement>(".timeline");
+  if (scroller === null) {
+    card.scrollIntoView({ block: "center" });
+    return;
+  }
+  const cardRect = card.getBoundingClientRect();
+  const scrollerRect = scroller.getBoundingClientRect();
+  scroller.scrollTop = centeredScrollTop({
+    scrollerTop: scrollerRect.top,
+    scrollerScrollTop: scroller.scrollTop,
+    scrollerHeight: scroller.clientHeight,
+    cardTop: cardRect.top,
+    cardHeight: cardRect.height,
+  });
+  // 让 timeline 立刻知道已经离开底部，否则下一条流式内容会把位置又钉回底部。
+  scroller.dispatchEvent(new Event("scroll"));
+}
+
 /**
  * 点状态行里的线程，滚到对应的子代理卡片并闪一下。
  * 卡片在折叠的过程块里时逐层展开（从最近的回合往上找），展开后仍没有则返回 false。
@@ -76,7 +102,7 @@ export async function revealSubagentThread(path: string): Promise<boolean> {
     }
   }
   if (card === null) return false;
-  card.scrollIntoView({ block: "center", behavior: "smooth" });
+  scrollCardIntoView(card);
   card.classList.remove("subagent-flash");
   // 同一帧里 remove + add 会被合并，先读一次布局强制重排。
   void card.offsetWidth;
