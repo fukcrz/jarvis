@@ -494,12 +494,14 @@ describe("isTurnProcessOpen", () => {
 });
 
 describe("splitVisibleTurnEntries", () => {
-  it("lifts a pending dialog and a user command out of the process", () => {
+  it("lifts a pending dialog, a user command and every assistant reply out of the process", () => {
     const result = splitVisibleTurnEntries([
       { kind: "thinking", item: thinking("t1") },
+      { kind: "message", item: message("a1") },
       { kind: "activity", items: [tool("a"), command("c1")] },
       { kind: "extension-ui", item: dialog("d1") },
       { kind: "extension-ui", item: dialog("d2", "answered") },
+      { kind: "message", item: message("a2") },
     ]);
     expect(result.process).toEqual([
       { kind: "thinking", item: thinking("t1") },
@@ -507,8 +509,10 @@ describe("splitVisibleTurnEntries", () => {
       { kind: "extension-ui", item: dialog("d2", "answered") },
     ]);
     expect(result.visible).toEqual([
+      { kind: "message", item: message("a1") },
       { kind: "activity", items: [command("c1")] },
       { kind: "extension-ui", item: dialog("d1") },
+      { kind: "message", item: message("a2") },
     ]);
   });
 });

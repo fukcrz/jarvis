@@ -560,7 +560,8 @@ function shouldShowRunStatusBarForElement(root: HTMLElement | null, activity: Ru
 
 function hasVisibleLiveProcessEntry(turn: TimelineTurn, streamingMessageId: string | undefined): boolean {
   const presented = presentTurnProcess(turn.process).entries;
-  const visibleEntries = splitVisibleTurnEntries(presented).process;
+  const split = splitVisibleTurnEntries(presented);
+  const visibleEntries = [...split.process, ...split.visible];
   const final = turn.final;
   if (final !== undefined && final.id === streamingMessageId && final.text !== "") return true;
   return visibleEntries.some((entry) => {
@@ -1367,12 +1368,17 @@ function isPendingDialog(entry: TimelineRenderItem): boolean {
   return entry.kind === "extension-ui" && entry.item.outcome === undefined;
 }
 
-/** 用户 !cmd 和未回答问询留在过程外，其余仍按原顺序收进过程。 */
+/** 助手说的话永远留在过程外，过程只收工具与思考；用户 !cmd 和未回答问询同样留在外面。 */
 export function splitVisibleTurnEntries(entries: TimelineRenderItem[]): { process: TimelineRenderItem[]; visible: TimelineRenderItem[] } {
   const process: TimelineRenderItem[] = [];
   const visible: TimelineRenderItem[] = [];
   for (const entry of entries) {
     if (isPendingDialog(entry)) {
+      visible.push(entry);
+      continue;
+    }
+    // 回合里的中间回复也要看得见：子代理反复触发时，每次汇报不能被收进折叠的过程块。
+    if (entry.kind === "message" && entry.item.role === "assistant") {
       visible.push(entry);
       continue;
     }
