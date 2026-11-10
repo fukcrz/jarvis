@@ -103,29 +103,35 @@ async function exercise(baseUrl, workspace, label, viewport) {
       const chip = document.querySelector(".subagent-status");
       const footer = document.querySelector(".composer-footer");
       const editor = document.querySelector(".composer-editor");
+      const track = document.querySelector(".extension-widget-track");
       const dot = document.querySelector(".sidebar-activity.subagents");
       const box = chip.getBoundingClientRect();
-      const editorBox = editor.getBoundingClientRect();
       const text = [...chip.querySelectorAll("span")].filter((node) => getComputedStyle(node).display !== "none").map((node) => node.textContent?.trim()).filter(Boolean);
+      const style = getComputedStyle(chip);
       return {
         text,
-        label: chip.textContent?.trim(),
         inFooter: footer?.contains(chip) === true,
+        inExtensionTrack: track?.contains(chip) === true,
         aboveEditor: box.bottom <= editor.getBoundingClientRect().top,
-        leftGap: Math.abs(box.left - editorBox.left),
         height: box.height,
         width: box.width,
+        borderWidth: style.borderTopWidth,
+        borderRadius: style.borderTopLeftRadius,
+        fontSize: style.fontSize,
         dotColor: dot === null ? undefined : getComputedStyle(dot).borderTopColor,
         dotAnimation: dot === null ? undefined : getComputedStyle(dot).animationDuration,
         documentWidth: document.documentElement.scrollWidth,
         viewportWidth: innerWidth,
       };
     });
-    assert.ok(layout.height > 0 && layout.width > 0, `${label}: status line must be visible`, layout);
-    assert.equal(layout.inFooter, false, `${label}: status line must not sit inside the composer toolbar`);
-    assert.ok(layout.aboveEditor, `${label}: status line must sit above the input box`, layout);
-    assert.ok(layout.leftGap <= 8, `${label}: status line must line up with the input box, gap ${layout.leftGap}px`, layout);
-    assert.ok(layout.documentWidth <= layout.viewportWidth + 1, `${label}: status line must not overflow: ${layout.documentWidth} > ${layout.viewportWidth}`);
+    assert.ok(layout.height > 0 && layout.width > 0, `${label}: status pill must be visible`, layout);
+    assert.equal(layout.inFooter, false, `${label}: status pill must not sit inside the composer toolbar`);
+    assert.equal(layout.inExtensionTrack, true, `${label}: status pill must join the extension panel track`);
+    assert.ok(layout.aboveEditor, `${label}: status pill must sit above the input box`, layout);
+    // 和扩展状态胶囊同一套外观：有边框、圆角、10px 字。
+    assert.equal(layout.borderWidth, "1px", `${label}: status pill must reuse the extension pill border`);
+    assert.equal(layout.fontSize, "10px", `${label}: status pill must reuse the extension pill type size`);
+    assert.ok(layout.documentWidth <= layout.viewportWidth + 1, `${label}: status pill must not overflow: ${layout.documentWidth} > ${layout.viewportWidth}`);
     assert.equal(layout.dotColor, "rgb(127, 210, 200)", `${label}: sidebar must use the subagent colour`);
     assert.deepEqual(layout.text, ["2 个子代理执行中 · 1 已暂停"], `${label}: label`);
     await page.screenshot({ path: join(shotDir, `${label}-status-line.png`) });

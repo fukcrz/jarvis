@@ -9,7 +9,7 @@ interface SubagentStatusProps {
 }
 
 /**
- * 输入框上方的一行状态：还有几个子代理在跑。点开看是哪些线程。
+ * 扩展面板里的一个状态胶囊：还有几个子代理在跑。点开看是哪些线程。
  * 只表达当前会话；别的会话靠侧栏的状态点。
  */
 export function SubagentStatus({ threads }: SubagentStatusProps) {
@@ -17,17 +17,15 @@ export function SubagentStatus({ threads }: SubagentStatusProps) {
   const label = subagentStatusLabel(threads);
   if (label === undefined || threads === undefined) return null;
   return (
-    <div className="subagent-status-bar">
-      <Dialog open={open} onOpenChange={setOpen}>
-        <button type="button" className="subagent-status" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
-          <span className="subagent-status-dot" aria-hidden="true" />
-          <span className="subagent-status-text">{label}</span>
-        </button>
-        <DialogContent className="selector-sheet subagent-status-sheet" title="子代理">
-          <SubagentStatusList threads={threads} onReveal={(path) => { setOpen(false); revealSubagentThread(path); }} />
-        </DialogContent>
-      </Dialog>
-    </div>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <button type="button" className="extension-status subagent-status" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
+        <span className="subagent-status-dot" aria-hidden="true" />
+        <span className="subagent-status-text">{label}</span>
+      </button>
+      <DialogContent className="selector-sheet subagent-status-sheet" title="子代理">
+        <SubagentStatusList threads={threads} onReveal={(path) => { setOpen(false); revealSubagentThread(path); }} />
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -1,16 +1,17 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Bell, CircleAlert, Puzzle, X } from "lucide-react";
 import type { SessionSummary } from "../../shared/protocol";
 import { extensionToastSourceLabel, type ExtensionToast } from "../extension-notifications";
 import type { ExtensionPanelState } from "../hooks/use-session-stream";
 
-export function ExtensionPanels({ panels }: { panels: ExtensionPanelState }) {
+export function ExtensionPanels({ panels, extra }: { panels: ExtensionPanelState; extra?: ReactNode }) {
   const widgets = Object.entries(panels.widgets);
   const statuses = Object.entries(panels.statuses);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  if (widgets.length === 0 && statuses.length === 0) return null;
+  if (widgets.length === 0 && statuses.length === 0 && extra == null) return null;
   return <aside className="extension-panels" aria-label="扩展内容">
     <div className="extension-widget-track">
+      {extra}
       {statuses.map(([key, text]) => <span className="extension-status" key={`status:${key}`} title={key}><Puzzle size={11} /><span>{text}</span></span>)}
       {widgets.map(([key, widget]) => <section key={`widget:${key}`} className={`extension-widget ${collapsed[key] === true ? "collapsed" : ""}`} title={key}>
         <button type="button" className="extension-widget-heading" onClick={() => setCollapsed((current) => ({ ...current, [key]: !current[key] }))} aria-expanded={collapsed[key] !== true}>
