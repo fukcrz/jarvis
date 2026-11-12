@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeTimelineTurn, activeUserMessageAnchor, groupTimelineItems, groupTimelineTurns, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, shouldFoldTurnProcess, shouldStopFollowingOnGesture, splitVisibleTurnEntries, summarizeTurnProcess, timelineProcessId, trailingAssistantMessage, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds } from "./timeline";
+import { activeTimelineTurn, activeUserMessageAnchor, buildTurnSegments, groupTimelineItems, groupTimelineTurns, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, shouldFoldProcess, shouldStopFollowingOnGesture, summarizeProcess, timelineProcessIds, trailingAssistantMessage, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds, type TimelineRenderItem, type TimelineSegment } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -57,6 +57,16 @@ function command(id: string): ToolTimelineItem {
 
 function dialog(id: string, outcome?: ExtensionUiTimelineItem["outcome"]): ExtensionUiTimelineItem {
   return { kind: "extension-ui", id, createdAt: "2026-01-01T00:00:00.000Z", request: { id, method: "confirm", title: "继续？" }, ...(outcome === undefined ? {} : { outcome }) };
+}
+
+/** 把回合的段压成可读序列，便于断言顺序与归属。 */
+function segmentsOf(turn: { segments: TimelineSegment[] } | undefined): string[] {
+  return (turn?.segments ?? []).map((segment) => {
+    if (segment.kind === "reply") return `reply:${segment.item.id}`;
+    const entries = segment.kind === "inline" ? [segment.item] : segment.entries;
+    const ids = entries.map((entry) => entry.kind === "activity" || entry.kind === "error" ? entry.items.map((item) => item.id).join("+") : entry.item.id);
+    return `${segment.kind}:${ids.join(",")}`;
+  });
 }
 
 describe("userMessageAnchors", () => {
@@ -183,67 +193,71 @@ describe("groupTimelineTurns", () => {
     const result = groupTimelineTurns([user("u1"), thinking("t1"), tool("a"), message("m1"), user("u2"), message("m2")]);
 
     expect(result).toEqual([
-      { key: "turn:u1", user: user("u1"), process: [{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }], final: message("m1") },
-      { key: "turn:u2", user: user("u2"), process: [], final: message("m2") },
+      {
+        key: "turn:u1",
+        user: user("u1"),
+        segments: [
+          { kind: "process", id: "process:t1", entries: [{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }] },
+          { kind: "reply", id: "reply:m1", item: message("m1") },
+        ],
+      },
+      { key: "turn:u2", user: user("u2"), segments: [{ kind: "reply", id: "reply:m2", item: message("m2") }] },
     ]);
   });
 
-  it("does not lift assistant text from the active run, even when it is currently last", () => {
-    const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), message("m1")], true);
+  it("keeps a response's text inside the process when that response also ran tools", () => {
+    const stepText = { ...message("m1"), assistantMessageId: "r" };
+    const ranTool = { ...tool("a"), assistantMessageId: "r" };
+    const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), stepText, ranTool]);
 
-    expect(turn?.final).toBeUndefined();
-    expect(turn?.process).toEqual([{ kind: "thinking", item: thinking("t1") }, { kind: "message", item: message("m1") }]);
+    expect(segmentsOf(turn)).toEqual(["process:t1,m1,a"]);
   });
 
-  it("keeps the last assistant text inline when a run ends with an error", () => {
-    const [turn] = groupTimelineTurns([user("u1"), message("m1")], false, false);
+  it("keeps the trailing answer visible even when the run ends with an error", () => {
+    const [turn] = groupTimelineTurns([user("u1"), message("m1"), error("e1")]);
 
-    expect(turn?.final).toBeUndefined();
-    expect(turn?.process).toEqual([{ kind: "message", item: message("m1") }]);
+    expect(segmentsOf(turn)).toEqual(["reply:m1"]);
+    expect(turn?.finalError).toEqual([error("e1")]);
   });
 
-  it("uses the last normal assistant text when no final output exists", () => {
-    const fallback = { ...message("m1"), phase: undefined };
-    const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), fallback]);
+  it("treats a recorded phase as metadata instead of the visibility rule", () => {
+    const answer = { ...message("m1"), phase: "final_answer" as const, assistantMessageId: "r" };
+    const ranTool = { ...tool("a"), assistantMessageId: "r" };
+    const [turn] = groupTimelineTurns([user("u1"), answer, ranTool]);
 
-    expect(turn?.final).toEqual(fallback);
-    expect(turn?.process).toEqual([{ kind: "thinking", item: thinking("t1") }]);
+    expect(segmentsOf(turn)).toEqual(["process:m1,a"]);
   });
 
-  it.each(["running", "completed"] as const)("retains tools and thinking after the latest text when %s", (state) => {
+  it.each(["running", "completed"] as const)("keeps tools and thinking after the latest text in order when %s", (state) => {
     const entries = [user("u1"), thinking("t1"), message("m1"), { ...tool("a"), state }, { ...thinking("t2"), state }];
-    const [turn] = groupTimelineTurns(entries);
-    expect(turn?.final).toBeUndefined();
-    expect(turn?.process.map((entry) => "items" in entry ? entry.items[0]?.id : entry.item.id)).toEqual(["t1", "m1", "a", "t2"]);
-    expect(groupTimelineTurns([...entries, message("m2")])[0]?.final?.id).toBe("m2");
+    expect(segmentsOf(groupTimelineTurns(entries)[0])).toEqual(["process:t1,m1,a,t2"]);
+    expect(segmentsOf(groupTimelineTurns([...entries, message("m2")])[0])).toEqual(["process:t1,m1,a,t2", "reply:m2"]);
   });
 
   it("attaches run outcomes to turns without making them process entries", () => {
     const outcome = { kind: "run-outcome" as const, id: "run-outcome:run", createdAt: "", runId: "run", outcome: "stopped" as const };
     const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), outcome]);
     expect(turn?.outcome).toEqual(outcome);
-    expect(turn?.process).toEqual([{ kind: "thinking", item: thinking("t1") }]);
+    expect(segmentsOf(turn)).toEqual(["process:t1"]);
   });
 
   it("keeps an error after commentary outside the process", () => {
     const [turn] = groupTimelineTurns([user("u1"), message("m1"), tool("a"), error("e1")]);
-    expect(turn?.final).toBeUndefined();
+    expect(segmentsOf(turn)).toEqual(["process:m1,a"]);
     expect(turn?.finalError).toEqual([error("e1")]);
-    expect(turn?.process).toEqual([{ kind: "message", item: message("m1") }, { kind: "activity", items: [tool("a")] }]);
   });
 
   it("keeps standalone user commands after a completed reply in their own turn", () => {
     const command = tool("bash:command", "bash");
     const [reply, commandTurn] = groupTimelineTurns([user("u1"), thinking("t1"), tool("a"), message("m1"), command]);
-    expect(reply?.final?.id).toBe("m1");
-    expect(reply?.process).toEqual([{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }]);
-    expect(commandTurn?.process).toEqual([{ kind: "activity", items: [command] }]);
+    expect(segmentsOf(reply)).toEqual(["process:t1,a", "reply:m1"]);
+    expect(segmentsOf(commandTurn)).toEqual(["inline:bash:command"]);
   });
 
   it("collects leading entries that precede any user message into their own turn", () => {
     const [turn] = groupTimelineTurns([tool("a"), user("u1"), message("m1")]);
 
-    expect(turn).toEqual({ key: "turn:a", process: [{ kind: "activity", items: [tool("a")] }] });
+    expect(turn).toEqual({ key: "turn:a", segments: [{ kind: "process", id: "process:a", entries: [{ kind: "activity", items: [tool("a")] }] }] });
   });
 
   it("keeps a leading process key stable when earlier blocks from the same response arrive", () => {
@@ -259,9 +273,8 @@ describe("groupTimelineTurns", () => {
     const second = { ...error("e2"), groupId: "b", message: "HTTP 403" };
     const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), first, second]);
 
-    expect(turn?.process).toEqual([{ kind: "thinking", item: thinking("t1") }]);
+    expect(segmentsOf(turn)).toEqual(["process:t1"]);
     expect(turn?.finalError).toEqual([first, second]);
-    expect(turn?.final).toBeUndefined();
   });
 
   it("keeps recovered trailing errors inside the process", () => {
@@ -269,57 +282,43 @@ describe("groupTimelineTurns", () => {
     const [turn] = groupTimelineTurns([user("u1"), recovered, message("m1")]);
 
     expect(turn?.finalError).toBeUndefined();
-    expect(turn?.final).toEqual(message("m1"));
-    expect(turn?.process).toEqual([{ kind: "error", items: [recovered] }]);
+    expect(segmentsOf(turn)).toEqual(["process:e1", "reply:m1"]);
   });
 });
 
-describe("summarizeTurnProcess", () => {
-  it("counts operations and the process duration", () => {
-    const [turn] = groupTimelineTurns([
-      user("u1"),
-      { ...tool("a"), createdAt: "2026-01-01T00:00:10.000Z" },
-      { ...tool("b"), createdAt: "2026-01-01T00:00:20.000Z", state: "failed" },
-      { ...error("e1"), groupId: "g", createdAt: "2026-01-01T00:00:30.000Z" },
-      message("m1"),
-    ]);
+describe("summarizeProcess", () => {
+  it("counts operations and the segment duration", () => {
+    const entries: TimelineRenderItem[] = [
+      { kind: "activity", items: [{ ...tool("a"), createdAt: "2026-01-01T00:00:10.000Z" }, { ...tool("b"), createdAt: "2026-01-01T00:00:20.000Z", state: "failed" }] },
+      { kind: "error", items: [{ ...error("e1"), groupId: "g", createdAt: "2026-01-01T00:00:30.000Z" }] },
+    ];
 
-    expect(turn === undefined ? undefined : summarizeTurnProcess(turn)).toEqual({ operations: 2, durationMs: 20_000, failures: 2 });
+    expect(summarizeProcess(entries)).toEqual({ operations: 2, durationMs: 20_000, failures: 2 });
   });
 
   it("omits durations that cannot be derived from timestamps", () => {
-    const [turn] = groupTimelineTurns([user("u1"), { ...tool("a"), createdAt: "" }, tool("b")]);
-
-    expect(turn === undefined ? undefined : summarizeTurnProcess(turn)).toEqual({ operations: 2 });
+    expect(summarizeProcess([{ kind: "activity", items: [{ ...tool("a"), createdAt: "" }, tool("b")] }])).toEqual({ operations: 2 });
   });
 });
 
 describe("structured text phases", () => {
-  it.each(["Preparing", "正在检查代码", "字".repeat(250)])("keeps text before the summary inside one process: %s", (text) => {
-    const plain = { ...message("plain"), text, phase: undefined };
-    const turns = groupTimelineTurns([user("u"), plain, tool("after"), message("final")]);
-    expect(turns).toHaveLength(1);
-    expect(turns[0]?.final).toEqual(message("final"));
-    expect(turns[0]?.process).toEqual([{ kind: "message", item: plain }, { kind: "activity", items: [tool("after")] }]);
+  it.each(["Preparing", "正在检查代码", "字".repeat(250)])("keeps a step's text inside the process whatever it says: %s", (text) => {
+    const step = { ...message("plain"), text, phase: undefined, assistantMessageId: "r" };
+    const [turn] = groupTimelineTurns([user("u"), step, { ...tool("after"), assistantMessageId: "r" }, message("final")]);
+    expect(segmentsOf(turn)).toEqual(["process:plain,after", "reply:final"]);
   });
 
   it("lifts a trailing commentary summary out of the process", () => {
     const commentary = { ...message("commentary"), phase: "commentary" as const, text: "Reviewing\n".repeat(200) };
     const [turn] = groupTimelineTurns([user("u"), thinking("t"), commentary]);
-    expect(turn?.final).toEqual(commentary);
-    expect(turn?.process).toEqual([{ kind: "thinking", item: thinking("t") }]);
+    expect(segmentsOf(turn)).toEqual(["process:t", "reply:commentary"]);
   });
 
-  it("keeps earlier text inside the process and lifts only the last summary", () => {
+  it("keeps earlier text inside the process and shows only the trailing answer", () => {
     const first = message("first");
     const second = message("second");
     const [turn] = groupTimelineTurns([user("u"), thinking("t"), first, tool("between"), second]);
-    expect(turn?.final).toEqual(second);
-    expect(turn?.process).toEqual([
-      { kind: "thinking", item: thinking("t") },
-      { kind: "message", item: first },
-      { kind: "activity", items: [tool("between")] },
-    ]);
+    expect(segmentsOf(turn)).toEqual(["process:t,first,between", "reply:second"]);
   });
 
   it("retains all source blocks when tools follow a final text block", () => {
@@ -329,17 +328,16 @@ describe("structured text phases", () => {
     const after = { ...tool("after"), assistantMessageId: "response", contentIndex: 3 };
     const turns = groupTimelineTurns([user("u"), first, between, second, after]);
     expect(turns).toHaveLength(1);
-    expect(timelineProcessId(turns[0])).toBe("process:response");
-    expect(turns[0]?.final).toBeUndefined();
-    expect(turns[0]?.process.map((entry) => "items" in entry ? entry.items[0]?.id : entry.item.id)).toEqual(["first", "between", "second", "after"]);
+    expect(timelineProcessIds(turns[0])).toEqual(["process:response"]);
+    expect(segmentsOf(turns[0])).toEqual(["process:first,between,second,after"]);
   });
 
   it("keeps a leading process identity stable when a user message is paged in", () => {
     const process = { ...tool("tool"), assistantMessageId: "response", contentIndex: 1 };
     const withoutUser = groupTimelineTurns([process])[0];
     const withUser = groupTimelineTurns([user("u"), process])[0];
-    expect(timelineProcessId(withoutUser)).toBe("process:response");
-    expect(timelineProcessId(withUser)).toBe("process:response");
+    expect(timelineProcessIds(withoutUser)).toEqual(["process:response"]);
+    expect(timelineProcessIds(withUser)).toEqual(["process:response"]);
   });
 });
 
@@ -368,7 +366,7 @@ describe("presentTurnProcess", () => {
     ]);
     expect(presented.entries).toEqual([{ kind: "extension-ui", item: select }]);
     expect(presented.customAnswers.get("select")).toBe("啥意思？我听不懂");
-    expect(shouldFoldTurnProcess({ key: "t", process: presented.entries })).toBe(true);
+    expect(shouldFoldProcess(presented.entries)).toBe(true);
   });
 });
 
@@ -453,23 +451,18 @@ describe("isToolActivityRunning", () => {
   });
 });
 
-describe("shouldFoldTurnProcess", () => {
-  it("folds multi-entry processes and single process messages", () => {
-    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }] })).toBe(true);
-    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "message", item: message("m1") }] })).toBe(true);
-    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }], finalError: [error("e1")] })).toBe(true);
+describe("shouldFoldProcess", () => {
+  it("folds a settled segment of any size", () => {
+    expect(shouldFoldProcess([{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }])).toBe(true);
+    expect(shouldFoldProcess([{ kind: "message", item: message("m1") }])).toBe(true);
+    expect(shouldFoldProcess([{ kind: "activity", items: [tool("a")] }])).toBe(true);
+    expect(shouldFoldProcess([])).toBe(false);
   });
 
   it("waits for the whole run to settle before folding its process", () => {
-    const [turn] = groupTimelineTurns([user("u1"), thinking("t1"), tool("a"), message("m1")]);
-    expect(shouldFoldTurnProcess(turn!, true)).toBe(false);
-    expect(shouldFoldTurnProcess(turn!, false)).toBe(true);
-  });
-
-  it("folds a single row and leaves an empty process unfolded", () => {
-    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "thinking", item: thinking("t1") }] })).toBe(true);
-    expect(shouldFoldTurnProcess({ key: "t", process: [{ kind: "activity", items: [tool("a")] }] })).toBe(true);
-    expect(shouldFoldTurnProcess({ key: "t", process: [] })).toBe(false);
+    const entries: TimelineRenderItem[] = [{ kind: "thinking", item: thinking("t1") }, { kind: "activity", items: [tool("a")] }];
+    expect(shouldFoldProcess(entries, true)).toBe(false);
+    expect(shouldFoldProcess(entries, false)).toBe(true);
   });
 });
 
@@ -493,27 +486,31 @@ describe("isTurnProcessOpen", () => {
   });
 });
 
-describe("splitVisibleTurnEntries", () => {
-  it("lifts a pending dialog, a user command and every assistant reply out of the process", () => {
-    const result = splitVisibleTurnEntries([
+describe("buildTurnSegments", () => {
+  it("cuts segments in source order and keeps dialogs and commands visible", () => {
+    const segments = buildTurnSegments([
       { kind: "thinking", item: thinking("t1") },
-      { kind: "message", item: message("a1") },
-      { kind: "activity", items: [tool("a"), command("c1")] },
-      { kind: "extension-ui", item: dialog("d1") },
-      { kind: "extension-ui", item: dialog("d2", "answered") },
-      { kind: "message", item: message("a2") },
-    ]);
-    expect(result.process).toEqual([
-      { kind: "thinking", item: thinking("t1") },
-      { kind: "activity", items: [tool("a")] },
-      { kind: "extension-ui", item: dialog("d2", "answered") },
-    ]);
-    expect(result.visible).toEqual([
-      { kind: "message", item: message("a1") },
+      { kind: "activity", items: [{ ...tool("a"), assistantMessageId: "r" }] },
+      { kind: "message", item: { ...message("a1"), assistantMessageId: "r1" } },
       { kind: "activity", items: [command("c1")] },
       { kind: "extension-ui", item: dialog("d1") },
-      { kind: "message", item: message("a2") },
+      { kind: "extension-ui", item: dialog("d2", "answered") },
+      { kind: "message", item: { ...message("a2"), assistantMessageId: "r3" } },
     ]);
+
+    expect(segments.map((segment) => segment.kind)).toEqual(["process", "reply", "inline", "inline", "process", "reply"]);
+    expect(segments.flatMap((segment) => segment.kind === "process" ? [segment.id] : [])).toEqual(["process:r", "process:d2"]);
+  });
+
+  it("keeps several replies in their original positions", () => {
+    const segments = buildTurnSegments([
+      { kind: "activity", items: [{ ...tool("a"), assistantMessageId: "r1" }] },
+      { kind: "message", item: { ...message("a1"), assistantMessageId: "r2" } },
+      { kind: "activity", items: [{ ...tool("b"), assistantMessageId: "r3" }] },
+      { kind: "message", item: { ...message("a2"), assistantMessageId: "r4" } },
+    ]);
+
+    expect(segments.map((segment) => segment.kind === "reply" ? segment.item.id : segment.kind)).toEqual(["process", "a1", "process", "a2"]);
   });
 });
 
@@ -530,8 +527,8 @@ describe("trailingAssistantMessage", () => {
 
 describe("turnEndedInFailure", () => {
   it("flags unrecovered errors and ignores recovered attempts", () => {
-    expect(turnEndedInFailure({ key: "t", process: [{ kind: "error", items: [{ ...error("e1"), state: "recovered" }] }] })).toBe(false);
-    expect(turnEndedInFailure({ key: "t", process: [{ kind: "error", items: [error("e1")] }] })).toBe(true);
-    expect(turnEndedInFailure({ key: "t", process: [], finalError: [error("e1")] })).toBe(true);
+    expect(turnEndedInFailure({ key: "t", segments: [{ kind: "process", id: "p", entries: [{ kind: "error", items: [{ ...error("e1"), state: "recovered" }] }] }] })).toBe(false);
+    expect(turnEndedInFailure({ key: "t", segments: [{ kind: "process", id: "p", entries: [{ kind: "error", items: [error("e1")] }] }] })).toBe(true);
+    expect(turnEndedInFailure({ key: "t", segments: [], finalError: [error("e1")] })).toBe(true);
   });
 });

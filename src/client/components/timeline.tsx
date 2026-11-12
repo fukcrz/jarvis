@@ -18,7 +18,7 @@ import { ElapsedClock } from "./elapsed-clock";
 import { DiffStat, DiffView } from "./diff-view";
 import { LocalTextFileLink } from "./text-file-preview";
 import { mergeFileChanges } from "../../shared/file-change";
-import { activityGroupId, collapseUntouchedTimelineProcess, emptyTimelineFoldState, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, visibleToolActivityItemIds, type TimelineFoldState } from "./timeline-fold";
+import { collapseUntouchedTimelineProcess, emptyTimelineFoldState, toggleTimelineDetail, toggleTimelineGroup, toggleTimelineProcess, visibleToolActivityItemIds, type TimelineFoldState } from "./timeline-fold";
 import { Dialog, DialogContent } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
@@ -147,9 +147,8 @@ export function visibleNavigatorAnchorIds(anchors: UserMessageAnchor[], activeId
 export function Timeline({ sessionKey, localMediaVersion, items, streamingMessageId, liveGeneration, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onRetryTurn, onContinue, onDismissInterrupted, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage }: TimelineProps) {
   const [foldState, setFoldState] = useState<TimelineFoldState>(() => emptyTimelineFoldState(sessionKey));
   const foldStateForRender = foldState.sessionKey === sessionKey ? foldState : emptyTimelineFoldState(sessionKey);
-  const liveLlmRun = status.runState !== "idle" && (status.activeRun?.kind ?? "llm") === "llm";
-  const allowFinalReply = !liveLlmRun && status.lastError === undefined;
-  const turns = useMemo(() => groupTimelineTurns(items, liveLlmRun, allowFinalReply), [items, liveLlmRun, allowFinalReply]);
+  // 判定只看结构且与运行状态无关：运行中只是不折叠，结算时不重新分类。
+  const turns = useMemo(() => groupTimelineTurns(items), [items]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const touchYRef = useRef<number | undefined>(undefined);
   const loadingEarlierRef = useRef(false);
@@ -184,8 +183,8 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   const [fillingViewport, setFillingViewport] = useState(false);
   const [fillViewportRevision, setFillViewportRevision] = useState(0);
   const isMobile = useIsMobile();
-  const activeProcessId = timelineProcessId(activeTimelineTurn(turns, status));
-  const previousActiveProcessRef = useRef<{ sessionKey?: string; processId?: string }>({ sessionKey, processId: activeProcessId });
+  const activeProcessIds = timelineProcessIds(activeTimelineTurn(turns, status)).join("|");
+  const previousActiveProcessRef = useRef<{ sessionKey?: string; processIds?: string }>({ sessionKey, processIds: activeProcessIds });
   const toggleProcess = useCallback((processId: string, open: boolean) => {
     setFoldState((current) => toggleTimelineProcess(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), processId, open));
   }, [sessionKey]);
@@ -200,10 +199,13 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
   }, [sessionKey]);
   useEffect(() => {
     const previous = previousActiveProcessRef.current;
-    previousActiveProcessRef.current = { sessionKey, processId: activeProcessId };
-    if (previous.sessionKey !== sessionKey || previous.processId === undefined || previous.processId === activeProcessId) return;
-    setFoldState((current) => collapseUntouchedTimelineProcess(current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey), previous.processId!));
-  }, [activeProcessId, sessionKey]);
+    previousActiveProcessRef.current = { sessionKey, processIds: activeProcessIds };
+    if (previous.sessionKey !== sessionKey || previous.processIds === undefined || previous.processIds === activeProcessIds) return;
+    setFoldState((current) => {
+      const base = current.sessionKey === sessionKey ? current : emptyTimelineFoldState(sessionKey);
+      return previous.processIds!.split("|").filter(Boolean).reduce(collapseUntouchedTimelineProcess, base);
+    });
+  }, [activeProcessIds, sessionKey]);
   const userMessages = useMemo(() => {
     if (outline !== undefined && outline.length > 0) return userMessageAnchorsFromOutline(outline);
     if (outlineLoading) return [];
@@ -559,16 +561,11 @@ function shouldShowRunStatusBarForElement(root: HTMLElement | null, activity: Ru
 }
 
 function hasVisibleLiveProcessEntry(turn: TimelineTurn, streamingMessageId: string | undefined): boolean {
-  const presented = presentTurnProcess(turn.process).entries;
-  const split = splitVisibleTurnEntries(presented);
-  const visibleEntries = [...split.process, ...split.visible];
-  const final = turn.final;
-  if (final !== undefined && final.id === streamingMessageId && final.text !== "") return true;
-  return visibleEntries.some((entry) => {
-    if (entry.kind === "activity") return entry.items.some((item) => item.state === "queued" || item.state === "running");
-    if (entry.kind === "thinking") return entry.item.state === "running" && entry.item.text.trim() !== "";
-    return entry.kind === "message" && entry.item.id === streamingMessageId && entry.item.text !== "";
-  });
+  return turn.segments.some((segment) => segmentItems(segment).some((item) => {
+    if (item.kind === "tool") return item.state === "queued" || item.state === "running";
+    if (item.kind === "thinking") return item.state === "running" && item.text.trim() !== "";
+    return item.kind === "message" && item.id === streamingMessageId && item.text !== "";
+  }));
 }
 
 function WorkingIndicator({ activity, startedAt, className = "working-indicator" }: { activity: RunStatusActivity; startedAt?: string; className?: string }) {
@@ -716,7 +713,7 @@ function errorSummary(message: string): string {
   return `${firstLine.slice(0, 177)}…`;
 }
 
-const MessageItem = memo(function MessageItem({ item, streaming, live, highlighted, onEdit, onFork, baseDir, showMeta = false, generationSummary, afterContent, runIndicator }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; live?: LiveGenerationStats; highlighted: boolean; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string; showMeta?: boolean; generationSummary?: GenerationSummary; afterContent?: ReactNode; runIndicator?: ReactNode }) {
+const MessageItem = memo(function MessageItem({ item, streaming, live, highlighted, onEdit, onFork, baseDir, showMeta = false, replyActions = false, generationSummary, afterContent, runIndicator }: { item: Extract<TimelineItem, { kind: "message" }>; streaming: boolean; live?: LiveGenerationStats; highlighted: boolean; onEdit?: TimelineProps["onEditUserMessage"]; onFork?: (item: MessageTimelineItem) => void; baseDir?: string; showMeta?: boolean; /** 回合中间的回复：只给复制与分支，不带回合级统计。 */ replyActions?: boolean; generationSummary?: GenerationSummary; afterContent?: ReactNode; runIndicator?: ReactNode }) {
   const [showTimestamp, setShowTimestamp] = useState(false);
   const images = item.images ?? [];
   const toggleTimestampOnTouch = (event: React.PointerEvent) => {
@@ -740,7 +737,7 @@ const MessageItem = memo(function MessageItem({ item, streaming, live, highlight
           <AssistantGenerationMeta generation={item.generation} summary={generationSummary} />
         </div> : <>
           {showMeta && item.role === "assistant" && (live !== undefined || item.generation !== undefined) ? <AssistantGenerationMeta live={live} generation={item.generation} /> : null}
-          <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : () => onEdit(item)} onFork={item.role === "assistant" && !showMeta ? undefined : onFork} showTimestamp={item.role === "user"} createdAt={item.createdAt} />
+          <MessageActions item={item} streaming={streaming} onEdit={onEdit === undefined ? undefined : () => onEdit(item)} onFork={item.role === "assistant" && !showMeta && !replyActions ? undefined : onFork} copyable={replyActions} showTimestamp={item.role === "user"} createdAt={item.createdAt} />
         </>}
         {runIndicator}
       </div>
@@ -1218,27 +1215,108 @@ export function isToolActivityRunning(items: TimelineItem[], status: SessionStat
   return false;
 }
 
+/**
+ * 回合内的段。顺序就是原始顺序：过程段只折叠、不搬家，回复留在它出现的位置。
+ * 一个回合因此可以有多段「过程」，普通任务仍然只有一段。
+ */
+export type TimelineSegment =
+  | { kind: "process"; id: string; entries: TimelineRenderItem[] }
+  | { kind: "reply"; id: string; item: MessageTimelineItem }
+  | { kind: "inline"; id: string; item: TimelineRenderItem };
+
 export interface TimelineTurn {
   /** React key 与折叠状态的依据。 */
   key: string;
   /** 触发该回合的用户消息；历史分页从回合中间开始时没有。 */
   user?: MessageTimelineItem;
-  /** 折叠进「过程」的条目：思考、工具组、过程文本、错误、上下文事件。 */
-  process: TimelineRenderItem[];
-  /** 回合最后一条 assistant 文本，留在过程外。 */
-  final?: MessageTimelineItem;
+  /** 按原始顺序切好的段。 */
+  segments: TimelineSegment[];
+  /** 选项列上的自定义跟进输入，配对在整回合条目上做。 */
+  customAnswers?: ReadonlyMap<string, string>;
   /** 回合末尾未恢复的错误，留在过程折叠外。 */
   finalError?: ErrorTimelineItem[];
   outcome?: RunOutcomeTimelineItem;
 }
 
-/** 以用户消息为界组成回合；只有运行成功结束后才提升末尾助手文本。 */
-export function groupTimelineTurns(items: TimelineItem[], live = false, allowFinalReply = true): TimelineTurn[] {
-  const turns: TimelineTurn[] = [];
-  let current: TimelineTurn | undefined;
-  const openTurn = (key: string): TimelineTurn => {
-    const turn: TimelineTurn = { key, process: [] };
-    turns.push(turn);
+/** 留下工具行的响应身份：出现在这里的响应，它的文本就是这一段过程的说明。 */
+function stepResponseIds(entries: TimelineRenderItem[]): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind !== "activity") continue;
+    for (const item of entry.items) if (item.assistantMessageId !== undefined) ids.add(item.assistantMessageId);
+  }
+  return ids;
+}
+
+/**
+ * 一条助手文本是不是面向用户的回复：它所在的响应没有留下工具行。
+ * 判据只看结构，不看长度、措辞或 provider 的 phase。
+ */
+export function isReplyEntry(entry: TimelineRenderItem, stepIds: ReadonlySet<string>, trailing = false): boolean {
+  if (entry.kind !== "message" || entry.item.role !== "assistant" || entry.item.text.trim() === "") return false;
+  const owner = entry.item.assistantMessageId;
+  // 没有响应身份的老数据只把回合末尾那条当回复，中间进度不提出去。
+  return owner === undefined ? trailing : !stepIds.has(owner);
+}
+
+/** 待回答问询和用户 !cmd 不参与折叠：它们本来就要等用户动手。 */
+function isInlineEntry(entry: TimelineRenderItem): boolean {
+  if (entry.kind === "extension-ui") return entry.item.outcome === undefined;
+  return entry.kind === "activity" && entry.items.every(isUserCommand);
+}
+
+function processSegmentId(entries: TimelineRenderItem[], used: Set<string>): string {
+  const sourceId = entries.map(renderItemSourceMessageId).find((id): id is string => id !== undefined) ?? renderItemKey(entries[0]!);
+  const base = `process:${sourceId}`;
+  let id = base;
+  for (let index = 2; used.has(id); index += 1) id = `${base}:${String(index)}`;
+  used.add(id);
+  return id;
+}
+
+/** 原顺序切段：连续的过程条目合并成一段，回复与待答条目各自独立成段。 */
+export function buildTurnSegments(entries: TimelineRenderItem[]): TimelineSegment[] {
+  const stepIds = stepResponseIds(entries);
+  let lastStepIndex = -1;
+  for (let index = 0; index < entries.length; index += 1) if (entries[index]!.kind === "activity") lastStepIndex = index;
+  const segments: TimelineSegment[] = [];
+  const used = new Set<string>();
+  let buffer: TimelineRenderItem[] = [];
+  const flush = () => {
+    if (buffer.length === 0) return;
+    segments.push({ kind: "process", id: processSegmentId(buffer, used), entries: buffer });
+    buffer = [];
+  };
+  for (const [index, entry] of entries.entries()) {
+    if (entry.kind === "message" && isReplyEntry(entry, stepIds, index > lastStepIndex)) {
+      flush();
+      segments.push({ kind: "reply", id: `reply:${entry.item.id}`, item: entry.item });
+      continue;
+    }
+    if (isInlineEntry(entry)) {
+      flush();
+      segments.push({ kind: "inline", id: `inline:${renderItemKey(entry)}`, item: entry });
+      continue;
+    }
+    buffer.push(entry);
+  }
+  flush();
+  return segments;
+}
+
+/** 以用户消息为界组成回合，回合内按原始顺序切段。 */
+export function groupTimelineTurns(items: TimelineItem[]): TimelineTurn[] {
+  interface DraftTurn {
+    key: string;
+    user?: MessageTimelineItem;
+    entries: TimelineRenderItem[];
+    outcome?: RunOutcomeTimelineItem;
+  }
+  const drafts: DraftTurn[] = [];
+  let current: DraftTurn | undefined;
+  const openTurn = (key: string): DraftTurn => {
+    const turn: DraftTurn = { key, entries: [] };
+    drafts.push(turn);
     current = turn;
     return turn;
   };
@@ -1253,26 +1331,34 @@ export function groupTimelineTurns(items: TimelineItem[], live = false, allowFin
       continue;
     }
     if (entry.kind === "activity" && entry.items.every(isUserCommand)) {
-      openTurn(`turn:${renderItemKey(entry)}`).process.push(entry);
+      openTurn(`turn:${renderItemKey(entry)}`).entries.push(entry);
       current = undefined;
       continue;
     }
     const sourceMessageId = renderItemSourceMessageId(entry);
-    (current ?? openTurn(`turn:${sourceMessageId ?? renderItemKey(entry)}`)).process.push(entry);
+    (current ?? openTurn(`turn:${sourceMessageId ?? renderItemKey(entry)}`)).entries.push(entry);
   }
-  for (const [index, turn] of turns.entries()) {
-    if (live && index === turns.length - 1) continue;
-    const last = turn.process.at(-1);
-    if (!allowFinalReply && index === turns.length - 1 && last?.kind === "message" && last.item.role === "assistant") continue;
-    if (last?.kind === "message" && last.item.role === "assistant") {
-      turn.final = last.item;
-      turn.process.pop();
-    } else if (last?.kind === "error" && last.items.some((item) => item.state === "failed")) {
-      turn.finalError = last.items;
-      turn.process.pop();
+
+  return drafts.map((draft) => {
+    const presented = presentTurnProcess(draft.entries);
+    const segments = buildTurnSegments(presented.entries);
+    const turn: TimelineTurn = {
+      key: draft.key,
+      ...(draft.user === undefined ? {} : { user: draft.user }),
+      segments,
+      ...(presented.customAnswers.size === 0 ? {} : { customAnswers: presented.customAnswers }),
+      ...(draft.outcome === undefined ? {} : { outcome: draft.outcome }),
+    };
+    // 回合末尾未恢复的错误提到段外，交给失败卡。
+    const trailing = segments.at(-1);
+    const lastEntry = trailing?.kind === "process" ? trailing.entries.at(-1) : undefined;
+    if (trailing?.kind === "process" && lastEntry?.kind === "error" && lastEntry.items.some((item) => item.state === "failed")) {
+      turn.finalError = lastEntry.items;
+      trailing.entries.pop();
+      if (trailing.entries.length === 0) segments.pop();
     }
-  }
-  return turns;
+    return turn;
+  });
 }
 
 /** 独立命令和手动压缩不重新打开上一轮回复。 */
@@ -1303,22 +1389,31 @@ export interface TurnProcessSummary {
   failures?: number;
 }
 
-function processStartAt(turn: TimelineTurn): string | undefined {
-  const first = turn.process.at(0);
+function segmentItems(segment: TimelineSegment): Array<MessageTimelineItem | ThinkingTimelineItem | ToolTimelineItem> {
+  if (segment.kind === "reply") return [segment.item];
+  if (segment.kind === "inline") return segment.item.kind === "message" ? [segment.item.item] : [];
+  return segment.entries.flatMap((entry): Array<MessageTimelineItem | ThinkingTimelineItem | ToolTimelineItem> => entry.kind === "activity" ? entry.items
+    : entry.kind === "message" || entry.kind === "thinking" ? [entry.item]
+    : []);
+}
+
+/** 回合里所有过程段的条目，拼成原有顺序。 */
+export function processEntries(turn: TimelineTurn): TimelineRenderItem[] {
+  return turn.segments.flatMap((segment) => segment.kind === "process" ? segment.entries : []);
+}
+
+function entriesStartAt(entries: TimelineRenderItem[]): string | undefined {
+  const first = entries.at(0);
   return first === undefined ? undefined : renderItemRange(first).start;
 }
 
-function processEndAt(turn: TimelineTurn): string | undefined {
-  const last = turn.process.at(-1);
+function entriesEndAt(entries: TimelineRenderItem[]): string | undefined {
+  const last = entries.at(-1);
   return last === undefined ? undefined : renderItemRange(last).end;
 }
 
 export function summarizeTurnGeneration(turn: TimelineTurn): GenerationSummary | undefined {
-  const items: TimelineItem[] = [];
-  for (const entry of turn.process) {
-    if (entry.kind === "message" || entry.kind === "thinking" || entry.kind === "activity") items.push(...(entry.kind === "activity" ? entry.items : [entry.item]));
-  }
-  if (turn.final !== undefined) items.push(turn.final);
+  const items = turn.segments.flatMap(segmentItems);
   const generations = items.flatMap((item) => item.kind !== "message" && item.kind !== "thinking" && item.kind !== "tool" || item.generation === undefined ? [] : [item.generation]);
   if (generations.length === 0) return undefined;
   return {
@@ -1329,17 +1424,18 @@ export function summarizeTurnGeneration(turn: TimelineTurn): GenerationSummary |
   };
 }
 
-export function summarizeTurnProcess(turn: TimelineTurn): TurnProcessSummary {
+/** 一段过程的耗时、工具数与失败数。 */
+export function summarizeProcess(entries: TimelineRenderItem[]): TurnProcessSummary {
   let operations = 0;
-  let failures = turn.finalError?.some((item) => item.state === "failed") === true ? 1 : 0;
-  for (const entry of turn.process) {
+  let failures = 0;
+  for (const entry of entries) {
     if (entry.kind === "activity") {
       operations += entry.items.length;
       failures += entry.items.filter((item) => item.state === "failed").length;
     } else if (entry.kind === "error" && entry.items.some((item) => item.state === "failed")) failures += 1;
   }
-  const start = Date.parse(processStartAt(turn) ?? "");
-  const end = Date.parse(processEndAt(turn) ?? "");
+  const start = Date.parse(entriesStartAt(entries) ?? "");
+  const end = Date.parse(entriesEndAt(entries) ?? "");
   const durationMs = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : undefined;
   return { operations, ...(durationMs === undefined ? {} : { durationMs }), ...(failures === 0 ? {} : { failures }) };
 }
@@ -1349,9 +1445,9 @@ export function turnProcessCategories(entries: TimelineRenderItem[]): string {
   return summarizeToolActivity(entries.flatMap((entry) => entry.kind === "activity" ? entry.items : []));
 }
 
-/** 整轮结束后才收进「过程」，单条内容也算。 */
-export function shouldFoldTurnProcess(turn: TimelineTurn, live = false): boolean {
-  return !live && turn.process.length > 0;
+/** 整轮结束后才收进「过程」；运行中一律平铺。 */
+export function shouldFoldProcess(entries: TimelineRenderItem[], live = false): boolean {
+  return !live && entries.length > 0;
 }
 
 /** 过程默认收起；用户手动打开过才展开。 */
@@ -1364,36 +1460,6 @@ function isUserCommand(item: ToolTimelineItem): boolean {
   return item.id.startsWith("bash:");
 }
 
-function isPendingDialog(entry: TimelineRenderItem): boolean {
-  return entry.kind === "extension-ui" && entry.item.outcome === undefined;
-}
-
-/** 助手说的话永远留在过程外，过程只收工具与思考；用户 !cmd 和未回答问询同样留在外面。 */
-export function splitVisibleTurnEntries(entries: TimelineRenderItem[]): { process: TimelineRenderItem[]; visible: TimelineRenderItem[] } {
-  const process: TimelineRenderItem[] = [];
-  const visible: TimelineRenderItem[] = [];
-  for (const entry of entries) {
-    if (isPendingDialog(entry)) {
-      visible.push(entry);
-      continue;
-    }
-    // 回合里的中间回复也要看得见：子代理反复触发时，每次汇报不能被收进折叠的过程块。
-    if (entry.kind === "message" && entry.item.role === "assistant") {
-      visible.push(entry);
-      continue;
-    }
-    if (entry.kind !== "activity") {
-      process.push(entry);
-      continue;
-    }
-    const commands = entry.items.filter(isUserCommand);
-    const rest = entry.items.filter((item) => !isUserCommand(item));
-    if (rest.length > 0) process.push({ kind: "activity", items: rest });
-    if (commands.length > 0) visible.push({ kind: "activity", items: commands });
-  }
-  return { process, visible };
-}
-
 /** 「执行中」并进末尾助手消息时跟着那条消息排版；过程末尾已是别的条目就落回回合底部，不能停在最新一步之前。 */
 export function trailingAssistantMessage(entries: TimelineRenderItem[]): Extract<TimelineRenderItem, { kind: "message" }> | undefined {
   const last = entries.at(-1);
@@ -1403,7 +1469,7 @@ export function trailingAssistantMessage(entries: TimelineRenderItem[]): Extract
 /** 回合以未恢复的错误收尾。末尾失败卡会提到折叠外，过程里也可能还留着未恢复错误。 */
 export function turnEndedInFailure(turn: TimelineTurn): boolean {
   if (turn.finalError?.some((item) => item.state === "failed")) return true;
-  return turn.process.some((entry) => entry.kind === "error" && entry.items.some((item) => item.state === "failed"));
+  return processEntries(turn).some((entry) => entry.kind === "error" && entry.items.some((item) => item.state === "failed"));
 }
 
 /** 过程耗时：与运行计时同一格式（M:SS），不足 1 秒不显示。 */
@@ -1443,6 +1509,8 @@ interface TurnRenderContext {
   customAnswers?: ReadonlyMap<string, string>;
   /** 只有回合的最终回答显示 token/速度/用时。 */
   showGenerationMeta?: boolean;
+  /** 回合中间的回复：只给复制与分支，不带回合级统计。 */
+  replyActions?: boolean;
   generationSummary?: GenerationSummary;
   afterContent?: ReactNode;
   runIndicator?: ReactNode;
@@ -1515,7 +1583,7 @@ function liveGenerationForBlock(item: MessageTimelineItem | ThinkingTimelineItem
 function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderContext, showAll = true, showActivePreview = true): ReactNode {
   if (entry.kind === "message") {
     const streaming = entry.item.id === context.streamingMessageId && context.liveGeneration?.activeBlockKind !== "thinking";
-    return <MessageItem key={entry.item.id} item={entry.item} streaming={streaming} live={liveGenerationForBlock(entry.item, context.liveGeneration, "text")} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={context.onForkMessage} baseDir={context.workspaceCwd} showMeta={context.showGenerationMeta === true} generationSummary={context.generationSummary} afterContent={context.afterContent} runIndicator={context.runStatusMessageId === entry.item.id ? context.runIndicator : undefined} />;
+    return <MessageItem key={entry.item.id} item={entry.item} streaming={streaming} live={liveGenerationForBlock(entry.item, context.liveGeneration, "text")} highlighted={entry.item.id === context.highlightedMessageId} onEdit={context.onEditUserMessage} onFork={context.onForkMessage} baseDir={context.workspaceCwd} showMeta={context.showGenerationMeta === true} replyActions={context.replyActions === true} generationSummary={context.generationSummary} afterContent={context.afterContent} runIndicator={context.runStatusMessageId === entry.item.id ? context.runIndicator : undefined} />;
   }
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
@@ -1540,12 +1608,9 @@ export function MarkdownTextPreview({ text }: { text: string }) {
   return <ReactMarkdown allowedElements={[]} unwrapDisallowed skipHtml components={{ p: ({ children }) => <>{children}</> }}>{text}</ReactMarkdown>;
 }
 
-export function timelineProcessId(turn: TimelineTurn | undefined): string | undefined {
-  if (turn === undefined || turn.process.length === 0) return undefined;
-  const sourceMessageId = turn.process.map(renderItemSourceMessageId).find((id): id is string => id !== undefined);
-  if (sourceMessageId === undefined) return `process:${renderItemKey(turn.process[0]!)}`;
-  if (turn.key.startsWith("turn:after:")) return `process:${sourceMessageId}:after:${turn.key.slice("turn:after:".length)}`;
-  return `process:${sourceMessageId}`;
+export function timelineProcessIds(turn: TimelineTurn | undefined): string[] {
+  if (turn === undefined) return [];
+  return turn.segments.flatMap((segment) => segment.kind === "process" ? [segment.id] : []);
 }
 
 /** 回合内成功落地的文件改动，同一文件合并。 */
@@ -1592,64 +1657,87 @@ function TurnChanges({ changes, cwd }: { changes: FileChange[]; cwd?: string }) 
   </section>;
 }
 
-function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; live: boolean; foldState: TimelineFoldState; onToggleProcess: (id: string, open: boolean) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string, currentlyCollapsed: boolean) => void }) {
-  const presented = useMemo(() => presentTurnProcess(turn.process), [turn.process]);
-  const split = useMemo(() => splitVisibleTurnEntries(presented.entries), [presented.entries]);
-  const displayTurn = { ...turn, process: split.process };
-  const summary = summarizeTurnProcess(displayTurn);
-  const collapsible = shouldFoldTurnProcess(displayTurn, live);
-  const processId = timelineProcessId(turn);
-  const touched = processId !== undefined && foldState.touchedProcessIds.has(processId);
-  const open = !collapsible || isTurnProcessOpen(foldState, processId);
-  const showAll = open;
-  const processBaseContext: TurnRenderContext = {
+/** 一段可折叠的过程：条目保持原顺序，运行中一律展开且没有折叠头。 */
+function TurnProcessSegment({ segment, live, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, context }: {
+  segment: Extract<TimelineSegment, { kind: "process" }>;
+  live: boolean;
+  foldState: TimelineFoldState;
+  onToggleProcess: (id: string, open: boolean) => void;
+  onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void;
+  onToggleProcessGroup: (processId: string, groupId: string, currentlyCollapsed: boolean) => void;
+  context: TurnRenderContext;
+}) {
+  const entries = segment.entries;
+  const summary = summarizeProcess(entries);
+  const collapsible = shouldFoldProcess(entries, live);
+  const touched = foldState.touchedProcessIds.has(segment.id);
+  const open = !collapsible || isTurnProcessOpen(foldState, segment.id);
+  const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
+  const categories = turnProcessCategories(entries);
+  const segmentContext: TurnRenderContext = {
     ...context,
     inlineProcess: live,
     openDetailIds: foldState.openDetailIds,
     closedDetailIds: foldState.closedDetailIds,
     openGroupIds: foldState.openGroupIds,
     closedGroupIds: foldState.closedGroupIds,
-    onToggleDetail: (detailId, currentlyOpen) => { if (processId !== undefined) onToggleProcessDetail(processId, detailId, currentlyOpen); },
-    onToggleGroup: (groupId, currentlyCollapsed) => { if (processId !== undefined) onToggleProcessGroup(processId, groupId, currentlyCollapsed); },
-    customAnswers: presented.customAnswers,
+    onToggleDetail: (detailId, currentlyOpen) => onToggleProcessDetail(segment.id, detailId, currentlyOpen),
+    onToggleGroup: (groupId, currentlyCollapsed) => onToggleProcessGroup(segment.id, groupId, currentlyCollapsed),
   };
-  const elapsed = summary.durationMs === undefined ? undefined : formatProcessElapsed(summary.durationMs);
-  const changes = useMemo(() => turnFileChanges(split.process), [split.process]);
-  const categories = useMemo(() => turnProcessCategories(split.process), [split.process]);
+  const block = <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
+    {!collapsible ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary, categories)} onClick={() => onToggleProcess(segment.id, open)}>
+      <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
+      <span className="turn-process-label">过程</span>
+      {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
+      {categories === "" ? null : <span className="turn-process-count">{categories}</span>}
+    </button>}
+    {open ? <div className={!collapsible ? "turn-process-stack" : "turn-process-body"}>{entries.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
+      {renderTimelineEntry(entry, segmentContext, true, !touched)}
+    </div>)}</div> : null}
+  </section>;
+  return live ? block : <div className="turn-details">{block}</div>;
+}
+
+function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onToggleProcessDetail, onToggleProcessGroup, ...context }: TurnRenderContext & { turn: TimelineTurn; live: boolean; foldState: TimelineFoldState; onToggleProcess: (id: string, open: boolean) => void; onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void; onToggleProcessGroup: (processId: string, groupId: string, currentlyCollapsed: boolean) => void }) {
+  const changes = useMemo(() => turnFileChanges(processEntries(turn)), [turn.segments]);
+  const completedChanges = changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />;
+  const lastReply = turn.segments.findLast((segment): segment is Extract<TimelineSegment, { kind: "reply" }> => segment.kind === "reply");
   const runIndicator = context.runStatusTurnKey === turn.key && context.runStatusActivity !== undefined
     ? <WorkingIndicator className="working-indicator message-run-status" activity={context.runStatusActivity} startedAt={context.runStatusStartedAt} />
     : undefined;
-  const runStatusMessage = runIndicator === undefined || turn.final !== undefined || split.visible.length > 0 ? undefined : trailingAssistantMessage(displayTurn.process);
-  const runStatusMessageId = runStatusMessage?.item.id;
-  const processContext: TurnRenderContext = {
-    ...processBaseContext,
+  // 运行指示掋在回合的最后一个节点上，没有可挂的节点时在末尾单开一行。
+  const lastSegment = turn.segments.at(-1);
+  const trailingMessage = lastSegment?.kind === "reply" ? lastSegment.item
+    : lastSegment?.kind === "process" ? trailingAssistantMessage(lastSegment.entries)?.item
+    : undefined;
+  const runStatusMessageId = runIndicator === undefined ? undefined : trailingMessage?.id;
+  const baseContext: TurnRenderContext = {
+    ...context,
+    customAnswers: turn.customAnswers,
     runIndicator,
     runStatusMessageId,
   };
-  const processEntries = displayTurn.process.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
-    {renderTimelineEntry(entry, processContext, true, !touched)}
-  </div>);
-  const processBlock = displayTurn.process.length === 0 ? null
-    : <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
-      {!collapsible || processId === undefined ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary, categories, changes.length)} onClick={() => onToggleProcess(processId, open)}>
-        <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
-        <span className="turn-process-label">过程</span>
-        {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
-        {categories === "" ? null : <span className="turn-process-count">{categories}</span>}
-        {changes.length === 0 ? null : <span className="turn-process-changes">改了 {changes.length} 个文件</span>}
-      </button>}
-      {showAll ? <div className={!collapsible ? "turn-process-stack" : "turn-process-body"}>{processEntries}</div> : null}
-    </section>;
-  const completedProcess = live || processBlock === null ? undefined : <div className="turn-details">{processBlock}</div>;
-  const completedChanges = changes.length === 0 ? null : <TurnChanges changes={changes} cwd={context.workspaceCwd} />;
+  const failureEntries = processEntries(turn);
   return <>
     {turn.user === undefined ? null : renderTimelineEntry({ kind: "message", item: turn.user }, context)}
-    {live ? processBlock : completedProcess}
-    {split.visible.map((entry) => <div key={renderItemKey(entry)} className="turn-visible-entry">{renderTimelineEntry(entry, { ...processContext, onToggleDetail: (detailId, currentlyOpen) => onToggleProcessDetail(processId ?? `visible:${turn.key}`, detailId, currentlyOpen) }, true, false)}</div>)}
-    {turn.final === undefined ? runIndicator === undefined || runStatusMessageId !== undefined || split.visible.length > 0 ? null : <div className="turn-live-status">{runIndicator}</div> : renderTimelineEntry({ kind: "message", item: turn.final }, { ...context, showGenerationMeta: !live, generationSummary: summarizeTurnGeneration(turn), onForkMessage: live ? undefined : context.onForkMessage, afterContent: live ? undefined : completedChanges, runIndicator: split.visible.length > 0 ? undefined : runIndicator, runStatusMessageId: turn.final.id })}
-    {runIndicator === undefined || split.visible.length === 0 ? null : <div className="turn-live-status">{runIndicator}</div>}
-    {turn.final === undefined && !live ? completedChanges : null}
-    {turn.finalError === undefined ? null : <TurnFailureCard items={turn.finalError} failedTool={lastFailedTool(split.process)} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} />}
+    {turn.segments.map((segment) => {
+      if (segment.kind === "process") return <TurnProcessSegment key={segment.id} segment={segment} live={live} foldState={foldState} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} context={baseContext} />;
+      if (segment.kind === "reply") {
+        const last = segment === lastReply;
+        return renderTimelineEntry({ kind: "message", item: segment.item }, {
+          ...baseContext,
+          showGenerationMeta: !live && last,
+          replyActions: !live && !last,
+          generationSummary: last ? summarizeTurnGeneration(turn) : undefined,
+          onForkMessage: live ? undefined : context.onForkMessage,
+          afterContent: !live && last ? completedChanges : undefined,
+        });
+      }
+      return <div key={segment.id} className="turn-visible-entry">{renderTimelineEntry(segment.item, { ...baseContext, onToggleDetail: (detailId, currentlyOpen) => onToggleProcessDetail(`inline:${turn.key}`, detailId, currentlyOpen) }, true, false)}</div>;
+    })}
+    {runIndicator === undefined || runStatusMessageId !== undefined ? null : <div className="turn-live-status">{runIndicator}</div>}
+    {lastReply !== undefined || live ? null : completedChanges}
+    {turn.finalError === undefined ? null : <TurnFailureCard items={turn.finalError} failedTool={lastFailedTool(failureEntries)} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} />}
     {turn.outcome?.outcome === "stopped" ? <RunStoppedItem /> : null}
     {turn.outcome?.outcome === "interrupted" || (turn.outcome?.outcome === "failed" && turn.finalError === undefined && !turnEndedInFailure(turn))
       ? <RunFailureCard failure={{ code: turn.outcome.code ?? "RUN_FAILED", message: turn.outcome.message ?? "This run did not complete.", occurredAt: turn.outcome.createdAt }} onRetryCompaction={turn.outcome.code === "PI_COMPACTION_FAILED" ? context.onRetryCompaction : undefined} onRetry={context.onRetryTurn === undefined || turn.user === undefined ? undefined : () => context.onRetryTurn?.(turn.user!)} onContinue={context.onContinue} onDismiss={turn.outcome.outcome === "interrupted" ? context.onDismissInterrupted : undefined} />

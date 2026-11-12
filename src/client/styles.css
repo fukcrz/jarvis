@@ -1187,7 +1187,9 @@ button.turn-failure-raw.timeline-event-summary { display: inline-flex; align-ite
 html.text-selecting .run-status-bar { pointer-events: none !important; }
 @media (max-width: 760px) { .chat-stage .run-status-bar { bottom: 168px; } .run-status-bar { max-width: calc(100% - 24px); } }
 /* 正文后的过程和文件变更在操作统计之前。 */
-.turn-details { display: grid; min-width: 0; gap: 6px; margin-top: 10px; }
+.turn-details { display: grid; min-width: 0; gap: 6px; }
+/* 一个回合可以有多段过程：与用户消息的间距只算一次，段与段之间交给 feed 的间距。 */
+[data-user-message-id] + .turn-details, .timeline-feed > .turn-details:first-child { margin-top: 10px; }
 .turn-details .turn-changes { margin: 0; }
 /* 长回答：最终回答下的复制按钮和统计放一行；表格横向滚动不再挤成窄列 */
 .assistant-message-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
