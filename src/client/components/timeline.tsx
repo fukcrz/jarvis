@@ -1480,7 +1480,7 @@ function formatProcessElapsed(durationMs: number): string | undefined {
 }
 
 /** 计时器单独成一个小组件：每秒钟只重渲染这一个节点。 */
-function turnProcessLabel(summary: TurnProcessSummary, categories = "", changedFiles = 0): string {
+export function turnProcessLabel(summary: TurnProcessSummary, categories = "", changedFiles = 0): string {
   const seconds = summary.durationMs === undefined ? 0 : Math.round(summary.durationMs / 1_000);
   const minutes = Math.floor(seconds / 60);
   return [
@@ -1669,6 +1669,8 @@ function TurnProcessSegment({ segment, live, foldState, onToggleProcess, onToggl
 }) {
   const entries = segment.entries;
   const summary = summarizeProcess(entries);
+  // 折叠头只说这一段自己改了什么，与段内的工具计数同一口径。
+  const changedFiles = turnFileChanges(entries).length;
   const collapsible = shouldFoldProcess(entries, live);
   const touched = foldState.touchedProcessIds.has(segment.id);
   const open = !collapsible || isTurnProcessOpen(foldState, segment.id);
@@ -1685,11 +1687,12 @@ function TurnProcessSegment({ segment, live, foldState, onToggleProcess, onToggl
     onToggleGroup: (groupId, currentlyCollapsed) => onToggleProcessGroup(segment.id, groupId, currentlyCollapsed),
   };
   const block = <section className={!collapsible ? "turn-process-stack" : `turn-process ${open ? "expanded" : "collapsed"}`}>
-    {!collapsible ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary, categories)} onClick={() => onToggleProcess(segment.id, open)}>
+    {!collapsible ? null : <button type="button" className="turn-process-summary" aria-expanded={open} aria-label={turnProcessLabel(summary, categories, changedFiles)} onClick={() => onToggleProcess(segment.id, open)}>
       <ChevronRight size={13} className={`turn-process-chevron${open ? " expanded" : ""}`} aria-hidden />
       <span className="turn-process-label">过程</span>
       {elapsed === undefined ? null : <time className="turn-process-elapsed">{elapsed}</time>}
       {categories === "" ? null : <span className="turn-process-count">{categories}</span>}
+      {changedFiles === 0 ? null : <span className="turn-process-changes">改了 {changedFiles} 个文件</span>}
     </button>}
     {open ? <div className={!collapsible ? "turn-process-stack" : "turn-process-body"}>{entries.map((entry) => <div key={renderItemKey(entry)} className="turn-process-entry">
       {renderTimelineEntry(entry, segmentContext, true, !touched)}

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ErrorTimelineItem, ExtensionUiTimelineItem, MessageTimelineItem, SessionStatus, ThinkingTimelineItem, ToolTimelineItem } from "../../shared/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activeTimelineTurn, activeUserMessageAnchor, buildTurnSegments, groupTimelineItems, groupTimelineTurns, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, shouldFoldProcess, shouldStopFollowingOnGesture, summarizeProcess, timelineProcessIds, trailingAssistantMessage, turnEndedInFailure, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds, type TimelineRenderItem, type TimelineSegment } from "./timeline";
+import { activeTimelineTurn, activeUserMessageAnchor, buildTurnSegments, groupTimelineItems, groupTimelineTurns, isTurnProcessOpen, MarkdownTextPreview, presentTurnProcess, processTextPreview, SettledChoices, isToolActivityRunning, shouldFoldProcess, shouldStopFollowingOnGesture, summarizeProcess, timelineProcessIds, trailingAssistantMessage, turnEndedInFailure, turnFileChanges, turnProcessLabel, userMessageAnchors, userMessageAnchorsFromOutline, visibleNavigatorAnchorIds, type TimelineRenderItem, type TimelineSegment } from "./timeline";
 
 function tool(id: string, name = "read"): ToolTimelineItem {
   return {
@@ -483,6 +483,24 @@ describe("isTurnProcessOpen", () => {
     expect(isTurnProcessOpen({ openProcessIds: new Set<string>() }, "p")).toBe(false);
     expect(isTurnProcessOpen({ openProcessIds: new Set<string>() }, undefined)).toBe(false);
     expect(isTurnProcessOpen({ openProcessIds: new Set(["p"]) }, "p")).toBe(true);
+  });
+});
+
+describe("turnProcessLabel", () => {
+  it("carries elapsed time, categories and the files this segment changed", () => {
+    expect(turnProcessLabel({ operations: 3, durationMs: 12_000 }, "读取 2", 3)).toBe("过程，用时 12 秒，读取 2，改了 3 个文件");
+    expect(turnProcessLabel({ operations: 3 })).toBe("过程，3 项操作");
+    expect(turnProcessLabel({ operations: 0, durationMs: 2_000 }, "", 0)).toBe("过程，用时 2 秒");
+  });
+});
+
+describe("turnFileChanges", () => {
+  it("counts files per process segment, so a later segment cannot borrow an earlier one's edits", () => {
+    const first = turnFileChanges([{ kind: "activity", items: [{ ...tool("a", "edit"), fileChange: { kind: "edit", path: "a.ts", added: 2, removed: 1 } }] }]);
+    const second = turnFileChanges([{ kind: "activity", items: [tool("b")] }]);
+
+    expect(first.map((change) => change.path)).toEqual(["a.ts"]);
+    expect(second).toEqual([]);
   });
 });
 
