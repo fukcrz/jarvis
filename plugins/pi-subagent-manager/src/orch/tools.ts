@@ -24,6 +24,7 @@ export function agentTools(
   caller: string,
   getTypes: () => AgentType[],
   resolveSettings: (type: AgentType) => ResolvedAgentSettings,
+  onReap: () => void = () => {},
 ): ToolDefinition[] {
   const threads = () => getManager().scope(caller);
   const make = (
@@ -165,6 +166,21 @@ export function agentTools(
       "Stop a descendant and its working children. Session history is retained; resume with agent_steer. This is cooperative cancellation, not sandbox process termination.",
       Type.Object({ path }),
       async (params) => result(compact(await threads().stop(params.path))),
+    ),
+    make(
+      "agent_reap",
+      "Release completed descendant threads to free total thread slots, without user confirmation. Read needed output first: reaped threads can no longer be resumed or read through agent tools. Omit paths to reap all eligible descendants, or supply paths to select threads. Running, paused, stopped and failed threads are retained, as are ancestors still needed by retained descendants.",
+      Type.Object({ paths: Type.Optional(Type.Array(path)) }),
+      (params) => {
+        const scoped = threads();
+        const selected = params.paths?.map((value: string) => scoped.get(value).path);
+        const eligible = scoped.list()
+          .filter((thread) => thread.path !== caller && (!selected || selected.includes(thread.path)))
+          .map((thread) => thread.path);
+        const reaped = getManager().reap(eligible);
+        if (reaped.length) onReap();
+        return result({ reaped, count: reaped.length });
+      },
     ),
     make(
       "agent_output",

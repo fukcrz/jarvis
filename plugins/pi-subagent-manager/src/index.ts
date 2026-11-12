@@ -583,6 +583,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
       path,
       () => store.list(),
       (type) => driverFactory.resolveAgentSettings(type, path),
+      () => {
+        persist();
+        refreshWidget(requireContext());
+      },
     );
   const rootTools = toolsFor("/root");
   let toolsEnabled: boolean | undefined;
