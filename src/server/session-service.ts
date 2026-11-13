@@ -385,6 +385,10 @@ export class SessionService {
       this.assertSessionIdle(active, "Editing");
       const entry = findUserMessageEntry(active.session.sessionManager.getBranch(), messageId);
       if (entry === undefined) throw new AppError("MESSAGE_NOT_FOUND", "User message not found in this session", 404);
+      // Reopening restores the model from the remaining branch, which drops a
+      // switch made after the edited message. Keep the selection at submit time.
+      const selectedModel = active.session.model;
+      const selectedThinking = active.session.thinkingLevel;
 
       const parentId = stringValue(entry["parentId"]) || undefined;
       if (parentId === undefined) active.session.sessionManager.resetLeaf();
@@ -395,6 +399,7 @@ export class SessionService {
         payload: { items: toExternalTimelineItems(this.timelineItems(active), active.ref), status: { sessionId: active.ref.sessionId, runState: "idle" } },
       });
       await this.reopenAtCurrentBranch(active);
+      await this.keepSelectionAcrossRewrite(ref, selectedModel, selectedThinking);
       return this.prompt(ref, text, clientRequestId, images, { skipTransitionWait: true }) as Promise<PromptAccepted>;
     });
   }
@@ -595,6 +600,34 @@ export class SessionService {
       await sleep(FORK_SNAPSHOT_RETRY_DELAY_MS);
     }
     throw new AppError("SESSION_NOT_READY", "Wait for this message to be saved before forking", 409);
+  }
+
+  /**
+   * `createAgentSession` restores the model and thinking level from the branch
+   * that remains after the edit. A switch made on the discarded tail must win.
+   */
+  private async keepSelectionAcrossRewrite(ref: SessionRef, model: AgentSession["model"], thinkingLevel: AgentSession["thinkingLevel"]): Promise<void> {
+    const reopened = await this.getActive(ref, { waitForTransition: false });
+    const modelChanged = model !== undefined && (reopened.session.model?.provider !== model.provider || reopened.session.model.id !== model.id);
+    if (modelChanged) {
+      const previousThinking = this.thinkingSnapshot(reopened);
+      await reopened.session.setModel(model);
+      reopened.updatedAt = new Date().toISOString();
+      const available = await this.availableModels(reopened.modelRuntime);
+      const updated = projectModelSnapshot(reopened.session.model, available, this.inScopeKeys(reopened));
+      if (updated.current === undefined) throw new AppError("MODEL_NOT_AVAILABLE", "Pi did not select the requested model", 409);
+      this.events.publishSession(reopened.ref, { type: "model.changed", payload: { model: updated } });
+      const updatedThinking = this.thinkingSnapshot(reopened);
+      if (previousThinking.current === updatedThinking.current && !sameThinkingLevels(previousThinking.available, updatedThinking.available)) {
+        this.events.publishSession(reopened.ref, { type: "thinking.changed", payload: { thinking: updatedThinking } });
+      }
+      this.publishSummary(reopened);
+    }
+    if (reopened.session.thinkingLevel !== thinkingLevel) {
+      reopened.session.setThinkingLevel(thinkingLevel);
+      reopened.updatedAt = new Date().toISOString();
+      this.publishSummary(reopened);
+    }
   }
 
   /** Recreate Pi's in-memory agent context after moving a session leaf. */

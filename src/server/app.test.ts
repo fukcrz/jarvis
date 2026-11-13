@@ -164,7 +164,7 @@ async function writeToolImageSession(workspacePath: string, imageData: string, t
   return { id, toolId };
 }
 
-async function writeConversationSession(workspacePath: string): Promise<{ id: string; user1: string; assistant1: string; user2: string; assistant2: string }> {
+async function writeConversationSession(workspacePath: string, model: { provider: string; id: string } = { provider: "openai", id: "test-model" }): Promise<{ id: string; user1: string; assistant1: string; user2: string; assistant2: string }> {
   const id = randomUUID();
   const timestamp = new Date("2026-08-09T00:00:00.000Z");
   const entry = (entryId: string, parentId: string | null, role: "user" | "assistant", text: string, offset: number) => {
@@ -181,8 +181,8 @@ async function writeConversationSession(workspacePath: string): Promise<{ id: st
           role,
           content: [{ type: "text", text }],
           api: "openai-completions",
-          provider: "openai",
-          model: "test-model",
+          provider: model.provider,
+          model: model.id,
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
           stopReason: "stop",
           timestamp: messageTimestamp,
@@ -1800,6 +1800,42 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const timeline = (await server.inject({ method: "GET", url: `${baseUrl}/timeline` })).json<{ items: Array<{ id: string }> }>();
     expect(timeline.items.map((item) => item.id)).toEqual([source.user1, source.assistant1]);
     socket.close();
+  });
+
+  it("keeps the model and thinking level selected before an edit-and-resend", async () => {
+    const agentDir = join(jarvisHome, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, "models.json"), JSON.stringify({
+      providers: {
+        "test-a": { baseUrl: "http://localhost:1/v1", api: "openai-completions", apiKey: "test-key", models: [{ id: "alpha", reasoning: true }] },
+        "test-b": { baseUrl: "http://localhost:1/v1", api: "openai-completions", apiKey: "test-key", models: [{ id: "beta", reasoning: true }] },
+      },
+    }));
+    const server = activeApp();
+    const workspacePath = join(jarvisHome, "edit-model-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const source = await writeConversationSession(workspacePath, { provider: "test-a", id: "alpha" });
+    const baseUrl = `/api/workspaces/${workspace.id}/sessions/${source.id}`;
+
+    const switched = await server.inject({ method: "PUT", url: `${baseUrl}/model`, payload: { provider: "test-b", modelId: "beta" } });
+    expect(switched.statusCode).toBe(200);
+    const thinking = await server.inject({ method: "PUT", url: `${baseUrl}/thinking`, payload: { level: "high" } });
+    expect(thinking.statusCode).toBe(200);
+    expect(thinking.json()).toMatchObject({ thinking: { current: "high" } });
+
+    let seen: { provider?: string; id?: string; thinking?: string } | undefined;
+    vi.spyOn(AgentSession.prototype, "prompt").mockImplementation(function (this: AgentSession) {
+      seen = { provider: this.model?.provider, id: this.model?.id, thinking: this.thinkingLevel };
+      return new Promise(() => undefined) as never;
+    });
+
+    const response = await server.inject({ method: "POST", url: `${baseUrl}/edit-and-resend`, payload: { messageId: source.user2, text: "Edited question", clientRequestId: randomUUID() } });
+    expect(response.statusCode).toBe(200);
+    await vi.waitFor(() => expect(seen).toEqual({ provider: "test-b", id: "beta", thinking: "high" }));
+
+    const runtime = await server.inject({ method: "GET", url: `${baseUrl}/runtime` });
+    expect(runtime.json()).toMatchObject({ model: { current: { provider: "test-b", id: "beta" } }, thinking: { current: "high" } });
   });
 
   it("serializes concurrent rewrites and runs extension shutdown before replacement", async () => {
