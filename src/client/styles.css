@@ -92,6 +92,7 @@ html[data-pointer="coarse"] [role="button"] { cursor: default; }
 .project-tree { display: grid; align-content: start; flex: 1; gap: 10px; min-height: 0; overflow-y: auto; margin: 0 -2px; padding: 0 2px 12px; }
 .project-node { display: grid; gap: 0; min-width: 0; }
 .project-row { position: relative; display: flex; align-items: center; min-width: 0; gap: 2px; border-radius: 8px; background: transparent; padding-inline: 4px; cursor: grab; user-select: none; }
+.project-node.active > .project-row { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .project-node.active > .project-row .project-toggle { color: var(--ink); }
 .project-node.active > .project-row .project-toggle svg { color: var(--accent-strong); }
 .project-count { flex: 0 0 auto; color: var(--subtle); padding-right: 2px; font-size: 10.5px; font-variant-numeric: tabular-nums; }

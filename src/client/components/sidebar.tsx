@@ -151,10 +151,12 @@ export function Sidebar(props: SidebarProps) {
           const window = sessionListWindow(sessions, sessionExpands[workspace.id] ?? 0);
           const expanded = props.expandedWorkspaceIds[workspace.id] === true;
           const activeSession = sortSessionSummaries(sessions)[0];
+          // 当前打开的会话所在项目轻微高亮，便于在长列表里定位。
+          const holdsOpenSession = props.selectedSessionId !== undefined && workspace.id === props.workspaceId;
           const toggleLabel = `${expanded ? "收起" : "展开"}${workspace.label}的会话`;
 
           return (
-            <section className={`project-node${draggingWorkspaceId === workspace.id ? " dragging" : ""}${dropTarget?.id === workspace.id && dropTarget.placeAfter ? " drop-after" : ""}${dropTarget?.id === workspace.id && !dropTarget.placeAfter ? " drop-before" : ""}`} data-workspace-id={workspace.id} key={workspace.id}>
+            <section className={`project-node${holdsOpenSession ? " active" : ""}${draggingWorkspaceId === workspace.id ? " dragging" : ""}${dropTarget?.id === workspace.id && dropTarget.placeAfter ? " drop-after" : ""}${dropTarget?.id === workspace.id && !dropTarget.placeAfter ? " drop-before" : ""}`} data-workspace-id={workspace.id} key={workspace.id}>
               <div className="project-row" onPointerDown={(event) => startWorkspacePointerDrag(event, workspace.id)}>
                 <button className="project-toggle" type="button" aria-label={toggleLabel} aria-expanded={expanded} onClick={() => { if (!consumeLongPress()) props.onToggleWorkspace(workspace.id); }} onContextMenu={(event) => {
                   event.preventDefault();
