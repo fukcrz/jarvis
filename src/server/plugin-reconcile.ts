@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import type { BundledPluginStatus } from "../shared/plugins.js";
 import { isMissingFile } from "./fs.js";
 
@@ -87,4 +87,64 @@ async function removeRetiredPlugins(extensionsDir: string, retired: Readonly<Rec
     const existingHash = existing === undefined ? undefined : pluginContentHash(existing);
     if (decideRetiredCleanup(existingHash, hashes) === "delete") await rm(destination, { force: true });
   }
+}
+
+export type LocalPackageSyncResult = "seeded" | "kept" | "missing";
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (isMissingFile(error)) return false;
+    throw error;
+  }
+}
+
+/**
+ * 本地插件包的种子逻辑：本地目录一旦存在就是唯一权威，永远不覆盖、不删除、不比对版本。
+ * 只复制，且跳过 node_modules（依赖由本地包自己管理）。
+ */
+export async function ensureLocalPackage(input: { shipped: string; local: string }): Promise<LocalPackageSyncResult> {
+  if (await pathExists(input.local)) return "kept";
+  if (!(await pathExists(input.shipped))) return "missing";
+  await mkdir(dirname(input.local), { recursive: true });
+  await cp(input.shipped, input.local, {
+    recursive: true,
+    force: false,
+    errorOnExist: false,
+    filter: (source) => basename(source) !== "node_modules",
+  });
+  return "seeded";
+}
+
+async function readJarvisUpstream(packageDir: string): Promise<string | undefined> {
+  const text = await readPluginText(join(packageDir, "package.json"));
+  if (text === undefined) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    const jarvis = (parsed as Record<string, unknown>)["_jarvis"];
+    if (typeof jarvis !== "object" || jarvis === null) return undefined;
+    const upstream = (jarvis as Record<string, unknown>)["upstream"];
+    return typeof upstream === "string" ? upstream : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 只做提示：本地副本与发行版种子记录的上游版本不一致时，界面可以显示「有更新」。
+ * 不做自动同步——本地改动是唯一权威。
+ */
+export async function localPackageUpdate(input: { shipped: string; local: string }): Promise<{ shippedUpstream?: string; localUpstream?: string; updateAvailable: boolean }> {
+  const [shippedUpstream, localUpstream] = await Promise.all([
+    readJarvisUpstream(input.shipped),
+    readJarvisUpstream(input.local),
+  ]);
+  return {
+    ...(shippedUpstream === undefined ? {} : { shippedUpstream }),
+    ...(localUpstream === undefined ? {} : { localUpstream }),
+    updateAvailable: shippedUpstream !== undefined && localUpstream !== undefined && shippedUpstream !== localUpstream,
+  };
 }

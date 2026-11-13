@@ -10,6 +10,8 @@ export interface RecommendedPluginStatus {
   source: string;
   enabled: boolean;
   installed: boolean;
+  /** 本地插件包：发行版种子记录的上游版本与本地副本不一致时为 true。仅提示，不自动同步。 */
+  updateAvailable?: boolean;
 }
 
 export interface InstalledPluginStatus {

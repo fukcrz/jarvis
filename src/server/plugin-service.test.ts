@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { PackageManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pluginContentHash } from "./plugin-reconcile.js";
@@ -16,7 +16,9 @@ class FakePackages {
 
   async installAndPersist(source: string): Promise<void> {
     this.calls.push(`install:${source}`);
-    if (!this.sources.some((item) => item.source === source)) this.sources.push({ source });
+    if (!this.sources.some((item) => item.source === source)) {
+      this.sources.push({ source, ...(isAbsolute(source) ? { installedPath: source } : {}) });
+    }
   }
 
   async removeAndPersist(source: string): Promise<boolean> {
@@ -138,8 +140,54 @@ describe("plugin service isolation", () => {
     await harness.service.ensureRecommended();
     expect(harness.packages.calls).toContain("remove:git:github.com/LukasParke/pi-subagent");
     expect(harness.packages.calls).not.toContain("install:npm:pi-subagent-manager");
-    expect(harness.packages.calls).toContain(`install:${join(process.cwd(), "plugins", "pi-subagent-manager")}`);
+    expect(harness.packages.calls).toContain(`install:${join(harness.agentDir, "plugins", "pi-subagent-manager")}`);
     expect(harness.packages.sources.map((item) => item.source)).not.toContain("git:github.com/LukasParke/pi-subagent");
+  });
+
+  it("seeds the local subagent plugin from the shipped copy and points installs at the local copy", async () => {
+    const harness = await createHarness();
+    const local = join(harness.agentDir, "plugins", "pi-subagent-manager");
+    expect(await readFile(join(local, "package.json"), "utf8")).toContain("pi-subagent-manager");
+    await expect(readFile(join(local, "src", "index.ts"), "utf8")).resolves.toContain("export");
+    await expect(readFile(join(local, "node_modules", "yaml", "package.json"), "utf8")).rejects.toThrow();
+
+    await harness.service.ensureRecommended();
+    expect(harness.packages.sources.map((item) => item.source)).toContain(local);
+    const snapshot = await harness.service.snapshot();
+    expect(snapshot.recommended.find((item) => item.name === "pi-subagent-manager")).toMatchObject({ source: local, installed: true, updateAvailable: false });
+  });
+
+  it("never overwrites local edits to the seeded plugin and reports an available update instead", async () => {
+    const harness = await createHarness();
+    const local = join(harness.agentDir, "plugins", "pi-subagent-manager");
+    const marker = join(local, "src", "local-edit.ts");
+    await writeFile(marker, "export const edited = true;\n", "utf8");
+    const manifest = join(local, "package.json");
+    const parsed = JSON.parse(await readFile(manifest, "utf8")) as Record<string, unknown>;
+    await writeFile(manifest, JSON.stringify({ ...parsed, _jarvis: { upstream: "pi-subagent-manager@1.5.0" } }), "utf8");
+
+    const restarted = await reload(harness);
+    expect(await readFile(marker, "utf8")).toBe("export const edited = true;\n");
+    expect(JSON.parse(await readFile(manifest, "utf8"))).toMatchObject({ _jarvis: { upstream: "pi-subagent-manager@1.5.0" } });
+    expect(restarted.recommended.find((item) => item.name === "pi-subagent-manager")?.updateAvailable).toBe(true);
+  });
+
+  it("toggles the local subagent plugin on and off without creating a second copy", async () => {
+    const harness = await createHarness();
+    const local = join(harness.agentDir, "plugins", "pi-subagent-manager");
+    await harness.service.ensureRecommended();
+    expect(harness.packages.sources.map((item) => item.source)).toContain(local);
+
+    const disabled = await harness.service.setRecommendedEnabled("pi-subagent-manager", false);
+    expect(harness.packages.sources.map((item) => item.source)).not.toContain(local);
+    expect(disabled.recommended.find((item) => item.name === "pi-subagent-manager")).toMatchObject({ enabled: false, installed: false });
+    await expect(readFile(join(local, "package.json"), "utf8")).resolves.toContain("pi-subagent-manager");
+
+    harness.packages.calls.length = 0;
+    const enabled = await harness.service.setRecommendedEnabled("pi-subagent-manager", true);
+    expect(harness.packages.calls).toEqual([`install:${local}`]);
+    expect(enabled.recommended.find((item) => item.name === "pi-subagent-manager")).toMatchObject({ enabled: true, installed: true });
+    expect(harness.packages.sources.filter((item) => item.source === local)).toHaveLength(1);
   });
 
   it("rejects unsafe install sources before touching the package manager", async () => {

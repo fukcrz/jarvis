@@ -4,15 +4,23 @@ import { DefaultPackageManager, getAgentDir, SettingsManager, type PackageManage
 import type { BundledPluginLifecycle, InstalledPluginStatus, PluginCatalogItem, PluginSnapshot, RecommendedPluginStatus } from "../shared/plugins.js";
 import { AppError, asMessage } from "./errors.js";
 import { atomicWrite, isMissingFile, readJsonRecovering, writeWithBackup } from "./fs.js";
-import { BUNDLED_PLUGINS, readPluginText, reconcileBundledPlugins } from "./plugin-reconcile.js";
+import { BUNDLED_PLUGINS, ensureLocalPackage, localPackageUpdate, readPluginText, reconcileBundledPlugins } from "./plugin-reconcile.js";
 import { catalogUrl, normalizeInstallSource, packageNameFromSource, PACKAGE_NAME } from "./plugin-source.js";
 import { isRecord } from "../shared/protocol.js";
 import { jarvisHome } from "./jarvis-home.js";
 
-export const RECOMMENDED_PACKAGES: readonly { name: string; source: string }[] = [
+export interface RecommendedPackageSpec {
+  name: string;
+  /** npm spec；带 localPackageName 的条目里指向发行版种子目录。 */
+  source: string;
+  /** 声明后该条目按本地包处理：agentDir/plugins/<localPackageName> 是唯一权威，source 只做首次运行的种子。 */
+  localPackageName?: string;
+}
+
+export const RECOMMENDED_PACKAGES: readonly RecommendedPackageSpec[] = [
   { name: "pi-web-access", source: "npm:pi-web-access" },
   { name: "@juicesharp/rpiv-ask-user-question", source: "npm:@juicesharp/rpiv-ask-user-question" },
-  { name: "pi-subagent-manager", source: join(process.cwd(), "plugins", "pi-subagent-manager") },
+  { name: "pi-subagent-manager", source: join(process.cwd(), "plugins", "pi-subagent-manager"), localPackageName: "pi-subagent-manager" },
   { name: "pi-playwright", source: "npm:pi-playwright" },
 ];
 
@@ -53,6 +61,7 @@ export class PluginService {
     this.knownHashes = manifest.plugins;
     this.retiredHashes = manifest.retired;
     await this.loadPrefs();
+    await this.seedLocalPackages();
     await this.reconcileBundled();
   }
 
@@ -60,11 +69,16 @@ export class PluginService {
     const installed = await this.listInstalled();
     const installedNames = new Set(installed.map((item) => item.name));
     const bundled = await this.reconcileBundled();
-    const recommended: RecommendedPluginStatus[] = RECOMMENDED_PACKAGES.map((item) => ({
-      name: item.name,
-      source: installed.find((entry) => entry.name === item.name)?.source ?? item.source,
-      enabled: !this.prefs.disabledRecommended.includes(item.name),
-      installed: installedNames.has(item.name),
+    const recommended: RecommendedPluginStatus[] = await Promise.all(RECOMMENDED_PACKAGES.map(async (item) => {
+      const paths = this.localPackagePaths(item);
+      const update = paths === undefined ? undefined : await localPackageUpdate(paths).catch(() => undefined);
+      return {
+        name: item.name,
+        source: installed.find((entry) => entry.name === item.name)?.source ?? this.recommendedSource(item),
+        enabled: !this.prefs.disabledRecommended.includes(item.name),
+        installed: installedNames.has(item.name),
+        ...(update === undefined ? {} : { updateAvailable: update.updateAvailable }),
+      };
     }));
     return { bundled, recommended, installed };
   }
@@ -98,8 +112,9 @@ export class PluginService {
     if (enabled) {
       this.prefs.disabledRecommended = this.prefs.disabledRecommended.filter((item) => item !== name);
       await this.persistPrefs();
+      await this.seedLocalPackages();
       const installed = await this.listInstalled();
-      if (!installed.some((item) => item.name === name)) await this.packages.installAndPersist(recommended.source);
+      if (!installed.some((item) => item.name === name)) await this.packages.installAndPersist(this.recommendedSource(recommended));
     } else {
       this.prefs.disabledRecommended = [...new Set([...this.prefs.disabledRecommended, name])];
       await this.persistPrefs();
@@ -165,6 +180,7 @@ export class PluginService {
 
   /** 推荐包缺了就装，已有的 npm 包则更新。本地路径的 package.json 名对上时视为已安装，不另装 npm 副本，也不覆盖该路径。失败只记日志，不挡启动。 */
   async ensureRecommended(): Promise<void> {
+    await this.seedLocalPackages();
     const installed = await this.listInstalled();
     await this.removeRetiredPackages(installed);
     for (const item of RECOMMENDED_PACKAGES) {
@@ -173,24 +189,50 @@ export class PluginService {
       const local = matches.find((entry) => packageNameFromSource(entry.source) === undefined);
       const npm = matches.find((entry) => packageNameFromSource(entry.source) === item.name);
       try {
-        const recommendedIsLocal = packageNameFromSource(item.source) === undefined;
+        const source = this.recommendedSource(item);
+        const recommendedIsLocal = packageNameFromSource(source) === undefined;
         if (recommendedIsLocal) {
           if (local !== undefined) {
             if (npm !== undefined) await this.packages.removeAndPersist(npm.source);
             continue;
           }
           if (npm !== undefined) await this.packages.removeAndPersist(npm.source);
-          await this.packages.installAndPersist(item.source);
+          await this.packages.installAndPersist(source);
           continue;
         }
         if (local !== undefined) {
           if (npm !== undefined) await this.packages.removeAndPersist(npm.source);
           continue;
         }
-        if (npm === undefined) await this.packages.installAndPersist(item.source);
+        if (npm === undefined) await this.packages.installAndPersist(source);
         else await this.packages.update(npm.source);
       } catch (error) {
         this.log(`Recommended plugin sync failed for ${item.name}: ${asMessage(error)}`);
+      }
+    }
+  }
+
+  private localPackagePaths(item: RecommendedPackageSpec): { shipped: string; local: string } | undefined {
+    if (item.localPackageName === undefined) return undefined;
+    return { shipped: item.source, local: join(this.agentDir, "plugins", item.localPackageName) };
+  }
+
+  /** 本地包条目一律指向 agentDir 下的权威副本；npm 条目原样返回。 */
+  private recommendedSource(item: RecommendedPackageSpec): string {
+    return this.localPackagePaths(item)?.local ?? item.source;
+  }
+
+  /** 本地插件包首次运行从发行版种子播种；已存在的本地副本绝不覆盖。 */
+  private async seedLocalPackages(): Promise<void> {
+    for (const item of RECOMMENDED_PACKAGES) {
+      const paths = this.localPackagePaths(item);
+      if (paths === undefined) continue;
+      try {
+        const result = await ensureLocalPackage(paths);
+        if (result === "seeded") this.log(`Seeded local plugin ${item.name} into ${paths.local}`);
+        else if (result === "missing") this.log(`Local plugin seed missing for ${item.name}: ${paths.shipped}`);
+      } catch (error) {
+        this.log(`Local plugin seed failed for ${item.name}: ${asMessage(error)}`);
       }
     }
   }
@@ -296,7 +338,8 @@ export class PluginService {
 
   private async removeByName(name: string): Promise<void> {
     const installed = await this.listInstalled();
-    const match = installed.find((item) => packageNameFromSource(item.source) === name);
+    // 本地包路径里解析不出 npm 包名，只能靠 listInstalled 解析好的 name 匹配。
+    const match = installed.find((item) => item.name === name);
     if (match !== undefined) await this.removeSource(match.source);
   }
 
