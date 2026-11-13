@@ -206,11 +206,12 @@ export class SettingsService {
     const timer = setTimeout(() => controller.abort(), 10_000);
     try {
       const url = modelsEndpoint(baseUrl, api);
-      const headers: Record<string, string> = {
-        ...(projectHeaders(provider.headers) ?? {}),
-        ...(projectHeaders(configured["headers"]) ?? {}),
-        ...(projectHeaders(auth?.auth.headers) ?? {}),
-      };
+      // HTTP 头名大小写不敏感：这里按小写归并，避免来源里的 "Authorization" 和下面写入的
+      // "authorization" 同时存在，被合成一条 "Bearer x, Bearer x" 而整条鉴权失效（部分网关直接 401）。
+      const headers: Record<string, string> = {};
+      for (const source of [provider.headers, configured["headers"], auth?.auth.headers]) {
+        for (const [name, value] of Object.entries(projectHeaders(source) ?? {})) headers[name.toLowerCase()] = value;
+      }
       if (auth?.auth.apiKey !== undefined) {
         if (api === "anthropic-messages") {
           headers["x-api-key"] = auth.auth.apiKey;

@@ -559,6 +559,41 @@ describe("Jarvis HTTP and WebSocket API", () => {
     }
   });
 
+  it("sends one authorization header when auth and configured headers differ only in case", async () => {
+    const agentDir = join(jarvisHome, "agent");
+    await mkdir(agentDir, { recursive: true });
+    const { createServer } = await import("node:http");
+    const seen: { authorization?: string } = {};
+    const httpServer = createServer((request, response) => {
+      seen.authorization = request.headers.authorization;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ data: [{ id: "alpha" }] }));
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const address = httpServer.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    await writeFile(join(agentDir, "models.json"), JSON.stringify({
+      providers: {
+        "test-auth": {
+          baseUrl,
+          api: "openai-completions",
+          authHeader: true,
+          apiKey: "test-key",
+          headers: { Authorization: "Bearer test-key" },
+          models: [{ id: "alpha" }],
+        },
+      },
+    }));
+    const server = activeApp();
+    try {
+      const response = await server.inject({ method: "POST", url: "/api/settings/providers/test-auth/fetch-models", payload: {} });
+      expect(response.statusCode).toBe(200);
+      expect(seen.authorization).toBe("Bearer test-key");
+    } finally {
+      await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it("saves custom provider headers and compat without dropping unknown compat keys", async () => {
     const agentDir = join(jarvisHome, "agent");
     await mkdir(agentDir, { recursive: true });
