@@ -34,9 +34,11 @@ interface SideChatPanelProps {
   resizeSideChatWithKeyboard?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
   stopSideChatResize?: (pointerId?: number) => void;
   onRunStateChange?: (runState: RunState | undefined) => void;
+  /** 由右侧停靠面板托管：不渲染自己的抽屉外壳、标题栏和拖拽手柄。 */
+  embedded?: boolean;
 }
 
-export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, workspaceCwd, isMobile, sideChatWidth, sideChatResizing, startSideChatResize, resizeSideChatWithKeyboard, stopSideChatResize, onRunStateChange }: SideChatPanelProps) {
+export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, workspaceCwd, isMobile, sideChatWidth, sideChatResizing, startSideChatResize, resizeSideChatWithKeyboard, stopSideChatResize, onRunStateChange, embedded }: SideChatPanelProps) {
   const [sideRef, setSideRef] = useState<SessionRef | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [draft, setDraft] = useState("");
@@ -446,6 +448,7 @@ export function SideChatPanel({ open, onOpenChange, parentRef, assistantName, wo
   </Dialog>;
 
   if (parentRef === undefined) return null;
+  if (embedded === true) return <>{body}{dialog}</>;
   if (isMobile) {
     if (!open) return dialog;
     return <>

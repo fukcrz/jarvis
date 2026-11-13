@@ -18,6 +18,9 @@ import { Timeline } from "./components/timeline";
 import { SettingsPage } from "./components/settings-page";
 import { FileBrowser } from "./components/file-browser";
 import { SideChatPanel, SideChatToggle } from "./components/side-chat-panel";
+import { RightDock, SubagentToggle, persistDockOpenState, persistDockTab, readDockOpenState, readDockTab, type RightDockTab } from "./components/right-dock";
+import { SubagentPanel } from "./components/subagent-panel";
+import { runningThreadCount, subagentPanelThreads } from "./lib/subagent-panel";
 import { ExtensionPanels, ExtensionToasts } from "./components/extension-chrome";
 import { ContextButton } from "./components/context-button";
 import { Button } from "./components/ui/button";
@@ -73,7 +76,7 @@ export function App() {
   const [sessionId, setSessionId] = useState<string | undefined>(() => initialPath.sessionId ?? window.localStorage.getItem("jarvis.session") ?? undefined);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Record<string, boolean>>(() => readExpandedWorkspaces());
   const { sidebarWidth, sidebarResizing, startSidebarResize, resizeSidebarWithKeyboard, stopSidebarResize } = useSidebarResize();
-  const { sideChatWidth, sideChatResizing, startSideChatResize, resizeSideChatWithKeyboard, stopSideChatResize } = useSideChatResize();
+  const { sideChatWidth, sideChatResizing, startSideChatResize, resizeSideChatWithKeyboard, resetSideChatWidth, stopSideChatResize } = useSideChatResize();
   const [focusMode, setFocusMode] = useState(readSessionFocusMode);
   const [focusNow, setFocusNow] = useState(Date.now());
   const [loading, setLoading] = useState(true);
@@ -100,7 +103,7 @@ export function App() {
   const isChatPage = isChatPath(location.pathname);
   const mobilePage: "sessions" | "chat" | "settings" = isSettingsPage ? "settings" : isChatPage ? "chat" : "sessions";
   const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | undefined>();
-  const [sideChatOpenBySession, setSideChatOpenBySession] = useState<Record<string, boolean>>({});
+  const [sideChatOpenBySession, setSideChatOpenBySession] = useState<Record<string, boolean>>(readDockOpenState);
   const [sideChatRunState, setSideChatRunState] = useState<RunState | undefined>();
   // Prevent repeated clicks from stacking unused sessions in the same workspace.
   const creatingSessionWorkspacesRef = useRef(new Set<string>());
@@ -185,13 +188,20 @@ export function App() {
   const selectedSessionId = selectedRef?.sessionId;
   const selectedRefKey = selectedRef === undefined ? undefined : `${selectedRef.workspaceId}:${selectedRef.sessionId}`;
   const sideChatOpen = selectedRefKey !== undefined && sideChatOpenBySession[selectedRefKey] === true;
+  const [dockTab, setDockTabState] = useState<RightDockTab>(readDockTab);
+  const setDockTab = useCallback((tab: RightDockTab) => {
+    setDockTabState(tab);
+    persistDockTab(tab);
+  }, []);
   const setSideChatOpen = useCallback((open: boolean | ((current: boolean) => boolean), ref: SessionRef | undefined = selectedRef) => {
     if (ref === undefined) return;
     const key = `${ref.workspaceId}:${ref.sessionId}`;
     setSideChatOpenBySession((current) => {
       const nextOpen = typeof open === "function" ? open(current[key] === true) : open;
       if (current[key] === nextOpen) return current;
-      return { ...current, [key]: nextOpen };
+      const next = { ...current, [key]: nextOpen };
+      persistDockOpenState(next);
+      return next;
     });
   }, [selectedRef]);
   const visibleSessionsByWorkspace = useMemo<Record<string, SessionSummary[]>>(() => {
@@ -1265,6 +1275,9 @@ export function App() {
     if (workspace !== undefined) setMobileActionTarget({ kind: "session", workspaceId, workspaceLabel: workspace.label, session });
   };
 
+  const subagentThreads = useMemo(() => subagentPanelThreads(stream.transcript.items), [stream.transcript.items]);
+  const subagentRunning = runningThreadCount(subagentThreads);
+
   const openSubagentThread = (path: string) => {
     void reachSubagentCard(path, stream.loadEarlierOnce).then((found) => {
       if (!found) setSessionNotice("子代理卡片不在历史中");
@@ -1338,7 +1351,7 @@ export function App() {
               <div><h1>{selectedSession === undefined ? "新会话" : sessionLabel(selectedSession.name, selectedSession.preview)}</h1>{selectedSession === undefined || selectedWorkspace === undefined || isEmptySession(selectedSession) ? null : <Tooltip label="重命名会话"><Button variant="ghost" size="icon" aria-label="重命名会话" onClick={() => { setRenameTarget({ workspaceId: selectedWorkspace.id, session: selectedSession }); setRenameValue(selectedSession.name ?? sessionLabel(selectedSession.name, selectedSession.preview)); }}><Pencil size={15} /></Button></Tooltip>}</div>
             </div>
           </div>
-          {selectedRef === undefined ? null : <div className="chat-header-actions"><SideChatToggle open={sideChatOpen} running={sideChatRunState === "running" || sideChatRunState === "stopping"} onClick={() => { setFilesWorkspaceId(undefined); setSideChatOpen((current) => !current); }} /><Tooltip label="文件"><Button variant="ghost" size="icon" aria-label="文件" onClick={() => { setSideChatOpen(false); setFilesWorkspaceId(selectedRef.workspaceId); }}><Folder size={16} /></Button></Tooltip></div>}
+          {selectedRef === undefined ? null : <div className="chat-header-actions"><SubagentToggle open={sideChatOpen && dockTab === "subagent"} running={subagentRunning} onClick={() => { setFilesWorkspaceId(undefined); if (sideChatOpen && dockTab === "subagent") { setSideChatOpen(false); return; } setDockTab("subagent"); setSideChatOpen(true); }} /><SideChatToggle open={sideChatOpen && dockTab === "chat"} running={sideChatRunState === "running" || sideChatRunState === "stopping"} onClick={() => { setFilesWorkspaceId(undefined); if (sideChatOpen && dockTab === "chat") { setSideChatOpen(false); return; } setDockTab("chat"); setSideChatOpen(true); }} /><Tooltip label="文件"><Button variant="ghost" size="icon" aria-label="文件" onClick={() => { setSideChatOpen(false); setFilesWorkspaceId(selectedRef.workspaceId); }}><Folder size={16} /></Button></Tooltip></div>}
         </header>}
         {isSettingsPage ? <SettingsPage assistantName={assistantName} refreshKeys={settingsRefreshKeys} onAssistantNameChange={setAssistantName} workspaces={workspaces} onWorkspacesChange={applyWorkspaceRegistry} onAddWorkspace={addWorkspace} onRemoveWorkspace={removeWorkspaceFromSettings} onBack={() => { if (workspaceId !== undefined && sessionId !== undefined) navigate(`/chat/${workspaceId}/${sessionId}`, { replace: true }); else navigate("/projects", { replace: true }); }} /> : renderChatContent()}
       </section> : null}
@@ -1382,7 +1395,8 @@ export function App() {
         setProjectRemoveTarget(workspace);
       }} cleanupDisabled={sessionCleanupTargets(sessionsByWorkspace[projectMenu.workspace.id] ?? [], keepSessionIdFor(projectMenu.workspace.id)).length === 0} />}
       <SessionSearchDialog open={searchOpen} onOpenChange={setSearchOpen} workspaces={workspaces} searchSessions={searchSessions} onSelectSession={(workspaceId, sessionId) => { chooseSession(workspaceId, sessionId); }} />
-      {selectedRef === undefined || isSettingsPage || (isMobile && mobilePage !== "chat") ? null : <SideChatPanel open={sideChatOpen} onOpenChange={(open) => setSideChatOpen(open, selectedRef)} parentRef={selectedRef} assistantName={assistantName} workspaceCwd={selectedWorkspace?.cwd} isMobile={isMobile} sideChatWidth={sideChatWidth} sideChatResizing={sideChatResizing} startSideChatResize={startSideChatResize} resizeSideChatWithKeyboard={resizeSideChatWithKeyboard} stopSideChatResize={stopSideChatResize} onRunStateChange={setSideChatRunState} />}
+      {selectedRef === undefined || isSettingsPage || (isMobile && mobilePage !== "chat") || isMobile ? null : sideChatOpen ? <RightDock tab={dockTab} onTabChange={setDockTab} onClose={() => { setSideChatOpen(false, selectedRef); }} runningCount={subagentRunning} width={sideChatWidth} resizing={sideChatResizing} onStartResize={startSideChatResize} onResizeWithKeyboard={resizeSideChatWithKeyboard} onResetWidth={resetSideChatWidth} onStopResize={stopSideChatResize} chat={dockTab === "chat" ? <SideChatPanel embedded open onOpenChange={(next) => { setSideChatOpen(next, selectedRef); }} parentRef={selectedRef} assistantName={assistantName} workspaceCwd={selectedWorkspace?.cwd} isMobile={isMobile} onRunStateChange={setSideChatRunState} /> : null} subagent={<SubagentPanel threads={subagentThreads} workspaceCwd={selectedWorkspace?.cwd} onLocate={openSubagentThread} />} /> : null}
+      {!isMobile || selectedRef === undefined || isSettingsPage || mobilePage !== "chat" ? null : <SideChatPanel open={sideChatOpen} onOpenChange={(open) => { setSideChatOpen(open, selectedRef); }} parentRef={selectedRef} assistantName={assistantName} workspaceCwd={selectedWorkspace?.cwd} isMobile={isMobile} sideChatWidth={sideChatWidth} sideChatResizing={sideChatResizing} startSideChatResize={startSideChatResize} resizeSideChatWithKeyboard={resizeSideChatWithKeyboard} stopSideChatResize={stopSideChatResize} onRunStateChange={setSideChatRunState} />}
       {filesWorkspaceId !== undefined ? <FileBrowser key={filesWorkspaceId} workspaceId={filesWorkspaceId} onClose={() => setFilesWorkspaceId(undefined)} /> : null}
       <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onOpenFiles={(targetWorkspaceId) => { setMobileActionTarget(undefined); setSideChatOpen(false); setFilesWorkspaceId(targetWorkspaceId); }} onOpenSideChat={(targetWorkspaceId, session) => { setMobileActionTarget(undefined); setFilesWorkspaceId(undefined); setSideChatOpen(true, { workspaceId: targetWorkspaceId, sessionId: session.id }); chooseSession(targetWorkspaceId, session.id); }} onRenameProject={(workspace) => {
         setMobileActionTarget(undefined);

@@ -16,6 +16,7 @@ export function useSideChatResize(): {
   sideChatResizing: boolean;
   startSideChatResize: (event: ReactPointerEvent<HTMLDivElement>) => void;
   resizeSideChatWithKeyboard: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
+  resetSideChatWidth: () => void;
   stopSideChatResize: (pointerId?: number) => void;
 } {
   const [sideChatWidth, setSideChatWidth] = useState(() => readSideChatWidth());
@@ -88,7 +89,13 @@ export function useSideChatResize(): {
     };
   }, [stopSideChatResize]);
 
-  return { sideChatWidth, sideChatResizing, startSideChatResize, resizeSideChatWithKeyboard, stopSideChatResize };
+  const resetSideChatWidth = useCallback(() => {
+    widthRef.current = SIDE_CHAT_DEFAULT_WIDTH;
+    setSideChatWidth(SIDE_CHAT_DEFAULT_WIDTH);
+    persistSideChatWidth(SIDE_CHAT_DEFAULT_WIDTH);
+  }, []);
+
+  return { sideChatWidth, sideChatResizing, startSideChatResize, resizeSideChatWithKeyboard, resetSideChatWidth, stopSideChatResize };
 }
 
 function persistSideChatWidth(width: number): void {
