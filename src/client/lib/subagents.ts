@@ -103,6 +103,8 @@ export async function revealSubagentThread(path: string): Promise<boolean> {
   }
   if (card === null) return false;
   scrollCardIntoView(card);
+  // 记录行点开就是抽屉：胶囊作为当前态入口，直接落到抽屉而不是只滚过去。
+  card.querySelector<HTMLElement>(".subagent-record-summary")?.click();
   card.classList.remove("subagent-flash");
   // 同一帧里 remove + add 会被合并，先读一次布局强制重排。
   void card.offsetWidth;

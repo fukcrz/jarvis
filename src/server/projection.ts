@@ -1,6 +1,6 @@
 import { isRecord, type AssistantGenerationStats, type AssistantTextPhase, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type NoticeTimelineItem, type RunOutcomeTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type TokenUsage, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
 import { fileChangeFromCall, fileChangeFromPatch } from "../shared/file-change.js";
-import { attachLiveSubagentThread, attachSubagentView, subagentThreadsFromEntries, subagentViewFromArgs } from "./subagent-view.js";
+import { attachLiveSubagentThread, attachSubagentView, subagentRecordsFromEntries, subagentThreadsFromEntries, subagentViewFromArgs } from "./subagent-view.js";
 import { isAbortErrorMessage, numberValue, stringValue, toIso } from "./values.js";
 
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
@@ -113,9 +113,22 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
   }
 
   const threads = subagentThreadsFromEntries(entries);
-  return items.filter((item) => item.kind !== "run-outcome" || !dismissedRunOutcomes.has(item.runId))
+  const records = subagentRecordsFromEntries(entries);
+  const projected = items.filter((item) => item.kind !== "run-outcome" || !dismissedRunOutcomes.has(item.runId))
     .map((item) => item.kind !== "tool" || item.subagent === undefined ? item
       : threads.reduce<ToolTimelineItem>((tool, thread) => attachLiveSubagentThread(tool, thread), item));
+  return records.length === 0 ? projected : mergeSubagentRecords(projected, records);
+}
+
+/** 记录插到它发生的时刻，相同时间则排在已有条目之后，避免抢在触发它的工具行前面。 */
+function mergeSubagentRecords(items: TimelineItem[], records: TimelineItem[]): TimelineItem[] {
+  const merged = [...items];
+  for (const record of records) {
+    const at = Date.parse(record.createdAt);
+    const index = merged.findIndex((item) => Date.parse(item.createdAt) > at);
+    merged.splice(index === -1 ? merged.length : index, 0, record);
+  }
+  return merged;
 }
 
 /**

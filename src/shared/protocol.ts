@@ -579,6 +579,31 @@ export interface SubagentThreadRow {
   elapsedMs?: number;
 }
 
+/** 子代理的一条状态记录：派发、完成、失败或停止。时间线按发生顺序逐条显示，不合并。 */
+export interface SubagentRecord {
+  kind: "subagent-record";
+  id: string;
+  /** 状态变化发生的时刻。 */
+  createdAt: string;
+  /** 线程路径，点开时靠它定位。 */
+  path: string;
+  /** 线程类型名，例如 reviewer。 */
+  agent: string;
+  /** 任务的一行摘要。 */
+  prompt: string;
+  state: "dispatched" | "completed" | "failed" | "stopped";
+  /** 终态记录的执行时长；派发记录没有。 */
+  durationMs?: number;
+  /** 终态记录的 token 用量。 */
+  tokens?: number;
+  /** 完成时的输出摘要。 */
+  output?: string;
+  /** 失败原因。 */
+  error?: string;
+  /** 抽屉里看的完整任务。 */
+  fullPrompt?: string;
+}
+
 export interface SubagentView {
   kind: "pi-subagent";
   results: SubagentCallView[];
@@ -635,7 +660,7 @@ export interface RunOutcomeTimelineItem {
   message?: string;
 }
 
-export type TimelineItem = MessageTimelineItem | ErrorTimelineItem | ToolTimelineItem | ThinkingTimelineItem | ContextSummaryTimelineItem | NoticeTimelineItem | RunOutcomeTimelineItem | ExtensionUiTimelineItem;
+export type TimelineItem = MessageTimelineItem | ErrorTimelineItem | ToolTimelineItem | ThinkingTimelineItem | ContextSummaryTimelineItem | NoticeTimelineItem | RunOutcomeTimelineItem | ExtensionUiTimelineItem | SubagentRecord;
 
 export interface TimelinePage {
   items: TimelineItem[];

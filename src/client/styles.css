@@ -434,6 +434,21 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .activity-items .tool-list-item .detail-command-line code { color: var(--accent-strong); }
 .activity-items .tool-list-item .detail-input + div { margin-top: 1px; }
 .activity-items .subagent-summary { align-items: center; }
+.turn-visible-entry .subagent-record { display: block; min-width: 0; max-width: 100%; }
+.turn-visible-entry .subagent-record-summary { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; border: 0; background: transparent; padding: 3px 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; text-align: left; cursor: pointer; white-space: nowrap; }
+.turn-visible-entry .subagent-record-summary > * { flex: 0 0 auto; }
+.turn-visible-entry .subagent-record-verb { color: var(--subtle); }
+.turn-visible-entry .subagent-record.failed .subagent-record-verb { color: var(--warm); }
+.turn-visible-entry .subagent-record-summary .subagent-role { color: var(--ink); font-weight: 500; }
+.turn-visible-entry .subagent-record-summary .tool-title { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--muted); font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.turn-visible-entry .subagent-record-facts { color: var(--subtle); font-variant-numeric: tabular-nums; }
+.turn-visible-entry .subagent-record-summary .subagent-type-dot { width: 7px; height: 7px; }
+.turn-visible-entry .subagent-record-summary .subagent-type-dot[data-tone="violet"] { background: #8d84b8; }
+.turn-visible-entry .subagent-record-summary .subagent-type-dot[data-tone="teal"] { background: #5aa89c; }
+.turn-visible-entry .subagent-record-summary .subagent-type-dot[data-tone="amber"] { background: #b08c4e; }
+.turn-visible-entry .subagent-record-summary .subagent-type-dot[data-tone="pink"] { background: #b07a92; }
+.turn-visible-entry .subagent-record-summary .subagent-type-dot[data-tone="blue"] { background: #688fb8; }
+.turn-visible-entry .subagent-record-summary .subagent-type-dot[data-tone="green"] { background: #62a480; }
 .activity-items .subagent-heading { display: flex; align-items: baseline; flex: 0 1 auto; min-width: 0; gap: 6px; }
 .activity-items .subagent-summary .tool-title { flex: 0 1 auto; }
 .activity-items .subagent-body { display: grid; min-width: 0; gap: 10px; padding: 4px 12px 8px 20px; }

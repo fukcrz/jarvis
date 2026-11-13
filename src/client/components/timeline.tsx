@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { KeyboardEvent, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import { Archive, ArrowDown, Bell, Check, ChevronRight, CircleAlert, Clock3, Copy, GitBranch, LoaderCircle, Pencil, RefreshCw, X, XCircle } from "lucide-react";
-import type { AssistantGenerationStats, ContextSummaryTimelineItem, FileChange, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, NoticeTimelineItem, RunOutcomeTimelineItem, SessionStatus, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
+import type { AssistantGenerationStats, ContextSummaryTimelineItem, FileChange, ErrorTimelineItem, ExtensionUiRequest, ExtensionUiTimelineItem, LiveGenerationStats, MessageTimelineItem, NoticeTimelineItem, RunOutcomeTimelineItem, SessionStatus, SubagentRecord, ThinkingTimelineItem, TimelineItem, ToolTimelineItem, UserMessageOutline } from "../../shared/protocol";
 import { userMessageOutline as outlineFromItems } from "../../shared/user-message";
 import { plainErrorReason } from "../lib/error-reason";
 import { getRunStatusActivity, type RunStatusActivity } from "../run-feedback";
@@ -12,7 +12,7 @@ import { LocalMediaVersionContext } from "../lib/local-media";
 import { encodeMultiSelectValue, multiSelectAnswerLabel, parseMultiSelectDialog, parseSelectDialog, previewSummary, selectAnswerLabel, selectDialogTitle, settledMultiRows, settledSelectRows, splitDialogHeading, type ExtensionSelectOption, type SettledChoiceRow } from "../lib/extension-dialog";
 import { MarkdownMessage } from "./markdown-message";
 import { ImagePreview } from "./image-lightbox";
-import { summarizeToolActivity, ToolActivity } from "./tool-activity";
+import { SubagentRecordRow, summarizeToolActivity, ToolActivity } from "./tool-activity";
 import { commandLabel } from "../lib/command-summary";
 import { ElapsedClock } from "./elapsed-clock";
 import { DiffStat, DiffView } from "./diff-view";
@@ -1161,6 +1161,7 @@ export type TimelineRenderItem =
   | { kind: "error"; items: ErrorTimelineItem[] }
   | { kind: "context-summary"; item: ContextSummaryTimelineItem }
   | { kind: "notice"; item: NoticeTimelineItem }
+  | { kind: "subagent-record"; item: SubagentRecord }
   | { kind: "run-outcome"; item: RunOutcomeTimelineItem }
   | { kind: "extension-ui"; item: ExtensionUiTimelineItem }
   | { kind: "thinking"; item: ThinkingTimelineItem }
@@ -1193,6 +1194,7 @@ function groupTimelineItemsInternal(items: TimelineItem[], includeRunOutcomes: b
       else if (item.kind === "thinking") result.push({ kind: "thinking", item });
       else if (item.kind === "context-summary") result.push({ kind: "context-summary", item });
       else if (item.kind === "notice") result.push({ kind: "notice", item });
+      else if (item.kind === "subagent-record") result.push({ kind: "subagent-record", item });
       else if (item.kind === "run-outcome" && includeRunOutcomes) result.push({ kind: "run-outcome", item });
     }
   }
@@ -1259,9 +1261,10 @@ export function isReplyEntry(entry: TimelineRenderItem, stepIds: ReadonlySet<str
   return owner === undefined ? trailing : !stepIds.has(owner);
 }
 
-/** 待回答问询和用户 !cmd 不参与折叠：它们本来就要等用户动手。 */
+/** 待回答问询、用户 !cmd 和子代理记录不参与折叠：记录要按发生顺序留在原位。 */
 function isInlineEntry(entry: TimelineRenderItem): boolean {
   if (entry.kind === "extension-ui") return entry.item.outcome === undefined;
+  if (entry.kind === "subagent-record") return true;
   return entry.kind === "activity" && entry.items.every(isUserCommand);
 }
 
@@ -1588,6 +1591,7 @@ function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderConte
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "notice") return <p className="timeline-notice" key={entry.item.id}>{entry.item.text}</p>;
+  if (entry.kind === "subagent-record") return <SubagentRecordRow key={entry.item.id} record={entry.item} />;
   if (entry.kind === "run-outcome") return null;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} customText={context.customAnswers?.get(entry.item.id)} />;
   if (entry.kind === "thinking") {

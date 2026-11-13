@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolTimelineItem } from "../shared/protocol.js";
-import { attachLiveSubagentThread, attachSubagentView, subagentThreadRow, subagentViewFromArgs } from "./subagent-view.js";
+import { attachLiveSubagentThread, attachSubagentView, subagentRecordsFromEntries, subagentThreadRow, subagentViewFromArgs } from "./subagent-view.js";
 
 const dispatchedAt = "2026-01-01T00:00:00.000Z";
 
@@ -252,5 +252,21 @@ describe("pi-subagent-manager shape", () => {
     expect(subagentThreadRow({ ...thread, state: "running", summary: "正在核对路由", status: "Reading" })?.line).toBe("正在核对路由");
     for (const state of ["completed", "failed", "stopped"]) expect(subagentThreadRow({ ...thread, state })).toBeUndefined();
     expect(subagentThreadRow({ state: "running" })).toBeUndefined();
+  });
+
+  it("records a dispatch and each terminal state, skipping pauses", () => {
+    const at = (millis: number) => new Date(millis).toISOString();
+    const view = (state: string, extra: Record<string, unknown> = {}) => ({ ...thread, state, ...extra });
+    const delta = (millis: number, change: unknown) => ({ type: "custom", customType: "pi-subagent:registry-delta:v1", timestamp: at(millis), data: { version: 1, changes: [change] } });
+    const records = subagentRecordsFromEntries([
+      delta(1_000, { thread: { view: view("starting") } }),
+      delta(2_000, { path: thread.path, view: { state: "running", status: "Reading" } }),
+      delta(3_000, { path: thread.path, view: { state: "paused" } }),
+      delta(4_000, { path: thread.path, view: { state: "completed", elapsedMs: 9_000, inputTokens: 100, outputTokens: 20 } }),
+    ]);
+    expect(records.map((record) => record.state)).toEqual(["dispatched", "completed"]);
+    expect(records[0]).toMatchObject({ path: thread.path, agent: "scout", createdAt: at(1_000) });
+    expect(records[1]).toMatchObject({ createdAt: at(4_000), durationMs: 9_000, tokens: 120 });
+    expect(records[1]?.durationMs).not.toBe(records[0]?.durationMs);
   });
 });

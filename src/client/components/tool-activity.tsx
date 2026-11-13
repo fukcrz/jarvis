@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronRight, CircleAlert, Copy, LoaderCircle, X } from "lucide-react";
-import type { SubagentCallView, SubagentView, ToolState, ToolTimelineItem } from "../../shared/protocol";
+import type { SubagentCallView, SubagentRecord, SubagentView, ToolState, ToolTimelineItem } from "../../shared/protocol";
 import { imageDataUrl } from "../lib/image";
 import { displayModelName } from "../model-display";
 import { ImagePreview } from "./image-lightbox";
@@ -255,6 +255,53 @@ function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: 
   );
 }
 
+/** 子代理的一条状态记录：派发、完成、失败或停止，各自独立成行，不合并。 */
+export function SubagentRecordRow({ record }: { record: SubagentRecord }) {
+  const [open, setOpen] = useState(false);
+  const verb = record.state === "dispatched" ? "派发" : record.state === "completed" ? "完成" : record.state === "failed" ? "失败" : "已停止";
+  const tone = record.state === "failed" ? "failed" : record.state === "stopped" ? "cancelled" : record.state === "completed" ? "completed" : "running";
+  const facts = [
+    record.durationMs === undefined ? "" : formatElapsedMs(record.durationMs),
+    record.tokens === undefined ? "" : `${formatTokenCount(record.tokens)} tok`,
+  ].filter(Boolean).join(" · ");
+  return (
+    <article className={`subagent-record ${tone}`} data-subagent-paths={record.path}>
+      <button className="tool-summary subagent-record-summary" type="button" onClick={() => setOpen(true)} aria-haspopup="dialog">
+        <span className={`subagent-type-dot ${tone}`} data-tone={subagentTypeTone(record.agent)} aria-hidden />
+        <span className="subagent-record-verb">{verb}</span>
+        <span className="subagent-role">{record.agent}</span>
+        <span className="tool-title">{record.prompt}</span>
+        {facts === "" ? null : <span className="subagent-record-facts">{facts}</span>}
+        <ChevronRight size={13} className="subagent-open-icon" aria-hidden />
+      </button>
+      {open ? createPortal(<SubagentDrawer view={viewFromRecord(record)} baseDir={undefined} stateLabel={verb} onClose={() => setOpen(false)} />, document.body) : null}
+    </article>
+  );
+}
+
+/** 记录自己带齐抽屉需要的字段，不依赖派发那条工具行还在不在。 */
+function viewFromRecord(record: SubagentRecord): SubagentView {
+  const state = record.state === "dispatched" ? "running" : record.state === "stopped" ? "cancelled" : record.state;
+  return {
+    kind: "pi-subagent",
+    total: 1,
+    completed: record.state === "completed" ? 1 : 0,
+    running: record.state === "dispatched" ? 1 : 0,
+    failed: record.state === "failed" ? 1 : 0,
+    results: [{
+      agent: record.agent,
+      label: record.path,
+      prompt: record.prompt,
+      state,
+      ...(record.durationMs === undefined ? {} : { durationMs: record.durationMs }),
+      ...(record.tokens === undefined ? {} : { usage: { total: record.tokens } }),
+      ...(record.output === undefined ? {} : { output: record.output }),
+      ...(record.error === undefined ? {} : { error: record.error }),
+      ...(record.fullPrompt === undefined ? {} : { fullPrompt: record.fullPrompt }),
+    }],
+  };
+}
+
 function SubagentToolRow({ item, view, pending, grouped, open, showDetails, onToggle }: { item: ToolTimelineItem; view: SubagentView; pending: boolean; grouped: boolean; open: boolean; showDetails: boolean; onToggle: () => void }) {
   const [detailIndex, setDetailIndex] = useState<number>();
   const running = pending || view.running > 0;
@@ -372,7 +419,7 @@ export function formatCost(cost: number): string {
 }
 
 /** 详情抽屉：输出在前，其余信息按顺序排在下面，不藏页签。 */
-export function SubagentDrawer({ view, initialIndex = 0, baseDir, onClose }: { view: SubagentView; initialIndex?: number; baseDir?: string; onClose: () => void }) {
+export function SubagentDrawer({ view, initialIndex = 0, baseDir, stateLabel, onClose }: { view: SubagentView; initialIndex?: number; baseDir?: string; stateLabel?: string; onClose: () => void }) {
   const [index, setIndex] = useState(initialIndex);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -406,7 +453,7 @@ export function SubagentDrawer({ view, initialIndex = 0, baseDir, onClose }: { v
         <header className="subagent-drawer-head">
           <div className="subagent-drawer-badges">
             <span className="subagent-agent-pill" data-tone={subagentTypeTone(call.agent)}>{subagentCallName(call)}</span>
-            <span className={`subagent-state-pill ${call.state}`}>{subagentCallStateLabel(call.state)}</span>
+            <span className={`subagent-state-pill ${call.state}`}>{stateLabel ?? subagentCallStateLabel(call.state)}</span>
             <button ref={closeButton} className="subagent-drawer-close" type="button" onClick={() => closeRef.current()} aria-label="关闭详情">
               <X size={15} />
             </button>

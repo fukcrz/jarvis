@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, isRecord, type SubagentCallView, type SubagentThreadRow, type SubagentView, type ThinkingLevel, type ToolTimelineItem } from "../shared/protocol.js";
+import { THINKING_LEVELS, isRecord, type SubagentCallView, type SubagentRecord, type SubagentThreadRow, type SubagentView, type ThinkingLevel, type ToolTimelineItem } from "../shared/protocol.js";
 import { numberValue, stringValue } from "./values.js";
 
 const MAX_SUBAGENT_PROMPT_CHARS = 160;
@@ -104,6 +104,96 @@ export function subagentThreadsFromEntries(entries: readonly unknown[]): unknown
     }
   }
   return [...threads.values()];
+}
+
+/** 线程状态变化的时刻：delta 带自己的时间戳，全量快照只有 updatedAt。 */
+function threadRecordedAt(entry: Record<string, unknown>, view: Record<string, unknown>): string | undefined {
+  const fromEntry = entry["timestamp"];
+  if (typeof fromEntry === "string" && Number.isFinite(Date.parse(fromEntry))) return new Date(fromEntry).toISOString();
+  if (typeof fromEntry === "number") return timeFromMillis(fromEntry);
+  return timeFromMillis(view["updatedAt"]);
+}
+
+/**
+ * 从注册表快照与增量里抽出子代理的状态变更记录。
+ * 只记派发与终态（完成/失败/停止）：暂停与恢复是临时态，留给胶囊。
+ * 全量快照会丢掉更早的增量，所以旧会话只能还原出最终状态。
+ */
+export function subagentRecordsFromEntries(entries: readonly unknown[]): SubagentRecord[] {
+  const threads = new Map<string, Record<string, unknown>>();
+  const seen = new Set<string>();
+  const records: SubagentRecord[] = [];
+  const remember = (view: Record<string, unknown>, createdAt: string | undefined) => {
+    const path = stringValue(view["path"]);
+    if (path === "" || createdAt === undefined) return;
+    const state = recordState(stringValue(view["state"]));
+    if (state === undefined) return;
+    const key = `${path}:${state}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    records.push(recordFromView(view, state, createdAt));
+  };
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry["type"] !== "custom" || !isRecord(entry["data"])) continue;
+    const data = entry["data"];
+    if (data["version"] !== 1) continue;
+    if (entry["customType"] === "pi-subagent:registry:v1" && Array.isArray(data["threads"])) {
+      for (const thread of data["threads"]) {
+        if (!isRecord(thread) || !isThreadView(thread["view"])) continue;
+        threads.set(stringValue(thread["view"]["path"]), thread["view"]);
+        remember(thread["view"], threadRecordedAt(entry, thread["view"]));
+      }
+    } else if (entry["customType"] === "pi-subagent:registry-delta:v1" && Array.isArray(data["changes"])) {
+      for (const change of data["changes"]) {
+        if (!isRecord(change)) continue;
+        const thread = change["thread"];
+        if (isRecord(thread) && isThreadView(thread["view"])) {
+          threads.set(stringValue(thread["view"]["path"]), thread["view"]);
+          remember(thread["view"], threadRecordedAt(entry, thread["view"]));
+        } else if (typeof change["path"] === "string" && isRecord(change["view"])) {
+          const previous = threads.get(change["path"]);
+          if (previous === undefined || !isThreadView(previous)) continue;
+          const view = { ...previous, ...change["view"] };
+          threads.set(change["path"], view);
+          remember(view, threadRecordedAt(entry, view));
+        }
+      }
+    }
+  }
+  return records;
+}
+
+/** 派发与终态才进时间线；starting/running/paused 不是记录。 */
+function recordState(raw: string): SubagentRecord["state"] | undefined {
+  if (raw === "starting") return "dispatched";
+  if (raw === "completed") return "completed";
+  if (raw === "failed") return "failed";
+  if (raw === "stopped") return "stopped";
+  return undefined;
+}
+
+function recordFromView(view: Record<string, unknown>, state: SubagentRecord["state"], createdAt: string): SubagentRecord {
+  const path = stringValue(view["path"]);
+  const agent = stringValue(view["type"]);
+  const task = stringValue(view["task"]);
+  const elapsedMs = state === "dispatched" ? undefined : numberValue(view["elapsedMs"]);
+  const tokens = state === "dispatched" ? 0 : (numberValue(view["inputTokens"]) ?? 0) + (numberValue(view["outputTokens"]) ?? 0);
+  const output = state === "dispatched" ? "" : truncateText(stringValue(view["output"]), MAX_SUBAGENT_OUTPUT_CHARS);
+  const error = state === "failed" ? truncateText(stringValue(view["error"]), MAX_SUBAGENT_ERROR_CHARS) : "";
+  return {
+    kind: "subagent-record",
+    id: `subagent-record:${path}:${state}`,
+    createdAt,
+    path,
+    agent: agent === "" ? "子代理" : agent,
+    prompt: truncateOneLine(task, MAX_SUBAGENT_PROMPT_CHARS),
+    state,
+    ...(elapsedMs === undefined ? {} : { durationMs: elapsedMs }),
+    ...(tokens === 0 ? {} : { tokens }),
+    ...(output === "" ? {} : { output }),
+    ...(error === "" ? {} : { error }),
+    fullPrompt: truncateText(task, MAX_SUBAGENT_FULL_PROMPT_CHARS),
+  };
 }
 
 function subagentViewFromResult(result: unknown, dispatchedAt?: string, seed?: SubagentView): SubagentView | undefined {
