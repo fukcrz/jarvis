@@ -37,7 +37,21 @@
   },
   "_jarvis": {
     "upstream": "pi-subagent-manager@1.6.1",
-    "patches": ["model-groups ownerSessionId forwarding"]
+    "layout": "local-package",
+    "sourceOfTruth": "~/.pi/agent/plugins/pi-subagent-manager",
+    "patches": [
+      "model-groups ownerSessionId forwarding",
+      "pi-subagent:live:v1 event stream with 150ms progress merge",
+      "cost display defaults to off",
+      "ask_user_question is never available to subagents",
+      "canSpawn type field (default false) gates agent_spawn/steer/stop/wait",
+      "agent_spawn accepts per-spawn model and thinkingLevel",
+      "thinking precedence: explicit > type config > restored session > parent > root",
+      "diagnostic when tools.allow is ignored under all-except-blocked",
+      "agents converged to planner/executor/verifier; docs/qa live in the user layer",
+      "modelAliases frontmatter: named model references accepted by agent_spawn model, never a whitelist",
+      "agent_types reports declared aliases and the available-model count (includeAvailableModels lists them)"
+    ]
   },
   "scripts": {
     "check": "tsc --noEmit",

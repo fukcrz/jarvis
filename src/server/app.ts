@@ -556,6 +556,12 @@ export async function buildApp(options: {
     const query = timelineQuery.parse(request.query);
     return sessions.timeline(ref, query.before, query.limit);
   });
+  app.get("/api/workspaces/:workspaceId/sessions/:sessionId/subagent-threads/:threadSessionId/timeline", async (request) => {
+    const ref = sessionRef(request.params);
+    const params = z.object({ threadSessionId: z.string().uuid() }).parse(request.params);
+    const query = z.object({ ...timelineQuery.shape, path: z.string().min(1).max(500) }).parse(request.query);
+    return sessions.subagentTimeline(ref, params.threadSessionId, query.path, query.before, query.limit);
+  });
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/user-messages", async (request) => sessions.userMessages(sessionRef(request.params)));
   app.get("/api/workspaces/:workspaceId/sessions/:sessionId/media/:itemId/:index", async (request, reply) => {
     const ref = sessionRef(request.params);

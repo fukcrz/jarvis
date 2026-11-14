@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, isRecord, type SubagentCallView, type SubagentRecord, type SubagentThreadRow, type SubagentView, type ThinkingLevel, type ToolTimelineItem } from "../shared/protocol.js";
+import { THINKING_LEVELS, isRecord, type SubagentCallView, type SubagentRecord, type SubagentStreamItem, type SubagentThreadRow, type SubagentView, type ThinkingLevel, type ToolTimelineItem } from "../shared/protocol.js";
 import { numberValue, stringValue } from "./values.js";
 
 const MAX_SUBAGENT_PROMPT_CHARS = 160;
@@ -51,6 +51,39 @@ export function attachLiveSubagentThread(tool: ToolTimelineItem, value: unknown)
 }
 
 const MAX_SUBAGENT_THREAD_LINE_CHARS = 80;
+/** 子代理实时输出片段：只放行白名单字段，缺 id/kind 的整条丢掉。 */
+export function subagentStreamItems(value: unknown): SubagentStreamItem[] {
+  if (!Array.isArray(value)) return [];
+  const items: SubagentStreamItem[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const id = stringValue(entry["id"]);
+    const kind = stringValue(entry["kind"]);
+    if (id === "" || (kind !== "text" && kind !== "thinking" && kind !== "tool")) continue;
+    const item: SubagentStreamItem = { id, kind };
+    const text = stringValue(entry["text"]);
+    if (text !== "") item.text = text;
+    if (typeof entry["streaming"] === "boolean") item.streaming = entry["streaming"];
+    const name = stringValue(entry["name"]);
+    if (name !== "") item.name = name;
+    const state = stringValue(entry["state"]);
+    if (state === "running" || state === "completed" || state === "failed") item.state = state;
+    const output = stringValue(entry["output"]);
+    if (output !== "") item.output = output;
+    const error = stringValue(entry["error"]);
+    if (error !== "") item.error = error;
+    const at = stringValue(entry["at"]);
+    if (at !== "") item.at = at;
+    items.push(item);
+  }
+  return items;
+}
+
+/** 子会话文件名 `<时间戳>_<uuid>.jsonl` → uuid；对不上就不给，避免客户端拼错请求。 */
+function threadSessionIdFromFile(sessionFile: string): string | undefined {
+  const match = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(sessionFile);
+  return match?.[1];
+}
 
 /**
  * live 线程快照 → 会话状态用的最小行。
@@ -272,6 +305,7 @@ function managerCallFromThread(value: Record<string, unknown>, fallbackCallIndex
   const output = truncateText(stringValue(value["output"]), MAX_SUBAGENT_OUTPUT_CHARS);
   const error = state === "running" ? "" : truncateText(stringValue(value["error"]), MAX_SUBAGENT_ERROR_CHARS);
   const progress = stringValue(value["status"]);
+  const threadSessionId = threadSessionIdFromFile(stringValue(value["sessionFile"]));
   const steps = state === "running" && progress !== ""
     ? [{ kind: "text" as const, text: truncateText(progress, MAX_SUBAGENT_STEP_TEXT_CHARS) }]
     : [];
@@ -287,6 +321,7 @@ function managerCallFromThread(value: Record<string, unknown>, fallbackCallIndex
     ...(startedAt === undefined ? {} : { startedAt }),
     ...(state === "running" || elapsedMs === undefined ? {} : { durationMs: Math.max(0, elapsedMs) }),
     ...(task === "" ? {} : { fullPrompt: truncateText(task, MAX_SUBAGENT_FULL_PROMPT_CHARS) }),
+    ...(threadSessionId === undefined ? {} : { threadSessionId }),
     ...(steps.length === 0 ? {} : { recentSteps: steps }),
     ...(output === "" ? {} : { output }),
     ...(error === "" ? {} : { error }),

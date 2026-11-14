@@ -1,8 +1,9 @@
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { applySessionEvents, emptyTranscript } from "../client/transcript.js";
-import type { SessionEvent, ToolTimelineItem } from "../shared/protocol.js";
+import type { SessionEvent, SessionRef, ToolTimelineItem } from "../shared/protocol.js";
 import { projectHistory, toolFromCall } from "./projection.js";
+import { attachLiveSubagentThread, subagentStreamItems } from "./subagent-view.js";
 import { summaryFromActive } from "./session-catalog.js";
 import { EventHub } from "./event-hub.js";
 import type { ActiveSession } from "./session-active.js";
@@ -72,5 +73,82 @@ describe("subagent live card bridge", () => {
     expect(summaryFromActive(active)).toMatchObject({ subagentThreads: [{ path: thread.path, type: "scout", state: "running" }] });
     handler.handleSubagentUpdate(active, { version: 1, thread: { ...thread, state: "completed", output: "OK" } });
     expect(summaryFromActive(active).subagentThreads).toEqual([]);
+  });
+});
+
+describe("subagent live stream bridge", () => {
+  function streamHost(published: SessionEvent[]): SessionPiHost {
+    return {
+      events: {
+        publishSession(ref: SessionRef, event: Omit<SessionEvent, "version" | "sessionId" | "seq" | "emittedAt">) {
+          const full = { ...event, version: 1, sessionId: ref.sessionId, seq: published.length + 1, emittedAt: "2026-01-01T00:00:00.000Z" } as SessionEvent;
+          published.push(full);
+          return full;
+        },
+      },
+    } as unknown as SessionPiHost;
+  }
+
+  function emptyActive(): ActiveSession {
+    return { ref: { workspaceId: "workspace", sessionId: "session" }, state: { sessionId: "session", runState: "idle" }, activeTools: new Map() } as unknown as ActiveSession;
+  }
+
+  it("buffers increments by id and forwards only the changed batch", () => {
+    const published: SessionEvent[] = [];
+    const handler = new SessionPiEvents(streamHost(published));
+    const active = emptyActive();
+    handler.handleSubagentStream(active, { version: 1, path: "/root/a", items: [{ id: "text:1:0", kind: "text", text: "Hel", streaming: true }] });
+    handler.handleSubagentStream(active, { version: 1, path: "/root/a", items: [{ id: "text:1:0", kind: "text", text: "Hello", streaming: false }, { id: "tool:t1", kind: "tool", name: "bash", state: "running" }] });
+    const buffered = active.subagentStreams?.get("/root/a") ?? [];
+    expect(buffered).toMatchObject([{ id: "text:1:0", text: "Hello", streaming: false }, { id: "tool:t1", name: "bash", state: "running" }]);
+    // 第二批发的是本批变化项，不是整段缓冲。
+    expect(published).toHaveLength(2);
+    expect((published[1]?.payload as { items: unknown[] }).items).toHaveLength(2);
+    // 缓冲按线程分开。
+    handler.handleSubagentStream(active, { version: 1, path: "/root/b", items: [{ id: "text:1:0", kind: "text", text: "Other" }] });
+    expect(active.subagentStreams?.get("/root/b")).toHaveLength(1);
+    expect(active.subagentStreams?.get("/root/a")).toHaveLength(2);
+  });
+
+  it("drops malformed batches and keeps only the newest 200 items", () => {
+    const published: SessionEvent[] = [];
+    const handler = new SessionPiEvents(streamHost(published));
+    const active = emptyActive();
+    handler.handleSubagentStream(active, { version: 2, path: "/root/a", items: [{ id: "x", kind: "text" }] });
+    handler.handleSubagentStream(active, { version: 1, path: "", items: [{ id: "x", kind: "text" }] });
+    handler.handleSubagentStream(active, { version: 1, path: "/root/a", items: [{ kind: "text" }] });
+    expect(published).toHaveLength(0);
+    const items = Array.from({ length: 250 }, (_, index) => ({ id: `text:${String(index)}`, kind: "text", text: `line ${String(index)}` }));
+    handler.handleSubagentStream(active, { version: 1, path: "/root/a", items });
+    const buffered = active.subagentStreams?.get("/root/a") ?? [];
+    expect(buffered).toHaveLength(200);
+    expect(buffered[0]?.id).toBe("text:50");
+    expect(buffered.at(-1)?.id).toBe("text:249");
+  });
+
+  it("whitelists stream fields without truncating long assistant text", () => {
+    const long = "x".repeat(5000);
+    const items = subagentStreamItems([
+      { id: "text:1", kind: "text", text: long, streaming: true, bogus: 1 },
+      { id: "tool:1", kind: "tool", name: "bash", state: "weird", output: "ok", error: "boom" },
+      { id: "", kind: "text" },
+      { id: "x", kind: "video" },
+      "not-an-object",
+    ]);
+    expect(items).toHaveLength(2);
+    expect(items[0]?.text).toHaveLength(5000);
+    expect(items[0]?.streaming).toBe(true);
+    expect(items[1]).toEqual({ id: "tool:1", kind: "tool", name: "bash", output: "ok", error: "boom" });
+  });
+
+  it("derives the child session id from the thread session file", () => {
+    const tool = { ...toolFromCall("spawn-1", "agent_spawn", args), state: "running" as const };
+    const withFile = attachLiveSubagentThread(tool, {
+      ...thread,
+      sessionFile: "C:/Users/x/.pi/agent/sessions/--C--x--/2026-11-13T09-25-15-642Z_01a1d439-bafa-775a-a2e1-6897e3bc66f7.jsonl",
+    });
+    expect(withFile.subagent?.results[0]?.threadSessionId).toBe("01a1d439-bafa-775a-a2e1-6897e3bc66f7");
+    const withoutFile = attachLiveSubagentThread(tool, { ...thread, sessionFile: "not-a-session.jsonl" });
+    expect(withoutFile.subagent?.results[0]?.threadSessionId).toBeUndefined();
   });
 });

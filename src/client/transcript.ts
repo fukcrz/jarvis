@@ -102,6 +102,7 @@ export function applySessionEvents(state: TranscriptState, events: SessionEvent[
 export function applySessionEvent(state: TranscriptState, event: SessionEvent): TranscriptState {
   if (event.seq <= state.seq) return state;
   const next = { ...state, seq: event.seq };
+  if (event.type === "subagent.stream") return next;
   if (event.type === "queue.updated") {
     const payload = isRecord(event.payload) ? event.payload : undefined;
     const queue = recordSessionQueue(payload);

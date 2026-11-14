@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, open, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -173,6 +173,71 @@ const SESSION_LIST_TAIL_SCAN_BYTES = 64 * 1024;
 const HEADER_READ_CONCURRENCY = 16;
 /** pi-subagent-manager 在建子会话时写入的归属记录，用来区分主会话与子代理会话。 */
 const SUBAGENT_THREAD_ENTRY = "pi-subagent:thread:v1";
+
+export function filterSubagentInheritedEntries(entries: readonly unknown[], inheritedCount: number): unknown[] {
+  const ownershipIndex = entries.findIndex((entry) => isRecord(entry) && entry["type"] === "custom" && entry["customType"] === SUBAGENT_THREAD_ENTRY);
+  let remaining = Math.max(0, inheritedCount);
+  return entries.filter((entry, index) => {
+    if (index <= ownershipIndex) return index > ownershipIndex;
+    if (remaining > 0 && isRecord(entry) && (entry["type"] === "message" || entry["type"] === "custom_message")) {
+      remaining -= 1;
+      return false;
+    }
+    return true;
+  });
+}
+
+/** Read a registered child branch without using SessionManager.open(), which may migrate and rewrite JSONL. */
+export function readSubagentSessionBranch(workspace: Workspace, sessionId: string, rootId: string, threadPath: string): { entries: unknown[]; inheritedCount: number } | undefined {
+  const directory = sessionFilesDirectory(workspace);
+  let file: string;
+  try {
+    const match = readdirSync(directory).find((name) => name.endsWith(`_${sessionId}.jsonl`));
+    if (match === undefined) return undefined;
+    file = join(directory, match);
+  } catch {
+    return undefined;
+  }
+  let lines: string[];
+  try {
+    lines = readFileSync(file, "utf8").split(/\r?\n/).filter((line) => line.length > 0);
+  } catch {
+    return undefined;
+  }
+  const parsed: unknown[] = [];
+  for (const line of lines) {
+    try {
+      const entry: unknown = JSON.parse(line);
+      if (isRecord(entry)) parsed.push(entry);
+    } catch {
+      // An in-progress append may leave one incomplete final line; ignore only that line.
+    }
+  }
+  const header = parsed.find((entry) => isRecord(entry) && entry["type"] === "session");
+  if (!isRecord(header) || header["id"] !== sessionId) return undefined;
+  const byId = new Map<string, Record<string, unknown>>();
+  let leafId: string | undefined;
+  for (const entry of parsed) {
+    if (!isRecord(entry) || entry["type"] === "session" || typeof entry["id"] !== "string") continue;
+    byId.set(entry["id"], entry);
+    leafId = entry["id"];
+  }
+  const branch: unknown[] = [];
+  const visited = new Set<string>();
+  while (leafId !== undefined && !visited.has(leafId)) {
+    visited.add(leafId);
+    const entry = byId.get(leafId);
+    if (entry === undefined) return undefined;
+    branch.push(entry);
+    leafId = typeof entry["parentId"] === "string" ? entry["parentId"] : undefined;
+  }
+  branch.reverse();
+  const ownership = branch.find((entry) => isRecord(entry) && entry["type"] === "custom" && entry["customType"] === SUBAGENT_THREAD_ENTRY);
+  if (!isRecord(ownership) || !isRecord(ownership["data"])) return undefined;
+  const data = ownership["data"];
+  if (data["rootId"] !== rootId || data["threadPath"] !== threadPath || typeof data["inheritedCount"] !== "number" || !Number.isInteger(data["inheritedCount"]) || data["inheritedCount"] < 0) return undefined;
+  return { entries: branch, inheritedCount: data["inheritedCount"] };
+}
 
 export async function readSessionFileHeader(path: string): Promise<{ id: string; cwd?: string; timestamp?: string; subagentThread?: true } | undefined> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;

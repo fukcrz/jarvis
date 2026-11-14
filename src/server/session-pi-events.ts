@@ -5,11 +5,16 @@ import type { EventHub } from "./event-hub.js";
 import { assistantTextBlockId, assistantTextPhaseFromContent, assistantThinkingBlockId, assistantTimelineItemsFromPi, contextSummaryFromEntry, errorFromPi, messageFromPi, noticeFromCustomMessage, toExternalTimelineItems, toolFromCall, toolWithPartial, toolWithResult, userContentFromContent } from "./projection.js";
 import type { ActiveRun, ActiveSession, PiEvent } from "./session-active.js";
 import { firstUserMessage, isAssistantMessage, isUserMessage, retryStatus } from "./session-helpers.js";
-import { attachLiveSubagentThread, subagentThreadRow } from "./subagent-view.js";
+import { attachLiveSubagentThread, subagentStreamItems, subagentThreadRow } from "./subagent-view.js";
+import type { SubagentStreamItem } from "../shared/protocol.js";
 import { isAbortErrorMessage, stringValue, toIso } from "./values.js";
 
 /** 子代理只改了进度行时，会话摘要最多每秒发一次。 */
 const SUBAGENT_SUMMARY_INTERVAL_MS = 1_000;
+/** 每线程保留的实时片段条数；超出淘汰最旧的。 */
+const SUBAGENT_STREAM_MAX_ITEMS = 200;
+/** 同时保留的线程数上限；更早的树结束后不再需要在内存里。 */
+const SUBAGENT_STREAM_MAX_THREADS = 32;
 
 export interface SessionPiHost {
   events: EventHub;
@@ -83,6 +88,28 @@ export class SessionPiEvents {
       default:
         return;
     }
+  }
+
+  /** 子代理线程的实时输出：按路径缓冲最近若干条，只把本批变化项转发给浏览器。 */
+  handleSubagentStream(active: ActiveSession, data: unknown): void {
+    if (!isRecord(data) || data["version"] !== 1) return;
+    const path = stringValue(data["path"]);
+    if (path === "") return;
+    const items = subagentStreamItems(data["items"]);
+    if (items.length === 0) return;
+    const streams = active.subagentStreams ??= new Map<string, SubagentStreamItem[]>();
+    const byId = new Map<string, SubagentStreamItem>((streams.get(path) ?? []).map((item) => [item.id, item] as const));
+    for (const item of items) byId.set(item.id, { ...byId.get(item.id), ...item });
+    // 重新插入一次，让最近活跃的线程留在保留窗口里。
+    streams.delete(path);
+    streams.set(path, [...byId.values()].slice(-SUBAGENT_STREAM_MAX_ITEMS));
+    // 只保留最近若干条线程，避免一个长会话把每棵树的过程都留在内存里。
+    while (streams.size > SUBAGENT_STREAM_MAX_THREADS) {
+      const oldest = streams.keys().next().value;
+      if (oldest === undefined) break;
+      streams.delete(oldest);
+    }
+    this.host.events.publishSession(active.ref, { type: "subagent.stream", payload: { path, items } });
   }
 
   /** Runtime-only child changes reuse tool.upsert; no model turn or visible message. */

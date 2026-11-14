@@ -135,8 +135,10 @@ provider contexts would produce conflicting effective policies, ask instead of b
 Target children have ONLY the listed builtins and manager agent_* tools, never the main
 session's third-party/MCP tools. The list below is the target capability vocabulary, not a
 promise every platform implements both shells. Infer a minimal explicit allowlist preserving
-source restrictions; never omit allow just because mapping failed. Include agent_spawn and
-agent_wait only when nesting was actually authorized, and flag unenforceable nesting limits.
+source restrictions; never omit allow just because mapping failed. Nesting is opt-in: set
+'canSpawn: true' only when the source actually authorized delegation (otherwise no agent_spawn,
+agent_steer, agent_stop or agent_wait is exposed), keep tools.allow/tools.block consistent with
+that choice, and flag unenforceable nesting limits.
 Unsupported security restrictions, tools, loading, memory, timeouts, backends or contracts
 must be explained and approved BEFORE writing that agent; otherwise skip it. Do not smuggle
 unsupported guarantees into prose and call them enforced. Metadata-only omissions can be

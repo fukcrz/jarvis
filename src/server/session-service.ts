@@ -73,6 +73,8 @@ import {
   persistEmptyManagedSession,
   removeSessionJsonl,
   readSessionFileHeader,
+  filterSubagentInheritedEntries,
+  readSubagentSessionBranch,
   sessionDirectoryFor,
   sessionFileMtimeMs,
 } from "./session-files.js";
@@ -553,6 +555,18 @@ export class SessionService {
     return { items: toExternalTimelineItems(items.slice(start, end), active.ref), start, total: items.length, hasMore: start > 0 };
   }
 
+  /** Read a child transcript without opening it as an active session or loading extensions. */
+  async subagentTimeline(ref: SessionRef, threadSessionId: string, threadPath: string, before?: number, limit = PAGE_LIMIT): Promise<TimelinePage> {
+    const workspace = this.workspaces.get(ref.workspaceId);
+    const branch = readSubagentSessionBranch(workspace, threadSessionId, ref.sessionId, threadPath);
+    if (branch === undefined) throw new AppError("SESSION_NOT_FOUND", "Subagent thread not found", 404);
+    const entries = filterSubagentInheritedEntries(branch.entries, branch.inheritedCount);
+    const items = projectHistory(entries);
+    const end = clamp(before ?? items.length, 0, items.length);
+    const start = Math.max(0, end - clamp(limit, 1, 500));
+    return { items: toExternalTimelineItems(items.slice(start, end), ref), start, total: items.length, hasMore: start > 0 };
+  }
+
   async userMessages(ref: SessionRef): Promise<{ messages: UserMessageOutline[] }> {
     const active = await this.getActive(ref, { waitForExtensions: false });
     return { messages: userMessageOutline(this.timelineItems(active)) };
@@ -752,6 +766,7 @@ export class SessionService {
       ...(active.liveGeneration === undefined ? {} : { liveGeneration: active.liveGeneration }),
       queue: active.queue,
       extensionUi: active.extensionUi.snapshot(),
+      ...(active.subagentStreams === undefined || active.subagentStreams.size === 0 ? {} : { subagentStreams: Object.fromEntries(active.subagentStreams) }),
     };
   }
 

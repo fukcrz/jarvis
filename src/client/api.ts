@@ -297,6 +297,12 @@ export const api = {
     const query = params.size === 0 ? "" : `?${params.toString()}`;
     return request(`${sessionPath(ref)}/timeline${query}`);
   },
+  subagentTimeline: async (ref: SessionRef, threadSessionId: string, path: string, before?: number, limit?: number): Promise<TimelinePage> => {
+    const params = new URLSearchParams({ path });
+    if (before !== undefined) params.set("before", String(before));
+    if (limit !== undefined) params.set("limit", String(limit));
+    return request(`${sessionPath(ref)}/subagent-threads/${encodeURIComponent(threadSessionId)}/timeline?${params.toString()}`);
+  },
   userMessages: async (ref: SessionRef): Promise<{ messages: UserMessageOutline[] }> => request(`${sessionPath(ref)}/user-messages`),
   runtime: async (ref: SessionRef): Promise<SessionStreamSnapshot> => request(`${sessionPath(ref)}/runtime`),
   setModel: async (ref: SessionRef, model: Pick<ModelDescriptor, "provider" | "id">): Promise<ModelDescriptor> => (await request<{ model: ModelDescriptor }>(`${sessionPath(ref)}/model`, { method: "PUT", body: JSON.stringify({ provider: model.provider, modelId: model.id }) })).model,

@@ -11,7 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { isMap, isScalar, parseDocument, stringify } from "yaml";
-import { getModelPreferences } from "./models.js";
+import { getModelAliases, getModelPreferences } from "./models.js";
 import { THINKING_LEVELS, type AgentType } from "../types.js";
 import type { ToolFilteringMode } from "./settings.ts";
 
@@ -75,8 +75,10 @@ const FIELDS = new Set([
   "description",
   "models",
   "model",
+  "modelAliases",
   "modelSuggestions",
   "thinkingLevel",
+  "canSpawn",
   "color",
   "icon",
   "tools",
@@ -182,7 +184,12 @@ function overrideToolPolicy(value: unknown): NonNullable<AgentSettingsOverride["
   return result;
 }
 
-export function parseAgentType(content: string, filePath?: string): AgentType {
+export function parseAgentType(
+  content: string,
+  filePath?: string,
+  /** Optional sink for non-fatal field problems (a malformed value falls back to its default). */
+  diagnostics?: string[],
+): AgentType {
   try {
     const { yaml, body } = frontmatter(content);
     const doc = parseDocument(yaml, { uniqueKeys: true });
@@ -206,12 +213,22 @@ export function parseAgentType(content: string, filePath?: string): AgentType {
       model: data.model,
     });
     if (models !== undefined) result.models = models;
+    if (Object.hasOwn(data, "modelAliases"))
+      result.modelAliases = getModelAliases({ modelAliases: data.modelAliases });
     if (Object.hasOwn(data, "modelSuggestions"))
       result.modelSuggestions = modelSuggestionNames(data.modelSuggestions);
     if (Object.hasOwn(data, "thinkingLevel")) {
       if (!THINKING_LEVELS.includes(data.thinkingLevel as AgentType["thinkingLevel"] & string))
         throw new Error(`thinkingLevel must be one of: ${THINKING_LEVELS.join(", ")}`);
       result.thinkingLevel = data.thinkingLevel as AgentType["thinkingLevel"];
+    }
+    if (Object.hasOwn(data, "canSpawn")) {
+      const canSpawn = booleanField(data.canSpawn);
+      if (canSpawn === undefined)
+        diagnostics?.push(
+          `${filePath ?? "Agent definition"}: canSpawn must be true or false; treated as false`,
+        );
+      result.canSpawn = canSpawn === true;
     }
     if (Object.hasOwn(data, "color")) {
       if (!AGENT_COLORS.includes(data.color as (typeof AGENT_COLORS)[number]))
@@ -245,7 +262,7 @@ export function serializeAgentType(type: AgentType): string {
   if (models !== undefined) data.models = models;
   if (type.modelSuggestions !== undefined)
     data.modelSuggestions = modelSuggestionNames(type.modelSuggestions);
-  for (const key of ["thinkingLevel", "color", "icon", "tools"] as const)
+  for (const key of ["thinkingLevel", "canSpawn", "color", "icon", "tools", "modelAliases"] as const)
     if (type[key] !== undefined) data[key] = type[key];
   const content = `---\n${stringify(data)}---\n${type.systemPrompt}`;
   parseAgentType(content);
@@ -267,7 +284,9 @@ export interface AgentSettingsOverride {
   /** @deprecated Single-model alias; normalized to models. */
   model?: string | null;
   modelSuggestions?: string[] | null;
+  modelAliases?: Record<string, string> | null;
   thinkingLevel?: AgentType["thinkingLevel"] | null;
+  canSpawn?: boolean | null;
   color?: string | null;
   icon?: string | null;
   tools?: { allow?: string[] | null; block?: string[] | null } | null;
@@ -288,6 +307,13 @@ export function isAgentOverrideFile(file: string): boolean {
 function nullableField<T>(value: unknown, validate: (value: unknown) => T): T | null {
   if (value === null) return null;
   return validate(value);
+}
+
+/** Strict-ish boolean: accepts YAML booleans and their quoted forms, rejects everything else. */
+function booleanField(value: unknown): boolean | undefined {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  return undefined;
 }
 
 /**
@@ -346,11 +372,21 @@ export function parseAgentSettings(
       result.modelSuggestions = nullableField(data.modelSuggestions, (value) =>
         modelSuggestionNames(value),
       );
+    if (Object.hasOwn(data, "modelAliases"))
+      result.modelAliases = nullableField(data.modelAliases, (value) =>
+        getModelAliases({ modelAliases: value }),
+      );
     if (Object.hasOwn(data, "thinkingLevel"))
       result.thinkingLevel = nullableField(data.thinkingLevel, (value) => {
         if (!THINKING_LEVELS.includes(value as AgentType["thinkingLevel"] & string))
           throw new Error(`thinkingLevel must be one of: ${THINKING_LEVELS.join(", ")}`);
         return value as AgentType["thinkingLevel"];
+      });
+    if (Object.hasOwn(data, "canSpawn"))
+      result.canSpawn = nullableField(data.canSpawn, (value) => {
+        const parsed = booleanField(value);
+        if (parsed === undefined) throw new Error("canSpawn must be true or false");
+        return parsed;
       });
     if (Object.hasOwn(data, "color"))
       result.color = nullableField(data.color, (value) => {
@@ -387,7 +423,7 @@ export function serializeAgentSettings(override: AgentSettingsOverride): string 
   if (override.modelSuggestions !== undefined)
     data.modelSuggestions =
       override.modelSuggestions === null ? null : modelSuggestionNames(override.modelSuggestions);
-  for (const key of ["thinkingLevel", "color", "icon", "tools"] as const)
+  for (const key of ["thinkingLevel", "canSpawn", "color", "icon", "tools", "modelAliases"] as const)
     if (override[key] !== undefined) data[key] = override[key];
   const content = `${stringify(data)}`;
   parseAgentSettings(content);
@@ -413,7 +449,7 @@ export function mergeAgentSettings(base: AgentType, override: AgentSettingsOverr
     merged.models = [...models];
     delete merged.model;
   }
-  for (const key of ["modelSuggestions", "thinkingLevel", "color", "icon"] as const) {
+  for (const key of ["modelSuggestions", "modelAliases", "thinkingLevel", "canSpawn", "color", "icon"] as const) {
     const value = override[key];
     if (value === undefined) continue;
     if (value === null) delete merged[key];
@@ -453,7 +489,7 @@ export function diffAgentSettings(base: AgentType, draft: AgentType): AgentSetti
     if (draftModels === undefined) override.models = null;
     else override.models = [...draftModels];
   }
-  for (const key of ["modelSuggestions", "thinkingLevel", "color", "icon"] as const) {
+  for (const key of ["modelSuggestions", "modelAliases", "thinkingLevel", "canSpawn", "color", "icon"] as const) {
     const before = base[key];
     const after = draft[key];
     if (sameSetting(before, after)) continue;
@@ -486,6 +522,7 @@ function updateAgentSettings(
     "description",
     "models",
     "modelSuggestions",
+    "modelAliases",
     "thinkingLevel",
     "color",
     "icon",
@@ -515,10 +552,16 @@ export function selectTools(
   policy: AgentType["tools"],
   available: string[],
   mode: ToolFilteringMode = "allowed",
+  /** Non-fatal diagnostic sink; used when a declared field is silently ignored by `mode`. */
+  onDiagnostic?: (message: string) => void,
 ): string[] {
   const names = new Set(available);
   if (mode === "all") return [...names];
   // Ignored lists do not participate in validation or tool selection.
+  if (mode === "all-except-blocked" && policy?.allow !== undefined && policy.block === undefined)
+    onDiagnostic?.(
+      "tools.allow is ignored under tool-filtering 'all-except-blocked' because no tools.block is declared; declare tools.block to remove tools (allow is only honored under tool-filtering 'allowed')",
+    );
   const relevantPolicy =
     mode === "all-except-blocked"
       ? policy?.block === undefined
@@ -622,7 +665,7 @@ export class ConfigStore {
         if (!lstatSync(filePath).isFile())
           throw new Error("Agent definition must be a regular file, not a symlink");
         content = readFileSync(filePath, "utf8");
-        const type = parseAgentType(content, filePath);
+        const type = parseAgentType(content, filePath, this.diagnostics);
         if (seenNames.has(type.name)) {
           blocked.add(type.name);
           this.diagnostics.push(`${filePath}: Duplicate agent name in bundled layer: ${type.name}`);
@@ -728,7 +771,7 @@ export class ConfigStore {
         if (!lstatSync(filePath).isFile())
           throw new Error("Agent definition must be a regular file, not a symlink");
         content = readFileSync(filePath, "utf8");
-        const type = parseAgentType(content, filePath);
+        const type = parseAgentType(content, filePath, this.diagnostics);
         if (overrides.has(type.name)) {
           declareBlocked(type.name);
           this.diagnostics.push(

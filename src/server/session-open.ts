@@ -178,9 +178,11 @@ export async function createActiveSession(
   };
   const unsubscribePi = session.subscribe((event) => deps.piEvents.handle(active, event));
   const unsubscribeSubagents = eventBus.on("pi-subagent:live:v1", (data) => deps.piEvents.handleSubagentUpdate(active, data));
+  const unsubscribeSubagentStream = eventBus.on("pi-subagent:stream:v1", (data) => deps.piEvents.handleSubagentStream(active, data));
   active.unsubscribe = () => {
     unsubscribePi();
     unsubscribeSubagents();
+    unsubscribeSubagentStream();
   };
   deps.active.set(activeKey(actualRef), active);
   const onExtensionError = (error: ExtensionError) => {

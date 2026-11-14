@@ -9,6 +9,7 @@ import type {
   SessionQueue,
   SessionRef,
   SessionStatus,
+  SubagentStreamItem,
   SubagentThreadRow,
   ThinkingTimelineItem,
   TimelineItem,
@@ -75,6 +76,8 @@ export interface ActiveSession {
   subagentTools?: Map<string, ToolTimelineItem>;
   /** 未结束的子代理线程，按路径索引；会话状态行与侧栏状态点读它。 */
   subagentThreads?: Map<string, SubagentThreadRow>;
+  /** 子代理线程的实时输岀片段，按路径索引；运行期状态，不落盘。 */
+  subagentStreams?: Map<string, SubagentStreamItem[]>;
   /** 上一次因为子代理进度发布会话摘要的时刻（节流用）。 */
   subagentSummaryAt?: number;
   /** Memoized projection of the current immutable branch. The leaf id is its version. */

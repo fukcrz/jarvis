@@ -1,9 +1,20 @@
 import type { ManagerSettings } from "../prefs/settings.ts";
 import { checklistGuidance } from "./checklist-integration.ts";
 
-export function delegationGuidance(canSpawnChildren: boolean): string {
-  return canSpawnChildren
-    ? "You may spawn subagents of your own if useful, subject to your tools, assigned scope, and shared concurrency limits."
+/**
+ * Child delegation guidance. Two independent gates decide it: the type opt-in
+ * (`canSpawn` in the definition) and the depth limit.
+ */
+export type DelegationBlock = "type" | "depth";
+
+export function delegationGuidance(
+  canDelegate: boolean,
+  blockedBy: DelegationBlock = "depth",
+): string {
+  if (canDelegate)
+    return "You may spawn subagents of your own if useful, subject to your tools, assigned scope, and shared concurrency limits.";
+  return blockedBy === "type"
+    ? "This agent type does not delegate: your toolset has no agent_spawn, agent_steer, agent_stop or agent_wait. Do the assigned work yourself; agent_update is still available to report progress to your parent."
     : "You are at the maximum agent depth and cannot spawn any more subagents. Complete your assigned work yourself.";
 }
 

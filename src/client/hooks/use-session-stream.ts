@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, notifyUnauthorized, sessionPath, socketUrl } from "../api";
-import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type ThinkingLevel, type TimelineItem, type UserMessageOutline, sessionEventSchema } from "../../shared/protocol";
+import { isRecord, type ExtensionUiSnapshot, type ModelDescriptor, type SessionEvent, type SessionRef, type SessionThinkingSnapshot, type SubagentStreamItem, type ThinkingLevel, type TimelineItem, type UserMessageOutline, sessionEventSchema } from "../../shared/protocol";
 import { appendUserMessageOutline, earlierPageLimit, userMessageOutline } from "../../shared/user-message";
 import { notifyRunFinished, type RunNotificationInfo } from "../notifications";
 import { randomUUID } from "../lib/utils";
@@ -15,6 +15,7 @@ import {
   SOCKET_PONG_TYPE,
   SOCKET_WATCHDOG_INTERVAL_MS,
 } from "../lib/socket-sync";
+import { mergeStreamItems } from "../lib/subagent-panel";
 import { addOptimisticUserMessage, applySessionEvents, emptyTranscript, hydrateTranscript, prependTranscript, removeOptimisticUserMessage, replaceUserMessageWithOptimistic, type TranscriptState } from "../transcript";
 
 /** 切会话时的首屏条数：先画出最近一轮，不够再往上补。 */
@@ -142,6 +143,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   const [userMessages, setUserMessages] = useState<UserMessageOutline[]>([]);
   const [userMessagesLoading, setUserMessagesLoading] = useState(false);
   const [extensionPanels, setExtensionPanels] = useState<ExtensionPanelState>({ widgets: {}, statuses: {} });
+  const [subagentStreams, setSubagentStreams] = useState<Record<string, SubagentStreamItem[]>>({});
   const stateRef = useRef(state);
   const transcriptCache = useRef(new Map<string, TranscriptState>());
   const historyLoadGeneration = useRef(0);
@@ -211,8 +213,15 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     const events = queuedEvents.current.splice(0);
     const transcriptEvents: SessionEvent[] = [];
     const sideEffects: PanelSideEffect[] = [];
+    const streamBatches: Array<{ path: string; items: SubagentStreamItem[] }> = [];
     const historyRewritten = events.some((event) => event.type === "session.rewritten");
     for (const event of events) {
+      if (event.type === "subagent.stream") {
+        const batch = subagentStreamFromPayload(event.payload);
+        if (batch !== undefined && event.seq > stateRef.current.transcript.seq) streamBatches.push(batch);
+        transcriptEvents.push(event);
+        continue;
+      }
       if (event.type === "extension.uiRequest") {
         const effect = sideEffectFor(event);
         if (effect !== undefined) sideEffects.push(effect);
@@ -244,6 +253,13 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
         }
       }
     }
+    if (streamBatches.length > 0) {
+      setSubagentStreams((previous) => {
+        const next = { ...previous };
+        for (const batch of streamBatches) next[batch.path] = mergeStreamItems(next[batch.path], batch.items);
+        return next;
+      });
+    }
     if (historyRewritten || sideEffects.length > 0) {
       setExtensionPanels((previous) => applySideEffects(historyRewritten ? { widgets: {}, statuses: {} } : previous, sideEffects, manageDocumentTitleRef.current));
       if (historyRewritten && manageDocumentTitleRef.current) document.title = defaultDocumentTitle.current;
@@ -265,6 +281,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   const applyHydration = useCallback((sessionKey: string, page: Awaited<ReturnType<typeof api.timeline>>, snapshot: Awaited<ReturnType<typeof api.runtime>>, connection?: StreamState["connection"]) => {
     dispatch({ type: "hydrate", sessionKey, page, snapshot, connection });
     setExtensionPanels(extensionPanelsFromSnapshot(snapshot.extensionUi));
+    setSubagentStreams(snapshot.subagentStreams ?? {});
     if (manageDocumentTitleRef.current) document.title = snapshot.extensionUi?.title ?? defaultDocumentTitle.current;
   }, []);
   const applyHydrationRef = useRef(applyHydration);
@@ -302,6 +319,7 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     setUserMessagesLoading(ref !== undefined);
     dispatch({ type: "select", sessionKey: refKey, ...(refKey === undefined ? {} : { transcript: transcriptCache.current.get(refKey) }) });
     setExtensionPanels({ widgets: {}, statuses: {} });
+    setSubagentStreams({});
     if (ref === undefined || refKey === undefined) {
       if (manageDocumentTitleRef.current) document.title = defaultDocumentTitle.current;
       return;
@@ -649,6 +667,12 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
     }
   }, [refKey]);
 
+  /** 历史回看拿到整段输出后并入同一个缓存，后续实时增量继续 upsert。 */
+  const mergeSubagentStream = useCallback((path: string, items: SubagentStreamItem[], prepend = false) => {
+    if (path === "" || items.length === 0) return;
+    setSubagentStreams((previous) => ({ ...previous, [path]: mergeStreamItems(previous[path], items, { prepend }) }));
+  }, []);
+
   const respondExtensionUi = useCallback(async (id: string, response: { value?: string; confirmed?: boolean; cancelled?: boolean }): Promise<void> => {
     if (ref === undefined) throw new Error("会话已关闭");
     try {
@@ -664,7 +688,18 @@ export function useSessionStream(ref: SessionRef | undefined, assistantName = do
   }, []);
   const discardOptimisticUser = useCallback((id: string) => { dispatch({ type: "discard-optimistic-user", id }); }, []);
   const replaceUserMessage = useCallback((messageId: string, id: string, text: string, images: import("../../shared/protocol").ImageAttachment[]) => { dispatch({ type: "replace-user", messageId, id, text, images }); }, []);
-  return { ...state, localMediaVersion: `${mediaSeed}-${String(state.mediaRevision)}`, refresh, loadEarlier, loadEarlierOnce, loadUntilMessage, loadingEarlier, userMessages, userMessagesLoading, selectModel, setThinkingLevel, extensionPanels, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
+  return { ...state, localMediaVersion: `${mediaSeed}-${String(state.mediaRevision)}`, refresh, loadEarlier, loadEarlierOnce, loadUntilMessage, loadingEarlier, userMessages, userMessagesLoading, selectModel, setThinkingLevel, extensionPanels, subagentStreams, mergeSubagentStream, respondExtensionUi, addOptimisticUser, discardOptimisticUser, replaceUserMessage };
+}
+
+/** `subagent.stream` 事件的有效载荷：`{ path, items }`，非法数据直接丢。 */
+export function subagentStreamFromPayload(payload: unknown): { path: string; items: SubagentStreamItem[] } | undefined {
+  if (!isRecord(payload)) return undefined;
+  const path = payload["path"];
+  if (typeof path !== "string" || path === "") return undefined;
+  const items = payload["items"];
+  if (!Array.isArray(items)) return undefined;
+  const parsed = items.filter((item): item is SubagentStreamItem => isRecord(item) && typeof item["id"] === "string" && (item["kind"] === "text" || item["kind"] === "thinking" || item["kind"] === "tool"));
+  return parsed.length === 0 ? undefined : { path, items: parsed };
 }
 
 export function runNotificationFor(event: SessionEvent, items: TimelineItem[]): RunNotificationInfo | undefined {

@@ -1,8 +1,9 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ThreadManager } from "./manager.ts";
-import { ModelPreferenceError } from "../prefs/models.ts";
+import { ModelPreferenceError, formatModelAliases } from "../prefs/models.ts";
 import type { AgentType, ResolvedAgentSettings, ThreadView } from "../types.ts";
+import { THINKING_LEVELS } from "../types.ts";
 
 const path = Type.String({ description: "Absolute agent path, or name relative to the caller" });
 const text = Type.String({ minLength: 1 });
@@ -24,7 +25,7 @@ export function agentTools(
   caller: string,
   getTypes: () => AgentType[],
   resolveSettings: (type: AgentType) => ResolvedAgentSettings,
-  onReap: () => void = () => {},
+  getAvailableModels: () => string[] = () => [],
 ): ToolDefinition[] {
   const threads = () => getManager().scope(caller);
   const make = (
@@ -42,17 +43,26 @@ export function agentTools(
   return [
     make(
       "agent_types",
-      "List agent names, descriptions, resolved models and thinking levels for new children of this caller. Reflects current configuration; call before choosing a type. Other parent paths may inherit different settings.",
-      Type.Object({}),
-      () => {
+      "List agent names, descriptions, resolved models and thinking levels for new children of this caller. Reflects current configuration; call before choosing a type. Every type accepts all thinking levels (off, minimal, low, medium, high, xhigh, max); the level shown is the effective one after the type's default and the target model's clamp. Types marked `delegates` may themselves spawn children. Each entry also lists the model aliases that type declares, which agent_spawn accepts as `model`. Any model available in this environment stays selectable, not only aliases. Other parent paths may inherit different settings.",
+      Type.Object({
+        includeAvailableModels: Type.Optional(
+          Type.Boolean({
+            description:
+              "Append the full list of provider/model-id values available in this environment. Default false; the count is always reported.",
+          }),
+        ),
+      }),
+      (params: { includeAvailableModels?: boolean }) => {
         const entries = getTypes().map((type) => {
           const { name, description } = type;
+          const aliases = formatModelAliases(type);
           try {
-            return { name, description, ...resolveSettings(type) };
+            return { name, description, ...resolveSettings(type), ...(aliases ? { aliases } : {}) };
           } catch (error) {
             return {
               name,
               description,
+              ...(aliases ? { aliases } : {}),
               error:
                 error instanceof ModelPreferenceError
                   ? error.summary
@@ -62,27 +72,39 @@ export function agentTools(
             };
           }
         });
+        const available = getAvailableModels();
+        const lines = entries.map((entry) => {
+          const aliases = "aliases" in entry && entry.aliases ? `\n  model aliases: ${entry.aliases}` : "";
+          const type = getTypes().find((candidate) => candidate.name === entry.name);
+          const declared = type?.thinkingLevel;
+          const clamped =
+            declared && "thinkingLevel" in entry && entry.thinkingLevel !== declared
+              ? ` (declared ${declared}, model clamps it)`
+              : "";
+          const delegates = type?.canSpawn === true ? ", delegates" : "";
+          return "error" in entry
+            ? `${entry.name} (unavailable${delegates}): ${entry.description}\n  ${entry.error}${aliases}`
+            : `${entry.name} (${entry.model}, thinking: ${entry.thinkingLevel}${clamped}${delegates}): ${entry.description}${aliases}`;
+        });
+        lines.push(
+          params?.includeAvailableModels
+            ? `\nAvailable models (${available.length}): ${available.join(", ") || "(none)"}`
+            : `\nAvailable models: ${available.length} (pass includeAvailableModels for the list)`,
+        );
         return {
           content: [
             {
               type: "text" as const,
-              text:
-                entries
-                  .map((entry) =>
-                    "error" in entry
-                      ? `${entry.name} (unavailable): ${entry.description}\n  ${entry.error}`
-                      : `${entry.name} (${entry.model}, thinking: ${entry.thinkingLevel}): ${entry.description}`,
-                  )
-                  .join("\n") || "No agent types available.",
+              text: lines.join("\n"),
             },
           ],
-          details: entries,
+          details: { types: entries, availableModels: available.length },
         };
       },
     ),
     make(
       "agent_spawn",
-      "Spawn a named child. The lexical parent, NOT the caller, supplies a context snapshot. /root is the main thread; independent roots have no inherited context. Foreground waits by default; wait:false runs detached: when it completes, fails or is stopped, you receive a message event that wakes you, so do not poll. Optional timeoutMs (30000–300000; none if unset): if the child is still running after that many ms you receive an event with its status, elapsed time, tokens and recent output (the child is NOT stopped; you decide whether to wait, steer, stop it or re-arm with agent_steer timeoutMs). For parallel work, spawn every independent sibling with wait:false before calling agent_wait; child agents with delegation tools should do the same. Existing paths are retained and can be resumed with agent_steer. Use agent_types to discover current types.",
+      "Spawn a named child. The lexical parent, NOT the caller, supplies a context snapshot. /root is the main thread; independent roots have no inherited context. Foreground waits by default; wait:false runs detached: when it completes, fails or is stopped, you receive a message event that wakes you, so do not poll. Optional model/thinkingLevel override the type's configured values for this spawn only; omitted, they inherit. Optional timeoutMs (30000–300000; none if unset): if the child is still running after that many ms you receive an event with its status, elapsed time, tokens and recent output (the child is NOT stopped; you decide whether to wait, steer, stop it or re-arm with agent_steer timeoutMs). For parallel work, spawn every independent sibling with wait:false before calling agent_wait; child agents with delegation tools should do the same. Existing paths are retained and can be resumed with agent_steer. Use agent_types to discover current types.",
       Type.Object({
         path: Type.String({
           description:
@@ -91,6 +113,21 @@ export function agentTools(
         type: text,
         task: text,
         wait: Type.Optional(Type.Boolean()),
+        model: Type.Optional(
+          Type.String({
+            description:
+              "Optional alias declared by the target type (see agent_types), or a literal provider/model-id such as opencode/deepseek-v4.1-flash. For this spawn only. Omitted means inherit: the type's configured models win, then a resumed session, then the lexical parent, then the root session. Any model available in this environment is accepted; an unavailable model fails with the list of candidates.",
+          }),
+        ),
+        thinkingLevel: Type.Optional(
+          Type.Union(
+            THINKING_LEVELS.map((level) => Type.Literal(level)),
+            {
+              description:
+                "Optional thinking level for this spawn only. Omitted means inherit. The target model's thinkingLevelMap may clamp it further.",
+            },
+          ),
+        ),
         timeoutMs: Type.Optional(
           Type.Integer({
             minimum: 30000,
@@ -166,21 +203,6 @@ export function agentTools(
       "Stop a descendant and its working children. Session history is retained; resume with agent_steer. This is cooperative cancellation, not sandbox process termination.",
       Type.Object({ path }),
       async (params) => result(compact(await threads().stop(params.path))),
-    ),
-    make(
-      "agent_reap",
-      "Release completed descendant threads to free total thread slots, without user confirmation. Read needed output first: reaped threads can no longer be resumed or read through agent tools. Omit paths to reap all eligible descendants, or supply paths to select threads. Running, paused, stopped and failed threads are retained, as are ancestors still needed by retained descendants.",
-      Type.Object({ paths: Type.Optional(Type.Array(path)) }),
-      (params) => {
-        const scoped = threads();
-        const selected = params.paths?.map((value: string) => scoped.get(value).path);
-        const eligible = scoped.list()
-          .filter((thread) => thread.path !== caller && (!selected || selected.includes(thread.path)))
-          .map((thread) => thread.path);
-        const reaped = getManager().reap(eligible);
-        if (reaped.length) onReap();
-        return result({ reaped, count: reaped.length });
-      },
     ),
     make(
       "agent_output",

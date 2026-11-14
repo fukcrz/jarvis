@@ -26,8 +26,13 @@ import {
   buildUpdateDetails,
   DurableMailbox,
 } from "./mailbox.ts";
-import { selectTools } from "../prefs/config.ts";
+import {
+  resolveSubagentTools,
+  resolveThinkingLevel,
+  FORBIDDEN_SUBAGENT_TOOLS,
+} from "./tool-pool.ts";
 import { TranscriptChannel } from "./transcript.ts";
+import { streamBlockId, streamBlockText } from "./stream-block.ts";
 import { delegationGuidance } from "./prompt.ts";
 import { discoverSubagentExtensions, selectSubagentExtensions } from "./extensions.ts";
 import type { InheritedToolSource } from "./inherited-tools.ts";
@@ -48,6 +53,7 @@ import {
   type ResolvedAgentSettings,
   type DriverFactory,
   type DriverOptions,
+  type SubagentStreamItem,
   type ThinkingLevel,
 } from "../types.ts";
 
@@ -59,7 +65,6 @@ import {
   diagnosticText,
 } from "./diagnostics.ts";
 
-const BUILTINS = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
 /** Persisted before transcript messages so older-leaf restores still carry ownership. */
 const THREAD_OWNERSHIP_TYPE = "pi-subagent:thread:v1";
 const SESSION_FILE_ERROR =
@@ -196,6 +201,36 @@ export function toolArgumentSnippet(args: unknown): string | undefined {
   return clean ? clean.slice(0, 160) : undefined;
 }
 
+
+
+/** 工具结果的纯文本形式：字符串、content 数组或兜底 JSON。 */
+function toolResultText(result: unknown): string | undefined {
+  if (result === undefined || result === null) return undefined;
+  let text: string | undefined;
+  if (typeof result === "string") text = result;
+  else if (typeof result === "object") {
+    const record = result as Record<string, unknown>;
+    const content = record["content"];
+    if (Array.isArray(content))
+      text = content
+        .flatMap((block) => {
+          if (typeof block === "string") return [block];
+          const item = block as { type?: unknown; text?: unknown };
+          return item.type === "text" && typeof item.text === "string" ? [item.text] : [];
+        })
+        .join("\n");
+    if (!text) {
+      try {
+        text = JSON.stringify(result);
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  const clean = text?.trim();
+  return clean || undefined;
+}
+
 /** Isolated SDK sessions; configured extension reload is experimental and opt-in. */
 export function createDriverFactory(
   getRootContext: () => ExtensionContext,
@@ -205,6 +240,8 @@ export function createDriverFactory(
   getSubagentExtensions: () => SubagentExtensionSelection = () => false,
 ): DriverFactory & {
   resolveAgentSettings(type: AgentType, parentPath: string): ResolvedAgentSettings;
+  /** provider/model-id values this environment can actually run. */
+  availableModels(): string[];
 } {
   // Keep resolved settings even after disposal: descendants inherit settings, not the caller's history.
   const resolved = new Map<string, { provider: string; id: string; thinking: ThinkingLevel }>();
@@ -246,6 +283,7 @@ export function createDriverFactory(
     type: AgentType,
     parentPath?: string | null,
     restored?: ReturnType<SessionManager["buildSessionContext"]>,
+    explicit?: { model?: string; thinkingLevel?: ThinkingLevel },
   ) => {
     const ctx = getRootContext();
     const parent = parentPath
@@ -270,12 +308,23 @@ export function createDriverFactory(
       provider = restored.model.provider;
       id = restored.model.modelId;
     }
+    // Precedence: explicit spawn parameter > type configuration > restored session >
+    // lexical parent > root session. `use-current` mode and the explicit parameter
+    // are applied last so each overrides the type/restored/hierarchy chain outright.
+    if (explicit?.model !== undefined) ({ provider, id } = parseModelIdentity(explicit.model));
     const savedThinking =
       restored && THINKING_LEVELS.includes(restored.thinkingLevel as ThinkingLevel)
         ? (restored.thinkingLevel as ThinkingLevel)
         : undefined;
-    const thinkingLevel =
-      savedThinking ?? type.thinkingLevel ?? parent?.thinking ?? ctx.thinkingLevel ?? "off";
+    // Type configuration now outranks the restored session: changing a type's thinking
+    // level must take effect when the same retained path is resumed.
+    const thinkingLevel = resolveThinkingLevel(
+      explicit?.thinkingLevel,
+      type,
+      savedThinking,
+      parent?.thinking,
+      ctx.thinkingLevel,
+    );
     return { provider, id, thinkingLevel };
   };
   const resolveAgentSettings = (type: AgentType, parentPath: string): ResolvedAgentSettings => {
@@ -380,7 +429,18 @@ export function createDriverFactory(
       options.type,
       options.parentPath,
       restored,
+      { model: options.model, thinkingLevel: options.thinkingLevel },
     );
+    if (options.model !== undefined) {
+      // Fail early with the actual candidates instead of a bare "unavailable" message.
+      const available = availableModelCandidates().map(({ model }) => modelIdentity(model));
+      if (!available.includes(options.model)) {
+        const listed = available.slice(0, 20).join(", ");
+        throw new Error(
+          `Model ${options.model} requested for this spawn is not available. Available models: ${listed || "(none)"}${available.length > 20 ? `, ... (${available.length} total)` : ""}`,
+        );
+      }
+    }
     options.signal.throwIfAborted();
     const runtime = await ModelRuntime.create({
       authPath: path.join(agentDir, "auth.json"),
@@ -432,22 +492,32 @@ export function createDriverFactory(
     };
     const model = await resolveRuntimeModel(provider, id, initialScopedModels);
     const inherited = getInheritedTools();
-    const localNames = new Set([...BUILTINS, ...options.tools.map((tool) => tool.name)]);
-    const externalTools = inherited.tools.filter((tool) => !localNames.has(tool.name));
-    const toolNames = selectTools(
-      options.type.tools,
-      [...localNames, ...externalTools.map((tool) => tool.name)],
-      toolFiltering,
-    );
-    const allowed = new Set(toolNames);
-    const rootActive = new Set(inherited.activeNames);
-    // Preserve deferred/codemode exposure rather than flooding model declarations with MCP tools.
-    const activeToolNames = toolNames.filter(
-      (name) =>
-        localNames.has(name) ||
-        rootActive.has(name) ||
-        (options.type.tools?.allow?.includes(name) && toolFiltering === "allowed"),
-    );
+    // One gate for the whole pool: forbidden tools, the delegation gate (type canSpawn AND
+    // depth), then the type's own allow/block policy. See ./tool-pool.ts.
+    const {
+      canDelegate,
+      typeCanSpawn,
+      toolNames,
+      allowed,
+      permittedTools,
+      externalTools,
+      activeToolNames,
+    } = resolveSubagentTools({
+      declared: options.tools,
+      type: options.type,
+      canSpawnChildren: options.canSpawnChildren !== false,
+      inherited,
+      filtering: toolFiltering,
+      onDiagnostic: (message) =>
+        options.onEvent({
+          kind: "diagnostic",
+          diagnostic: {
+            level: "warning",
+            message: `${options.type.name}: ${message}`,
+            source: "tools",
+          },
+        }),
+    });
     const projectTrusted = ctx.isProjectTrusted?.() ?? false;
     const extensionPaths =
       extensionSelection === false ||
@@ -546,10 +616,8 @@ export function createDriverFactory(
           ? `Your lexical parent is ${options.parentPath}; inherited conversation comes only from that parent.`
           : "You are an independent root thread with no inherited history.",
         "When finished, give your final answer normally so it can be handed back. To retain unfinished work without a final answer, call agent_pause (if available), then stop; resume only when instructed.",
-        delegationGuidance(options.canSpawnChildren !== false),
-        ...(options.canSpawnChildren !== false &&
-        allowed.has("agent_spawn") &&
-        allowed.has("agent_wait")
+        delegationGuidance(canDelegate, typeCanSpawn ? "depth" : "type"),
+        ...(canDelegate && allowed.has("agent_spawn") && allowed.has("agent_wait")
           ? [
               "Name child paths with concise task-based kebab-case slugs (e.g. /root/controller-security-research), independent of type.",
               "For independent parallel work, launch all siblings with agent_spawn wait:false before calling agent_wait. Children share the main conversation's depth and concurrency limits; waiting parents count as active. Do not delegate work beyond your assigned scope.",
@@ -582,9 +650,11 @@ export function createDriverFactory(
           pi.on("turn_end", pauseBoundary);
           pi.on("agent_before_settle", pauseBoundary);
           pi.on("tool_call", (event) =>
-            allowed.has(event.toolName)
-              ? undefined
-              : { block: true, reason: "Tool is not allowed by this agent type" },
+            FORBIDDEN_SUBAGENT_TOOLS.has(event.toolName)
+              ? { block: true, reason: "This tool is unavailable to subagents" }
+              : allowed.has(event.toolName)
+                ? undefined
+                : { block: true, reason: "Tool is not allowed by this agent type" },
           );
         },
       ],
@@ -600,7 +670,7 @@ export function createDriverFactory(
     const loadedExtensions = loader.getExtensions();
     // Manager controls remain SDK custom tools so loaded extensions cannot replace
     // them. With reload disabled, preserve the existing SDK bridge behavior exactly.
-    const customTools = [...options.tools, ...(subagentExtensions ? [] : externalTools)].filter(
+    const customTools = [...permittedTools, ...(subagentExtensions ? [] : externalTools)].filter(
       (tool) => allowed.has(tool.name) && tool.name !== "codemode" && tool.name !== "tool_search",
     );
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"];
@@ -874,10 +944,15 @@ export function createDriverFactory(
     let settledOutput = 0;
     let settledCost: number | undefined;
     const countedUsage = new WeakSet<object>();
+    const streamToolArgs = new Map<string, string>();
     let finalOutput = "";
     let abortPromise: Promise<void> | undefined;
     const emit = (kind: "activity" | "error", text: string, detail?: string) =>
       options.onEvent({ kind, text: text.slice(0, 1000), ...(detail ? { detail } : {}) });
+    // Live transcript blocks for read-only viewers. The event-bus bridge batches replacements
+    // by stable block id; text stays intact so it can be reconciled with persisted history.
+    const streamItem = (item: SubagentStreamItem) =>
+      options.onEvent({ kind: "stream", items: [{ ...item, at: new Date().toISOString() }] });
     const assistantUsage = (message: AssistantMessage) => {
       const usage = message.usage;
       const input = usage.input + usage.cacheRead + usage.cacheWrite;
@@ -915,10 +990,22 @@ export function createDriverFactory(
       transcript.accept(event);
       if (event.type === "message_update" && event.message.role === "assistant") {
         const update = event.assistantMessageEvent;
-        if (update.type === "text_delta" || update.type === "text_end") {
-          const text = event.message.content.filter((block) => block.type === "text").map((block) => block.text).join("");
-          if (text) options.onEvent({ kind: "activity", text: text.slice(-1000), partial: true });
-        } else if (update.type === "thinking_start") options.onEvent({ kind: "activity", text: "Thinking", partial: true });
+        if (update.type === "text_start" || update.type === "text_delta" || update.type === "text_end") {
+          const text = update.type === "text_end"
+            ? update.content
+            : streamBlockText(event.message.content, update.contentIndex, "text");
+          if (text || update.type === "text_start") {
+            streamItem({ id: streamBlockId(event.message.timestamp, "text", update.contentIndex), kind: "text", text, streaming: update.type !== "text_end" });
+            if (text) options.onEvent({ kind: "activity", text: text.slice(-1000), partial: true });
+          }
+        } else if (update.type === "thinking_start" || update.type === "thinking_delta" || update.type === "thinking_end") {
+          const text = update.type === "thinking_end"
+            ? update.content
+            : streamBlockText(event.message.content, update.contentIndex, "thinking");
+          const id = streamBlockId(event.message.timestamp, "thinking", update.contentIndex);
+          streamItem({ id, kind: "thinking", text, streaming: update.type !== "thinking_end" });
+          if (update.type === "thinking_start") options.onEvent({ kind: "activity", text: "Thinking", partial: true });
+        }
       }
       if (event.type === "tool_execution_start")
         emit("activity", `Tool: ${event.toolName}`, toolArgumentSnippet(event.args));
@@ -927,6 +1014,42 @@ export function createDriverFactory(
           event.isError ? "error" : "activity",
           `Tool ${event.toolName}: ${event.isError ? "failed" : "finished"}`,
         );
+      if (event.type === "tool_execution_start") {
+        const args = toolArgumentSnippet(event.args);
+        if (args !== undefined) streamToolArgs.set(event.toolCallId, args);
+        streamItem({
+          id: event.toolCallId,
+          kind: "tool",
+          name: event.toolName,
+          state: "running",
+          ...(args === undefined ? {} : { text: args }),
+        });
+      }
+      if (event.type === "tool_execution_update") {
+        const args = toolArgumentSnippet(event.args);
+        const partial = toolResultText(event.partialResult);
+        streamItem({
+          id: event.toolCallId,
+          kind: "tool",
+          name: event.toolName,
+          state: "running",
+          ...(args === undefined ? {} : { text: args }),
+          ...(partial === undefined ? {} : { output: partial }),
+        });
+      }
+      if (event.type === "tool_execution_end") {
+        const output = toolResultText(event.result);
+        const args = streamToolArgs.get(event.toolCallId);
+        streamToolArgs.delete(event.toolCallId);
+        streamItem({
+          id: event.toolCallId,
+          kind: "tool",
+          name: event.toolName,
+          state: event.isError ? "failed" : "completed",
+          ...(args === undefined ? {} : { text: args }),
+          ...(output === undefined ? {} : event.isError ? { error: output } : { output }),
+        });
+      }
       if (
         (event.type === "message_update" || event.type === "message_end") &&
         event.message.role === "assistant" &&
@@ -1065,5 +1188,8 @@ export function createDriverFactory(
       },
     };
   };
-  return Object.assign(createDriver, { resolveAgentSettings });
+  return Object.assign(createDriver, {
+    resolveAgentSettings,
+    availableModels: () => availableModelCandidates().map(({ model }) => modelIdentity(model)),
+  });
 }

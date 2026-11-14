@@ -13,9 +13,22 @@ export interface AgentType {
   models?: string[];
   /** @deprecated Use ordered models instead. */
   model?: string;
+  /**
+   * Named model references a caller may pass to agent_spawn as `model: "<alias>"`.
+   * Purely additive: any available provider/model-id stays selectable, and when
+   * `models` is absent the alias values (in declaration order) become the type's
+   * default preference chain.
+   */
+  modelAliases?: Record<string, string>;
   /** Advisory display names. Not provider/model pins and never used for selection. */
   modelSuggestions?: string[];
   thinkingLevel?: ThinkingLevel;
+  /**
+   * Whether this type may delegate (agent_spawn/agent_steer/agent_stop/agent_wait).
+   * Defaults to false: a type only delegates when it opts in explicitly. Depth
+   * limits still apply in addition to this flag.
+   */
+  canSpawn?: boolean;
   /** Pi semantic token for the type pill background and task path foreground. */
   color?: string;
   /** Optional literal Nerd Font glyph; displayed only when the labs setting is enabled. */
@@ -88,6 +101,27 @@ export interface ThreadView {
   /** Stable lifetime identity for cost accounting, retained across resumes/reloads. */
   costId?: string;
 }
+/** 子会话的一条实时输出碎片；只用于展示，不进注册表、不进会话文件。 */
+export interface SubagentStreamItem {
+  /** 同一线程内稳定，用于 upsert。 */
+  id: string;
+  kind: "text" | "thinking" | "tool";
+  /** text / thinking 正文；tool 的一行摘要（参数）。 */
+  text?: string;
+  /** 仍在流式写入（text / thinking）。 */
+  streaming?: boolean;
+  /** tool 名称。 */
+  name?: string;
+  /** tool 状态。 */
+  state?: "running" | "completed" | "failed";
+  /** tool 输出；不额外裁剪。 */
+  output?: string;
+  /** tool 失败原因。 */
+  error?: string;
+  /** 该条产生时刻（ISO）。 */
+  at?: string;
+}
+
 export type DriverEvent =
   | { kind: "diagnostic"; diagnostic: ChildDiagnostic }
   | { kind: "settings"; model: string; thinkingLevel: ThinkingLevel }
@@ -114,7 +148,9 @@ export type DriverEvent =
       costUsd?: number;
       /** Streaming message_update snapshot. Omit for authoritative message_end. */
       partial?: boolean;
-    };
+    }
+  /** Child transcript increments for live viewing; never persisted. */
+  | { kind: "stream"; items: SubagentStreamItem[] };
 /** Ephemeral read-only transcript state; never part of registry/delivery events. */
 export interface TranscriptToolState {
   toolCallId: string;
@@ -158,6 +194,10 @@ export interface DriverOptions {
   path: string;
   /** Whether the configured depth limit permits another level of children. */
   canSpawnChildren?: boolean;
+  /** Explicit per-spawn model identity (`provider/model-id`); wins over type configuration. */
+  model?: string;
+  /** Explicit per-spawn thinking level; wins over type configuration. */
+  thinkingLevel?: ThinkingLevel;
   type: AgentType;
   inherited: AgentMessage[];
   tools: ToolDefinition[];
@@ -209,7 +249,17 @@ export interface ThreadService {
   /** Optional for portable adapters; the runtime manager always implements this. */
   observeTranscript?(path: string, listener: TranscriptListener): Promise<TranscriptObservation>;
   spawn(
-    args: { path: string; type: string; task: string; wait?: boolean; timeoutMs?: number },
+    args: {
+      path: string;
+      type: string;
+      task: string;
+      wait?: boolean;
+      timeoutMs?: number;
+      /** Explicit model for this spawn only (`provider/model-id`); omitted = inherit. */
+      model?: string;
+      /** Explicit thinking level for this spawn only; omitted = inherit. */
+      thinkingLevel?: ThinkingLevel;
+    },
     signal?: AbortSignal,
   ): Promise<ThreadView>;
   /** message and/or timeoutMs (30s–5min). timeoutMs alone only re-arms a running child's report-only timeout. */
@@ -225,6 +275,12 @@ export type ThreadEvent =
   | { kind: "change"; thread: ThreadView }
   | { kind: "metrics"; thread: ThreadView }
   | { kind: "update"; thread: ThreadView; message: string; recipient: string }
+  | {
+      kind: "stream";
+      thread: ThreadView;
+      items: SubagentStreamItem[];
+      recipient: string;
+    }
   | { kind: "settled"; thread: ThreadView; recipient: string; async: boolean }
   /** A spawn timeout elapsed while the child is still running. The child is NOT stopped. */
   | {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { subagentStreamFromPayload } from "../hooks/use-session-stream";
 import type { SubagentCallView, SubagentView, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { formatCost, formatThreadElapsed, formatTokenCount, groupSubagentThreads, runningThreadCount, subagentPanelThreads, threadMeta } from "./subagent-panel";
+import { formatCost, formatThreadElapsed, formatTokenCount, groupSubagentThreads, mergeStreamItems, runningThreadCount, streamItemsFromTimeline, subagentPanelThreads, threadMeta } from "./subagent-panel";
 
 function call(overrides: Partial<SubagentCallView> & { agent: string }): SubagentCallView {
   return { prompt: "do the thing", state: "running", ...overrides };
@@ -110,5 +111,61 @@ describe("subagent panel formatting", () => {
   it("lists model, thinking, tokens and cost for the detail meta line", () => {
     const [thread] = subagentPanelThreads([toolItem("t7", [call({ agent: "executor", model: "sol", thinkingLevel: "high", usage: { total: 12_400, cost: 0.03 } })])]);
     expect(thread === undefined ? undefined : threadMeta(thread)).toEqual(["sol", "thinking high", "12k tok", "$0.03"]);
+  });
+});
+
+describe("subagent stream merge", () => {
+  it("upserts by id and keeps the first appearance order", () => {
+    const first = mergeStreamItems(undefined, [
+      { id: "a", kind: "text", text: "一" },
+      { id: "b", kind: "tool", name: "bash", state: "running" },
+    ]);
+    const next = mergeStreamItems(first, [
+      { id: "b", kind: "tool", name: "bash", state: "completed" },
+      { id: "c", kind: "text", text: "二" },
+    ]);
+    expect(next.map((item) => item.id)).toEqual(["a", "b", "c"]);
+    expect(next[1]?.state).toBe("completed");
+  });
+
+  it("drops the oldest items beyond the limit", () => {
+    const items = Array.from({ length: 6 }, (_, index) => ({ id: `i${String(index)}`, kind: "text" as const, text: String(index) }));
+    expect(mergeStreamItems(undefined, items, { limit: 4 }).map((item) => item.id)).toEqual(["i2", "i3", "i4", "i5"]);
+  });
+
+  it("folds a stored child timeline into the same output items", () => {
+    const items = streamItemsFromTimeline([
+      { kind: "message", id: "m1", role: "assistant", createdAt: "2026-11-13T00:00:00.000Z", text: "改完了" },
+      { kind: "thinking", id: "k1", createdAt: "2026-11-13T00:00:01.000Z", state: "completed", text: "先看看结构" },
+      { kind: "tool", id: "t1", createdAt: "2026-11-13T00:00:02.000Z", name: "bash", title: "npm test", state: "failed", output: "2 failed", error: "exit 1" },
+    ]);
+    expect(items).toEqual([
+      { id: "m1", kind: "text", text: "改完了", at: "2026-11-13T00:00:00.000Z" },
+      { id: "k1", kind: "thinking", text: "先看看结构", at: "2026-11-13T00:00:01.000Z" },
+      { id: "t1", kind: "tool", name: "bash", state: "failed", text: "npm test", output: "2 failed", error: "exit 1", at: "2026-11-13T00:00:02.000Z" },
+    ]);
+  });
+});
+
+describe("history and live stream merging", () => {
+  it("prepends older history without duplicating or replacing a newer live block", () => {
+    const live = [{ id: "message:assistant:1000", kind: "text" as const, text: "newer live text", streaming: true }];
+    const history = streamItemsFromTimeline([
+      { kind: "message", id: "old", role: "assistant", createdAt: "2026-01-01T00:00:00Z", text: "older" },
+      { kind: "message", id: "message:assistant:1000", role: "assistant", createdAt: "2026-01-01T00:00:01Z", text: "stale persisted text" },
+    ]);
+    const merged = mergeStreamItems(live, history, { prepend: true });
+    expect(merged.map((item) => item.id)).toEqual(["old", "message:assistant:1000"]);
+    expect(merged[1]?.text).toBe("newer live text");
+    expect(mergeStreamItems(merged, [{ ...live[0]!, text: "done", streaming: false }])).toHaveLength(2);
+  });
+});
+
+describe("subagent stream payload", () => {
+  it("accepts a well formed batch and drops bad items", () => {
+    expect(subagentStreamFromPayload({ path: "/root/a", items: [{ id: "x", kind: "text", text: "hi" }, { id: "y", kind: "video" }] })).toEqual({ path: "/root/a", items: [{ id: "x", kind: "text", text: "hi" }] });
+    expect(subagentStreamFromPayload({ path: "", items: [{ id: "x", kind: "text" }] })).toBeUndefined();
+    expect(subagentStreamFromPayload({ path: "/root/a", items: [] })).toBeUndefined();
+    expect(subagentStreamFromPayload("nope")).toBeUndefined();
   });
 });

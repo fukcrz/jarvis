@@ -1,4 +1,4 @@
-import type { SubagentCallState, SubagentCallView, SubagentUsageView, ThinkingLevel, TimelineItem } from "../../shared/protocol";
+import type { SubagentCallState, SubagentCallView, SubagentStreamItem, SubagentUsageView, ThinkingLevel, TimelineItem } from "../../shared/protocol";
 import { formatElapsedMs } from "./subagents";
 
 /** 侧栏里的一行线程：由时间线里的 agent_* 工具卡片摊平而来。 */
@@ -18,6 +18,8 @@ export interface SubagentPanelThread {
   durationMs?: number;
   model?: string;
   thinkingLevel?: ThinkingLevel;
+  /** 子会话 id：按普通会话读它的完整过程。 */
+  threadSessionId?: string;
   usage?: SubagentUsageView;
   steps: Array<{ kind: "thinking" | "text" | "tool"; label?: string; text: string }>;
   output?: string;
@@ -128,6 +130,7 @@ function threadFromCall(call: SubagentCallView, key: string): SubagentPanelThrea
   if (call.startedAt !== undefined) thread.startedAt = call.startedAt;
   if (call.durationMs !== undefined) thread.durationMs = call.durationMs;
   if (call.model !== undefined) thread.model = call.model;
+  if (call.threadSessionId !== undefined) thread.threadSessionId = call.threadSessionId;
   if (call.thinkingLevel !== undefined) thread.thinkingLevel = call.thinkingLevel;
   if (call.usage !== undefined) thread.usage = call.usage;
   if (call.output !== undefined) thread.output = call.output;
@@ -192,4 +195,46 @@ export function threadTitle(thread: SubagentPanelThread): string {
   if (thread.path !== undefined) return thread.path;
   if (thread.label !== undefined) return thread.label;
   return thread.agent;
+}
+
+/** 线程输出默认保留的条目数，与服务端环形缓冲一致。 */
+export const SUBAGENT_STREAM_LIMIT = 200;
+
+/** 按 id upsert，保持首次出现顺序；超出上限先丢最旧。 */
+export function mergeStreamItems(current: readonly SubagentStreamItem[] | undefined, incoming: readonly SubagentStreamItem[], options: { prepend?: boolean; limit?: number } = {}): SubagentStreamItem[] {
+  const existing = current === undefined ? [] : [...current];
+  const byId = new Map<string, SubagentStreamItem>();
+  const order: string[] = [];
+  const add = (item: SubagentStreamItem) => {
+    if (!byId.has(item.id)) order.push(item.id);
+    byId.set(item.id, { ...byId.get(item.id), ...item });
+  };
+  for (const item of options.prepend === true ? [...incoming, ...existing] : [...existing, ...incoming]) add(item);
+  const merged = order.map((id) => byId.get(id) as SubagentStreamItem);
+  return options.limit === undefined || merged.length <= options.limit ? merged : merged.slice(merged.length - options.limit);
+}
+
+/** 历史回看：把子会话的标准时间线折成同一套输出项，和实时流共用渲染。 */
+export function streamItemsFromTimeline(items: readonly TimelineItem[]): SubagentStreamItem[] {
+  const result: SubagentStreamItem[] = [];
+  for (const item of items) {
+    if (item.kind === "message") {
+      if (item.role !== "assistant" || item.text.trim() === "") continue;
+      result.push({ id: item.id, kind: "text", text: item.text, at: item.createdAt });
+      continue;
+    }
+    if (item.kind === "thinking") {
+      if (item.text.trim() === "") continue;
+      result.push({ id: item.id, kind: "thinking", text: item.text, at: item.createdAt });
+      continue;
+    }
+    if (item.kind !== "tool") continue;
+    const tool: SubagentStreamItem = { id: item.id, kind: "tool", name: item.name, state: item.state === "failed" ? "failed" : item.state === "running" || item.state === "queued" ? "running" : "completed", at: item.createdAt };
+    const text = (item.title !== undefined && item.title.trim() !== "") ? item.title : item.inputPreview;
+    if (text !== undefined && text.trim() !== "") tool.text = text;
+    if (item.output !== undefined && item.output.trim() !== "") tool.output = item.output;
+    if (item.error !== undefined && item.error.trim() !== "") tool.error = item.error;
+    result.push(tool);
+  }
+  return result;
 }

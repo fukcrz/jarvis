@@ -30,7 +30,7 @@ import { ChecklistMetaMirror, checklistStatus } from "./orch/checklist-integrati
 import { agentTools } from "./orch/tools.ts";
 import { editAgentTypes, updateWidget } from "./ui/ui.ts";
 import { canOpenDialog, dialogMenu } from "./ui/dialog.ts";
-import type { ThreadEvent, ThreadView } from "./types.ts";
+import type { SubagentStreamItem, ThreadEvent, ThreadView } from "./types.ts";
 import { COST_ENTRY, CostLedger } from "./orch/cost-ledger.ts";
 import { readRegistry, RegistryWriter } from "./orch/registry.ts";
 import { CostFooterController } from "./ui/cost-footer.ts";
@@ -40,6 +40,9 @@ const ROOT_SUMMARY_MESSAGE = "pi-subagent:final-recap";
 const ROOT_WAKE_MESSAGE = "pi-subagent:wake";
 const LIVE_UPDATE_CHANNEL = "pi-subagent:live:v1";
 const LIVE_UPDATE_THROTTLE_MS = 150;
+/** 子会话实时输出片段：与快照通道并行，自己合批，不参与持久化。 */
+const STREAM_CHANNEL = "pi-subagent:stream:v1";
+const STREAM_THROTTLE_MS = 200;
 type RootNotification = {
   rootSessionId: string;
   content: string;
@@ -169,6 +172,43 @@ export default function piSubagent(pi: ExtensionAPI): void {
     liveUpdateTimers.clear();
     liveUpdatePending.clear();
     liveUpdateAt.clear();
+  };
+  // 每线程一个待发缓冲：同一 id 的多次增量只留最后一版，200ms 一批。
+  const streamPending = new Map<string, Map<string, SubagentStreamItem>>();
+  const streamTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const flushStream = (path: string) => {
+    const timer = streamTimers.get(path);
+    if (timer !== undefined) clearTimeout(timer);
+    streamTimers.delete(path);
+    const batch = streamPending.get(path);
+    streamPending.delete(path);
+    if (batch === undefined || batch.size === 0 || limits.subagentMode === "off") return;
+    try {
+      // Runtime-only: 子会话过程不进根会话 JSONL。
+      pi.events.emit(STREAM_CHANNEL, { version: 1, path, items: [...batch.values()] });
+    } catch (error) {
+      warnDelivery(error);
+    }
+  };
+  const queueStream = (path: string, items: readonly SubagentStreamItem[], immediate = false) => {
+    if (limits.subagentMode === "off") return;
+    let batch = streamPending.get(path);
+    if (batch === undefined) {
+      batch = new Map();
+      streamPending.set(path, batch);
+    }
+    for (const item of items) batch.set(item.id, item);
+    if (immediate) {
+      flushStream(path);
+      return;
+    }
+    if (streamTimers.has(path)) return;
+    streamTimers.set(path, setTimeout(() => flushStream(path), STREAM_THROTTLE_MS));
+  };
+  const clearStreams = () => {
+    for (const timer of streamTimers.values()) clearTimeout(timer);
+    streamTimers.clear();
+    streamPending.clear();
   };
   const cancelSummary = () => {
     if (rootTurnTimer !== undefined) clearTimeout(rootTurnTimer);
@@ -583,10 +623,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       path,
       () => store.list(),
       (type) => driverFactory.resolveAgentSettings(type, path),
-      () => {
-        persist();
-        refreshWidget(requireContext());
-      },
+      () => driverFactory.availableModels(),
     );
   const rootTools = toolsFor("/root");
   let toolsEnabled: boolean | undefined;
@@ -686,6 +723,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   ) => {
     cancelSummary();
     clearLiveUpdates();
+    clearStreams();
     housekeeping.cancelAll();
     const token = ++generation;
     closeNavigation(installEditor);
@@ -728,8 +766,15 @@ export default function piSubagent(pi: ExtensionAPI): void {
       },
       onEvent: (event) => {
         if (token !== generation) return;
+        if (event.kind === "stream") {
+          queueStream(event.thread.path, event.items);
+          return;
+        }
         if (event.kind === "change" || event.kind === "metrics") publishLiveUpdate(event.thread);
         else publishLiveUpdate(event.thread, true);
+        // 终态把还没发出去的尾批立即推走，避免最后几句正文丢掉。
+        if (event.thread.state !== "starting" && event.thread.state !== "running")
+          flushStream(event.thread.path);
         // Settled agents and explicit progress reports (which replace the summary) cancel pending
         // housekeeping so an older request cannot reapply stale text; fresh activity reschedules.
         if (
@@ -794,6 +839,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     capabilityActive = false;
     cancelSummary();
     clearLiveUpdates();
+    clearStreams();
     housekeeping.cancelAll();
     generation++;
     closeNavigation(true);

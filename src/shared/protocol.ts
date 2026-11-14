@@ -554,6 +554,8 @@ export interface SubagentCallView {
   /** 已结束 call 的执行时长，实时行由 startedAt 现算。 */
   durationMs?: number;
   sessionHandle?: string;
+  /** 子会话 id（由插件快照的 sessionFile 推得），用于父会话下的只读历史接口。 */
+  threadSessionId?: string;
   /** 完整提示词（截断到 8000 字），只有展开提示词时才读。 */
   fullPrompt?: string;
   /** 最近几条过程：思考 / 正文 / 动作按发生顺序拍平。 */
@@ -577,6 +579,27 @@ export interface SubagentThreadRow {
   startedAt?: string;
   /** paused 线程冻结的已跑时长，不再随当前时间增长。 */
   elapsedMs?: number;
+}
+
+/** 子代理线程的实时输出项：插件按增量推送，服务端按线程转发，客户端按 id upsert。 */
+export interface SubagentStreamItem {
+  /** 同一线程内稳定，用于 upsert。 */
+  id: string;
+  kind: "text" | "thinking" | "tool";
+  /** text / thinking 的正文；tool 的一行摘要。 */
+  text?: string;
+  /** 仍在流式写入（text / thinking）。 */
+  streaming?: boolean;
+  /** tool 名称。 */
+  name?: string;
+  /** tool 状态。 */
+  state?: "running" | "completed" | "failed";
+  /** tool 输出；实时流不额外裁剪。 */
+  output?: string;
+  /** tool 失败原因。 */
+  error?: string;
+  /** 该条产生时刻。 */
+  at?: string;
 }
 
 /** 子代理的一条状态记录：派发、完成、失败或停止。时间线按发生顺序逐条显示，不合并。 */
@@ -722,6 +745,8 @@ export interface SessionStreamSnapshot {
   extensionUi?: ExtensionUiSnapshot;
   /** 排队等待投递的用户消息（忙时发送/Alt 发送）。 */
   queue?: SessionQueue;
+  /** 子代理线程的运行期输出，按线程路径。进程重启后为空，历史靠子会话时间线补。 */
+  subagentStreams?: Record<string, SubagentStreamItem[]>;
 }
 
 export interface PromptAccepted {
@@ -793,6 +818,7 @@ export type SessionEventType =
   | "usage.updated"
   | "queue.updated"
   | "session.rewritten"
+  | "subagent.stream"
   | "session.updated";
 
 export type ExtensionUiRequest =
@@ -885,6 +911,7 @@ export const sessionEventSchema = z.object({
     "usage.updated",
     "queue.updated",
     "session.rewritten",
+    "subagent.stream",
     "session.updated",
   ]),
   payload: z.unknown(),

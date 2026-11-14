@@ -17,10 +17,15 @@ import type {
 import { immutableTranscriptValue } from "./transcript.ts";
 import { canonicalPath, inheritContext, isDescendant, parentPath } from "./paths.ts";
 import { DEFAULT_MANAGER_SETTINGS, type ManagerSettings } from "../prefs/settings.ts";
+import { getModelAliases, resolveModelReference } from "../prefs/models.ts";
+import { THINKING_LEVELS, type ThinkingLevel } from "../types.ts";
 
 interface Record {
   view: ThreadView;
   definition: AgentType;
+  /** Explicit per-spawn overrides; they outrank type configuration and restored sessions. */
+  modelOverride?: string;
+  thinkingOverride?: ThinkingLevel;
   inherited: AgentMessage[];
   contextReady?: Promise<void>;
   contextPending?: boolean;
@@ -293,11 +298,21 @@ export class ThreadManager {
 
   async spawn(
     caller: string,
-    args: { path: string; type: string; task: string; wait?: boolean; timeoutMs?: number },
+    args: {
+      path: string;
+      type: string;
+      task: string;
+      wait?: boolean;
+      timeoutMs?: number;
+      model?: string;
+      thinkingLevel?: ThinkingLevel;
+    },
     signal?: AbortSignal,
   ): Promise<ThreadView> {
     this.assertLive();
     if (args.timeoutMs !== undefined) assertSpawnTimeout(args.timeoutMs);
+    if (args.thinkingLevel !== undefined && !THINKING_LEVELS.includes(args.thinkingLevel))
+      throw new Error(`thinkingLevel must be one of: ${THINKING_LEVELS.join(", ")}`);
     caller = canonicalPath(caller);
     if (
       caller !== "/root" &&
@@ -328,6 +343,17 @@ export class ThreadManager {
       throw new Error("Total thread limit reached");
     this.assertCapacity();
     const type = structuredClone(this.options.getType(args.type));
+    // An alias the type declares is resolved here; anything else must already be provider/model-id.
+    const requestedModel =
+      args.model === undefined ? undefined : resolveModelReference(type, args.model);
+    if (requestedModel !== undefined && !/^[^/\s]+\/\S+$/.test(requestedModel)) {
+      const aliases = Object.keys(getModelAliases(type));
+      throw new Error(
+        `model ${JSON.stringify(args.model)} is neither provider/model-id nor an alias declared by ${type.name}${
+          aliases.length ? ` (aliases: ${aliases.join(", ")})` : " (this type declares no aliases)"
+        }`,
+      );
+    }
     const parentRecord = parent && parent !== "/root" ? this.record(parent) : undefined;
     this.assertStartableAncestors(path);
     // Reservation is synchronous: subtree cancellation sees children even during lazy parent reopen.
@@ -357,6 +383,8 @@ export class ThreadManager {
         outputTokens: 0,
       },
       definition: type,
+      modelOverride: requestedModel,
+      thinkingOverride: args.thinkingLevel,
       inherited,
       contextPending: !!(parentRecord && !parentRecord.driver),
       startup: new AbortController(),
@@ -733,6 +761,8 @@ export class ThreadManager {
           const options: DriverOptions = {
             path: record.view.path,
             canSpawnChildren,
+            model: record.modelOverride,
+            thinkingLevel: record.thinkingOverride,
             type: record.definition,
             inherited: record.inherited,
             tools: this.options.toolsFor(record.view.path),
@@ -773,6 +803,16 @@ export class ThreadManager {
               }
               if (event.kind === "usage") {
                 this.applyUsage(record, event);
+                return;
+              }
+              if (event.kind === "stream") {
+                if (this.disposed || this.records.get(record.view.path) !== record) return;
+                this.emit({
+                  kind: "stream",
+                  thread: this.view(record),
+                  items: event.items,
+                  recipient: record.view.parent ?? record.view.owner,
+                });
                 return;
               }
               if (event.kind === "checkpoint") {
