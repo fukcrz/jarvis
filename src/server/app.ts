@@ -77,6 +77,15 @@ const bashInput = z.object({ command: z.string().min(1).max(40_000), excludeFrom
 const backgroundTaskInput = z.object({ command: z.string().min(1).max(40_000), cwd: z.string().optional() }).strict();
 const abortInput = z.object({ runId: z.string().uuid().optional() }).strict();
 const settingsInput = z.object({ assistantName: z.string().min(1).max(64) }).strict();
+const conversationModelRefInput = z.object({ provider: z.string().min(1).max(120), id: z.string().min(1).max(320) }).strict();
+const conversationSettingsInput = z.object({
+  defaultModel: conversationModelRefInput.optional(),
+  defaultThinkingLevel: z.enum(THINKING_LEVELS).optional(),
+  modelThinkingLevel: conversationModelRefInput.extend({ level: z.enum(THINKING_LEVELS).nullable() }).strict().optional(),
+  queueMode: z.enum(["all", "one-at-a-time"]).optional(),
+  compactionEnabled: z.boolean().optional(),
+  retryEnabled: z.boolean().optional(),
+}).strict();
 const authLoginInput = z.object({ providerId: z.string().min(1).max(120), type: z.enum(["api_key", "oauth"]) }).strict();
 const loginInput = z.object({ password: z.string().min(1).max(200) }).strict();
 const passwordInput = z.object({ currentPassword: z.string().max(200).optional(), newPassword: z.string().max(200).nullable() }).strict();
@@ -348,6 +357,13 @@ export async function buildApp(options: {
   });
   app.get("/api/settings", async () => ({ settings: settings.getSettings() }));
   app.patch("/api/settings", async (request) => ({ settings: await settings.updateSettings(settingsInput.parse(request.body)) }));
+  app.get("/api/settings/conversation", async () => ({ conversation: await settings.conversationSettings() }));
+  app.patch("/api/settings/conversation", async (request) => {
+    const body = conversationSettingsInput.parse(request.body);
+    const conversation = await settings.updateConversationSettings(body);
+    sessions.applyConversationRuntime(body);
+    return { conversation };
+  });
   app.get("/api/settings/providers", async () => ({ providers: await settings.providers() }));
   app.get("/api/settings/enabled-models", async () => ({ enabledModels: await settings.enabledModels() }));
   app.put("/api/settings/enabled-models", async (request) => ({ enabledModels: await settings.updateEnabledModels(enabledModelsInput.parse(request.body).models) }));

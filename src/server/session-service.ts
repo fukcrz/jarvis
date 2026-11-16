@@ -26,6 +26,7 @@ import type {
   SessionStreamSnapshot,
   SessionCleanupResult,
   SessionSummary,
+  ConversationSettingsPatch,
   SessionThinkingSnapshot,
   TokenUsage,
   ThinkingLevel,
@@ -823,6 +824,18 @@ export class SessionService {
       this.publishSummary(active);
     }
     return this.thinkingSnapshot(active);
+  }
+
+  /** 把队列、压缩和重试同步到已经打开的会话。不改这些会话当前选中的模型和思考等级。 */
+  applyConversationRuntime(update: Pick<ConversationSettingsPatch, "queueMode" | "compactionEnabled" | "retryEnabled">): void {
+    for (const active of this.active.values()) {
+      if (update.queueMode !== undefined) {
+        active.session.setSteeringMode(update.queueMode);
+        active.session.setFollowUpMode(update.queueMode);
+      }
+      if (update.compactionEnabled !== undefined) active.session.settingsManager.setCompactionEnabled(update.compactionEnabled);
+      if (update.retryEnabled !== undefined) active.session.settingsManager.setRetryEnabled(update.retryEnabled);
+    }
   }
 
   async prompt(ref: SessionRef, text: string, clientRequestId: string, images?: ImageAttachment[], options?: { behavior?: "steer" | "followUp"; skipTransitionWait?: boolean }): Promise<PromptAccepted | QueuedPromptAccepted> {

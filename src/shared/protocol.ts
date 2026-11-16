@@ -39,6 +39,43 @@ export interface AppSettings {
   assistantName: string;
 }
 
+export type QueueMode = "all" | "one-at-a-time";
+
+/** 对话设置里可选的一个模型。名单与模型选择器的启用范围一致。 */
+export interface ConversationModel {
+  provider: string;
+  id: string;
+  name?: string;
+  reasoning: boolean;
+}
+
+export interface ModelThinkingLevelSetting {
+  provider: string;
+  id: string;
+  level: ThinkingLevel;
+}
+
+/** Pi 全局对话设置。默认模型和思考等级只影响之后新建的会话。 */
+export interface ConversationSettings {
+  defaultModel?: { provider: string; id: string };
+  defaultThinkingLevel: ThinkingLevel;
+  modelThinkingLevels: ModelThinkingLevelSetting[];
+  queueMode: QueueMode;
+  compactionEnabled: boolean;
+  retryEnabled: boolean;
+  models: ConversationModel[];
+}
+
+/** 只提交改过的字段。`modelThinkingLevel.level` 为 null 时删掉该模型自己的等级。 */
+export interface ConversationSettingsPatch {
+  defaultModel?: { provider: string; id: string };
+  defaultThinkingLevel?: ThinkingLevel;
+  modelThinkingLevel?: { provider: string; id: string; level: ThinkingLevel | null };
+  queueMode?: QueueMode;
+  compactionEnabled?: boolean;
+  retryEnabled?: boolean;
+}
+
 /**
  * 登录认证状态：required 表示已设置密码（启用认证），
  * authenticated 表示当前请求已通过认证（未启用认证时恒为 true）。

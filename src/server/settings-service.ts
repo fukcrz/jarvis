@@ -3,7 +3,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir, readStoredCredential, resolveModelScopeWithDiagnostics, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthEvent, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
-import type { AppSettings, AuthLoginOperation, EnabledModelRef, EnabledModelsStatus, FetchedModel, ManagedCompat, ManagedMaxTokensField, ManagedModel, ManagedProvider, ManagedThinkingFormat, ProviderOverride, ProviderStatus } from "../shared/protocol.js";
+import { THINKING_LEVELS, type AppSettings, type AuthLoginOperation, type ConversationModel, type ConversationSettings, type ConversationSettingsPatch, type EnabledModelRef, type EnabledModelsStatus, type FetchedModel, type ManagedCompat, type ManagedMaxTokensField, type ManagedModel, type ManagedProvider, type ManagedThinkingFormat, type ModelThinkingLevelSetting, type ProviderOverride, type ProviderStatus, type ThinkingLevel } from "../shared/protocol.js";
 import { AppError, asMessage } from "./errors.js";
 import { isMissingFile, readJsonRecovering, writeWithBackup } from "./fs.js";
 import { isRecord } from "../shared/protocol.js";
@@ -64,6 +64,64 @@ export class SettingsService {
     await this.persistSettings();
     this.onChanged("settings.changed");
     return this.getSettings();
+  }
+
+  /** Pi 全局对话设置，加上当前启用范围内的模型名单。 */
+  async conversationSettings(): Promise<ConversationSettings> {
+    const [runtime, manager] = await Promise.all([this.modelRuntime(), Promise.resolve(this.piSettings())]);
+    const catalog = runtime.getModels();
+    const patterns = manager.getEnabledModels() ?? [];
+    const scope = patterns.length === 0 ? undefined : new Set((await resolveModelScopeWithDiagnostics(patterns, runtime)).scopedModels.map(({ model }) => modelKey(model.provider, model.id)));
+    const available = await this.availableModels(runtime);
+    const models = available
+      .filter((model) => scope === undefined || scope.has(modelKey(model.provider, model.id)))
+      .map(conversationModel)
+      .sort(compareConversationModels);
+    const provider = manager.getDefaultProvider();
+    const modelId = manager.getDefaultModel();
+    const modelThinkingLevels: ModelThinkingLevelSetting[] = [];
+    for (const model of catalog) {
+      const level = manager.getModelThinkingLevel(model.provider, model.id);
+      if (level !== undefined && isThinkingLevel(level)) modelThinkingLevels.push({ provider: model.provider, id: model.id, level });
+    }
+    modelThinkingLevels.sort((left, right) => left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id));
+    return {
+      ...(provider !== undefined && provider !== "" && modelId !== undefined && modelId !== "" ? { defaultModel: { provider, id: modelId } } : {}),
+      defaultThinkingLevel: thinkingLevelOrMedium(manager.getDefaultThinkingLevel()),
+      modelThinkingLevels,
+      queueMode: manager.getSteeringMode(),
+      compactionEnabled: manager.getCompactionEnabled(),
+      retryEnabled: manager.getRetryEnabled(),
+      models,
+    };
+  }
+
+  /** 写入改过的字段。默认模型必须能在当前模型目录里找到；不提供清空。 */
+  async updateConversationSettings(input: ConversationSettingsPatch): Promise<ConversationSettings> {
+    if (!hasConversationChange(input)) return this.conversationSettings();
+    const runtime = await this.modelRuntime();
+    const known = new Set(runtime.getModels().map((model) => modelKey(model.provider, model.id)));
+    const manager = this.piSettings();
+    if (input.defaultModel !== undefined) {
+      assertKnownModel(known, input.defaultModel.provider, input.defaultModel.id);
+      manager.setDefaultModelAndProvider(input.defaultModel.provider, input.defaultModel.id);
+    }
+    if (input.defaultThinkingLevel !== undefined) manager.setDefaultThinkingLevel(input.defaultThinkingLevel);
+    if (input.modelThinkingLevel !== undefined) {
+      assertKnownModel(known, input.modelThinkingLevel.provider, input.modelThinkingLevel.id);
+      if (input.modelThinkingLevel.level === null) manager.removeModelThinkingLevel(input.modelThinkingLevel.provider, input.modelThinkingLevel.id);
+      else manager.setModelThinkingLevel(input.modelThinkingLevel.provider, input.modelThinkingLevel.id, input.modelThinkingLevel.level);
+    }
+    if (input.queueMode !== undefined) {
+      manager.setSteeringMode(input.queueMode);
+      manager.setFollowUpMode(input.queueMode);
+    }
+    if (input.compactionEnabled !== undefined) manager.setCompactionEnabled(input.compactionEnabled);
+    if (input.retryEnabled !== undefined) manager.setRetryEnabled(input.retryEnabled);
+    await manager.flush();
+    const failure = manager.drainErrors()[0];
+    if (failure !== undefined) throw new AppError("SETTINGS_WRITE_FAILED", asMessage(failure.error), 500);
+    return this.conversationSettings();
   }
 
   async providers(): Promise<ProviderStatus[]> {
@@ -259,7 +317,16 @@ export class SettingsService {
   }
 
   private readEnabledModelPatterns(): string[] {
-    return SettingsManager.create(process.cwd(), getAgentDir()).getEnabledModels() ?? [];
+    return this.piSettings().getEnabledModels() ?? [];
+  }
+
+  private piSettings(): SettingsManager {
+    return SettingsManager.create(process.cwd(), getAgentDir());
+  }
+
+  private async availableModels(runtime: ModelRuntime) {
+    const cached = runtime.getAvailableSnapshot();
+    return cached.length > 0 ? cached : await runtime.getAvailable();
   }
 
   private async resolveEnabledModels(runtime: ModelRuntime, patterns: string[]): Promise<EnabledModelRef[]> {
@@ -773,4 +840,38 @@ function parseJsonc(value: string): string {
     result += character;
   }
   return result.replace(/,(\s*[}\]])/g, "$1");
+}
+
+function hasConversationChange(input: ConversationSettingsPatch): boolean {
+  return input.defaultModel !== undefined || input.defaultThinkingLevel !== undefined || input.modelThinkingLevel !== undefined || input.queueMode !== undefined || input.compactionEnabled !== undefined || input.retryEnabled !== undefined;
+}
+
+function assertKnownModel(known: ReadonlySet<string>, provider: string, id: string): void {
+  if (!known.has(modelKey(provider, id))) throw new AppError("MODEL_NOT_FOUND", `Model "${provider}/${id}" is not available`, 400);
+}
+
+function modelKey(provider: string, id: string): string {
+  return `${provider}\u0000${id}`;
+}
+
+function conversationModel(model: { provider: string; id: string; name?: string; reasoning?: boolean }): ConversationModel {
+  const name = model.name?.trim();
+  return {
+    provider: model.provider,
+    id: model.id,
+    ...(name === undefined || name === "" || name === model.id ? {} : { name }),
+    reasoning: model.reasoning === true,
+  };
+}
+
+function compareConversationModels(left: ConversationModel, right: ConversationModel): number {
+  return left.provider.localeCompare(right.provider) || (left.name ?? left.id).localeCompare(right.name ?? right.id) || left.id.localeCompare(right.id);
+}
+
+function thinkingLevelOrMedium(level: string | undefined): ThinkingLevel {
+  return isThinkingLevel(level) ? level : "medium";
+}
+
+function isThinkingLevel(level: string | undefined): level is ThinkingLevel {
+  return level !== undefined && (THINKING_LEVELS as readonly string[]).includes(level);
 }

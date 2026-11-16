@@ -1,4 +1,4 @@
-import { Bell, Folder, Globe, Info, KeyRound, Puzzle, Route, Settings, Wrench, type LucideIcon } from "lucide-react";
+import { Bell, Folder, Globe, Info, KeyRound, MessageSquare, Puzzle, Route, Settings, Wrench, type LucideIcon } from "lucide-react";
 import type { SettingsCategoryId } from "./settings-routes";
 
 export interface SettingsCategory {
@@ -20,6 +20,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
   { id: "general", group: "应用", title: "通用", description: "基础信息与快捷键。改动立即生效。", icon: Settings },
   { id: "notifications", group: "应用", title: "通知", description: "运行结束时提醒你。桌面端用系统通知，浏览器里需要先授权。", icon: Bell },
   { id: "models", group: "AI", title: "模型与供应商", description: "连接供应商、选择出现在模型选择器里的模型。开关立即生效，新开会话可用。", icon: KeyRound },
+  { id: "conversation", group: "AI", title: "对话", description: "新会话的模型、思考等级和运行方式。", icon: MessageSquare },
   { id: "model-groups", group: "AI", title: "模型组", description: "把多个供应商的模型合成一个「虚拟模型」：按顺序路由，失败自动换下一条。由自带插件「模型组路由」提供。", icon: Route },
   { id: "plugins", group: "AI", title: "插件", description: "安装和管理会扩展 AI 能力的插件。", icon: Puzzle },
   { id: "skills", group: "AI", title: "技能", description: "管理 AI 可调用的技能文件。", icon: Wrench },

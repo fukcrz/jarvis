@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { AgentSession, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "./app.js";
@@ -528,6 +528,109 @@ describe("Jarvis HTTP and WebSocket API", () => {
     const unknown = await server.inject({ method: "PUT", url: "/api/settings/enabled-models", payload: { models: [{ provider: "test-a", id: "nope" }] } });
     expect(unknown.statusCode).toBe(400);
     expect(unknown.json()).toMatchObject({ error: { code: "MODEL_NOT_FOUND" } });
+  });
+
+  it("reads and updates conversation defaults without clearing an untouched follow-up mode", async () => {
+    const agentDir = join(jarvisHome, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, "models.json"), JSON.stringify({
+      providers: {
+        "test-a": { baseUrl: "http://localhost:1/v1", api: "openai-completions", apiKey: "test-key", models: [{ id: "alpha", name: "Alpha", reasoning: true }, { id: "gamma" }] },
+        "test-b": { baseUrl: "http://localhost:1/v1", api: "openai-completions", apiKey: "test-key", models: [{ id: "beta", reasoning: true }] },
+      },
+    }));
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "test-a", steeringMode: "all", followUpMode: "one-at-a-time" }));
+    const server = activeApp();
+
+    const initial = await server.inject({ method: "GET", url: "/api/settings/conversation" });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json()).toMatchObject({
+      conversation: {
+        defaultThinkingLevel: "medium",
+        modelThinkingLevels: [],
+        queueMode: "all",
+        compactionEnabled: true,
+        retryEnabled: true,
+      },
+    });
+    expect(initial.json<{ conversation: { defaultModel?: unknown; models: Array<{ provider: string; id: string; reasoning: boolean }> } }>().conversation.defaultModel).toBeUndefined();
+    const models = initial.json<{ conversation: { models: Array<{ provider: string; id: string; name?: string; reasoning: boolean }> } }>().conversation.models;
+    expect(models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: "test-a", id: "alpha", name: "Alpha", reasoning: true }),
+      expect.objectContaining({ provider: "test-a", id: "gamma", reasoning: false }),
+      expect.objectContaining({ provider: "test-b", id: "beta", reasoning: true }),
+    ]));
+
+    const empty = await server.inject({ method: "PATCH", url: "/api/settings/conversation", payload: {} });
+    expect(empty.statusCode).toBe(200);
+    const untouched = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")) as { followUpMode?: string; defaultProvider?: string };
+    expect(untouched.followUpMode).toBe("one-at-a-time");
+    expect(untouched.defaultProvider).toBe("test-a");
+
+    const unknown = await server.inject({ method: "PATCH", url: "/api/settings/conversation", payload: { defaultModel: { provider: "test-a", id: "missing" } } });
+    expect(unknown.statusCode).toBe(400);
+    expect(unknown.json()).toMatchObject({ error: { code: "MODEL_NOT_FOUND" } });
+    const invalid = await server.inject({ method: "PATCH", url: "/api/settings/conversation", payload: { defaultThinkingLevel: "turbo" } });
+    expect(invalid.statusCode).toBe(400);
+
+    const workspacePath = join(jarvisHome, "conversation-workspace");
+    await mkdir(workspacePath);
+    const workspace = (await server.inject({ method: "POST", url: "/api/workspaces", payload: { cwd: workspacePath } })).json<{ workspace: { id: string } }>().workspace;
+    const created = await server.inject({ method: "POST", url: `/api/workspaces/${workspace.id}/sessions`, payload: {} });
+    expect(created.statusCode).toBe(200);
+    const steer = vi.spyOn(AgentSession.prototype, "setSteeringMode");
+    const follow = vi.spyOn(AgentSession.prototype, "setFollowUpMode");
+    const compact = vi.spyOn(SettingsManager.prototype, "setCompactionEnabled");
+    const retry = vi.spyOn(SettingsManager.prototype, "setRetryEnabled");
+
+    const saved = await server.inject({ method: "PATCH", url: "/api/settings/conversation", payload: {
+      defaultModel: { provider: "test-b", id: "beta" },
+      defaultThinkingLevel: "high",
+      modelThinkingLevel: { provider: "test-a", id: "alpha", level: "low" },
+      queueMode: "one-at-a-time",
+      compactionEnabled: false,
+      retryEnabled: false,
+    } });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({
+      conversation: {
+        defaultModel: { provider: "test-b", id: "beta" },
+        defaultThinkingLevel: "high",
+        modelThinkingLevels: [{ provider: "test-a", id: "alpha", level: "low" }],
+        queueMode: "one-at-a-time",
+        compactionEnabled: false,
+        retryEnabled: false,
+      },
+    });
+    expect(steer).toHaveBeenCalledWith("one-at-a-time");
+    expect(follow).toHaveBeenCalledWith("one-at-a-time");
+    expect(compact).toHaveBeenCalledWith(false);
+    expect(retry).toHaveBeenCalledWith(false);
+    const persisted = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")) as {
+      defaultProvider?: string;
+      defaultModel?: string;
+      defaultThinkingLevel?: string;
+      modelThinkingLevels?: Record<string, string>;
+      steeringMode?: string;
+      followUpMode?: string;
+      compaction?: { enabled?: boolean };
+      retry?: { enabled?: boolean };
+    };
+    expect(persisted.defaultProvider).toBe("test-b");
+    expect(persisted.defaultModel).toBe("beta");
+    expect(persisted.defaultThinkingLevel).toBe("high");
+    expect(persisted.modelThinkingLevels).toEqual({ "test-a/alpha": "low" });
+    expect(persisted.steeringMode).toBe("one-at-a-time");
+    expect(persisted.followUpMode).toBe("one-at-a-time");
+    expect(persisted.compaction?.enabled).toBe(false);
+    expect(persisted.retry?.enabled).toBe(false);
+
+    const removed = await server.inject({ method: "PATCH", url: "/api/settings/conversation", payload: { modelThinkingLevel: { provider: "test-a", id: "alpha", level: null } } });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json<{ conversation: { modelThinkingLevels: unknown[] } }>().conversation.modelThinkingLevels).toEqual([]);
+    const cleared = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")) as { modelThinkingLevels?: unknown; defaultModel?: string };
+    expect(cleared.modelThinkingLevels).toBeUndefined();
+    expect(cleared.defaultModel).toBe("beta");
   });
 
   it("fetches the model list from a custom provider's compatibility endpoint", async () => {
