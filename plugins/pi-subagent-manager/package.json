@@ -50,7 +50,11 @@
       "diagnostic when tools.allow is ignored under all-except-blocked",
       "agents converged to planner/executor/verifier; docs/qa live in the user layer",
       "modelAliases frontmatter: named model references accepted by agent_spawn model, never a whitelist",
-      "agent_types reports declared aliases and the available-model count (includeAvailableModels lists them)"
+      "agent_types reports declared aliases and the available-model count (includeAvailableModels lists them)",
+      "orchestration root: 2-call read-only budget, dispatch everything else, never block",
+      "long-task checklist gate plus task-watch auto-wake when the root settles with unfinished items",
+      "subagent recursion is leaf-only, enforced in manager.spawn",
+      "tsconfig.json shipped with the local package so the seeded copy can be type-checked"
     ]
   },
   "scripts": {

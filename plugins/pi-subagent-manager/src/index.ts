@@ -4,6 +4,8 @@ import {
   diagnosticAgentText,
 } from "./orch/diagnostics.ts";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildSessionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
@@ -27,6 +29,7 @@ import {
 import { createInheritedToolSource } from "./orch/inherited-tools.ts";
 import { subagentPrompt } from "./orch/prompt.ts";
 import { ChecklistMetaMirror, checklistStatus } from "./orch/checklist-integration.ts";
+import { INITIAL_TASK_WATCH, taskWatchDecision, type TaskWatchState } from "./orch/task-watch.ts";
 import { agentTools } from "./orch/tools.ts";
 import { editAgentTypes, updateWidget } from "./ui/ui.ts";
 import { canOpenDialog, dialogMenu } from "./ui/dialog.ts";
@@ -525,6 +528,37 @@ export default function piSubagent(pi: ExtensionAPI): void {
     drainRootMailbox(ctx);
     scheduleRootTurn(ctx);
   };
+  // 长任务停滞保险：读清单只在本机、只读，失败就当没有清单。
+  let taskWatch: TaskWatchState = INITIAL_TASK_WATCH;
+  const watchTaskList = (ctx: ExtensionContext) => {
+    const file = limits.taskWatchFile;
+    if (limits.subagentMode !== "orchestration" || file === "") return;
+    let text: string | undefined;
+    try {
+      text = readFileSync(join(process.cwd(), file), "utf8");
+    } catch {
+      text = undefined;
+    }
+    const decision = taskWatchDecision({
+      text,
+      outstandingAsync: manager?.outstandingAsync() ?? 0,
+      busy: rootTurnTimer !== undefined || rootTurnRunning,
+      state: taskWatch,
+      now: Date.now(),
+    });
+    taskWatch = decision.state;
+    if (!decision.wake) return;
+    queueRootNotification({
+      rootSessionId: ctx.sessionManager.getSessionId(),
+      content: [
+        `任务清单 ${file} 里还有 ${decision.pending.length} 项未完成，当前也没有子代理在跑。`,
+        "读清单、更新状态与证据，然后继续派下一个未完成项；已经卡住的项把原因报给用户。",
+        ...decision.pending.map((item) => `- [ ] ${item}`),
+      ].join("\n"),
+      trigger: true,
+      details: { mailboxId: randomUUID(), path: "/root", state: "running" },
+    });
+  };
   const queueRootNotification = (notification: RootNotification) => {
     pi.appendEntry(ROOT_MAILBOX_ENTRY, notification);
     restoreRootMailbox(requireContext());
@@ -533,6 +567,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (context?.sessionManager === ctx.sessionManager) {
       rootTurnRunning = false;
       restoreRootMailbox(ctx);
+      watchTaskList(ctx);
     }
   });
   const delivery = (event: ThreadEvent) => {

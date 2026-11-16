@@ -343,6 +343,12 @@ export class ThreadManager {
       throw new Error("Total thread limit reached");
     this.assertCapacity();
     const type = structuredClone(this.options.getType(args.type));
+    // Recursion has exactly one path: /root → planner → leaf. A subagent that spawns
+    // another spawner is what turns one task into duplicate work on the same files.
+    if (caller !== "/root" && type.canSpawn === true)
+      throw new Error(
+        `Subagents may only spawn leaf types; ${type.name} can spawn children itself. Use executor, verifier, docs or qa.`,
+      );
     // An alias the type declares is resolved here; anything else must already be provider/model-id.
     const requestedModel =
       args.model === undefined ? undefined : resolveModelReference(type, args.model);

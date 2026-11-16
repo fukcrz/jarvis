@@ -33,7 +33,7 @@ import {
 } from "./tool-pool.ts";
 import { TranscriptChannel } from "./transcript.ts";
 import { streamBlockId, streamBlockText } from "./stream-block.ts";
-import { delegationGuidance } from "./prompt.ts";
+import { delegationGuidance, reportingGuidance } from "./prompt.ts";
 import { discoverSubagentExtensions, selectSubagentExtensions } from "./extensions.ts";
 import type { InheritedToolSource } from "./inherited-tools.ts";
 import type {
@@ -617,6 +617,7 @@ export function createDriverFactory(
           : "You are an independent root thread with no inherited history.",
         "When finished, give your final answer normally so it can be handed back. To retain unfinished work without a final answer, call agent_pause (if available), then stop; resume only when instructed.",
         delegationGuidance(canDelegate, typeCanSpawn ? "depth" : "type"),
+        reportingGuidance(),
         ...(canDelegate && allowed.has("agent_spawn") && allowed.has("agent_wait")
           ? [
               "Name child paths with concise task-based kebab-case slugs (e.g. /root/controller-security-research), independent of type.",

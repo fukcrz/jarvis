@@ -12,7 +12,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 export const SUBAGENT_MODES = ["off", "opportunistic", "orchestration"] as const;
 export type SubagentMode = (typeof SUBAGENT_MODES)[number];
@@ -72,6 +72,8 @@ export interface ManagerSettings {
   housekeepingEnabled: boolean;
   /** `provider/model-id` of the housekeeping model; empty means none selected. */
   housekeepingModel: string;
+  /** 长任务停滞保险要读的清单文件（相对工作目录）；空字符串关闭。 */
+  taskWatchFile: string;
   maxLevels: number;
   maxConcurrent: number;
   maxThreads: number;
@@ -96,6 +98,7 @@ export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
   checklistIntegration: false,
   housekeepingEnabled: false,
   housekeepingModel: "",
+  taskWatchFile: "docs/tasks.md",
 };
 
 /** Same `provider/model-id` shape as agent model preferences. */
@@ -121,6 +124,7 @@ const KEYS = [
   "checklistIntegration",
   "housekeepingEnabled",
   "housekeepingModel",
+  "taskWatchFile",
 ] as const;
 const MAX_LEVELS = 32;
 
@@ -164,6 +168,7 @@ function requirement(key: (typeof KEYS)[number]): string {
   )
     return `${key} must be a boolean`;
   if (key === "housekeepingModel") return "housekeepingModel must be empty or provider/model-id";
+  if (key === "taskWatchFile") return "taskWatchFile must be empty or a relative path without ..";
   if (key === "subagentMode") return "subagentMode must be off, opportunistic or orchestration";
   if (key === "widgetMode") return "widgetMode must be full or minimal";
   if (key === "costDisplay")
@@ -237,6 +242,12 @@ function parseSettings(content: string): Partial<ManagerSettings> {
     if (key === "housekeepingModel") {
       if (!isHousekeepingModel(value)) throw new Error(requirement(key));
       layer.housekeepingModel = value;
+      continue;
+    }
+    if (key === "taskWatchFile") {
+      if (typeof value !== "string" || isAbsolute(value) || value.split(/[\\/]/).includes(".."))
+        throw new Error(requirement(key));
+      layer.taskWatchFile = value;
       continue;
     }
     if (key === "subagentMode") {
