@@ -280,11 +280,18 @@ describe("renderMermaidDiagram", () => {
     expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({
       startOnLoad: false,
       suppressErrorRendering: true,
-      themeCSS: expect.stringContaining("stroke: #ffffff"),
+      themeCSS: expect.stringContaining("[class*=\"section-edge-\"]"),
       themeVariables: expect.objectContaining({
         lineColor: "#ffffff",
         arrowheadColor: "#ffffff",
-        scaleLabelColor: "#24212b",
+        // mindmap 的节点底色/字色/根节点不来自 primaryColor，必须显式给值，
+        // 否则 base 主题会把 cScale 压到纯黑、根节点写成黑字。
+        cScale1: expect.stringMatching(/^#[0-9a-f]{6}$/),
+        cScaleLabel1: "#f5efea",
+        cScale11: expect.stringMatching(/^#[0-9a-f]{6}$/),
+        git0: expect.stringMatching(/^#[0-9a-f]{6}$/),
+        gitBranchLabel0: expect.stringMatching(/^#[0-9a-f]{6}$/),
+        scaleLabelColor: "#f5efea",
       }),
     }));
     expect(mermaid.parse).toHaveBeenCalledTimes(1);

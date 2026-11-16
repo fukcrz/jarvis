@@ -83,6 +83,41 @@ function cleanupMermaidDom(id: string, host: HTMLElement | undefined): void {
   removeTempNode(document.getElementById(`i${id}`));
 }
 
+/**
+ * mindmap 的节点配色不来自 primaryColor：第 N 层分支用 `cScale{N+1}` 填块、`cScaleLabel{N+1}` 上字，
+ * 根节点用 `git0` / `gitBranchLabel0`。这些变量不显式给值时，base 主题 + darkMode 会把 cScale
+ * 再压暗 75（落到纯黑），根节点则是 lighten(primaryColor, 25) 配一个写死的黑标签，
+ * 深色卡片里就是「一片黑 + 字看不见」。这里直接给一套卡片上能看清的深色块 + 正文色文字。
+ */
+const MINDMAP_SECTION_FILLS = [
+  "#302d42",
+  "#3f3663",
+  "#364863",
+  "#365f63",
+  "#634e36",
+  "#633648",
+  "#36634b",
+  "#513663",
+  "#365463",
+  "#635936",
+  "#363c63",
+  "#36635a",
+];
+const MINDMAP_SECTION_TEXT = "#f5efea";
+
+function mindmapThemeVariables(): Record<string, string> {
+  const variables: Record<string, string> = {
+    // 根节点（中心）：比各分支亮一档，字用主题强调色。
+    git0: "#4b4478",
+    gitBranchLabel0: "#d0c7ff",
+  };
+  MINDMAP_SECTION_FILLS.forEach((fill, index) => {
+    variables[`cScale${String(index)}`] = fill;
+    variables[`cScaleLabel${String(index)}`] = MINDMAP_SECTION_TEXT;
+  });
+  return variables;
+}
+
 /** 按需加载并初始化 mermaid：安全级别维持 strict（内置 DOMPurify，图形源码不能注入脚本）。 */
 async function loadMermaid(): Promise<typeof import("mermaid").default> {
   mermaidPromise ??= import("mermaid").then(({ default: mermaid }) => {
@@ -94,7 +129,8 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
       theme: "base",
       fontFamily: "system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei UI', sans-serif",
       // mindmap 连线用 cScale（节点底色）而不是 lineColor；darkMode 还会再压暗，必须写进 SVG 样式。
-      themeCSS: ".edge, [class*=\"section-edge-\"] { stroke: #ffffff !important; }",
+      // 压得太亮又会盖过节点，所以在卡片底色上取一档中间灰蓝，比纯白安静但依然看得见。
+      themeCSS: ".edge { stroke: #ffffff !important; } [class*=\"section-edge-\"] { stroke: #8b93b4 !important; }",
       themeVariables: {
         darkMode: true,
         background: "#0b0d14",
@@ -119,8 +155,9 @@ async function loadMermaid(): Promise<typeof import("mermaid").default> {
         signalColor: "#c9c9d1",
         signalTextColor: "#c9c9d1",
         labelTextColor: "#f1f3f4",
-        scaleLabelColor: "#24212b",
+        scaleLabelColor: MINDMAP_SECTION_TEXT,
         edgeLabelBackground: "#16181c",
+        ...mindmapThemeVariables(),
       },
     });
     return mermaid;
