@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { BundledPluginStatus } from "../shared/plugins.js";
 import { isMissingFile } from "./fs.js";
@@ -89,7 +89,13 @@ async function removeRetiredPlugins(extensionsDir: string, retired: Readonly<Rec
   }
 }
 
-export type LocalPackageSyncResult = "seeded" | "kept" | "missing";
+export interface LocalPackageSeedOutcome {
+  result: "seeded" | "upgraded" | "kept" | "missing";
+  /** 本地内容与上次播种一致（或刚播种完成）：记录为下次自动升级的基线。 */
+  baselineHash?: string;
+  /** 本地存在与基线不同的改动，因此没有自动升级。 */
+  modified: boolean;
+}
 
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -102,20 +108,114 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 /**
- * 本地插件包的种子逻辑：本地目录一旦存在就是唯一权威，永远不覆盖、不删除、不比对版本。
- * 只复制，且跳过 node_modules（依赖由本地包自己管理）。
+ * 目录内容指纹：按相对路径排序后哈希文件内容，换行归一，跳过 node_modules 与 .git。
+ * 用来判断本地副本是否仍是上次播种的样子。
  */
-export async function ensureLocalPackage(input: { shipped: string; local: string }): Promise<LocalPackageSyncResult> {
-  if (await pathExists(input.local)) return "kept";
-  if (!(await pathExists(input.shipped))) return "missing";
-  await mkdir(dirname(input.local), { recursive: true });
-  await cp(input.shipped, input.local, {
+export async function localPackageTreeHash(dir: string): Promise<string | undefined> {
+  if (!(await pathExists(dir))) return undefined;
+  const files: string[] = [];
+  const walk = async (relative: string): Promise<void> => {
+    const entries = await readdir(join(dir, relative), { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      const next = relative === "" ? entry.name : `${relative}/${entry.name}`;
+      if (entry.isDirectory()) await walk(next);
+      else if (entry.isFile()) files.push(next);
+    }
+  };
+  await walk("");
+  files.sort();
+  const hash = createHash("md5");
+  for (const file of files) {
+    const content = await readFile(join(dir, file), "utf8");
+    hash.update(file, "utf8");
+    hash.update("\0");
+    hash.update(content.replace(/\r\n/g, "\n").replace(/\r/g, "\n"), "utf8");
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+/** 用发行版种子替换本地副本，保留本地 node_modules（依赖单独播种）。 */
+async function replaceLocalPackageTree(shipped: string, local: string): Promise<void> {
+  for (const entry of await readdir(local)) {
+    if (entry === "node_modules") continue;
+    await rm(join(local, entry), { recursive: true, force: true });
+  }
+  await cp(shipped, local, {
     recursive: true,
-    force: false,
+    force: true,
     errorOnExist: false,
     filter: (source) => basename(source) !== "node_modules",
   });
-  return "seeded";
+}
+
+/**
+ * 本地插件包的种子与升级：本地目录是权威，只有「与上次播种完全一致」时才自动升级。
+ * - 本地不存在：从发行版种子播种。
+ * - 本地内容等于基线、种子已变：按新种子替换，旧文件一并删除。
+ * - 本地内容不等于基线（有人改过）或没有基线记录：保留本地，只报告 modified。
+ * 复制与替换都跳过 node_modules，依赖由 {@link seedLocalPackageDependencies} 负责。
+ */
+export async function ensureLocalPackage(input: { shipped: string; local: string; baselineHash?: string }): Promise<LocalPackageSeedOutcome> {
+  if (!(await pathExists(input.shipped))) return { result: "missing", modified: false };
+  if (!(await pathExists(input.local))) {
+    await mkdir(dirname(input.local), { recursive: true });
+    await cp(input.shipped, input.local, {
+      recursive: true,
+      force: false,
+      errorOnExist: false,
+      filter: (source) => basename(source) !== "node_modules",
+    });
+    const hash = await localPackageTreeHash(input.local);
+    return { result: "seeded", ...(hash === undefined ? {} : { baselineHash: hash }), modified: false };
+  }
+  const [shippedHash, localHash] = await Promise.all([
+    localPackageTreeHash(input.shipped),
+    localPackageTreeHash(input.local),
+  ]);
+  if (localHash !== undefined && localHash === shippedHash) {
+    return { result: "kept", baselineHash: localHash, modified: false };
+  }
+  if (localHash !== undefined && input.baselineHash !== undefined && localHash === input.baselineHash) {
+    await replaceLocalPackageTree(input.shipped, input.local);
+    const hash = await localPackageTreeHash(input.local);
+    return { result: "upgraded", ...(hash === undefined ? {} : { baselineHash: hash }), modified: false };
+  }
+  return { result: "kept", modified: true };
+}
+
+/**
+ * 播种运行依赖：本地 node_modules 缺哪个，就从 Jarvis 自己的 node_modules 复制哪个。
+ * 依赖名取自种子的 package.json；Jarvis 已依赖这些包，版本因此与发行版一致。
+ */
+export async function seedLocalPackageDependencies(input: {
+  shipped: string;
+  local: string;
+  sourceRoot: string;
+}): Promise<string[]> {
+  const manifest = await readPluginText(join(input.shipped, "package.json"));
+  if (manifest === undefined) return [];
+  let names: string[];
+  try {
+    const parsed: unknown = JSON.parse(manifest);
+    const dependencies = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>)["dependencies"] : undefined;
+    if (typeof dependencies !== "object" || dependencies === null) return [];
+    names = Object.keys(dependencies).filter((name) => /^(@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(name));
+  } catch {
+    return [];
+  }
+  const copied: string[] = [];
+  for (const name of names) {
+    const source = join(input.sourceRoot, name);
+    const destination = join(input.local, "node_modules", name);
+    if ((await pathExists(destination)) || !(await pathExists(source))) continue;
+    await mkdir(dirname(destination), { recursive: true });
+    // 开发树里的依赖可能是符号链接，解引用后复制成普通目录。
+    await cp(source, destination, { recursive: true, force: true, dereference: true });
+    copied.push(name);
+  }
+  return copied;
 }
 
 async function readJarvisUpstream(packageDir: string): Promise<string | undefined> {
@@ -134,8 +234,8 @@ async function readJarvisUpstream(packageDir: string): Promise<string | undefine
 }
 
 /**
- * 只做提示：本地副本与发行版种子记录的上游版本不一致时，界面可以显示「有更新」。
- * 不做自动同步——本地改动是唯一权威。
+ * 版本提示：本地副本与发行版种子的上游版本不一致时，界面可以显示「有更新」。
+ * 自动升级只在本地内容等于播种基线时发生（见 {@link ensureLocalPackage}）。
  */
 export async function localPackageUpdate(input: { shipped: string; local: string }): Promise<{ shippedUpstream?: string; localUpstream?: string; updateAvailable: boolean }> {
   const [shippedUpstream, localUpstream] = await Promise.all([

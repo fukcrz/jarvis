@@ -1,10 +1,10 @@
 import { readFile, rm } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { DefaultPackageManager, getAgentDir, SettingsManager, type PackageManager } from "@earendil-works/pi-coding-agent";
 import type { BundledPluginLifecycle, InstalledPluginStatus, PluginCatalogItem, PluginSnapshot, RecommendedPluginStatus } from "../shared/plugins.js";
 import { AppError, asMessage } from "./errors.js";
 import { atomicWrite, isMissingFile, readJsonRecovering, writeWithBackup } from "./fs.js";
-import { BUNDLED_PLUGINS, ensureLocalPackage, localPackageUpdate, readPluginText, reconcileBundledPlugins } from "./plugin-reconcile.js";
+import { BUNDLED_PLUGINS, ensureLocalPackage, localPackageUpdate, readPluginText, reconcileBundledPlugins, seedLocalPackageDependencies } from "./plugin-reconcile.js";
 import { catalogUrl, normalizeInstallSource, packageNameFromSource, PACKAGE_NAME } from "./plugin-source.js";
 import { isRecord } from "../shared/protocol.js";
 import { jarvisHome } from "./jarvis-home.js";
@@ -29,6 +29,19 @@ const RETIRED_PACKAGES: readonly string[] = ["@parke.dev/pi-subagent"];
 
 interface PluginPrefs { version: 1; disabledBundled: string[]; disabledRecommended: string[]; }
 
+/** 播种基线：记录上次播种后本地插件的内容指纹，用来判断本地是否被改过。 */
+interface LocalPackageSeedState { version: 1; packages: Record<string, { hash: string }>; }
+
+function parseSeedState(value: unknown): LocalPackageSeedState {
+  const packages: Record<string, { hash: string }> = {};
+  if (isRecord(value) && isRecord(value["packages"])) {
+    for (const [name, entry] of Object.entries(value["packages"])) {
+      if (isRecord(entry) && typeof entry["hash"] === "string") packages[name] = { hash: entry["hash"] };
+    }
+  }
+  return { version: 1, packages };
+}
+
 const SEARCH_URL = "https://registry.npmjs.org/-/v1/search";
 
 export function bundledPluginRoot(): string {
@@ -52,6 +65,7 @@ export class PluginService {
     private readonly packages: PackageManager = createPackageManager(agentDir),
     private readonly log: (message: string) => void = (message) => console.warn(message),
     private readonly lifecycle: BundledPluginLifecycle = {},
+    private readonly seedStatePath = join(dirname(prefsPath), "local-package-seeds.json"),
   ) {
     this.prefsPath = prefsPath;
   }
@@ -222,18 +236,36 @@ export class PluginService {
     return this.localPackagePaths(item)?.local ?? item.source;
   }
 
-  /** 本地插件包首次运行从发行版种子播种；已存在的本地副本绝不覆盖。 */
+  /** 本地插件包：本地不存在时从发行版种子播种；本地仍是上次播种的样子时随发行版升级；改过则保留。 */
   private async seedLocalPackages(): Promise<void> {
+    const recovered = await readJsonRecovering(this.seedStatePath, parseSeedState).catch(() => undefined);
+    const state = recovered?.value ?? { version: 1, packages: {} };
+    let changed = false;
     for (const item of RECOMMENDED_PACKAGES) {
       const paths = this.localPackagePaths(item);
       if (paths === undefined) continue;
       try {
-        const result = await ensureLocalPackage(paths);
-        if (result === "seeded") this.log(`Seeded local plugin ${item.name} into ${paths.local}`);
-        else if (result === "missing") this.log(`Local plugin seed missing for ${item.name}: ${paths.shipped}`);
+        const outcome = await ensureLocalPackage({ ...paths, baselineHash: state.packages[item.name]?.hash });
+        if (outcome.result === "seeded") this.log(`Seeded local plugin ${item.name} into ${paths.local}`);
+        else if (outcome.result === "upgraded") this.log(`Upgraded local plugin ${item.name} at ${paths.local}`);
+        else if (outcome.result === "missing") this.log(`Local plugin seed missing for ${item.name}: ${paths.shipped}`);
+        else if (outcome.modified) this.log(`Local plugin ${item.name} has local changes; seed upgrade skipped`);
+        if (outcome.result !== "missing") {
+          const copied = await seedLocalPackageDependencies({ shipped: paths.shipped, local: paths.local, sourceRoot: join(process.cwd(), "node_modules") });
+          if (copied.length > 0) this.log(`Seeded dependencies for ${item.name}: ${copied.join(", ")}`);
+        }
+        if (outcome.baselineHash !== undefined && state.packages[item.name]?.hash !== outcome.baselineHash) {
+          state.packages[item.name] = { hash: outcome.baselineHash };
+          changed = true;
+        }
       } catch (error) {
         this.log(`Local plugin seed failed for ${item.name}: ${asMessage(error)}`);
       }
+    }
+    if (changed) {
+      await atomicWrite(this.seedStatePath, `${JSON.stringify(state, null, 2)}\n`).catch((error: unknown) => {
+        this.log(`Local plugin seed state write failed: ${asMessage(error)}`);
+      });
     }
   }
 

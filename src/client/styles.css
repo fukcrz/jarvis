@@ -1489,6 +1489,8 @@ html.text-selecting .run-status-bar { pointer-events: none !important; }
   .st-expand .st-row { align-items: flex-start; flex-wrap: wrap; row-gap: 6px; }
   .st-expand .st-row-text { flex: 1 1 calc(100% - 32px); }
   .st-expand .st-row > .st-ctl { flex: 1 1 100%; justify-content: flex-end; border-top: 1px solid var(--line); padding-top: 6px; }
+  .st-expand .st-row > .st-ctl .st-select { width: 100%; }
+  .st-expand .st-row > .st-ctl .st-saved:not(.show) { display: none; }
   .st-expand .st-row > .st-ctl .st-saved { margin-right: auto; }
   .st-detail:not(.mobile-open) { display: none; }
   .st-master-detail > .st-section:has(+ .st-detail:not(.mobile-open)) { display: block; }

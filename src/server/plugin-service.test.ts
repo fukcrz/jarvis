@@ -144,12 +144,15 @@ describe("plugin service isolation", () => {
     expect(harness.packages.sources.map((item) => item.source)).not.toContain("git:github.com/LukasParke/pi-subagent");
   });
 
-  it("seeds the local subagent plugin from the shipped copy and points installs at the local copy", async () => {
+  it("seeds the local subagent plugin and its runtime dependencies from the shipped copy", async () => {
     const harness = await createHarness();
     const local = join(harness.agentDir, "plugins", "pi-subagent-manager");
     expect(await readFile(join(local, "package.json"), "utf8")).toContain("pi-subagent-manager");
     await expect(readFile(join(local, "src", "index.ts"), "utf8")).resolves.toContain("export");
-    await expect(readFile(join(local, "node_modules", "yaml", "package.json"), "utf8")).rejects.toThrow();
+    // 插件运行时真的 import 这三个包；宿主的依赖版本与插件清单一致。
+    for (const name of ["yaml", "fuzzysort", "shell-quote"]) {
+      await expect(readFile(join(local, "node_modules", name, "package.json"), "utf8")).resolves.toContain(`"${name}"`);
+    }
 
     await harness.service.ensureRecommended();
     expect(harness.packages.sources.map((item) => item.source)).toContain(local);

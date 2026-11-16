@@ -7,7 +7,7 @@
 - 唯一源码：`~/.pi/agent/plugins/pi-subagent-manager`，随配置仓库提交。
 - `~/.pi/agent/settings.json` 的 `packages` 用相对路径 `"./plugins/pi-subagent-manager"`（相对 settings 所在目录解析），换机器不需要改。
 - 依赖已随包入库（`node_modules/{yaml,fuzzysort,shell-quote}`），克隆后无需 `npm install`。需要重建时用 `npm ci --omit=dev`。
-- `<Jarvis>/plugins/pi-subagent-manager` 是发行版种子：只在本地目录缺失时用于初始化，本地存在时永不覆盖。
+- `<Jarvis>/plugins/pi-subagent-manager` 是发行版种子：本地目录缺失时用于初始化；本地内容仍等于上次播种记录（`<jarvisHome>/local-package-seeds.json`）时随发行版升级；被改过就保留，只在界面上报「有更新」。运行依赖（yaml、fuzzysort、shell-quote）在播种时从 Jarvis 自己的 `node_modules` 复制到本地插件，版本与插件清单一致。
 - 改完代码 `/reload` 或新会话生效，没有构建步骤。
 - 类型检查：`node <tsc> -p tsconfig.json`。需要 peer 依赖，未安装时全部报 “Cannot find module”；本机通过在插件 `node_modules/` 里对 Jarvis 的 peer 包建 junction 解决，junction 不入库。
 
