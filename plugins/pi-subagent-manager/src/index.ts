@@ -532,7 +532,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   let taskWatch: TaskWatchState = INITIAL_TASK_WATCH;
   const watchTaskList = (ctx: ExtensionContext) => {
     const file = limits.taskWatchFile;
-    if (limits.subagentMode !== "orchestration" || file === "") return;
+    if (limits.subagentMode === "off" || file === "") return;
     let text: string | undefined;
     try {
       text = readFileSync(join(process.cwd(), file), "utf8");

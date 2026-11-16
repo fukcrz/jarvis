@@ -38,7 +38,24 @@ export function reportingGuidance(): string {
   ].join(" ");
 }
 
-/** Long-task policy for /root. Chinese on purpose: the user tunes this text directly. */
+/** Default policy for /root. Chinese on purpose: the user tunes this text directly. */
+const AUTONOMOUS_POLICY = [
+  "工作模式：默认自己动手，由你判断该不该派子代理。",
+  "",
+  "先判断这件事该不该派：",
+  "- 自己动手：范围清楚、影响有限、你自己几轮工具调用就能做完的活——直接做。不要为了看起来像多代理而派。",
+  "- 派子代理：确实复杂或耗时的活——要扫很多文件、要并行推进几条互不依赖的线、单次会跑很久、或需要独立核验。",
+  "- 拿不准就自己做：多开一个线程要重新熟悉背景，成本通常高于你直接做。",
+  "",
+  "真派出去的时候：",
+  "- 一块任务一个线程，brief 写全：目标、范围（只能改哪些路径）、验收标准、你已掌握的结论。",
+  "- 互不依赖的任务一起用 wait:false 派出去，不要在派活前阻塞；当前回合必须要结果时才同步等待。长任务派完就结束回合，用户还在等你说话。",
+  "- 同一批文件只能有一个线程在改；构建、部署、迁移、装依赖永远单负责人。",
+  "- 长任务（跨多个交付物或可能跨上下文压缩）在 docs/tasks.md 用 `- [ ]` 维护清单，每完成一项更新状态与证据；清单还有未完成项且没有子代理在跑时，系统会自动唤醒你继续。",
+  "- 子代理说完成不算完成：实现类要有命令与真实输出，高风险项（资金、删除、上线、对外通知）要独立核验一次。",
+].join("\n");
+
+/** Long-task policy: only when the user explicitly wants dispatch-first behaviour. */
 const LONG_TASK_POLICY = [
   "长任务模式：你是调度者，不是执行者。跑长任务的目标是把它真正做完，不是尽快收工。",
   "",
@@ -74,19 +91,15 @@ export function subagentPrompt(
 ): string | undefined {
   if (settings.subagentMode === "off") return undefined;
   const longTask = settings.subagentMode === "orchestration";
-  const policy = longTask
-    ? LONG_TASK_POLICY
-    : "Opportunistic mode: do ordinary tasks yourself. Delegate only when work can be parallelized, is long-running, or is very large; do not spawn agents for small, quick, straightforward tasks.";
-  const waitingPolicy = longTask
-    ? undefined
-    : "For independent parallel work, spawn all siblings with wait:false before agent_wait. Only await synchronous tasks whose results are needed in the current turn. For long-running tasks, create background agents with wait:false and do not immediately call agent_wait; end your turn so you remain free to talk to the user while they work. Await background results when the user asks you to collect them.";
+  const policy = longTask ? LONG_TASK_POLICY : AUTONOMOUS_POLICY;
+  const waitingPolicy = undefined;
   return [
     "## pi-subagent",
     "You are /root, the main conversation (L1).",
     policy,
     ...(waitingPolicy ? [waitingPolicy] : []),
     "Call agent_types before choosing a type. Use task-based kebab-case paths, not type names. Choose context via agent_spawn path: /root/task forks the lexical parent's conversation; /task starts fresh with no inherited history. Use fresh agents for adversarial review or clean-slate research; give them a self-contained task without the current thread's conclusions.",
-    'Use agent_status to inspect and agent_output for full results. Completion, failure or stop of a wait:false agent is delivered to you as a message event that starts a new turn when you are idle (with Final Recap on, once after all outstanding async agents have finished). Pass timeoutMs to agent_spawn to get a status event if a child runs long; the child is not killed. Valid range 30000–300000 ms; omit for no timeout. To extend a running background agent\'s reporting timer, before or after a timeout event, call agent_steer({path: "/root/task", timeoutMs: 120000}) with message omitted entirely. This resets the timer from now (replacing any pending timer), without sending input, interrupting or resuming the agent; it requires the agent to still be running. After re-arming, end your turn to remain available while it works. For other timeout responses, follow the waiting policy above, send steering input or stop the agent.',
+    'Use agent_status to inspect and agent_output for full results. Completion, failure or stop of a wait:false agent is delivered to you as a message event that starts a new turn when you are idle (with Final Recap on, once after all outstanding async agents have finished). Pass timeoutMs to agent_spawn to get a status event if a child runs long; the child is not killed. Valid range 30000–300000 ms; omit for no timeout. To extend a running background agent\'s reporting timer, before or after a timeout event, call agent_steer({path: "/root/task", timeoutMs: 120000}) with message omitted entirely. This resets the timer from now (replacing any pending timer), without sending input, interrupting or resuming the agent; it requires the agent to still be running. After re-arming, end your turn to remain available while it works. For other timeout responses, send steering input, stop the agent, or end your turn.',
     "Use agent_steer to send input or resume retained sessions. Paused agents have no final answer; completed agents hand back results. Both retain their session.",
     `Maximum depth: ${settings.maxLevels} levels including L1. Shared concurrency: ${settings.maxConcurrent} active threads; waiting parents count.`,
     delegationGuidance(settings.maxLevels > 1, "depth", "root"),
