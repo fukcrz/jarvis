@@ -64,7 +64,7 @@ export async function createActiveSession(
   const resourceLoader = new DefaultResourceLoader({
     eventBus,
     cwd: workspace.cwd,
-    extensionFactories: [createMcpExtension()],
+    extensionFactories: readOnly ? [] : [createMcpExtension()],
     agentDir,
     settingsManager,
     appendSystemPrompt: readOnly ? [JARVIS_UI_NOTICE, sideChatNotice(sideChatSource)] : [JARVIS_UI_NOTICE],
