@@ -15,7 +15,7 @@ export function subagentThreadCounts(threads: SubagentThreadRow[] | undefined): 
   let paused = 0;
   for (const thread of threads ?? []) {
     if (thread.state === "running") running += 1;
-    else paused += 1;
+    else if (thread.state === "paused") paused += 1;
   }
   return { running, paused };
 }

@@ -112,8 +112,9 @@ describe("session cleanup targets", () => {
       { ...idle("subagents"), subagentThreads: [row] },
       { ...idle("paused"), subagentThreads: [{ ...row, state: "paused" as const }] },
       { ...idle("done"), subagentThreads: [] },
+      { ...idle("finished"), subagentThreads: [{ ...row, state: "completed" as const }] },
     ];
-    expect(ids(sessionCleanupTargets(items))).toEqual(["idle-1", "done"]);
+    expect(ids(sessionCleanupTargets(items))).toEqual(["idle-1", "done", "finished"]);
   });
 });
 

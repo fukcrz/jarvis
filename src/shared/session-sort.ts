@@ -26,9 +26,9 @@ export function sessionAttentionRank(session: SessionSummary): number {
   return 4;
 }
 
-/** 还有线程在跑或挂着未收尾；只算 live 事件来源。 */
+/** 还有线程在跑或挂着未收尾。终态线程留在摘要里给侧栏树，不挡住清理。 */
 export function hasUnfinishedSubagent(session: SessionSummary): boolean {
-  return (session.subagentThreads?.length ?? 0) > 0;
+  return session.subagentThreads?.some((thread) => thread.state === "running" || thread.state === "paused") === true;
 }
 
 /** 子代理自己还在跑（paused 不算在跑，它不会自己往前走）。 */

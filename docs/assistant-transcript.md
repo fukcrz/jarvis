@@ -59,7 +59,7 @@ Only when the timeline is more than 300px from the bottom does a floating capsul
 
 ## Subagent activity
 
-A session whose root turn has ended can still have child threads running. `pi-subagent-manager` publishes each thread on `pi-subagent:live:v1`; the server turns those threads into `SessionSummary.subagentThreads` (path, type, state, one-line activity, run start, and a frozen elapsed time for paused threads). A finished thread leaves the list immediately, so an empty array means nothing is outstanding, and the field is the only source of both the sidebar marker and the composer status chip.
+A session whose root turn has ended can still have child threads running. `pi-subagent-manager` publishes each thread on `pi-subagent:live:v1`; the server turns those threads into `SessionSummary.subagentThreads` (path, type, state, one-line activity, run start, and a frozen elapsed time for paused threads). Finished threads stay in the summary so the sidebar tree can still open them. The session marker, cleanup, and composer chip only treat `running` and `paused` as outstanding; completed, failed, and stopped threads do not keep a session alive or appear in the chip.
 
 A thread that changes count or state publishes the session summary at once; a thread that only changed its activity line is throttled to one summary per second, so the list and the chip do not rebuild on every progress tick. Threads known only from a blocking tool result, with no live event, do not appear here.
 

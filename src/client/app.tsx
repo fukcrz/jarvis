@@ -20,7 +20,7 @@ import { FileBrowser } from "./components/file-browser";
 import { SideChatPanel, SideChatToggle } from "./components/side-chat-panel";
 import { RightDock, SubagentToggle, persistDockOpenState, persistDockTab, readDockOpenState, readDockTab, type RightDockTab } from "./components/right-dock";
 import { SubagentPanel } from "./components/subagent-panel";
-import { runningThreadCount, subagentPanelThreads } from "./lib/subagent-panel";
+import { runningThreadCount, mergeLiveSubagentThreads, subagentPanelThreads } from "./lib/subagent-panel";
 import { ExtensionPanels, ExtensionToasts } from "./components/extension-chrome";
 import { ContextButton } from "./components/context-button";
 import { Button } from "./components/ui/button";
@@ -1275,7 +1275,10 @@ export function App() {
     if (workspace !== undefined) setMobileActionTarget({ kind: "session", workspaceId, workspaceLabel: workspace.label, session });
   };
 
-  const subagentThreads = useMemo(() => subagentPanelThreads(stream.transcript.items), [stream.transcript.items]);
+  const subagentThreads = useMemo(
+    () => mergeLiveSubagentThreads(subagentPanelThreads(stream.transcript.items), selectedSession?.subagentThreads),
+    [stream.transcript.items, selectedSession?.subagentThreads],
+  );
   const subagentRunning = runningThreadCount(subagentThreads);
 
   const openSubagentThread = (path: string) => {

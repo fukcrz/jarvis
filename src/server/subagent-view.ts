@@ -92,17 +92,23 @@ function threadSessionIdFromFile(sessionFile: string): string | undefined {
 export function subagentThreadRow(value: unknown): SubagentThreadRow | undefined {
   if (!isThreadView(value)) return undefined;
   const state = stringValue(value["state"]);
-  const rowState = state === "paused" ? "paused" as const : state === "starting" || state === "running" ? "running" as const : undefined;
+  const rowState = state === "starting" || state === "running" ? "running"
+    : state === "paused" || state === "completed" || state === "failed" || state === "stopped" ? state
+      : undefined;
   if (rowState === undefined) return undefined;
   const startedAt = timeFromMillis(value["startedAt"]);
   const elapsedMs = numberValue(value["elapsedMs"]);
+  const parent = stringValue(value["parent"]);
+  const threadSessionId = threadSessionIdFromFile(stringValue(value["sessionFile"]));
   return {
     path: stringValue(value["path"]),
     type: stringValue(value["type"]),
     state: rowState,
+    ...(parent === "" ? {} : { parent }),
+    ...(threadSessionId === undefined ? {} : { threadSessionId }),
     line: truncateOneLine(stringValue(value["summary"]) || stringValue(value["status"]) || stringValue(value["task"]), MAX_SUBAGENT_THREAD_LINE_CHARS),
     ...(startedAt === undefined ? {} : { startedAt }),
-    ...(rowState === "paused" && elapsedMs !== undefined ? { elapsedMs } : {}),
+    ...(rowState !== "running" && elapsedMs !== undefined ? { elapsedMs } : {}),
   };
 }
 

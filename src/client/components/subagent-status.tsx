@@ -37,8 +37,9 @@ function SubagentStatusList({ threads, onReveal }: { threads: SubagentThreadRow[
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, []);
+  const outstanding = threads.filter((thread) => thread.state === "running" || thread.state === "paused");
   return <ul className="subagent-status-list">
-    {threads.map((thread) => {
+    {outstanding.map((thread) => {
       const elapsed = subagentElapsed(thread, now);
       return <li key={thread.path}>
         <button type="button" className="subagent-status-row" onClick={() => onReveal(thread.path)}>

@@ -602,19 +602,23 @@ export interface SubagentCallView {
   toolCalls?: Array<{ name: string; summary: string }>;
 }
 
-/** 未结束子代理线程的一行最小描述，供会话状态使用。 */
+/** 未结束或本会话刚结束的子代理线程摘要，供会话状态与嵌套树显示。 */
 export interface SubagentThreadRow {
   /** 线程路径，同一会话内唯一。 */
   path: string;
   /** 线程类型名，例如 researcher。 */
   type: string;
-  /** running = 正在执行；paused = 停在轮边界、不再自己往前走。 */
-  state: "running" | "paused";
+  /** running = 正在执行；paused = 停在轮边界；其余为终态。 */
+  state: "running" | "paused" | "completed" | "failed" | "stopped";
+  /** 直接父线程；顶层代理省略。 */
+  parent?: string;
+  /** 子会话 id，供抽屉加载该线程输出。 */
+  threadSessionId?: string;
   /** 一行当前动作；没有进度时退化为任务描述。 */
   line: string;
   /** 本次运行开始时刻。running 的耗时由它现算，paused 不再增长。 */
   startedAt?: string;
-  /** paused 线程冻结的已跑时长，不再随当前时间增长。 */
+  /** 冻结的已跑时长；非运行态不再随当前时间增长。 */
   elapsedMs?: number;
 }
 
@@ -970,7 +974,9 @@ const sessionSummarySchema = z.object({
   subagentThreads: z.array(z.object({
     path: z.string(),
     type: z.string(),
-    state: z.enum(["running", "paused"]),
+    state: z.enum(["running", "paused", "completed", "failed", "stopped"]),
+    parent: z.string().optional(),
+    threadSessionId: z.string().uuid().optional(),
     line: z.string(),
     startedAt: z.string().optional(),
     elapsedMs: z.number().optional(),

@@ -237,6 +237,18 @@ describe("pi-subagent-manager shape", () => {
     expect(plain.subagent).toBeUndefined();
   });
 
+  it("maps live threads to nested session-status rows with a history id", () => {
+    expect(subagentThreadRow({ ...thread, path: "/root/plan/exec", parent: "/root/plan", sessionFile: "2026-11-16T00-00-00-000Z_22222222-2222-4222-8222-222222222222.jsonl", state: "running", status: "Running tests", startedAt: 1_767_225_600_000 })).toEqual({
+      path: "/root/plan/exec",
+      type: "scout",
+      state: "running",
+      parent: "/root/plan",
+      threadSessionId: "22222222-2222-4222-8222-222222222222",
+      line: "Running tests",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
   it("maps live threads to session-status rows and drops finished ones", () => {
     expect(subagentThreadRow({ ...thread, state: "running", status: "Running tests", startedAt: 1_767_225_600_000 })).toEqual({
       path: thread.path,
@@ -245,12 +257,13 @@ describe("pi-subagent-manager shape", () => {
       line: "Running tests",
       startedAt: "2026-01-01T00:00:00.000Z",
     });
+    expect(subagentThreadRow({ ...thread, state: "completed" })).toMatchObject({ state: "completed", elapsedMs: 42_000 });
     expect(subagentThreadRow({ ...thread, state: "paused", status: "", elapsedMs: 41_000 })).toMatchObject({ state: "paused", line: thread.task, elapsedMs: 41_000 });
     // running 线程不给冻结时长，前端用 startedAt 现算。
     expect(subagentThreadRow({ ...thread, state: "running", elapsedMs: 41_000 })?.elapsedMs).toBeUndefined();
     // summary 比 status 更接近“当前在干什么”。
     expect(subagentThreadRow({ ...thread, state: "running", summary: "正在核对路由", status: "Reading" })?.line).toBe("正在核对路由");
-    for (const state of ["completed", "failed", "stopped"]) expect(subagentThreadRow({ ...thread, state })).toBeUndefined();
+    for (const state of ["completed", "failed", "stopped"]) expect(subagentThreadRow({ ...thread, state })?.state).toBe(state);
     expect(subagentThreadRow({ state: "running" })).toBeUndefined();
   });
 

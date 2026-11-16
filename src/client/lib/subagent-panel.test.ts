@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { subagentStreamFromPayload } from "../hooks/use-session-stream";
 import type { SubagentCallView, SubagentView, TimelineItem, ToolTimelineItem } from "../../shared/protocol";
-import { formatCost, formatThreadElapsed, formatTokenCount, groupSubagentThreads, mergeStreamItems, runningThreadCount, streamItemsFromTimeline, subagentPanelThreads, threadMeta } from "./subagent-panel";
+import { formatCost, formatThreadElapsed, formatTokenCount, groupSubagentThreadTree, groupSubagentThreads, mergeLiveSubagentThreads, mergeStreamItems, runningThreadCount, streamItemsFromTimeline, subagentPanelThreads, subagentThreadTree, threadMeta } from "./subagent-panel";
 
 function call(overrides: Partial<SubagentCallView> & { agent: string }): SubagentCallView {
   return { prompt: "do the thing", state: "running", ...overrides };
@@ -63,6 +63,43 @@ describe("subagentPanelThreads", () => {
     expect(active.map((thread) => thread.agent)).toEqual(["verifier", "planner"]);
     expect(finished.map((thread) => thread.agent)).toEqual(["executor"]);
     expect(runningThreadCount(threads)).toBe(1);
+  });
+
+  it("keeps a finished child under its running parent", () => {
+    const threads = subagentPanelThreads([
+      toolItem("tree", [
+        call({ agent: "planner", label: "/root/plan", startedAt: "2026-11-12T00:00:01.000Z" }),
+        call({ agent: "executor", label: "/root/plan/exec", state: "completed", durationMs: 1_000 }),
+        call({ agent: "verifier", label: "/root/other", state: "completed", durationMs: 2_000 }),
+      ]),
+    ]);
+    const { active, finished } = groupSubagentThreadTree(subagentThreadTree(threads));
+    expect(active.map((node) => node.thread.path)).toEqual(["/root/plan"]);
+    expect(active[0]?.children.map((node) => node.thread.path)).toEqual(["/root/plan/exec"]);
+    expect(finished.map((node) => node.thread.path)).toEqual(["/root/other"]);
+  });
+});
+
+describe("mergeLiveSubagentThreads", () => {
+  it("adds nested live rows, derives indentation, and enriches a matching parent row", () => {
+    const timeline = subagentPanelThreads(items);
+    const rows = [
+      { path: "/root/plan", type: "planner", state: "running" as const, line: "Assigning work", threadSessionId: "11111111-1111-4111-8111-111111111111" },
+      { path: "/root/plan/exec", type: "executor", state: "running" as const, parent: "/root/plan", line: "Running tests", threadSessionId: "22222222-2222-4222-8222-222222222222" },
+    ];
+    const merged = mergeLiveSubagentThreads(timeline, rows);
+    expect(merged).toHaveLength(2);
+    expect(merged.map((thread) => [thread.path, thread.depth, thread.parent])).toEqual([
+      ["/root/plan", 0, undefined],
+      ["/root/plan/exec", 1, "/root/plan"],
+    ]);
+    expect(merged[0]).toMatchObject({ line: "Assigning work", threadSessionId: rows[0]?.threadSessionId });
+    expect(merged[1]).toMatchObject({ agent: "executor", line: "Running tests", threadSessionId: rows[1]?.threadSessionId });
+  });
+
+  it("keeps transcript completion state when the live row has already disappeared", () => {
+    const finished = subagentPanelThreads([toolItem("done", [call({ agent: "planner", label: "/root/plan", state: "completed", output: "Done" })])]);
+    expect(mergeLiveSubagentThreads(finished, undefined)[0]?.state).toBe("completed");
   });
 });
 

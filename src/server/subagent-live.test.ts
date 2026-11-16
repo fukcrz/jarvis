@@ -9,7 +9,7 @@ import { EventHub } from "./event-hub.js";
 import type { ActiveSession } from "./session-active.js";
 import { SessionPiEvents, type SessionPiHost } from "./session-pi-events.js";
 
-const thread = { path: "/root/short-test", type: "scout", task: "Return OK", state: "running", status: "Reading", createdAt: 1000, inputTokens: 12, outputTokens: 3 };
+const thread = { path: "/root/short-test", type: "scout", task: "Return OK", state: "running", status: "Reading", createdAt: 1000, sessionFile: "2026-11-16T00-00-00-000Z_33333333-3333-4333-8333-333333333333.jsonl", inputTokens: 12, outputTokens: 3 };
 const args = { path: "short-test", type: "scout", task: thread.task, wait: false };
 
 describe("subagent live card bridge", () => {
@@ -45,8 +45,9 @@ describe("subagent live card bridge", () => {
       const completed = applySessionEvents(running, events.slice(1));
       expect(completed.items).toHaveLength(1);
       expect(completed.items[0]).toMatchObject({ id: tool.id, subagent: { running: 0, completed: 1, results: [{ state: "completed", output: "OK", durationMs: 800, usage: { total: 17 } }] } });
-      // 线程结束就离开未结束列表，状态行随之消失。
-      expect(active.subagentThreads!.size).toBe(0);
+      // 线程终态留在摘要里，供嵌套列表继续打开历史输出。
+      expect(active.subagentThreads!.size).toBe(1);
+      expect([...active.subagentThreads!.values()]).toMatchObject([{ path: thread.path, state: "completed", threadSessionId: "33333333-3333-4333-8333-333333333333" }]);
       expect(summaries).toBe(2);
       expect(active.state.runState).toBe("idle");
       unsubscribe();
@@ -72,7 +73,7 @@ describe("subagent live card bridge", () => {
     handler.handleSubagentUpdate(active, { version: 1, thread });
     expect(summaryFromActive(active)).toMatchObject({ subagentThreads: [{ path: thread.path, type: "scout", state: "running" }] });
     handler.handleSubagentUpdate(active, { version: 1, thread: { ...thread, state: "completed", output: "OK" } });
-    expect(summaryFromActive(active).subagentThreads).toEqual([]);
+    expect(summaryFromActive(active).subagentThreads).toMatchObject([{ path: thread.path, type: "scout", state: "completed" }]);
   });
 });
 

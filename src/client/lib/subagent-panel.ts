@@ -1,4 +1,4 @@
-import type { SubagentCallState, SubagentCallView, SubagentStreamItem, SubagentUsageView, ThinkingLevel, TimelineItem } from "../../shared/protocol";
+import type { SubagentCallState, SubagentCallView, SubagentStreamItem, SubagentThreadRow, SubagentUsageView, ThinkingLevel, TimelineItem } from "../../shared/protocol";
 import { formatElapsedMs } from "./subagents";
 
 /** 侧栏里的一行线程：由时间线里的 agent_* 工具卡片摊平而来。 */
@@ -14,6 +14,8 @@ export interface SubagentPanelThread {
   state: SubagentCallState;
   /** path 的层级深度，用来缩进。 */
   depth: number;
+  /** 直接父线程；顶层代理省略。 */
+  parent?: string;
   startedAt?: string;
   durationMs?: number;
   model?: string;
@@ -45,8 +47,8 @@ export function subagentPanelThreads(items: readonly TimelineItem[]): SubagentPa
       const thread = threadFromCall(call, `${item.id}:${String(call.callIndex ?? index)}`);
       if (thread.path !== undefined && byPath.has(thread.path)) {
         const previous = byPath.get(thread.path) as SubagentPanelThread;
-        collected[collected.indexOf(previous)] = thread;
-        byPath.set(thread.path, thread);
+        collected[collected.indexOf(previous)] = { ...previous, ...thread, parent: previous.parent ?? thread.parent };
+        byPath.set(thread.path, collected[collected.indexOf(previous)] as SubagentPanelThread);
         return;
       }
       if (thread.path !== undefined) byPath.set(thread.path, thread);
@@ -54,6 +56,82 @@ export function subagentPanelThreads(items: readonly TimelineItem[]): SubagentPa
     });
   }
   return collected.map((thread) => ({ ...thread, depth: pathDepth(thread.path) }));
+}
+
+/** 补入会话级 live registry 的所有层级线程；时间线信息更完整时保留原条目。 */
+export function mergeLiveSubagentThreads(
+  timeline: readonly SubagentPanelThread[],
+  liveRows: readonly SubagentThreadRow[] | undefined,
+): SubagentPanelThread[] {
+  const result = [...timeline];
+  const byPath = new Map(result.flatMap((thread, index) => thread.path === undefined ? [] : [[thread.path, index] as const]));
+  for (const row of liveRows ?? []) {
+    const existingIndex = byPath.get(row.path);
+    if (existingIndex !== undefined) {
+      const existing = result[existingIndex] as SubagentPanelThread;
+      result[existingIndex] = {
+        ...existing,
+        parent: row.parent ?? existing.parent,
+        threadSessionId: row.threadSessionId ?? existing.threadSessionId,
+        line: row.line || existing.line,
+        startedAt: row.startedAt ?? existing.startedAt,
+      };
+      continue;
+    }
+    const thread: SubagentPanelThread = {
+      key: `live:${row.path}`,
+      path: row.path,
+      agent: row.type,
+      prompt: row.line,
+      state: row.state === "running" ? "running" : row.state === "paused" ? "partial" : row.state === "completed" ? "completed" : row.state === "failed" ? "failed" : "cancelled",
+      depth: pathDepth(row.path),
+      line: row.line,
+      ...(row.parent === undefined ? {} : { parent: row.parent }),
+      ...(row.threadSessionId === undefined ? {} : { threadSessionId: row.threadSessionId }),
+      ...(row.startedAt === undefined ? {} : { startedAt: row.startedAt }),
+      ...(row.elapsedMs === undefined ? {} : { durationMs: row.elapsedMs }),
+      steps: [],
+    };
+    byPath.set(row.path, result.length);
+    result.push(thread);
+  }
+  return result;
+}
+
+export interface SubagentThreadNode {
+  thread: SubagentPanelThread;
+  children: SubagentThreadNode[];
+}
+
+/** 按 parent 路径挂到父线程下。父线程不在当前列表里时，该节点仍作为根，缩进仍由路径深度决定。 */
+export function subagentThreadTree(threads: readonly SubagentPanelThread[]): SubagentThreadNode[] {
+  const byPath = new Map<string, SubagentThreadNode>();
+  const nodes = threads.map((thread) => {
+    const node: SubagentThreadNode = { thread, children: [] };
+    if (thread.path !== undefined) byPath.set(thread.path, node);
+    return node;
+  });
+  const roots: SubagentThreadNode[] = [];
+  for (const node of nodes) {
+    const parent = node.thread.parent === undefined ? undefined : byPath.get(node.thread.parent);
+    if (parent === undefined || parent === node) roots.push(node);
+    else parent.children.push(node);
+  }
+  return roots;
+}
+
+/** 自身或任一后代仍在跑，整支留在进行中。 */
+export function threadBranchActive(node: SubagentThreadNode): boolean {
+  return isActiveThread(node.thread) || node.children.some(threadBranchActive);
+}
+
+/** 进行中的根在前（按开始时间），整支已结束的根在后（保持派发顺序）。子线程不拆出父线程。 */
+export function groupSubagentThreadTree(roots: readonly SubagentThreadNode[]): { active: SubagentThreadNode[]; finished: SubagentThreadNode[] } {
+  const active: SubagentThreadNode[] = [];
+  const finished: SubagentThreadNode[] = [];
+  for (const root of roots) (threadBranchActive(root) ? active : finished).push(root);
+  active.sort((left, right) => (left.thread.startedAt ?? "").localeCompare(right.thread.startedAt ?? ""));
+  return { active, finished };
 }
 
 /** 进行中在前（按开始时间），已结束在后（保持派发顺序）。 */
@@ -126,7 +204,11 @@ function threadFromCall(call: SubagentCallView, key: string): SubagentPanelThrea
     line: "",
   };
   if (call.label !== undefined && call.label.trim().length > 0) thread.label = call.label;
-  if (call.label !== undefined && call.label.startsWith("/")) thread.path = call.label;
+  if (call.label !== undefined && call.label.startsWith("/")) {
+    thread.path = call.label;
+    const segments = call.label.split("/").filter((part) => part.length > 0);
+    if (segments.length > 2) thread.parent = `/${segments.slice(0, -1).join("/")}`;
+  }
   if (call.startedAt !== undefined) thread.startedAt = call.startedAt;
   if (call.durationMs !== undefined) thread.durationMs = call.durationMs;
   if (call.model !== undefined) thread.model = call.model;

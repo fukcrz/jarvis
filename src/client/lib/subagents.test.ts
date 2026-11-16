@@ -21,6 +21,8 @@ describe("subagent status line", () => {
     // paused 不会自己往前走，不单独占一行。
     expect(subagentStatusLabel([row("/root/c", "paused")])).toBeUndefined();
     expect(subagentStatusLabel([row("/root/c", "paused"), row("/root/d", "paused")])).toBeUndefined();
+    expect(subagentThreadCounts([row("/root/a", "running"), row("/root/b", "completed"), row("/root/c", "failed"), row("/root/d", "stopped")])).toEqual({ running: 1, paused: 0 });
+    expect(subagentStatusLabel([row("/root/a", "running"), row("/root/b", "completed")])).toBe("1 个子代理执行中");
   });
 
   it("stops paging back once history runs out", async () => {

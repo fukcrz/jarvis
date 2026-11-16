@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, Crosshair } from "lucide-react";
+import { ChevronLeft, ChevronRight, Crosshair } from "lucide-react";
 import { api } from "../api";
 import type { SessionRef, SubagentStreamItem } from "../../shared/protocol";
-import { formatThreadElapsed, groupSubagentThreads, isActiveThread, streamItemsFromTimeline, threadMeta, threadStateLabel, threadTitle, type SubagentPanelThread } from "../lib/subagent-panel";
+import { formatThreadElapsed, groupSubagentThreadTree, isActiveThread, streamItemsFromTimeline, subagentThreadTree, threadBranchActive, threadMeta, threadStateLabel, threadTitle, type SubagentPanelThread, type SubagentThreadNode } from "../lib/subagent-panel";
 import { MarkdownMessage } from "./markdown-message";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
@@ -23,9 +23,10 @@ interface SubagentPanelProps {
 export function SubagentPanel({ threads, onLocate, workspaceCwd, parentRef, streams, onHistory }: SubagentPanelProps) {
   const [selectedKey, setSelectedKey] = useState<string | undefined>();
   const [showAllFinished, setShowAllFinished] = useState(false);
+  const [openOverrides, setOpenOverrides] = useState<Readonly<Record<string, boolean>>>({});
   const [now, setNow] = useState(() => Date.now());
-  const { active, finished } = useMemo(() => groupSubagentThreads(threads), [threads]);
-  const ticking = active.some(isActiveThread);
+  const { active, finished } = useMemo(() => groupSubagentThreadTree(subagentThreadTree(threads)), [threads]);
+  const ticking = active.some((node) => threadBranchActive(node));
   useEffect(() => {
     if (!ticking) return;
     const timer = window.setInterval(() => { setNow(Date.now()); }, 1000);
@@ -52,34 +53,49 @@ export function SubagentPanel({ threads, onLocate, workspaceCwd, parentRef, stre
   if (selected !== undefined) return <SubagentDetail thread={selected} now={now} workspaceCwd={workspaceCwd} parentRef={parentRef} stream={streams?.[selected.path ?? ""]} onHistory={onHistory} onBack={() => { setSelectedKey(undefined); }} onLocate={onLocate} />;
 
   const visibleFinished = showAllFinished ? finished : finished.slice(-FINISHED_PREVIEW);
+  const isOpen = (node: SubagentThreadNode) => openOverrides[node.thread.key] ?? threadBranchActive(node);
+  const onToggle = (node: SubagentThreadNode) => {
+    setOpenOverrides((current) => ({ ...current, [node.thread.key]: !isOpen(node) }));
+  };
   return <section className="subagent-panel" aria-label="子代理">
     <div className="subagent-panel-scroll">
-      {active.length === 0 ? null : <ul className="subagent-list" aria-label="进行中">
-        {active.map((thread) => <SubagentRow key={thread.key} thread={thread} now={now} onOpen={() => { setSelectedKey(thread.key); }} />)}
-      </ul>}
+      {active.length === 0 ? null : <SubagentTree nodes={active} label="进行中" depth={0} now={now} isOpen={isOpen} onToggle={onToggle} onOpen={setSelectedKey} />}
       {finished.length === 0 ? null : <>
         <div className="subagent-group-heading"><span>已结束</span><span>{String(finished.length)}</span></div>
-        <ul className="subagent-list">
-          {visibleFinished.map((thread) => <SubagentRow key={thread.key} thread={thread} now={now} onOpen={() => { setSelectedKey(thread.key); }} />)}
-        </ul>
+        <SubagentTree nodes={visibleFinished} depth={0} now={now} isOpen={isOpen} onToggle={onToggle} onOpen={setSelectedKey} />
         {finished.length > FINISHED_PREVIEW && !showAllFinished ? <button type="button" className="subagent-show-all" onClick={() => { setShowAllFinished(true); }}>查看全部</button> : null}
       </>}
     </div>
   </section>;
 }
 
+function SubagentTree({ nodes, label, depth, now, isOpen, onToggle, onOpen }: { nodes: readonly SubagentThreadNode[]; label?: string; depth: number; now: number; isOpen: (node: SubagentThreadNode) => boolean; onToggle: (node: SubagentThreadNode) => void; onOpen: (key: string) => void }) {
+  return <ul className={depth === 0 ? "subagent-list" : "subagent-list subagent-children"} aria-label={label}>
+    {nodes.map((node) => {
+      const open = node.children.length > 0 && isOpen(node);
+      return <li key={node.thread.key}>
+        <div className="subagent-tree-item" style={{ paddingLeft: 8 + depth * 14 }}>
+          {node.children.length > 0 ? <button type="button" className="subagent-tree-toggle" aria-expanded={open} aria-label={open ? "收起" : "展开"} onClick={() => { onToggle(node); }}><ChevronRight size={14} /></button> : <span className="subagent-tree-spacer" aria-hidden="true" />}
+          <SubagentRow thread={node.thread} now={now} onOpen={() => { onOpen(node.thread.key); }} />
+        </div>
+        {open ? <SubagentTree nodes={node.children} depth={depth + 1} now={now} isOpen={isOpen} onToggle={onToggle} onOpen={onOpen} /> : null}
+      </li>;
+    })}
+  </ul>;
+}
+
 function SubagentRow({ thread, now, onOpen }: { thread: SubagentPanelThread; now: number; onOpen: () => void }) {
   const elapsed = formatThreadElapsed(thread, now);
-  return <li>
-    <button type="button" className="subagent-row" data-state={thread.state} style={{ paddingLeft: 12 + thread.depth * 14 }} onClick={onOpen}>
-      <span className="subagent-row-head">
-        <span className="subagent-row-dot" data-state={thread.state} aria-hidden="true" />
-        <span className="subagent-row-agent">{thread.agent}</span>
-        {elapsed === undefined ? null : <span className="subagent-row-elapsed">{elapsed}</span>}
-      </span>
-      <span className="subagent-row-line" title={thread.line}>{thread.line}</span>
-    </button>
-  </li>;
+  const segment = thread.path?.split("/").at(-1);
+  return <button type="button" className="subagent-row" data-state={thread.state} data-depth={thread.depth} onClick={onOpen}>
+    <span className="subagent-row-head">
+      <span className="subagent-row-dot" data-state={thread.state} aria-hidden="true" />
+      <span className="subagent-row-agent">{thread.agent}</span>
+      {thread.depth > 0 && segment !== undefined ? <span className="subagent-row-parent">{segment}</span> : null}
+      {elapsed === undefined ? null : <span className="subagent-row-elapsed">{elapsed}</span>}
+    </span>
+    <span className="subagent-row-line" title={thread.line}>{thread.line}</span>
+  </button>;
 }
 
 function SubagentDetail({ thread, now, workspaceCwd, parentRef, stream, onHistory, onBack, onLocate }: { thread: SubagentPanelThread; now: number; workspaceCwd?: string; parentRef?: SessionRef; stream?: SubagentStreamItem[]; onHistory?: (path: string, items: SubagentStreamItem[], prepend?: boolean) => void; onBack: () => void; onLocate: (path: string) => void }) {
@@ -92,13 +108,14 @@ function SubagentDetail({ thread, now, workspaceCwd, parentRef, stream, onHistor
   const [historyBefore, setHistoryBefore] = useState<number | undefined>();
   const requestGeneration = useRef(0);
   const path = thread.path;
+  const threadSessionId = thread.threadSessionId;
 
   const loadHistory = useCallback((before?: number) => {
-    if (path === undefined || thread.threadSessionId === undefined || parentRef === undefined) return;
+    if (path === undefined || threadSessionId === undefined || parentRef === undefined) return;
     const generation = ++requestGeneration.current;
     const target = parentRef;
     setHistoryState("loading");
-    void api.subagentTimeline(target, thread.threadSessionId, path, before, HISTORY_LIMIT).then((page) => {
+    void api.subagentTimeline(target, threadSessionId, path, before, HISTORY_LIMIT).then((page) => {
       if (generation !== requestGeneration.current) return;
       onHistory?.(path, streamItemsFromTimeline(page.items), true);
       setHistoryBefore(page.start);
@@ -107,7 +124,7 @@ function SubagentDetail({ thread, now, workspaceCwd, parentRef, stream, onHistor
     }).catch(() => {
       if (generation === requestGeneration.current) setHistoryState("failed");
     });
-  }, [path, thread.threadSessionId, parentRef, onHistory]);
+  }, [path, threadSessionId, parentRef, onHistory]);
 
   useEffect(() => {
     if (tab !== "output") return;
