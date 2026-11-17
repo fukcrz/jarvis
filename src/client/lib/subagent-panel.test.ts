@@ -41,6 +41,17 @@ describe("subagentPanelThreads", () => {
     expect(threads[0]?.line).toBe("换掉了三处调用");
   });
 
+  it("keeps updating the same path across three or more appearances", () => {
+    const threads = subagentPanelThreads([
+      ...items,
+      toolItem("t2", [call({ agent: "planner", label: "/root/plan", state: "completed", durationMs: 65_000, output: "换掉了三处调用" })]),
+      toolItem("t3", [call({ agent: "planner", label: "/root/plan", state: "completed", durationMs: 70_000, output: "又改了一处" })]),
+    ]);
+    expect(threads).toHaveLength(2);
+    expect(threads[0]?.line).toBe("又改了一处");
+    expect(threads[0]?.durationMs).toBe(70_000);
+  });
+
   it("strips markdown emphasis from the action line", () => {
     const threads = subagentPanelThreads([toolItem("t8", [call({ agent: "executor", recentSteps: [{ kind: "text", text: "**Changed** — 未改文件，`git status` 干净" }] })])]);
     expect(threads[0]?.line).toBe("Changed — 未改文件，git status 干净");

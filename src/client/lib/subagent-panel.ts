@@ -39,20 +39,25 @@ export function isActiveThread(thread: SubagentPanelThread): boolean {
 
 /** 摊平时间线里的子代理调用；同一线程出现多次时保留最后一次的状态。 */
 export function subagentPanelThreads(items: readonly TimelineItem[]): SubagentPanelThread[] {
-  const byPath = new Map<string, SubagentPanelThread>();
+  // 路径 → 已收集线程的下标；同一线程后续出现时按下标就地更新。
+  const indexByPath = new Map<string, number>();
   const collected: SubagentPanelThread[] = [];
   for (const item of items) {
     if (item.kind !== "tool" || item.subagent === undefined) continue;
     item.subagent.results.forEach((call, index) => {
       const thread = threadFromCall(call, `${item.id}:${String(call.callIndex ?? index)}`);
-      if (thread.path !== undefined && byPath.has(thread.path)) {
-        const previous = byPath.get(thread.path) as SubagentPanelThread;
-        collected[collected.indexOf(previous)] = { ...previous, ...thread, parent: previous.parent ?? thread.parent };
-        byPath.set(thread.path, collected[collected.indexOf(previous)] as SubagentPanelThread);
+      if (thread.path === undefined) {
+        collected.push(thread);
         return;
       }
-      if (thread.path !== undefined) byPath.set(thread.path, thread);
-      collected.push(thread);
+      const existingIndex = indexByPath.get(thread.path);
+      if (existingIndex === undefined) {
+        indexByPath.set(thread.path, collected.length);
+        collected.push(thread);
+        return;
+      }
+      const previous = collected[existingIndex] as SubagentPanelThread;
+      collected[existingIndex] = { ...previous, ...thread, parent: previous.parent ?? thread.parent };
     });
   }
   return collected.map((thread) => ({ ...thread, depth: pathDepth(thread.path) }));
