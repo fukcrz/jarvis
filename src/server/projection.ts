@@ -1,6 +1,6 @@
 import { isRecord, type AssistantGenerationStats, type AssistantTextPhase, type ContextSummaryTimelineItem, type ErrorTimelineItem, type ImageAttachment, type MessageTimelineItem, type NoticeTimelineItem, type RunOutcomeTimelineItem, type SessionRef, type ThinkingTimelineItem, type TimelineItem, type TokenUsage, type ToolState, type ToolTimelineItem } from "../shared/protocol.js";
 import { fileChangeFromCall, fileChangeFromPatch } from "../shared/file-change.js";
-import { attachLiveSubagentThread, attachSubagentView, subagentRecordsFromEntries, subagentThreadsFromEntries, subagentViewFromArgs } from "./subagent-view.js";
+import { attachLiveSubagentThread, attachSubagentView, attachSubagentViewOnce, subagentRecordsFromEntries, subagentThreadsFromEntries, subagentViewFromArgs } from "./subagent-view.js";
 import { isAbortErrorMessage, numberValue, stringValue, toIso } from "./values.js";
 
 const MAX_TOOL_OUTPUT_CHARS = 12_000;
@@ -11,6 +11,7 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
   const generations = generationEntries(entries);
   const thinkingDurations = thinkingDurationEntries(entries);
   const toolIndex = new Map<string, number>();
+  const seenSubagentPaths = new Set<string>();
   // A new user message starts a new operation. Until then, later successful
   // assistant output means the retained error attempts were recovered by Pi.
   let pendingErrorIndexes: number[] = [];
@@ -92,16 +93,16 @@ export function projectHistory(entries: readonly unknown[]): TimelineItem[] {
       if (existingIndex !== undefined) {
         const current = items[existingIndex];
         if (current?.kind === "tool") {
-          items[existingIndex] = attachSubagentView(withFileChangeResult({
+          items[existingIndex] = attachSubagentViewOnce(withFileChangeResult({
             ...current,
             state,
             ...(state === "failed" ? { error: output } : { output, ...(images.length === 0 ? {} : { images }) }),
-          }, message, state === "failed"), message);
+          }, message, state === "failed"), message, seenSubagentPaths);
           continue;
         }
       }
       const tool = toolFromCall(toolId, stringValue(message["toolName"]) || "tool", undefined, createdAt, state);
-      items.push(attachSubagentView({ ...tool, ...(state === "failed" ? { error: output } : { output }), ...(state === "failed" || images.length === 0 ? {} : { images }) }, message));
+      items.push(attachSubagentViewOnce({ ...tool, ...(state === "failed" ? { error: output } : { output }), ...(state === "failed" || images.length === 0 ? {} : { images }) }, message, seenSubagentPaths));
       toolIndex.set(toolId, items.length - 1);
       continue;
     }

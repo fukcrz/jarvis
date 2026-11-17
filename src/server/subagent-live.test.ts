@@ -67,8 +67,29 @@ describe("subagent live card bridge", () => {
     expect(projectHistory([...entries, { type: "custom", customType: "pi-subagent:registry-delta:v1", data: { version: 1, changes: [{ path: thread.path, view: { state: "paused" }, cleared: ["output"] }] } }])).toMatchObject([{ subagent: { partial: 1, completed: 0, results: [{ state: "partial" }] } }]);
   });
 
-  it("carries unfinished threads in the session summary", () => {
-    const active = { ref: { workspaceId: "workspace", sessionId: "session" }, state: { sessionId: "session", runState: "idle" }, attentionState: "idle", activeTools: new Map(), subagentTools: new Map(), createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", session: { sessionName: "Session", sessionManager: { getBranch: () => [] } } } as unknown as ActiveSession;
+  it("keeps one card per thread when status and wait report the same path", () => {
+    const entries = [
+      { type: "message", id: "assistant", message: { role: "assistant", timestamp: 1000, content: [{ type: "toolCall", id: "spawn-1", name: "agent_spawn", arguments: args }] } },
+      { type: "message", id: "result", message: { role: "toolResult", toolCallId: "spawn-1", toolName: "agent_spawn", details: thread, content: [] } },
+      { type: "message", id: "status-call", message: { role: "assistant", timestamp: 2000, content: [{ type: "toolCall", id: "status-1", name: "agent_status", arguments: { path: thread.path } }] } },
+      { type: "message", id: "status-result", message: { role: "toolResult", toolCallId: "status-1", toolName: "agent_status", details: thread, content: [] } },
+      { type: "message", id: "wait-call", message: { role: "assistant", timestamp: 3000, content: [{ type: "toolCall", id: "wait-1", name: "agent_wait", arguments: { path: thread.path } }] } },
+      { type: "message", id: "wait-result", message: { role: "toolResult", toolCallId: "wait-1", toolName: "agent_wait", details: thread, content: [] } },
+    ];
+    const items = projectHistory(entries);
+    expect(items.flatMap((item) => item.kind === "tool" && item.subagent !== undefined ? [item.id] : [])).toEqual(["spawn-1"]);
+    expect(items.filter((item) => item.kind === "tool" && item.name === "agent_wait")).toMatchObject([{ id: "wait-1" }]);
+  });
+
+  it("still puts a card on the first status of a thread this session never spawned", () => {
+    const entries = [
+      { type: "message", id: "status-call", message: { role: "assistant", timestamp: 2000, content: [{ type: "toolCall", id: "status-1", name: "agent_status", arguments: { path: thread.path } }] } },
+      { type: "message", id: "status-result", message: { role: "toolResult", toolCallId: "status-1", toolName: "agent_status", details: thread, content: [] } },
+    ];
+    expect(projectHistory(entries)).toMatchObject([{ kind: "tool", id: "status-1", subagent: { total: 1, results: [{ label: thread.path }] } }]);
+  });
+
+  it("carries unfinished threads in the session summary", () => {    const active = { ref: { workspaceId: "workspace", sessionId: "session" }, state: { sessionId: "session", runState: "idle" }, attentionState: "idle", activeTools: new Map(), subagentTools: new Map(), createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", session: { sessionName: "Session", sessionManager: { getBranch: () => [] } } } as unknown as ActiveSession;
     const handler = new SessionPiEvents({ publishTool() {}, publishSummary() {} } as unknown as SessionPiHost);
     handler.handleSubagentUpdate(active, { version: 1, thread });
     expect(summaryFromActive(active)).toMatchObject({ subagentThreads: [{ path: thread.path, type: "scout", state: "running" }] });

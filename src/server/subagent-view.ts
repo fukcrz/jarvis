@@ -35,6 +35,30 @@ export function attachSubagentView(tool: ToolTimelineItem, result?: unknown): To
   return finalizeSeededSubagent(tool, result);
 }
 
+/**
+ * 同一线程只出一张卡：`agent_status` / `agent_wait` 返回的线程如果已经有卡，
+ * 这里只把卡片让回给首次出现的那次工具调用，本次不再出卡。
+ * 没有路径的旧插件结果照旧出卡。
+ */
+export function attachSubagentViewOnce(tool: ToolTimelineItem, result: unknown, seen: Set<string>): ToolTimelineItem {
+  const next = attachSubagentView(tool, result);
+  if (next === tool || next.subagent === undefined) return next;
+  const kept = next.subagent.results.filter((call) => {
+    const path = call.label !== undefined && call.label.startsWith("/") ? call.label : undefined;
+    if (path === undefined) return true;
+    if (seen.has(path)) return false;
+    seen.add(path);
+    return true;
+  });
+  if (kept.length === next.subagent.results.length) return next;
+  if (kept.length === 0) {
+    const stripped = { ...next };
+    delete stripped.subagent;
+    return stripped;
+  }
+  return { ...next, subagent: viewFromCalls(kept) };
+}
+
 /** Apply a live pi-subagent-manager thread snapshot to the matching seeded call. */
 export function attachLiveSubagentThread(tool: ToolTimelineItem, value: unknown): ToolTimelineItem {
   if (!MANAGER_TOOLS.has(tool.name) || tool.subagent === undefined || !isThreadView(value)) return tool;
