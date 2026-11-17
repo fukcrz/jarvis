@@ -71,6 +71,22 @@ describe("collapsed tool visibility", () => {
     expect(collapsedToolActivityItems([completed, running, failed, partialFailure], true, true)).toEqual([running, failed, partialFailure]);
     expect(visibleToolActivityItemIds([completed, running, failed, partialFailure], true, true)).toEqual(new Set(["running", "failed", "subagent"]));
   });
+
+  it("folds a finished dispatch while its subagent is still running", () => {
+    const dispatch = {
+      ...item("dispatch", "completed"),
+      subagent: {
+        kind: "pi-subagent" as const,
+        results: [{ agent: "verifier", prompt: "Audit", state: "running" as const }],
+        total: 1,
+        completed: 0,
+        running: 1,
+        failed: 0,
+      },
+    };
+    expect(collapsedToolActivityItems([dispatch], false, false)).toEqual([]);
+    expect(visibleToolActivityItemIds([dispatch], false, false)).toEqual(new Set());
+  });
 });
 
 

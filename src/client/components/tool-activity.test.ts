@@ -582,7 +582,7 @@ describe("parke.dev/pi-subagent rows", () => {
     expect(subagentCallMeta(view.results[0]!)).toBe("codex · explore · gpt-5.2 · high · worktree");
   });
 
-  it("keeps an async subagent row visible while its child still runs", () => {
+  it("folds an async subagent row while its child still runs", () => {
     const item = subagentTool("completed", {
       kind: "pi-subagent",
       results: [{ agent: "scout", prompt: "Map auth", state: "running" }],
@@ -591,6 +591,6 @@ describe("parke.dev/pi-subagent rows", () => {
       running: 1,
       failed: 0,
     });
-    expect(collapsedToolActivityItems([item], true, false)).toEqual([item]);
+    expect(collapsedToolActivityItems([item], true, false)).toEqual([]);
   });
 });
