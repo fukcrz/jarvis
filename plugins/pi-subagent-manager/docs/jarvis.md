@@ -20,7 +20,7 @@
 - 子会话正文、思考及工具执行由 `pi-subagent:stream:v1` 推送 `{ version: 1, path, items }`，每线程按 200ms 合批；结束状态立即冲刷。条目以 assistant timestamp + contentIndex 或 toolCallId 标识，工具支持运行中的部分结果。流不额外裁剪正文，不写入父会话 JSONL。Jarvis 的历史读取与缓冲回放见其 `docs/right-dock.md`。
 - 费用显示默认关闭；`costDisplay: "off"` 清除费用状态，设置菜单可选择 Off。
 - `ask_user_question` 对所有子代理恒不可用：无人值守的批次不能再被人工提问卡住。
-- 类型新增 `canSpawn`（缺省 false）决定是否把 `agent_spawn`/`agent_steer`/`agent_stop`/`agent_wait` 放进工具池，系统提示的委派说明由同一字段生成。
+- 类型新增 `canSpawn`（缺省 false）决定是否把 `agent_spawn`/`agent_steer`/`agent_stop`/`agent_wait` 放进工具池，系统提示的委派说明由同一字段生成。根会话工具表里的同名工具不会再继承给叶子；叶子调用时也会被拦住。`manager.spawn` 拒绝 `canSpawn` 不是 true 的调用方。
 - `agent_spawn` 支持按次传入 `model` 与 `thinkingLevel`；不传则继承。显式 `model` 不可用时立即失败并列出可用候选。
 - 类型可声明 `modelAliases`（别名 → `provider/model-id`），`agent_spawn` 的 `model` 既接受别名也接受任意可用模型；`agent_types` 输出每个类型的别名与可用模型数量。别名不是白名单。
 - 默认类型不声明任何模型（`models`/`model`/`modelSuggestions` 全部不写），一律继承。`agent_types` 每行显示生效模型、生效思考档（被模型 `thinkingLevelMap` 调整过的会注明声明值）、是否 `delegates`，末尾给出可用模型数量。

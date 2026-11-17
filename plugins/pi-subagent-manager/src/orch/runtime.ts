@@ -29,6 +29,7 @@ import {
 import {
   resolveSubagentTools,
   resolveThinkingLevel,
+  DELEGATION_TOOLS,
   FORBIDDEN_SUBAGENT_TOOLS,
 } from "./tool-pool.ts";
 import { TranscriptChannel } from "./transcript.ts";
@@ -650,13 +651,15 @@ export function createDriverFactory(
         (pi) => {
           pi.on("turn_end", pauseBoundary);
           pi.on("agent_before_settle", pauseBoundary);
-          pi.on("tool_call", (event) =>
-            FORBIDDEN_SUBAGENT_TOOLS.has(event.toolName)
-              ? { block: true, reason: "This tool is unavailable to subagents" }
-              : allowed.has(event.toolName)
-                ? undefined
-                : { block: true, reason: "Tool is not allowed by this agent type" },
-          );
+          pi.on("tool_call", (event) => {
+            if (FORBIDDEN_SUBAGENT_TOOLS.has(event.toolName))
+              return { block: true, reason: "This tool is unavailable to subagents" };
+            if (!canDelegate && DELEGATION_TOOLS.has(event.toolName))
+              return { block: true, reason: "This agent type cannot delegate" };
+            return allowed.has(event.toolName)
+              ? undefined
+              : { block: true, reason: "Tool is not allowed by this agent type" };
+          });
         },
       ],
     });

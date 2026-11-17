@@ -530,6 +530,27 @@ describe("buildTurnSegments", () => {
 
     expect(segments.map((segment) => segment.kind === "reply" ? segment.item.id : segment.kind)).toEqual(["process", "a1", "process", "a2"]);
   });
+
+  it("folds subagent records into the process and leaves the reply outside", () => {
+    const segments = buildTurnSegments([
+      { kind: "activity", items: [{ ...tool("a"), assistantMessageId: "r" }] },
+      {
+        kind: "subagent-record",
+        item: {
+          kind: "subagent-record",
+          id: "rec",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          path: "/root/audit",
+          agent: "verifier",
+          prompt: "audit",
+          state: "dispatched",
+        },
+      },
+      { kind: "message", item: { ...message("a1"), assistantMessageId: "reply" } },
+    ]);
+    expect(segments.map((segment) => segment.kind)).toEqual(["process", "reply"]);
+    expect(segments[0]).toMatchObject({ kind: "process", entries: [{ kind: "activity" }, { kind: "subagent-record" }] });
+  });
 });
 
 describe("trailingAssistantMessage", () => {

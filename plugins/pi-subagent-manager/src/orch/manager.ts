@@ -314,11 +314,13 @@ export class ThreadManager {
     if (args.thinkingLevel !== undefined && !THINKING_LEVELS.includes(args.thinkingLevel))
       throw new Error(`thinkingLevel must be one of: ${THINKING_LEVELS.join(", ")}`);
     caller = canonicalPath(caller);
-    if (
-      caller !== "/root" &&
-      (!active(this.record(caller).view) || this.record(caller).stopRequested)
-    )
-      throw new Error("Only a working agent may spawn children");
+    if (caller !== "/root") {
+      const callerRecord = this.record(caller);
+      if (!active(callerRecord.view) || callerRecord.stopRequested)
+        throw new Error("Only a working agent may spawn children");
+      if (callerRecord.definition.canSpawn !== true)
+        throw new Error(`${callerRecord.definition.name} cannot spawn children`);
+    }
     signal?.throwIfAborted();
     const path = canonicalPath(args.path, caller);
     this.assertAccess(caller, path);

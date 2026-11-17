@@ -1261,10 +1261,9 @@ export function isReplyEntry(entry: TimelineRenderItem, stepIds: ReadonlySet<str
   return owner === undefined ? trailing : !stepIds.has(owner);
 }
 
-/** 待回答问询、用户 !cmd 和子代理记录不参与折叠：记录要按发生顺序留在原位。 */
+/** 待回答问询和用户 !cmd 不参与折叠。子代理记录收进过程，折叠外只留卡片。 */
 function isInlineEntry(entry: TimelineRenderItem): boolean {
   if (entry.kind === "extension-ui") return entry.item.outcome === undefined;
-  if (entry.kind === "subagent-record") return true;
   return entry.kind === "activity" && entry.items.every(isUserCommand);
 }
 

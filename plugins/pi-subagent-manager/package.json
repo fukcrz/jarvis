@@ -54,6 +54,7 @@
       "orchestration root: 2-call read-only budget, dispatch everything else, never block",
       "long-task checklist gate plus task-watch auto-wake when the root settles with unfinished items",
       "subagent recursion is leaf-only, enforced in manager.spawn",
+      "leaf types do not inherit root delegation tools; manager.spawn rejects a caller whose canSpawn is not true",
       "tsconfig.json shipped with the local package so the seeded copy can be type-checked"
     ]
   },

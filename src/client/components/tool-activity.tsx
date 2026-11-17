@@ -255,7 +255,7 @@ function GenericToolRow({ item, pending, open, showDetails, onToggle }: { item: 
   );
 }
 
-/** 子代理的一条状态记录：派发、完成、失败或停止，各自独立成行，不合并。 */
+/** 子代理的一条状态记录：派发、完成、失败或停止，各自独立成行，收进过程折叠。 */
 export function SubagentRecordRow({ record }: { record: SubagentRecord }) {
   const [open, setOpen] = useState(false);
   const verb = record.state === "dispatched" ? "派发" : record.state === "completed" ? "完成" : record.state === "failed" ? "失败" : "已停止";

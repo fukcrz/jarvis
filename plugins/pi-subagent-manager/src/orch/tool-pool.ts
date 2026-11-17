@@ -66,8 +66,14 @@ export function resolveSubagentTools(input: {
       (canDelegate || !DELEGATION_TOOLS.has(tool.name)),
   );
   const localNames = new Set([...BUILTINS, ...permittedTools.map((tool) => tool.name)]);
+  // A leaf's declared pool no longer contains agent_spawn, so the root loadout would
+  // otherwise hand the same tool back as an inherited bridge. That bridge executes as
+  // /root and skips the "only immediate children" check.
   const externalTools = input.inherited.tools.filter(
-    (tool) => !localNames.has(tool.name) && !FORBIDDEN_SUBAGENT_TOOLS.has(tool.name),
+    (tool) =>
+      !localNames.has(tool.name) &&
+      !FORBIDDEN_SUBAGENT_TOOLS.has(tool.name) &&
+      (canDelegate || !DELEGATION_TOOLS.has(tool.name)),
   );
   const toolNames = selectTools(
     input.type.tools,
@@ -77,7 +83,10 @@ export function resolveSubagentTools(input: {
     [...localNames, ...externalTools.map((tool) => tool.name), ...FORBIDDEN_SUBAGENT_TOOLS],
     input.filtering,
     input.onDiagnostic,
-  ).filter((name) => !FORBIDDEN_SUBAGENT_TOOLS.has(name));
+  ).filter(
+    (name) =>
+      !FORBIDDEN_SUBAGENT_TOOLS.has(name) && (canDelegate || !DELEGATION_TOOLS.has(name)),
+  );
   const allowed = new Set(toolNames);
   const rootActive = new Set(input.inherited.activeNames);
   const activeToolNames = toolNames.filter(
