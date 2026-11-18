@@ -1,6 +1,6 @@
 {
   "name": "jarvis",
-  "version": "0.1.31-beta.24",
+  "version": "0.1.31-beta.25",
   "type": "module",
   "description": "A local coding workspace for persistent Pi sessions.",
   "license": "MIT",
