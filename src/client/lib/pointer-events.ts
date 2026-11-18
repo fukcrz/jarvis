@@ -28,13 +28,19 @@ export function restoreBodyPointerEventsIfIdle(doc: Document = document): boolea
 export function installBodyPointerEventsGuard(doc: Document = document): () => void {
   const restore = () => { restoreBodyPointerEventsIfIdle(doc); };
   const view = doc.defaultView;
+  const observer = typeof MutationObserver === "undefined"
+    ? undefined
+    : new MutationObserver(restore);
   doc.addEventListener("pointerdown", restore, true);
   view?.addEventListener("focus", restore);
   doc.addEventListener("visibilitychange", restore);
+  observer?.observe(doc.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
+  restore();
   return () => {
     doc.removeEventListener("pointerdown", restore, true);
     view?.removeEventListener("focus", restore);
     doc.removeEventListener("visibilitychange", restore);
+    observer?.disconnect();
   };
 }
 
