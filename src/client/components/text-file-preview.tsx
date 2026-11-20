@@ -56,6 +56,7 @@ interface LocalTextFileLinkProps {
   column?: number;
   className?: string;
   fallbackHref?: string;
+  previewOnly?: boolean;
 }
 
 /** 预览入口的下载回退地址。 */
@@ -110,8 +111,7 @@ export function LocalTextFilePreviewAnchor({ path, cwd, className, loading = fal
   >{children}</a>;
 }
 
-/** 只有服务端确认是可读取文本文件后，才把普通文本显示成可点击入口。 */
-export function LocalTextFileLink({ path, cwd, line, column, children, className, fallbackHref }: LocalTextFileLinkProps) {
+export function LocalTextFileLink({ path, cwd, line, column, children, className, fallbackHref, previewOnly = false }: LocalTextFileLinkProps) {
   const [available, setAvailable] = useState<boolean>();
   const [loading, setLoading] = useState(false);
   const [file, setFile] = useState<WorkspaceFileContent>();
@@ -140,6 +140,9 @@ export function LocalTextFileLink({ path, cwd, line, column, children, className
       .catch(() => { setAvailable(false); })
       .finally(() => { setLoading(false); });
   };
+
+  // 自动识别的文字只有确认是文件后才可点击；下载回退留给显式文件入口。
+  if (previewOnly && available !== true) return <>{children}</>;
 
   const fallbackDownload = fallbackHref ?? localTextFileDownloadHref(path, cwd);
   if (available === false) return <a

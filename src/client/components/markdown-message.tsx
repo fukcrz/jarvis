@@ -306,7 +306,7 @@ function MarkdownCode({ node: _node, children, className, ...rest }: ComponentPr
   const text = textFromReactNode(children).trim();
   const reference = localFileReferenceFromHref(text);
   if (interactive && !isBlock && reference !== undefined && looksLikeFileReference(text) && isTextFilePreviewPath(reference.path)) {
-    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line} column={reference.column}><code className={className} {...rest}>{children}</code></LocalTextFileLink>;
+    return <LocalTextFileLink path={reference.path} cwd={cwd} line={reference.line} column={reference.column} previewOnly><code className={className} {...rest}>{children}</code></LocalTextFileLink>;
   }
   return <code className={className} {...rest}>{children}</code>;
 }

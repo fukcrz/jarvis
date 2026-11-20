@@ -252,6 +252,19 @@ describe("MarkdownMessage", () => {
     }
   });
 
+  it("renders auto-detected inline file candidates as plain code until confirmed", () => {
+    const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+      text: "前端 `web.example.com`、API `api.example.com`、迁移 `0028_chilly_expediter.sql`",
+      baseDir: "/ws",
+      interactiveFiles: true,
+    }));
+
+    expect(markup).toContain("<code>web.example.com</code>");
+    expect(markup).toContain("<code>api.example.com</code>");
+    expect(markup).toContain("<code>0028_chilly_expediter.sql</code>");
+    expect(markup).not.toContain("/api/files");
+  });
+
   it("keeps non-text local links as downloads when interactive previews are enabled", () => {
     const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
       text: "打开 [源码](src/app.ts) 和 [设计稿](docs/design.pdf)",
@@ -259,7 +272,7 @@ describe("MarkdownMessage", () => {
       interactiveFiles: true,
     }));
 
-    // 静态渲染时尚未确认可预览，使用附件下载回退链接。
+    // 显式 Markdown 链接在探测期间保留原有文件入口。
     expect(markup).toContain('href="/api/files?path=src%2Fapp.ts&amp;cwd=%2Fws&amp;download=1"');
     expect(markup).toContain('download=""');
     expect(markup).toContain(">源码<");
