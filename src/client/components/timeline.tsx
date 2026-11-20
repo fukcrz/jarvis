@@ -1181,6 +1181,7 @@ function groupTimelineItemsInternal(items: TimelineItem[], includeRunOutcomes: b
 
   for (const item of items) {
     if (item.kind === "tool") {
+      if (item.subagent !== undefined || ["subagent", "agent_spawn", "agent_wait", "agent_status", "agent_steer", "agent_stop"].includes(item.name)) continue;
       if (tools.length > 0 && isUserCommand(tools[0]!) !== isUserCommand(item)) flushTools();
       tools.push(item);
     } else {
@@ -1261,7 +1262,7 @@ export function isReplyEntry(entry: TimelineRenderItem, stepIds: ReadonlySet<str
   return owner === undefined ? trailing : !stepIds.has(owner);
 }
 
-/** 待回答问询和用户 !cmd 不参与折叠。子代理记录收进过程，折叠外只留卡片。 */
+/** 待回答问询和用户 !cmd 不参与折叠。 */
 function isInlineEntry(entry: TimelineRenderItem): boolean {
   if (entry.kind === "extension-ui") return entry.item.outcome === undefined;
   return entry.kind === "activity" && entry.items.every(isUserCommand);
@@ -1556,7 +1557,7 @@ export function presentTurnProcess(entries: TimelineRenderItem[]): PresentedTurn
     customAnswers,
     entries: entries.flatMap((entry): TimelineRenderItem[] => {
       if (entry.kind === "activity") {
-        const items = entry.items.filter((item) => item.name !== "ask_user_question" && item.name !== "session_update");
+        const items = entry.items.filter((item) => item.name !== "ask_user_question" && item.name !== "session_update" && item.subagent === undefined && !["subagent", "agent_spawn", "agent_wait", "agent_status", "agent_steer", "agent_stop"].includes(item.name));
         return items.length === 0 ? [] : [{ kind: "activity", items }];
       }
       if (entry.kind === "extension-ui" && hidden.has(entry.item.id)) return [];

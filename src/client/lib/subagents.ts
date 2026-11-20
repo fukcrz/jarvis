@@ -1,5 +1,9 @@
 import type { SubagentThreadRow } from "../../shared/protocol";
 
+export function subagentRecordMatchesPath(record: Pick<HTMLElement, "dataset">, path: string): boolean {
+  return record.dataset.subagentPaths?.split(" ").includes(path) ?? false;
+}
+
 /** 点线程要回溯多少页历史；超过就承认找不到。 */
 const SUBAGENT_REACH_PAGE_LIMIT = 20;
 
@@ -49,7 +53,8 @@ export function formatElapsedMs(value: number): string {
  */
 export function subagentCard(path: string): HTMLElement | null {
   if (typeof document === "undefined") return null;
-  return document.querySelector<HTMLElement>(`[data-subagent-paths~="${CSS.escape(path)}"]`);
+  return [...document.querySelectorAll<HTMLElement>(".subagent-record")]
+    .find((record) => subagentRecordMatchesPath(record, path)) ?? null;
 }
 
 /** 下一页渲染完后才算真正可见，等两帧。 */
@@ -85,10 +90,7 @@ function scrollCardIntoView(card: HTMLElement): void {
   scroller.dispatchEvent(new Event("scroll"));
 }
 
-/**
- * 点状态行里的线程，滚到对应的子代理卡片并闪一下。
- * 卡片在折叠的过程块里时逐层展开（从最近的回合往上找），展开后仍没有则返回 false。
- */
+/** 点状态行里的线程，滚到对应的子代理过程记录并闪一下。 */
 export async function revealSubagentThread(path: string): Promise<boolean> {
   if (typeof document === "undefined") return false;
   let card = subagentCard(path);
@@ -103,7 +105,6 @@ export async function revealSubagentThread(path: string): Promise<boolean> {
   }
   if (card === null) return false;
   scrollCardIntoView(card);
-  // 记录行点开就是抽屉：胶囊作为当前态入口，直接落到抽屉而不是只滚过去。
   card.querySelector<HTMLElement>(".subagent-record-summary")?.click();
   card.classList.remove("subagent-flash");
   // 同一帧里 remove + add 会被合并，先读一次布局强制重排。

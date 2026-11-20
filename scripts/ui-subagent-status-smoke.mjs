@@ -154,7 +154,7 @@ async function exercise(baseUrl, workspace, label, viewport) {
     await page.keyboard.press("Escape");
     await sheet.waitFor({ state: "hidden" });
 
-    // 点线程行要能进入卡片：卡片所在回合的过程块折叠时整块不渲染，需要先展开再滚过去。
+    // 点线程行定位到过程记录；折叠时整段不渲染，需要先展开再滚过去。
     await page.evaluate(() => {
       const timeline = document.querySelector(".timeline");
       const spacer = document.createElement("div");
@@ -171,12 +171,22 @@ async function exercise(baseUrl, workspace, label, viewport) {
       body.className = "turn-process-body";
       toggle.addEventListener("click", () => {
         if (body.childElementCount > 0) return;
-        const card = document.createElement("article");
-        card.className = "subagent-card";
-        card.setAttribute("data-subagent-paths", "/root/researcher");
-        card.style.height = "48px";
-        card.textContent = "researcher 卡片";
-        body.append(card);
+        const entry = document.createElement("div");
+        entry.className = "turn-visible-entry";
+        const record = document.createElement("article");
+        record.className = "subagent-record";
+        record.setAttribute("data-subagent-paths", "/root/researcher");
+        const summary = document.createElement("button");
+        summary.className = "tool-summary subagent-record-summary";
+        summary.innerHTML = '<span class="subagent-type-dot" data-tone="blue"></span><span class="subagent-record-verb">派发</span><span class="subagent-role">researcher</span><span class="tool-title"></span><span class="subagent-record-facts">6:10 · 1.1m tok</span><span class="subagent-open-icon">›</span>';
+        summary.querySelector(".tool-title").textContent = "Read-only review of shared UI frame (app/src/index.css, app/src/components/Screen, StatusBar, BottomNavbar and other shared layout components) against existing rules";
+        record.append(summary);
+        entry.append(record);
+        const following = document.createElement("div");
+        following.className = "subagent-fixture-next";
+        following.textContent = "Get-Content app/src/prototype/routes.tsx -TotalCount 120";
+        entry.append(following);
+        body.append(entry);
         toggle.setAttribute("aria-expanded", "true");
       });
       section.append(toggle, body);
@@ -197,9 +207,14 @@ async function exercise(baseUrl, workspace, label, viewport) {
       expanded: document.querySelector(".turn-process-summary")?.getAttribute("aria-expanded"),
       inViewport: (() => { const box = document.querySelector('[data-subagent-paths~=\"/root/researcher\"]').getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; })(),
     }));
-    assert.equal(revealed.expanded, "true", `${label}: reaching the card must expand the folded process`);
-    assert.equal(revealed.inViewport, true, `${label}: revealed card must end up in view`);
-    await page.screenshot({ path: join(shotDir, `${label}-status-reveal.png`) });
+    assert.equal(revealed.expanded, "true", `${label}: reaching the process record must expand the folded process`);
+    assert.equal(revealed.inViewport, true, `${label}: revealed record must end up in view`);
+    assert.equal(await page.locator(".subagent-card").count(), 0, `${label}: timeline must not render subagent cards`);
+    await page.evaluate(() => {
+      document.querySelector('[data-subagent-paths~="/root/researcher"]')?.classList.remove("subagent-flash");
+      document.activeElement instanceof HTMLElement && document.activeElement.blur();
+    });
+    await page.locator(".turn-visible-entry:has(.subagent-record)").screenshot({ path: join(shotDir, `${label}-status-reveal.png`) });
     await page.evaluate(() => { for (const node of document.querySelectorAll(".subagent-fixture")) node.remove(); });
 
     await emitSummary(page, { workspaceId: workspace.id, sessionId: session.id, summary: withThreads(base, [threads[2]]) });

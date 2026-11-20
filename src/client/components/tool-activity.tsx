@@ -272,7 +272,6 @@ export function SubagentRecordRow({ record }: { record: SubagentRecord }) {
         <span className="subagent-role">{record.agent}</span>
         <span className="tool-title">{record.prompt}</span>
         {facts === "" ? null : <span className="subagent-record-facts">{facts}</span>}
-        <ChevronRight size={13} className="subagent-open-icon" aria-hidden />
       </button>
       {open ? createPortal(<SubagentDrawer view={viewFromRecord(record)} baseDir={undefined} stateLabel={verb} onClose={() => setOpen(false)} />, document.body) : null}
     </article>

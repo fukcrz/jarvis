@@ -1283,7 +1283,7 @@ export function App() {
 
   const openSubagentThread = (path: string) => {
     void reachSubagentCard(path, stream.loadEarlierOnce).then((found) => {
-      if (!found) setSessionNotice("子代理卡片不在历史中");
+      if (!found) setSessionNotice("子代理过程记录不在历史中");
     });
   };
 

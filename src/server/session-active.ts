@@ -72,7 +72,7 @@ export interface ActiveSession {
   queue: SessionQueue;
   messageQueue: SessionMessageQueue;
   activeTools: Map<string, ToolTimelineItem>;
-  /** Child cards outlive the root model turn; retained for runtime updates. */
+  /** Child tool snapshots retained only to keep runtime thread state fresh. */
   subagentTools?: Map<string, ToolTimelineItem>;
   /** 未结束的子代理线程，按路径索引；会话状态行与侧栏状态点读它。 */
   subagentThreads?: Map<string, SubagentThreadRow>;

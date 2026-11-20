@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentThreadRow } from "../../shared/protocol";
-import { centeredScrollTop, reachSubagentCard, subagentElapsed, subagentStatusLabel, subagentThreadCounts } from "./subagents";
+import { centeredScrollTop, reachSubagentCard, subagentElapsed, subagentRecordMatchesPath, subagentStatusLabel, subagentThreadCounts } from "./subagents";
 
 function row(path: string, state: SubagentThreadRow["state"]): SubagentThreadRow {
   return { path, type: "scout", state, line: "Reading" };
+}
+
+function record(path: string, paths = path): HTMLElement {
+  return { dataset: { subagentPaths: paths } } as HTMLElement;
 }
 
 describe("subagent status line", () => {
@@ -27,12 +31,17 @@ describe("subagent status line", () => {
 
   it("stops paging back once history runs out", async () => {
     let pages = 0;
-    // node 环境没有 DOM，每页都找不到卡片，靠页数上限收口。
     expect(await reachSubagentCard("/root/a", () => { pages += 1; return Promise.resolve(false); })).toBe(false);
     expect(pages).toBe(1);
     pages = 0;
     expect(await reachSubagentCard("/root/a", () => { pages += 1; return Promise.resolve(true); })).toBe(false);
     expect(pages).toBe(20);
+  });
+
+  it("locates a process record by its thread path", () => {
+    expect(subagentRecordMatchesPath(record("/root/audit"), "/root/audit")).toBe(true);
+    expect(subagentRecordMatchesPath(record("/root/one", "/root/one /root/two"), "/root/two")).toBe(true);
+    expect(subagentRecordMatchesPath(record("/root/audit"), "/root/other")).toBe(false);
   });
 
   it("centers the card inside the scroller", () => {

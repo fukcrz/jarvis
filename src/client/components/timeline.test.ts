@@ -342,6 +342,24 @@ describe("structured text phases", () => {
 });
 
 describe("presentTurnProcess", () => {
+  it("removes subagent tool cards while preserving surrounding process entries", () => {
+    const card = { ...tool("spawn", "agent_spawn"), subagent: { kind: "pi-subagent" as const, total: 1, completed: 0, running: 1, failed: 0, results: [{ agent: "verifier", prompt: "Review UI", state: "running" as const }] } };
+    const presented = presentTurnProcess([
+      { kind: "activity", items: [tool("read"), card, tool("bash", "bash")] },
+      { kind: "subagent-record", item: { kind: "subagent-record", id: "record", createdAt: "2026-01-01T00:00:00.000Z", path: "/root/review", agent: "verifier", prompt: "Review UI", state: "dispatched" } },
+    ]);
+    expect(presented.entries).toMatchObject([
+      { kind: "activity", items: [{ id: "read" }, { id: "bash" }] },
+      { kind: "subagent-record", item: { id: "record" } },
+    ]);
+  });
+
+  it("does not group subagent tool cards into timeline activity", () => {
+    const card = { ...tool("spawn", "agent_spawn"), subagent: { kind: "pi-subagent" as const, total: 1, completed: 0, running: 1, failed: 0, results: [{ agent: "verifier", prompt: "Review", state: "running" as const }] } };
+    const record = { kind: "subagent-record" as const, id: "record", createdAt: card.createdAt, path: "/root/review", agent: "verifier", prompt: "Review", state: "dispatched" as const };
+    expect(groupTimelineItems([card, record])).toEqual([{ kind: "subagent-record", item: record }]);
+  });
+
   it("drops internal session updates along with the ask tool and custom follow-up", () => {
     const select: ExtensionUiTimelineItem = {
       kind: "extension-ui",
