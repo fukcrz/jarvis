@@ -24,6 +24,15 @@ export function sessionRouteNeedsSync(
     || (pathSessionId !== undefined && pathSessionId !== sessionId);
 }
 
+/**
+ * 路由里的会话 id 在已加载的列表里不存在（刚删除、别的项目）。
+ * 列表已加载时不要把这种 id 写回 state：交给过期路由校正处理，
+ * 否则导航还在途中时旧路由会被反复写回，形成死循环。
+ */
+export function routeSessionMissing(pathSessionId: string | undefined, sessions: readonly { id: string }[] | undefined): boolean {
+  return pathSessionId !== undefined && sessions !== undefined && !sessions.some((session) => session.id === pathSessionId);
+}
+
 export function readSessionFocusMode(): boolean {
   try {
     return window.localStorage.getItem(SESSION_FOCUS_STORAGE_KEY) === "true";

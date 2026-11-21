@@ -40,7 +40,7 @@ import {
   withoutKeys,
   withoutSession,
 } from "./lib/socket-sync";
-import { isChatPath, pathParams, readDrafts, readExpandedWorkspaces, readSessionFocusMode, SESSION_FOCUS_STORAGE_KEY, sessionRouteNeedsSync } from "./lib/app-storage";
+import { isChatPath, pathParams, readDrafts, readExpandedWorkspaces, readSessionFocusMode, routeSessionMissing, SESSION_FOCUS_STORAGE_KEY, sessionRouteNeedsSync } from "./lib/app-storage";
 import { markSessionUserActivity, mergeWorkspace, sessionCleanupConfirmMessage } from "./lib/session-list";
 import { composerImageAttachments, sameImageAttachments } from "./lib/image";
 import { mergeQueuedMessagesIntoDraft } from "./lib/composer-draft";
@@ -116,12 +116,14 @@ export function App() {
   useEffect(() => {
     const { workspaceId: pathWorkspaceId, sessionId: pathSessionId } = pathParams(location.pathname);
     if (pathWorkspaceId !== undefined && pathWorkspaceId !== workspaceId) setWorkspaceId(pathWorkspaceId);
+    // 路由指向的会话已从列表消失（刚删除）：不要写回 state，交给过期路由校正那次 effect。
+    if (routeSessionMissing(pathSessionId, pathWorkspaceId === undefined ? undefined : sessionsByWorkspace[pathWorkspaceId])) return;
     if (isMobile) {
       if (pathSessionId !== sessionId) setSessionId(pathSessionId);
     } else if (pathSessionId !== undefined && pathSessionId !== sessionId) {
       setSessionId(pathSessionId);
     }
-  }, [isMobile, location.pathname, workspaceId, sessionId]);
+  }, [isMobile, location.pathname, workspaceId, sessionId, sessionsByWorkspace]);
 
   // First visit (empty hash): mobile lands on the global session list; desktop restores its previous workspace.
   useEffect(() => {

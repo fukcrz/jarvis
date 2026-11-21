@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isChatPath, pathParams, sessionRouteNeedsSync } from "./app-storage";
+import { isChatPath, pathParams, routeSessionMissing, sessionRouteNeedsSync } from "./app-storage";
 
 describe("pathParams", () => {
   it("reads chat workspace and session ids", () => {
@@ -37,5 +37,23 @@ describe("sessionRouteNeedsSync", () => {
 
   it("does not wait on the session list", () => {
     expect(sessionRouteNeedsSync(undefined, undefined, "a", undefined)).toBe(false);
+  });
+});
+
+describe("routeSessionMissing", () => {
+  it("flags a route session that the loaded list no longer has", () => {
+    expect(routeSessionMissing("s1", [{ id: "s2" }])).toBe(true);
+  });
+
+  it("keeps a session that is still listed", () => {
+    expect(routeSessionMissing("s1", [{ id: "s1" }])).toBe(false);
+  });
+
+  it("does not judge before the list is loaded", () => {
+    expect(routeSessionMissing("s1", undefined)).toBe(false);
+  });
+
+  it("ignores routes without a session id", () => {
+    expect(routeSessionMissing(undefined, [])).toBe(false);
   });
 });
