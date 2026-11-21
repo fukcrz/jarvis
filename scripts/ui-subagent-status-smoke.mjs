@@ -172,7 +172,7 @@ async function exercise(baseUrl, workspace, label, viewport) {
       toggle.addEventListener("click", () => {
         if (body.childElementCount > 0) return;
         const entry = document.createElement("div");
-        entry.className = "turn-visible-entry";
+        entry.className = "turn-process-entry";
         const record = document.createElement("article");
         record.className = "subagent-record";
         record.setAttribute("data-subagent-paths", "/root/researcher");
@@ -210,11 +210,31 @@ async function exercise(baseUrl, workspace, label, viewport) {
     assert.equal(revealed.expanded, "true", `${label}: reaching the process record must expand the folded process`);
     assert.equal(revealed.inViewport, true, `${label}: revealed record must end up in view`);
     assert.equal(await page.locator(".subagent-card").count(), 0, `${label}: timeline must not render subagent cards`);
+    // 记录行在真实过程结构里必须仍是单行：标题省略号，不换行、不回退成工具行的网格布局。
+    const recordLine = await page.evaluate(() => {
+      const summary = document.querySelector("[data-subagent-paths~='/root/researcher'] .subagent-record-summary");
+      const title = summary.querySelector(".tool-title");
+      const style = getComputedStyle(summary);
+      return {
+        display: style.display,
+        nowrap: getComputedStyle(title).whiteSpace,
+        overflow: getComputedStyle(title).overflow,
+        height: Math.round(summary.getBoundingClientRect().height),
+        dots: summary.querySelectorAll(".subagent-type-dot").length,
+        verb: summary.querySelector(".subagent-record-verb")?.textContent?.trim(),
+      };
+    });
+    assert.equal(recordLine.display, "flex", `${label}: record summary must keep its own row layout`);
+    assert.equal(recordLine.nowrap, "nowrap", `${label}: record title must stay on one line`);
+    assert.equal(recordLine.overflow, "hidden", `${label}: record title must clip with ellipsis`);
+    assert.ok(recordLine.height <= 32, `${label}: record summary must stay single-line, got ${recordLine.height}px`);
+    assert.equal(recordLine.dots, 1, `${label}: record keeps exactly one type dot`);
+    assert.equal(recordLine.verb, "派发", `${label}: record verb`);
     await page.evaluate(() => {
       document.querySelector('[data-subagent-paths~="/root/researcher"]')?.classList.remove("subagent-flash");
       document.activeElement instanceof HTMLElement && document.activeElement.blur();
     });
-    await page.locator(".turn-visible-entry:has(.subagent-record)").screenshot({ path: join(shotDir, `${label}-status-reveal.png`) });
+    await page.locator(".turn-process-entry:has(.subagent-record)").screenshot({ path: join(shotDir, `${label}-status-reveal.png`) });
     await page.evaluate(() => { for (const node of document.querySelectorAll(".subagent-fixture")) node.remove(); });
 
     await emitSummary(page, { workspaceId: workspace.id, sessionId: session.id, summary: withThreads(base, [threads[2]]) });
