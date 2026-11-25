@@ -1,4 +1,4 @@
-import { crc32, deflateRawSync } from "node:zlib";
+import { crc32, deflateRawSync, inflateRawSync } from "node:zlib";
 
 export interface ZipInput {
   name: string;
@@ -55,6 +55,33 @@ export function createZip(entries: readonly ZipInput[]): Buffer {
   end.writeUInt32LE(centralSize, 12);
   end.writeUInt32LE(offset, 16);
   return Buffer.concat([...locals, ...centrals, end]);
+}
+
+/**
+ * 读出 zip 里每个文件的名字与内容，并校验 CRC。
+ * 只支持本文件写出的格式（deflate、无 zip64），够测试和诊断包回读用。
+ */
+export function readZip(data: Buffer): Map<string, string> {
+  const end = data.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (end < 0) throw new Error("不是有效的 zip：找不到中央目录结尾");
+  const count = data.readUInt16LE(end + 10);
+  let offset = data.readUInt32LE(end + 16);
+  const files = new Map<string, string>();
+  for (let index = 0; index < count; index += 1) {
+    if (data.readUInt32LE(offset) !== 0x02014b50) throw new Error(`zip 中央目录第 ${index} 项损坏`);
+    const expectedCrc = data.readUInt32LE(offset + 16);
+    const compressedSize = data.readUInt32LE(offset + 20);
+    const nameLength = data.readUInt16LE(offset + 28);
+    const local = data.readUInt32LE(offset + 42);
+    const name = data.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
+    const localNameLength = data.readUInt16LE(local + 26);
+    const body = data.subarray(local + 30 + localNameLength, local + 30 + localNameLength + compressedSize);
+    const content = inflateRawSync(body);
+    if ((crc32(content) >>> 0) !== expectedCrc) throw new Error(`zip 条目 ${name} 的 CRC 对不上`);
+    files.set(name, content.toString("utf8"));
+    offset += 46 + nameLength;
+  }
+  return files;
 }
 
 function dosDateTime(date: Date): { time: number; day: number } {

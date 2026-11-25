@@ -24,8 +24,14 @@ export const RECOMMENDED_PACKAGES: readonly RecommendedPackageSpec[] = [
   { name: "pi-playwright", source: "npm:pi-playwright" },
 ];
 
-/** 已下线的推荐插件：两个 subagent 插件同时装会抢 `/agents`，启动时必须清掉。 */
-const RETIRED_PACKAGES: readonly string[] = ["@parke.dev/pi-subagent"];
+/**
+ * 已下线的推荐插件：两个 subagent 插件同时装会抢 `/agents`，启动时必须清掉。
+ * `@mjakl/pi-subagent` 和 `@parke.dev/pi-subagent` 是 0.1.31 之前的两代推荐包，升上来时会留在用户配置里。
+ */
+const RETIRED_PACKAGES: readonly string[] = ["@mjakl/pi-subagent", "@parke.dev/pi-subagent"];
+
+/** 已下线推荐包的本地路径条目：包名读不到时（目录已被删）靠路径识别并摘掉配置。 */
+const RETIRED_LOCAL_PATHS: readonly string[] = ["vendor/pi-subagent"];
 
 interface PluginPrefs { version: 1; disabledBundled: string[]; disabledRecommended: string[]; }
 
@@ -359,8 +365,10 @@ export class PluginService {
   private async removeRetiredPackages(installed: readonly InstalledPluginStatus[]): Promise<void> {
     for (const entry of installed) {
       const name = packageNameFromSource(entry.source) ?? entry.name;
-      if (!RETIRED_PACKAGES.includes(name)) continue;
+      const localRetired = isRetiredLocalSource(entry.source);
+      if (!RETIRED_PACKAGES.includes(name) && !localRetired) continue;
       try {
+        // 只摘配置条目，不删盘上目录：目录可能是用户自己改过的，留着不影响加载。
         await this.packages.removeAndPersist(entry.source);
       } catch (error) {
         this.log(`Retired plugin removal failed for ${name}: ${asMessage(error)}`);
@@ -442,6 +450,13 @@ async function readInstalledVersion(path: string | undefined): Promise<string | 
   const manifest = await readInstalledManifest(path);
   const version = manifest?.["version"];
   return typeof version === "string" ? version : undefined;
+}
+
+/** 已下线推荐包的本地路径条目：配置里可能是相对路径，也可能是绝对路径。 */
+function isRetiredLocalSource(source: string): boolean {
+  if (source.startsWith("npm:") || source.startsWith("git:") || /^https?:/i.test(source)) return false;
+  const normalized = source.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  return RETIRED_LOCAL_PATHS.some((path) => normalized === path || normalized.endsWith(`/${path}`));
 }
 
 function stringList(value: unknown): string[] {

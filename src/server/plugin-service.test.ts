@@ -2,9 +2,14 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { PackageManager } from "@earendil-works/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pluginContentHash } from "./plugin-reconcile.js";
 import { PluginService } from "./plugin-service.js";
+
+// 每条用例都要真拷一遍插件种子（含 node_modules），CI 的 Windows 磁盘偶尔会超过默认 5 秒。
+beforeEach(() => {
+  vi.setConfig({ testTimeout: 60_000 });
+});
 
 class FakePackages {
   readonly calls: string[] = [];
@@ -142,6 +147,26 @@ describe("plugin service isolation", () => {
     expect(harness.packages.calls).not.toContain("install:npm:pi-subagent-manager");
     expect(harness.packages.calls).toContain(`install:${join(harness.agentDir, "plugins", "pi-subagent-manager")}`);
     expect(harness.packages.sources.map((item) => item.source)).not.toContain("git:github.com/LukasParke/pi-subagent");
+  });
+
+  it("removes every retired subagent generation, including the npm copy and the dead local vendor path", async () => {
+    const harness = await createHarness();
+    const old = join(harness.agentDir, "npm", "node_modules", "@mjakl", "pi-subagent");
+    const vendor = join(harness.agentDir, "vendor", "pi-subagent");
+    await mkdir(old, { recursive: true });
+    await writeFile(join(old, "package.json"), JSON.stringify({ name: "@mjakl/pi-subagent", version: "3.1.0" }), "utf8");
+    // vendor 目录已经在 0.1.30 之后删掉，升级后只剩一条指向不存在目录的配置。
+    harness.packages.sources.push(
+      { source: "npm:@mjakl/pi-subagent", installedPath: old },
+      { source: "./vendor/pi-subagent", installedPath: vendor },
+    );
+    await harness.service.ensureRecommended();
+    expect(harness.packages.calls).toContain("remove:npm:@mjakl/pi-subagent");
+    expect(harness.packages.calls).toContain("remove:./vendor/pi-subagent");
+    const sources = harness.packages.sources.map((item) => item.source);
+    expect(sources).not.toContain("npm:@mjakl/pi-subagent");
+    expect(sources).not.toContain("./vendor/pi-subagent");
+    expect(sources).toContain(join(harness.agentDir, "plugins", "pi-subagent-manager"));
   });
 
   it("seeds the local subagent plugin and its runtime dependencies from the shipped copy", async () => {

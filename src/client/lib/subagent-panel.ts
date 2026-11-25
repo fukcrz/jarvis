@@ -1,4 +1,4 @@
-import type { SubagentCallState, SubagentCallView, SubagentStreamItem, SubagentThreadRow, SubagentUsageView, ThinkingLevel, TimelineItem } from "../../shared/protocol";
+import type { SubagentCallState, SubagentCallView, SubagentRecord, SubagentStreamItem, SubagentThreadRow, SubagentUsageView, ThinkingLevel, TimelineItem } from "../../shared/protocol";
 import { formatElapsedMs } from "./subagents";
 
 /** 侧栏里的一行线程：由时间线里的 agent_* 工具卡片摊平而来。 */
@@ -11,6 +11,8 @@ export interface SubagentPanelThread {
   /** 任务的短标签。 */
   label?: string;
   prompt: string;
+  /** 完整任务原文；详情页的「任务」用它。 */
+  fullPrompt?: string;
   state: SubagentCallState;
   /** path 的层级深度，用来缩进。 */
   depth: number;
@@ -106,6 +108,31 @@ export function mergeLiveSubagentThreads(
 export interface SubagentThreadNode {
   thread: SubagentPanelThread;
   children: SubagentThreadNode[];
+}
+
+/**
+ * 时间线里的状态记录也是一条完整线程：路径、类型、任务、终态输出都在里面。
+ * 详情页靠它打开，不要求当前页还保留着当初那条工具记录。
+ */
+export function threadFromRecord(record: SubagentRecord): SubagentPanelThread {
+  const thread: SubagentPanelThread = {
+    key: `record:${record.path}`,
+    path: record.path,
+    agent: record.agent,
+    prompt: record.prompt,
+    state: record.state === "dispatched" ? "running" : record.state === "stopped" ? "cancelled" : record.state,
+    depth: pathDepth(record.path),
+    steps: [],
+    line: record.error === undefined ? record.prompt : record.error,
+  };
+  const started = record.state === "dispatched" ? record.createdAt : undefined;
+  if (started !== undefined) thread.startedAt = started;
+  if (record.durationMs !== undefined) thread.durationMs = record.durationMs;
+  if (record.threadSessionId !== undefined) thread.threadSessionId = record.threadSessionId;
+  if (record.output !== undefined) thread.output = record.output;
+  if (record.error !== undefined) thread.error = record.error;
+  if (record.fullPrompt !== undefined) thread.fullPrompt = record.fullPrompt;
+  return thread;
 }
 
 /** 按 parent 路径挂到父线程下。父线程不在当前列表里时，该节点仍作为根，缩进仍由路径深度决定。 */

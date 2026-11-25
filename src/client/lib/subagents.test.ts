@@ -7,7 +7,7 @@ function row(path: string, state: SubagentThreadRow["state"]): SubagentThreadRow
 }
 
 function record(path: string, paths = path): HTMLElement {
-  return { dataset: { subagentPaths: paths } } as HTMLElement;
+  return { dataset: { subagentPaths: paths } } as unknown as HTMLElement;
 }
 
 describe("subagent status line", () => {

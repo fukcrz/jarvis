@@ -243,6 +243,7 @@ function recordFromView(view: Record<string, unknown>, state: SubagentRecord["st
   const tokens = state === "dispatched" ? 0 : (numberValue(view["inputTokens"]) ?? 0) + (numberValue(view["outputTokens"]) ?? 0);
   const output = state === "dispatched" ? "" : truncateText(stringValue(view["output"]), MAX_SUBAGENT_OUTPUT_CHARS);
   const error = state === "failed" ? truncateText(stringValue(view["error"]), MAX_SUBAGENT_ERROR_CHARS) : "";
+  const threadSessionId = threadSessionIdFromFile(stringValue(view["sessionFile"]));
   return {
     kind: "subagent-record",
     id: `subagent-record:${path}:${state}`,
@@ -256,6 +257,7 @@ function recordFromView(view: Record<string, unknown>, state: SubagentRecord["st
     ...(output === "" ? {} : { output }),
     ...(error === "" ? {} : { error }),
     fullPrompt: truncateText(task, MAX_SUBAGENT_FULL_PROMPT_CHARS),
+    ...(threadSessionId === undefined ? {} : { threadSessionId }),
   };
 }
 

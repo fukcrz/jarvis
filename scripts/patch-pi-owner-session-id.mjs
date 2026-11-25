@@ -67,6 +67,13 @@ async function replaceOneOf(path, replacements, { critical = false } = {}) {
   await writeFile(path, source.replace(before, after), "utf8");
 }
 
+/** pi-playwright 新版本自己就用 process.execPath 启 CLI 并传了 windowsHide，无需再打。 */
+async function isPlaywrightRuntimeAlreadyHidden(path) {
+  const source = await readFile(path, "utf8");
+  return source.includes("const result = spawn(process.execPath, [entry, ...finalArgs], {")
+    && source.includes("windowsHide: true,");
+}
+
 for (const piAiTypes of piAiTypePaths) {
   await replaceOneOf(piAiTypes, [
     {
@@ -156,10 +163,19 @@ if (existsSync(clipboardCommandPath)) {
     'const options = { input: text, timeout: 5000, stdio: ["pipe", "ignore", "ignore"], windowsHide: true };',
   );
 }
-await replaceOnce(
+await replaceOneOf(
   join(codingAgentUtils, "open-browser.js"),
-  'spawn(cmd, args, { stdio: "ignore", detached: true })',
-  'spawn(cmd, args, { stdio: "ignore", detached: process.platform !== "win32", windowsHide: true })',
+  [
+    {
+      before: 'spawn(cmd, args, { stdio: "ignore", detached: true })',
+      after: 'spawn(cmd, args, { stdio: "ignore", detached: process.platform !== "win32", windowsHide: true })',
+    },
+    {
+      // 1.3+ 给 launcher 定义了 cwd，WSL 下避免 MAX_PATH。Windows 只需补 window 隐藏。
+      before: 'spawn(cmd, args, { stdio: "ignore", detached: true, cwd: "/" })',
+      after: 'spawn(cmd, args, { stdio: "ignore", detached: process.platform !== "win32", cwd: "/", windowsHide: true })',
+    },
+  ],
 );
 await replaceOnce(
   join(codingAgentUtils, "shell.js"),
@@ -208,10 +224,19 @@ await replaceOnce(
 // The SDK's primary Bash runner already hides its console. Cover its other
 // automatic child-process paths too, including extension pi.exec and the
 // built-in grep/find tools.
-await replaceOnce(
+await replaceOneOf(
   join(codingAgentDist, "exec.js"),
-  "            shell: false,\n            stdio: [\"ignore\", \"pipe\", \"pipe\"],\n        });",
-  "            shell: false,\n            stdio: [\"ignore\", \"pipe\", \"pipe\"],\n            windowsHide: true,\n        });",
+  [
+    {
+      before: "            shell: false,\n            stdio: [\"ignore\", \"pipe\", \"pipe\"],\n        });",
+      after: "            shell: false,\n            stdio: [\"ignore\", \"pipe\", \"pipe\"],\n            windowsHide: true,\n        });",
+    },
+    {
+      // 1.3+ 在 shell 前面多了一行 cwd。
+      before: "        shell: false,\n        stdio: [\"ignore\", \"pipe\", \"pipe\"],\n    });",
+      after: "        shell: false,\n        stdio: [\"ignore\", \"pipe\", \"pipe\"],\n        windowsHide: true,\n    });",
+    },
+  ],
 );
 
 await replaceOnce(
@@ -401,6 +426,8 @@ const playwrightRoots = [
 for (const base of new Set(playwrightRoots)) {
   const runtime = join(base, "skills/playwright-browser/scripts/lib/runtime.js");
   if (!existsSync(runtime)) continue;
+  // 0.1.2 起 pi-playwright 自己就用 process.execPath 启动 CLI 并传 windowsHide，这里只需补旧版。
+  if (isPlaywrightRuntimeAlreadyHidden(runtime)) continue;
   await replaceOnce(runtime,
     '  const result = spawnSync(bin, finalArgs, {',
     '  const result = spawnSync(process.platform === "win32" ? process.execPath : bin, process.platform === "win32" ? [join(packageRoot, "node_modules", "@playwright", "cli", "playwright-cli.js"), ...finalArgs] : finalArgs, {');

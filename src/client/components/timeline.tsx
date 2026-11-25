@@ -56,6 +56,8 @@ interface TimelineProps {
   outline?: UserMessageOutline[];
   outlineLoading?: boolean;
   onEnsureMessage?: (id: string) => Promise<void>;
+  /** 点开关过程里的子代理记录：交给上层打开统一的线程详情。 */
+  onOpenSubagentRecord?: (record: SubagentRecord) => void;
 }
 
 /** Distance from the bottom (px) within which the list is considered "following" the latest content. */
@@ -144,7 +146,7 @@ export function visibleNavigatorAnchorIds(anchors: UserMessageAnchor[], activeId
   return visible;
 }
 
-export function Timeline({ sessionKey, localMediaVersion, items, streamingMessageId, liveGeneration, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onRetryTurn, onContinue, onDismissInterrupted, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage }: TimelineProps) {
+export function Timeline({ sessionKey, localMediaVersion, items, streamingMessageId, liveGeneration, hasMore, loadingMore, onLoadMore, error, notice, onDismissNotice, status, onRetryCompaction, onRetryTurn, onContinue, onDismissInterrupted, onEditUserMessage, onForkMessage, onExtensionUiRespond, workspaceCwd, navigatorOpen = false, onNavigatorOpenChange, outline, outlineLoading = false, onEnsureMessage, onOpenSubagentRecord }: TimelineProps) {
   const [foldState, setFoldState] = useState<TimelineFoldState>(() => emptyTimelineFoldState(sessionKey));
   const foldStateForRender = foldState.sessionKey === sessionKey ? foldState : emptyTimelineFoldState(sessionKey);
   // 判定只看结构且与运行状态无关：运行中只是不折叠，结算时不重新分类。
@@ -492,7 +494,7 @@ export function Timeline({ sessionKey, localMediaVersion, items, streamingMessag
           <div className="timeline-feed">
             {hasMore ? <button type="button" className="timeline-load-earlier" disabled={loadingMore} onClick={() => { void loadEarlier(); }}>{loadingMore ? "加载中" : "更早"}</button> : null}
             <LocalMediaVersionContext.Provider value={localMediaVersion}>
-              {renderTimelineTurns(turns, streamingMessageId, liveGeneration, status, foldStateForRender, toggleProcess, toggleDetail, toggleGroup, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, workspaceCwd, highlightedMessageId, status.runState === "idle" ? onRetryTurn : undefined, status.runState === "idle" ? onContinue : undefined, onRetryCompaction, onDismissInterrupted, showInlineRunStatus ? runActivity : undefined, runStatusTurnKey)}
+              {renderTimelineTurns(turns, streamingMessageId, liveGeneration, status, foldStateForRender, toggleProcess, toggleDetail, toggleGroup, onExtensionUiRespond === undefined ? undefined : stableOnExtensionUiRespond, onEditUserMessage === undefined ? undefined : stableOnEditUserMessage, onForkMessage === undefined ? undefined : stableOnForkMessage, workspaceCwd, highlightedMessageId, status.runState === "idle" ? onRetryTurn : undefined, status.runState === "idle" ? onContinue : undefined, onRetryCompaction, onDismissInterrupted, showInlineRunStatus ? runActivity : undefined, runStatusTurnKey, onOpenSubagentRecord)}
             </LocalMediaVersionContext.Provider>
             {notice === undefined ? null : <div className="session-notice" role="status"><span>{notice}</span>{onDismissNotice === undefined ? null : <Button variant="ghost" size="icon" aria-label="关闭提示" onClick={onDismissNotice}><X size={14} /></Button>}</div>}
             {error === undefined ? null : <div className="session-error" role="alert">{error}</div>}
@@ -1527,6 +1529,7 @@ interface TurnRenderContext {
   onDismissInterrupted?: TimelineProps["onDismissInterrupted"];
   /** 整轮运行结束前：过程不收进「过程」，进行中的工具组不自动收起。 */
   inlineProcess?: boolean;
+  onOpenSubagentRecord?: (record: SubagentRecord) => void;
 }
 
 export interface PresentedTurnProcess {
@@ -1591,7 +1594,7 @@ function renderTimelineEntry(entry: TimelineRenderItem, context: TurnRenderConte
   if (entry.kind === "error") return <ErrorItem key={`error:${entry.items[0]?.id ?? "empty"}`} items={entry.items} />;
   if (entry.kind === "context-summary") return <ContextSummaryItem key={entry.item.id} item={entry.item} baseDir={context.workspaceCwd} />;
   if (entry.kind === "notice") return <p className="timeline-notice" key={entry.item.id}>{entry.item.text}</p>;
-  if (entry.kind === "subagent-record") return <SubagentRecordRow key={entry.item.id} record={entry.item} />;
+  if (entry.kind === "subagent-record") return <SubagentRecordRow key={entry.item.id} record={entry.item} {...(context.onOpenSubagentRecord === undefined ? {} : { onOpen: context.onOpenSubagentRecord })} />;
   if (entry.kind === "run-outcome") return null;
   if (entry.kind === "extension-ui") return <ExtensionUiOperation key={entry.item.id} item={entry.item} onRespond={context.onExtensionUiRespond} customText={context.customAnswers?.get(entry.item.id)} />;
   if (entry.kind === "thinking") {
@@ -1752,8 +1755,8 @@ function TimelineTurnBlock({ turn, live, foldState, onToggleProcess, onTogglePro
   </>;
 }
 
-function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string, open: boolean) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string, currentlyCollapsed: boolean) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined, onRetryTurn?: TimelineProps["onRetryTurn"], onContinue?: TimelineProps["onContinue"], onRetryCompaction?: TimelineProps["onRetryCompaction"], onDismissInterrupted?: TimelineProps["onDismissInterrupted"], runStatusActivity?: RunStatusActivity, runStatusTurnKey?: string): ReactNode[] {
-  const context: TurnRenderContext = { streamingMessageId, liveGeneration, status, openDetailIds: foldState.openDetailIds, closedDetailIds: foldState.closedDetailIds, openGroupIds: foldState.openGroupIds, closedGroupIds: foldState.closedGroupIds, onToggleDetail: () => undefined, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage, onRetryTurn, onContinue, onRetryCompaction, onDismissInterrupted, runStatusActivity, runStatusStartedAt: status.activeRun?.startedAt, runStatusTurnKey };
+function renderTimelineTurns(turns: TimelineTurn[], streamingMessageId: string | undefined, liveGeneration: LiveGenerationStats | undefined, status: SessionStatus, foldState: TimelineFoldState, onToggleProcess: (id: string, open: boolean) => void, onToggleProcessDetail: (processId: string, detailId: string, parentShowingAll: boolean) => void, onToggleProcessGroup: (processId: string, groupId: string, currentlyCollapsed: boolean) => void, onExtensionUiRespond: TimelineProps["onExtensionUiRespond"], onEditUserMessage: TimelineProps["onEditUserMessage"], onForkMessage: TimelineProps["onForkMessage"], workspaceCwd: string | undefined, highlightedMessageId: string | undefined, onRetryTurn?: TimelineProps["onRetryTurn"], onContinue?: TimelineProps["onContinue"], onRetryCompaction?: TimelineProps["onRetryCompaction"], onDismissInterrupted?: TimelineProps["onDismissInterrupted"], runStatusActivity?: RunStatusActivity, runStatusTurnKey?: string, onOpenSubagentRecord?: (record: SubagentRecord) => void): ReactNode[] {
+  const context: TurnRenderContext = { streamingMessageId, liveGeneration, status, openDetailIds: foldState.openDetailIds, closedDetailIds: foldState.closedDetailIds, openGroupIds: foldState.openGroupIds, closedGroupIds: foldState.closedGroupIds, onToggleDetail: () => undefined, highlightedMessageId, workspaceCwd, onExtensionUiRespond, onEditUserMessage, onForkMessage, onRetryTurn, onContinue, onRetryCompaction, onDismissInterrupted, runStatusActivity, runStatusStartedAt: status.activeRun?.startedAt, runStatusTurnKey, onOpenSubagentRecord };
   const liveTurnKey = activeTimelineTurn(turns, status)?.key;
   return turns.map((turn) => <TimelineTurnBlock key={turn.key} turn={turn} live={turn.key === liveTurnKey} foldState={foldState} {...context} onToggleProcess={onToggleProcess} onToggleProcessDetail={onToggleProcessDetail} onToggleProcessGroup={onToggleProcessGroup} />);
 }

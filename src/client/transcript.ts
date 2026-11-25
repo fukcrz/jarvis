@@ -1,4 +1,4 @@
-import { THINKING_LEVELS, type AssistantGenerationStats, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type FileChange, type ImageAttachment, type LiveGenerationStats, type MessageTimelineItem, type ModelDescriptor, type NoticeTimelineItem, type RetryStatus, type RunOutcomeTimelineItem, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type TokenUsage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol.js";
+import { THINKING_LEVELS, type AssistantGenerationStats, type CompactionReason, type ContextSummaryTimelineItem, type ContextUsage, type ErrorTimelineItem, type ExtensionUiRequest, type ExtensionUiTimelineItem, type FileChange, type ImageAttachment, type LiveGenerationStats, type MessageTimelineItem, type ModelDescriptor, type NoticeTimelineItem, type RetryStatus, type RunOutcomeTimelineItem, type SessionEvent, type SessionModelSnapshot, type SessionQueue, type SessionStatus, type SessionStreamSnapshot, type SessionThinkingSnapshot, type SubagentCallView, type SubagentRecord, type SubagentView, type ThinkingLevel, type ThinkingTimelineItem, type TimelineItem, type TimelinePage, type TokenUsage, type ToolTimelineItem, emptySessionQueue, recordSessionQueue } from "../shared/protocol.js";
 import { isRecord } from "../shared/protocol.js";
 
 export interface TranscriptState {
@@ -411,8 +411,42 @@ function recordTimelineItem(value: unknown): TimelineItem[] {
   if (summary !== undefined) return [summary];
   const notice = recordNotice(value);
   if (notice !== undefined) return [notice];
+  const subagentRecord = recordSubagentRecord(value);
+  if (subagentRecord !== undefined) return [subagentRecord];
   const outcome = recordRunOutcome(value);
   return outcome === undefined ? [] : [outcome];
+}
+
+/** 子代理状态记录：服务端投影的独立时间线条目，不是工具结果。 */
+function recordSubagentRecord(value: unknown): SubagentRecord | undefined {
+  if (!isRecord(value) || value["kind"] !== "subagent-record") return undefined;
+  const state = value["state"];
+  if (state !== "dispatched" && state !== "completed" && state !== "failed" && state !== "stopped") return undefined;
+  if (typeof value["id"] !== "string" || typeof value["createdAt"] !== "string" || typeof value["path"] !== "string" || value["path"] === "") return undefined;
+  if (typeof value["agent"] !== "string" || typeof value["prompt"] !== "string") return undefined;
+  const number = (raw: unknown) => typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+  const text = (raw: unknown) => typeof raw === "string" && raw !== "" ? raw : undefined;
+  const durationMs = number(value["durationMs"]);
+  const tokens = number(value["tokens"]);
+  const output = text(value["output"]);
+  const error = text(value["error"]);
+  const fullPrompt = text(value["fullPrompt"]);
+  const threadSessionId = text(value["threadSessionId"]);
+  return {
+    kind: "subagent-record",
+    id: value["id"],
+    createdAt: value["createdAt"],
+    path: value["path"],
+    agent: value["agent"],
+    prompt: value["prompt"],
+    state,
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(tokens === undefined ? {} : { tokens }),
+    ...(output === undefined ? {} : { output }),
+    ...(error === undefined ? {} : { error }),
+    ...(fullPrompt === undefined ? {} : { fullPrompt }),
+    ...(threadSessionId === undefined ? {} : { threadSessionId }),
+  };
 }
 
 function recordNotice(value: unknown): NoticeTimelineItem | undefined {

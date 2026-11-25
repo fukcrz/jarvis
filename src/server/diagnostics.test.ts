@@ -1,10 +1,9 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inflateRawSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildDiagnosticsZip, sanitizeConfig } from "./diagnostics.js";
-import { createZip } from "./zip.js";
+import { createZip, readZip } from "./zip.js";
 
 let directory: string;
 
@@ -15,25 +14,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(directory, { force: true, recursive: true });
 });
-
-/** 读出 zip 里每个文件的名字和内容（只支持 createZip 产出的格式）。 */
-function readZip(data: Buffer): Map<string, string> {
-  const end = data.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
-  const count = data.readUInt16LE(end + 10);
-  let offset = data.readUInt32LE(end + 16);
-  const files = new Map<string, string>();
-  for (let index = 0; index < count; index += 1) {
-    const compressedSize = data.readUInt32LE(offset + 20);
-    const nameLength = data.readUInt16LE(offset + 28);
-    const local = data.readUInt32LE(offset + 42);
-    const name = data.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
-    const localNameLength = data.readUInt16LE(local + 26);
-    const body = data.subarray(local + 30 + localNameLength, local + 30 + localNameLength + compressedSize);
-    files.set(name, inflateRawSync(body).toString("utf8"));
-    offset += 46 + nameLength;
-  }
-  return files;
-}
 
 describe("createZip", () => {
   it("produces an archive whose entries round-trip", () => {

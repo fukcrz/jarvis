@@ -666,6 +666,8 @@ export interface SubagentRecord {
   error?: string;
   /** 抽屉里看的完整任务。 */
   fullPrompt?: string;
+  /** 子会话 id：详情靠它读历史输出。 */
+  threadSessionId?: string;
 }
 
 export interface SubagentView {

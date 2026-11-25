@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DailySnapshots } from "./snapshot.js";
+import { readZip } from "./zip.js";
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "jarvis-snap-")); });
@@ -23,10 +23,10 @@ describe("DailySnapshots", () => {
 
     expect(await snapshots.ensureToday()).toBe("2026-10-01.zip");
     expect(await snapshots.ensureToday()).toBeUndefined();
-    const listing = execFileSync("unzip", ["-l", join(home, "snapshots", "2026-10-01.zip")], { encoding: "utf8" });
-    expect(listing).toContain("workspaces.json");
-    expect(listing).toContain("agent/jarvis-session-attention.json");
-    expect(listing).not.toContain("notes.txt");
+    const archive = readZip(await readFile(join(home, "snapshots", "2026-10-01.zip")));
+    expect([...archive.keys()].sort()).toEqual(["agent/jarvis-session-attention.json", "workspaces.json"]);
+    expect(archive.get("workspaces.json")).toBe("{\"version\":1}");
+    expect(archive.get("agent/jarvis-session-attention.json")).toBe("{}");
 
     for (const day of [2, 3, 4, 5]) {
       now = new Date(2026, 9, day, 12);

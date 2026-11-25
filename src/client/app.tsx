@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ArrowLeft, ChevronDown, Folder, FolderPlus, MoreVertical, Pencil, Plus } from "lucide-react";
-import type { ComposerCommand, GlobalEvent, ImageAttachment, MessageTimelineItem, ModelDescriptor, RunState, SessionFileReference, SessionRef, SessionSummary, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
+import type { ComposerCommand, GlobalEvent, ImageAttachment, MessageTimelineItem, ModelDescriptor, RunState, SessionFileReference, SessionRef, SessionSummary, SubagentRecord, ThinkingLevel, Workspace, WorkspaceFile } from "../shared/protocol";
 import { api, isSessionConflict, notifyUnauthorized } from "./api";
 import { listenDesktopOpenSession } from "./desktop";
 import { PromptEditor } from "./components/prompt-editor";
@@ -20,7 +20,8 @@ import { FileBrowser } from "./components/file-browser";
 import { SideChatPanel, SideChatToggle } from "./components/side-chat-panel";
 import { RightDock, SubagentToggle, persistDockOpenState, persistDockTab, readDockOpenState, readDockTab, type RightDockTab } from "./components/right-dock";
 import { SubagentPanel } from "./components/subagent-panel";
-import { runningThreadCount, mergeLiveSubagentThreads, subagentPanelThreads } from "./lib/subagent-panel";
+import { runningThreadCount, mergeLiveSubagentThreads, subagentPanelThreads, threadFromRecord } from "./lib/subagent-panel";
+import { SubagentDetail } from "./components/subagent-detail";
 import { ExtensionPanels, ExtensionToasts } from "./components/extension-chrome";
 import { ContextButton } from "./components/context-button";
 import { Button } from "./components/ui/button";
@@ -195,6 +196,9 @@ export function App() {
     setDockTabState(tab);
     persistDockTab(tab);
   }, []);
+  // 从时间线记录点进来的线程：右侧栏据此直接打开详情，移动端开同一个详情的对话框。
+  const [subagentRecordDetail, setSubagentRecordDetail] = useState<SubagentRecord | undefined>();
+  useEffect(() => { setSubagentRecordDetail(undefined); }, [selectedRefKey]);
   const setSideChatOpen = useCallback((open: boolean | ((current: boolean) => boolean), ref: SessionRef | undefined = selectedRef) => {
     if (ref === undefined) return;
     const key = `${ref.workspaceId}:${ref.sessionId}`;
@@ -1289,6 +1293,14 @@ export function App() {
     });
   };
 
+  // 时间线里的子代理记录 → 同一个线程详情：桌面端开右侧栏，移动端开对话框。
+  const openSubagentRecord = (record: SubagentRecord) => {
+    setSubagentRecordDetail(record);
+    if (isMobile) return;
+    setDockTab("subagent");
+    setSideChatOpen(true, selectedRef);
+  };
+
   const sidebar = <Sidebar
     workspaces={visibleWorkspaces}
     allWorkspaces={workspaces}
@@ -1318,7 +1330,7 @@ export function App() {
   const renderChatContent = () => <>
     {pageError === undefined ? null : <div className="page-error" role="alert"><span>{pageError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setPageError(undefined)}>关闭</button></div>}
     {selectedRef === undefined ? <section className="empty-workspace"><FolderPlus size={28} /><h2>未选择会话</h2><Button onClick={() => { void createSession(); }} disabled={workspaceId === undefined}><Plus size={16} /> 新建会话</Button></section> : <div className="chat-stage">
-      <Timeline sessionKey={selectedRefKey} localMediaVersion={stream.localMediaVersion} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} liveGeneration={stream.transcript.liveGeneration} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onRetryTurn={(user) => { void retryTurn(user); }} onContinue={() => { void continueTurn(); }} onDismissInterrupted={selectedRef === undefined ? undefined : () => { void api.dismissInterrupted(selectedRef).catch(() => undefined); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} />
+      <Timeline sessionKey={selectedRefKey} localMediaVersion={stream.localMediaVersion} items={stream.transcript.items} streamingMessageId={stream.transcript.streamingMessageId} liveGeneration={stream.transcript.liveGeneration} hasMore={stream.transcript.hasMore} loadingMore={stream.loadingEarlier} onLoadMore={stream.loadEarlier} error={stream.error} notice={sessionNotice} onDismissNotice={() => setSessionNotice(undefined)} status={stream.transcript.status} onRetryCompaction={() => { void compact(); }} onRetryTurn={(user) => { void retryTurn(user); }} onContinue={() => { void continueTurn(); }} onDismissInterrupted={selectedRef === undefined ? undefined : () => { void api.dismissInterrupted(selectedRef).catch(() => undefined); }} onEditUserMessage={stream.transcript.status.runState !== "idle" ? undefined : editUserMessage} onForkMessage={requestForkMessage} onExtensionUiRespond={stream.respondExtensionUi} workspaceCwd={selectedWorkspace?.cwd} navigatorOpen={userNavigatorOpen} onNavigatorOpenChange={setUserNavigatorOpen} outline={stream.userMessages} outlineLoading={stream.userMessagesLoading} onEnsureMessage={stream.loadUntilMessage} onOpenSubagentRecord={openSubagentRecord} />
       <div className="chat-dock">
         <ExtensionPanels panels={stream.extensionPanels} extra={<SubagentStatus threads={selectedSession?.subagentThreads} onOpenThread={openSubagentThread} />} />
         <PromptEditor key={selectedRef.sessionId} initialValue={selectedDraft} draftNonce={draftNonce} busy={stream.transcript.status.runState !== "idle" || compactionPending} commands={selectedComposerCommands} searchFiles={searchWorkspaceFiles} searchSessionFiles={searchSessionFiles} onDraftChange={updateSelectedDraft} onSubmit={submitPrompt} onStop={() => { void abort(); }} attachments={selectedAttachments} onAttachmentsChange={updateSelectedAttachments} onAttachmentError={reportAttachmentError} workspaceId={selectedRef.workspaceId} attachDisabled={stream.transcript.model.current?.vision === false} injectedText={stream.extensionPanels.editorText} draftInjection={editDraftInjection} onCancelEdit={editingMessage?.sessionId === selectedRef.sessionId ? cancelMessageEdit : undefined} queue={stream.transcript.queue} onDequeueAll={() => { void dequeueAll(); }} onRemoveQueued={removeQueuedMessage} onToggleKind={toggleQueuedKind} collapsed={isMobile && composerCollapsed} focusRequestRef={composerFocusRef} autoFocus={newSessionFocusId === selectedSessionId} onAutoFocusConsumed={() => setNewSessionFocusId(undefined)} controls={selectedSession === undefined ? undefined : <>
@@ -1400,7 +1412,7 @@ export function App() {
         setProjectRemoveTarget(workspace);
       }} cleanupDisabled={sessionCleanupTargets(sessionsByWorkspace[projectMenu.workspace.id] ?? [], keepSessionIdFor(projectMenu.workspace.id)).length === 0} />}
       <SessionSearchDialog open={searchOpen} onOpenChange={setSearchOpen} workspaces={workspaces} searchSessions={searchSessions} onSelectSession={(workspaceId, sessionId) => { chooseSession(workspaceId, sessionId); }} />
-      {selectedRef === undefined || isSettingsPage || (isMobile && mobilePage !== "chat") || isMobile ? null : sideChatOpen ? <RightDock tab={dockTab} onTabChange={setDockTab} onClose={() => { setSideChatOpen(false, selectedRef); }} runningCount={subagentRunning} width={sideChatWidth} resizing={sideChatResizing} onStartResize={startSideChatResize} onResizeWithKeyboard={resizeSideChatWithKeyboard} onResetWidth={resetSideChatWidth} onStopResize={stopSideChatResize} chat={dockTab === "chat" ? <SideChatPanel embedded open onOpenChange={(next) => { setSideChatOpen(next, selectedRef); }} parentRef={selectedRef} assistantName={assistantName} workspaceCwd={selectedWorkspace?.cwd} isMobile={isMobile} onRunStateChange={setSideChatRunState} /> : null} subagent={<SubagentPanel threads={subagentThreads} workspaceCwd={selectedWorkspace?.cwd} parentRef={selectedRef} streams={stream.subagentStreams} onHistory={stream.mergeSubagentStream} onLocate={openSubagentThread} />} /> : null}
+      {selectedRef === undefined || isSettingsPage || (isMobile && mobilePage !== "chat") || isMobile ? null : sideChatOpen ? <RightDock tab={dockTab} onTabChange={setDockTab} onClose={() => { setSideChatOpen(false, selectedRef); }} runningCount={subagentRunning} width={sideChatWidth} resizing={sideChatResizing} onStartResize={startSideChatResize} onResizeWithKeyboard={resizeSideChatWithKeyboard} onResetWidth={resetSideChatWidth} onStopResize={stopSideChatResize} chat={dockTab === "chat" ? <SideChatPanel embedded open onOpenChange={(next) => { setSideChatOpen(next, selectedRef); }} parentRef={selectedRef} assistantName={assistantName} workspaceCwd={selectedWorkspace?.cwd} isMobile={isMobile} onRunStateChange={setSideChatRunState} /> : null} subagent={<SubagentPanel threads={subagentThreads} workspaceCwd={selectedWorkspace?.cwd} parentRef={selectedRef} streams={stream.subagentStreams} onHistory={stream.mergeSubagentStream} onLocate={openSubagentThread} {...(subagentRecordDetail === undefined ? {} : { selectedThread: threadFromRecord(subagentRecordDetail) })} onSelectedThreadChange={() => { setSubagentRecordDetail(undefined); }} />} /> : null}
       {!isMobile || selectedRef === undefined || isSettingsPage || mobilePage !== "chat" ? null : <SideChatPanel open={sideChatOpen} onOpenChange={(open) => { setSideChatOpen(open, selectedRef); }} parentRef={selectedRef} assistantName={assistantName} workspaceCwd={selectedWorkspace?.cwd} isMobile={isMobile} sideChatWidth={sideChatWidth} sideChatResizing={sideChatResizing} startSideChatResize={startSideChatResize} resizeSideChatWithKeyboard={resizeSideChatWithKeyboard} stopSideChatResize={stopSideChatResize} onRunStateChange={setSideChatRunState} />}
       {filesWorkspaceId !== undefined ? <FileBrowser key={filesWorkspaceId} workspaceId={filesWorkspaceId} onClose={() => setFilesWorkspaceId(undefined)} /> : null}
       <MobileActionSheet target={mobileActionTarget} onClose={() => setMobileActionTarget(undefined)} onOpenFiles={(targetWorkspaceId) => { setMobileActionTarget(undefined); setSideChatOpen(false); setFilesWorkspaceId(targetWorkspaceId); }} onOpenSideChat={(targetWorkspaceId, session) => { setMobileActionTarget(undefined); setFilesWorkspaceId(undefined); setSideChatOpen(true, { workspaceId: targetWorkspaceId, sessionId: session.id }); chooseSession(targetWorkspaceId, session.id); }} onRenameProject={(workspace) => {
@@ -1450,6 +1462,19 @@ export function App() {
         <DialogContent title="清理会话">
           <p className="delete-session-message">{sessionCleanupConfirmMessage(sessionsByWorkspace[sessionCleanupTarget?.id ?? ""] ?? [], sessionCleanupTarget === undefined ? undefined : keepSessionIdFor(sessionCleanupTarget.id))}</p>
           <div className="dialog-actions"><Button variant="secondary" onClick={() => setSessionCleanupTarget(undefined)} disabled={sessionCleanupPending}>取消</Button><Button variant="danger" onClick={() => { void cleanupProjectSessions(); }} disabled={sessionCleanupPending}>{sessionCleanupPending ? "正在清理…" : "清理会话"}</Button></div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isMobile && subagentRecordDetail !== undefined} onOpenChange={(open) => { if (!open) setSubagentRecordDetail(undefined); }}>
+        <DialogContent title="子代理">
+          {subagentRecordDetail === undefined ? null : <SubagentDetail
+            thread={threadFromRecord(subagentRecordDetail)}
+            workspaceCwd={selectedWorkspace?.cwd}
+            parentRef={selectedRef}
+            stream={stream.subagentStreams[subagentRecordDetail.path]}
+            onHistory={stream.mergeSubagentStream}
+            onLocate={(path) => { setSubagentRecordDetail(undefined); openSubagentThread(path); }}
+          />}
         </DialogContent>
       </Dialog>
 
