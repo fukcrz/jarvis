@@ -1,6 +1,6 @@
 {
   "name": "jarvis",
-  "version": "0.1.31-beta.29",
+  "version": "0.1.31",
   "type": "module",
   "description": "A local coding workspace for persistent Pi sessions.",
   "license": "MIT",
@@ -47,6 +47,7 @@
     "test:ui:mobile-enter": "node scripts/ui-mobile-session-enter-smoke.mjs",
     "lint": "eslint src --max-warnings=0",
     "test:ui:extension": "node scripts/ui-extension-smoke.mjs",
+    "test:ui:subagent-detail": "node scripts/ui-subagent-detail-smoke.mjs",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build"
   },
