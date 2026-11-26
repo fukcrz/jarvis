@@ -449,7 +449,7 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .subagent-record .subagent-record-summary .subagent-type-dot[data-tone="violet"] { background: #8d84b8; }
 .subagent-record .subagent-record-summary .subagent-type-dot[data-tone="teal"] { background: #5aa89c; }
 .subagent-record .subagent-record-summary .subagent-type-dot[data-tone="amber"] { background: #b08c4e; }
-.subagent-record .subagent-record-summary .subagent-type-dot[data-tone="pink"] { background: #b07a92; }
+.subagent-record .subagent-record-summary .subagent-type-dot[data-tone="pink"] { background: #7088b8; }
 .subagent-record .subagent-record-summary .subagent-type-dot[data-tone="blue"] { background: #688fb8; }
 .subagent-record .subagent-record-summary .subagent-type-dot[data-tone="green"] { background: #62a480; }
 
@@ -458,7 +458,7 @@ button.activity-group-label:focus-visible { color: var(--ink); outline: none; }
 .subagent-type-dot[data-tone="violet"] { background: #b6a8ff; }
 .subagent-type-dot[data-tone="teal"] { background: #6fd3c4; }
 .subagent-type-dot[data-tone="amber"] { background: #e2b96a; }
-.subagent-type-dot[data-tone="pink"] { background: #e79ab8; }
+.subagent-type-dot[data-tone="pink"] { background: #8da6d8; }
 .subagent-type-dot[data-tone="blue"] { background: #7fb3f0; }
 .subagent-type-dot[data-tone="green"] { background: #7fd0a2; }
 
